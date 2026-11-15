@@ -55,6 +55,7 @@ internal static class Program
         FormWords();
         SentenceAndVerbRules();
         LandingLegRules();
+        SiteSlopeRules();
 
         Console.WriteLine(_failures == 0
             ? $"PASS {_checks} checks"
@@ -607,6 +608,32 @@ internal static class Program
         Check("the landing says what it did", LegsRules.Done(true, 812.4, 4) == "DEPLOYED AT 812 m." && LegsRules.Done(true, 812.4, 0) == "ALREADY DOWN AT 812 m." && LegsRules.Done(false, 812.4, 4).Length == 0);
         Check("the deploy is on by default at 1000 m", GuidanceSettingSpecs.LegsAutoDeploy.Default && GuidanceSettingSpecs.LegsDeployHeightM.Default == 1000.0);
         Check("the note names the height", PageText.LegsStowedAuto(1000.0) == "LEGS STOWED. THE LANDING DEPLOYS THEM AT 1000 m.");
+    }
+
+    private static void SiteSlopeRules()
+    {
+        Check("a slope under the tip-over limit fits", SiteSlopeText.Verdict(4.0, 9.0, 30.0) == SlopeVerdict.Fits);
+        Check("a slope over the tip-over limit tips over", SiteSlopeText.Verdict(10.0, 9.0, 30.0) == SlopeVerdict.TipsOver);
+        Check("a slope over the stand limit cannot stand", SiteSlopeText.Verdict(31.0, 9.0, 30.0) == SlopeVerdict.CannotStand);
+        Check("an unknown slope or limit gives no verdict", SiteSlopeText.Verdict(double.NaN, 9.0, 30.0) == SlopeVerdict.Unknown && SiteSlopeText.Verdict(4.0, double.NaN, 30.0) == SlopeVerdict.Unknown);
+        Check("a site that fits has no footer fact", SiteSlopeText.Fact(SlopeVerdict.Fits, 4.0, 9.0, 30.0).Length == 0);
+        Check("the footer fact names the slope, the limit and the action", SiteSlopeText.Fact(SlopeVerdict.TipsOver, 10.2, 8.9, 30.0) == "GROUND 10 DEG: TIPS OVER ABOVE 9 DEG. FIND FLAT.",
+            SiteSlopeText.Fact(SlopeVerdict.TipsOver, 10.2, 8.9, 30.0));
+        Check("only a site no heading stands on is refused", SiteSlopeText.Refusal(SlopeVerdict.TipsOver, 10.0, 30.0).Length == 0 && SiteSlopeText.Refusal(SlopeVerdict.CannotStand, 31.0, 30.0).Length > 0);
+        Check("a point a tenth of a degree flatter is better", SiteSlopeText.IsBetter(9.0, 9.1) && !SiteSlopeText.IsBetter(9.05, 9.1));
+        Check("the answer names slope, distance and direction", SiteSlopeText.Found(1.24, 212.4, 47.0, 10.0, 300.0) == "FLAT 1.2 DEG, 212 m NE",
+            SiteSlopeText.Found(1.24, 212.4, 47.0, 10.0, 300.0));
+        Check("no flatter ground says so with the radius", SiteSlopeText.Found(9.0, 0.0, 0.0, 9.0, 300.0) == "NO FLATTER GROUND IN 300 m");
+        Check("the card after the widest search names the radius and that no search looks further", SiteSlopeText.WidestCard(7.8, 4.0, 2700.0).Contains("within 2700 m") && SiteSlopeText.WidestCard(7.8, 4.0, 2700.0).Contains("No search looks further"));
+        Check("the compass words", SiteSlopeText.Compass(0.0) == "N" && SiteSlopeText.Compass(-10.0) == "N" && SiteSlopeText.Compass(90.0) == "E" && SiteSlopeText.Compass(200.0) == "S" && SiteSlopeText.Compass(337.6) == "N");
+
+        var open = new CommitGates(false, false, "", "", false, Where: CraftSituation.Orbit);
+        string refusal = SiteSlopeText.Refusal(SlopeVerdict.CannotStand, 31.0, 30.0);
+        CommitView steep = CommitResolver.Resolve(GuidanceModeId.DeorbitLand, default, open with { SiteRefusal = refusal });
+        Check("DEORBIT + LAND refuses a site no heading stands on, and says why", !steep.Enabled && steep.Reason == CommitResolver.SiteTooSteepReason && steep.Detail == refusal);
+        CommitView flying = CommitResolver.Resolve(GuidanceModeId.DeorbitLand, new CraftActivity { DescentLive = true }, open with { SiteRefusal = refusal });
+        Check("a landing that flies is not refused for its site", flying.Reason != CommitResolver.SiteTooSteepReason, flying.Reason);
+        Check("TOUCHDOWN from here is never refused for the site", CommitResolver.Resolve(GuidanceModeId.SixDofHere, default, open with { Where = CraftSituation.FallingNoAir, SiteRefusal = refusal }).Enabled);
     }
 
     private static void Check(string name, bool ok, string detail = "")

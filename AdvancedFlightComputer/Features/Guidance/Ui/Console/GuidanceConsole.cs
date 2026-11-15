@@ -609,7 +609,10 @@ public static partial class GuidanceWindow
             PageFactNext: _landFactNext,
             PageFactSolver: _landFactSolver,
             PageFactCalm: _landFactCalm,
-            NoStageHome: NoStageHome);
+            NoStageHome: NoStageHome,
+            SiteRefusal: mode == GuidanceModeId.DeorbitLand && noSite.Length == 0
+                ? SiteSlopeText.Refusal(SiteSlopeText.Verdict(SiteSlopeNowDeg(vehicle.Orbit?.Parent), _s.SiteTipDeg, _s.SiteStandDeg), _s.SiteSlopeDeg, _s.SiteStandDeg)
+                : "");
     }
 
     // The backup choice counts only while the failure it answered is still shown.

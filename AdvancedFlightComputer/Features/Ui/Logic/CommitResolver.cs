@@ -15,7 +15,8 @@ internal readonly record struct CommitGates(
     bool PlansFirst = false, bool BackupChosen = false,
     CraftSituation Where = CraftSituation.Unknown, bool HasAir = false, bool BelowBrakingStart = false, bool GfoldChosen = false,
     string HoverProblem = "", string PageFact = "", string NoSiteNote = "", string FarSiteNote = "",
-    ConsolePage? PageFactNext = null, LandSolver? PageFactSolver = null, bool PageFactCalm = false, bool NoStageHome = false);
+    ConsolePage? PageFactNext = null, LandSolver? PageFactSolver = null, bool PageFactCalm = false, bool NoStageHome = false,
+    string SiteRefusal = "");
 
 /// <summary><see cref="PressEnds"/> says that the mode ends a press at once: StartTerminalHover refuses a craft with a hover problem before it claims anything, and PrepareLandingEngines ends G-FOLD on its first step on a body with air, after its start has claimed the craft.</summary>
 internal readonly record struct CommitView(string Verb, bool Enabled, string Reason, bool NeedsTakeOver, bool Live, string Detail = "", VerbFit Fit = default, bool PressEnds = false)
@@ -32,6 +33,7 @@ internal static class CommitResolver
     public const string GravityTurnUnavailable = GuidanceModes.GravityTurnUnavailable;
     public const string LandingSwitchesOffReason = "NEEDS AFC MAY STEER + MAY USE ENGINES";
     public const string DeorbitSettingsReason = "LANDING SETTING OUT OF RANGE";
+    public const string SiteTooSteepReason = "SITE TOO STEEP TO STAND";
 
     /// <summary>The status of a landing while stock AUTO flies its deorbit burn, so the footer does not give that burn to the landing.</summary>
     public const string StockDeorbitStatus = "STOCK AUTO: DEORBIT BURN";
@@ -56,6 +58,7 @@ internal static class CommitResolver
             GuidanceModeId.DeorbitLand => ("DEORBIT + LAND",
                 g.LandingSwitchesOff ? LandingSwitchesOffReason
                 : g.DeorbitRefusal.Length > 0 ? DeorbitSettingsReason
+                : !a.DescentLive && g.SiteRefusal.Length > 0 ? SiteTooSteepReason
                 : a.DescentLive ? (a.LandingStockAuto ? StockDeorbitStatus : "AFC: LANDING")
                 : "",
                 !g.LandingSwitchesOff && g.DeorbitRefusal.Length == 0 && a.DescentLive),
@@ -73,6 +76,7 @@ internal static class CommitResolver
 
         string detail = reason == LandingSwitchesOffReason ? LandingSwitchesOffDetail
             : reason == DeorbitSettingsReason ? g.DeorbitRefusal
+            : reason == SiteTooSteepReason ? g.SiteRefusal
             : "";
         bool enabled = reason.Length == 0;
         StopTarget running = StopResolver.Resolve(in a);
