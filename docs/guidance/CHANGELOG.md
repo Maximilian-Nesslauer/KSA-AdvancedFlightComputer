@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-15
+
+Guidance settings kept with the save, and the slope of the landing site on LAND.
+
 - The guidance settings of a craft are kept with the game save. Before, every LAUNCH, LAND and TUNE value went back to its default when a save loaded or the game started again. AFC now writes the values that differ from the defaults to `afc-craft-settings.toml` in the folder of the save, and gives them back to the craft of the same name when that save loads: the target orbit without the LAN, the ascent method, **THEN**, the landing site, the legs, **STEER BURN WITH GIMBAL**, the limits and the tuning values. A load gives back settings only, so no mode starts by itself. A file of another format and a key that AFC does not know are skipped. The **SHOW IN MAP** and **SHOW IN WORLD** switches are kept in `ui.toml` for all craft. A landing no longer turns **AUTO WARP TO WINDOW** off, so the switch stays as the player set it.
 
 - LAND shows the slope of the ground at the landing site, measured over the footprint of the legs, and the slope on which this craft goes over. A craft that lands upright on a slope meets the ground with its uphill feet first and falls onto the downhill feet; above that slope the fall carries it over them. The limit comes from the legs, the height of the centre of mass and the inertia of the craft, for the worst heading of the legs and for any propellant left at the touchdown, also with the lowest tanks run empty first. The row turns to the warning colour above it, and the footer says so. **FIND FLAT** searches the ground within 300 m of the site for the flattest point and names its slope, distance and direction, and **MOVE SITE** takes it. While the flattest point found still tips the craft over, the button searches 900 m and then 2.7 km, and after that it stays off. DEORBIT + LAND refuses a site on which no heading of the craft can stand.
