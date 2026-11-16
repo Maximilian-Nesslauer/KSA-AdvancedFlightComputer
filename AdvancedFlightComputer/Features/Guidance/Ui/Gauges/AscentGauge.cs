@@ -502,7 +502,7 @@ public static partial class GuidanceWindow
             string pick = arming ? "CLICK SITE" : "PICK SITE";
             float clearW = stage.HasTarget ? ConsoleWidgets.ButtonWidth("X".AsSpan()) + ImGui.GetStyle().ItemSpacing.X : 0f;
             float buttonsW = ConsoleWidgets.ButtonWidth(pick.AsSpan()) + clearW;
-            BeginKitRow(stage.Name.ToUpperInvariant() + (stage.IsNext ? "  NEXT" : ""), controlWidth: buttonsW);
+            BeginKitRow(stage.Name.ToUpperInvariant() + SharedRowSuffix(list, i) + (stage.IsNext ? "  NEXT" : ""), controlWidth: buttonsW);
             ConsoleUi.RowRight(buttonsW);
             if (ConsoleWidgets.Button(pick.AsSpan(), $"AfcStageSet{stage.RootId}".AsSpan(), default))
             {
@@ -523,6 +523,21 @@ public static partial class GuidanceWindow
 
             GaugeRowText(stage.HasTarget ? "SITE" : "", stage.HasTarget ? Fmt.Sentence(Fmt.LatLon(stage.TargetLatDeg, stage.TargetLonDeg)) : "NO SITE", dim);
         }
+    }
+
+    // Side boosters leaving on one row are usually the same parts with the same name, so each gets its place on that row: " 1", " 2". Empty for a stage that leaves alone.
+    private static string SharedRowSuffix(List<GuidanceWindow.ReturnableStage> list, int index)
+    {
+        int seq = list[index].SequenceIndex, place = 0, count = 0;
+        for (int j = 0; j < list.Count; j++)
+        {
+            if (list[j].SequenceIndex != seq)
+                continue;
+            count++;
+            if (j <= index)
+                place++;
+        }
+        return count > 1 ? " " + place : "";
     }
 
     private static void DrawAscentOptionsSection(double bodyRadius)

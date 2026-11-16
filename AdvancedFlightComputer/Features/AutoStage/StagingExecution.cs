@@ -36,6 +36,8 @@ internal static class StagingExecution
         if (target == null)
             return null;
 
+        StagingHooks.RaiseSequenceActivating(vehicle, target);
+
         int seqNumber = target.Number;
         double engineDelay = StagingConfig.GetSequenceEngineDelay(vehicle, seqNumber);
         double decouplerDelay = StagingConfig.GetSequenceDecouplerDelay(vehicle, seqNumber);

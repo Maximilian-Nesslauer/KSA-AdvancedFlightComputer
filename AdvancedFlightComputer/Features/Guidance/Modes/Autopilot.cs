@@ -145,12 +145,9 @@ public static partial class GuidanceWindow
         if (request != StagingDetector.StagingRequest.Queued)
             return;
 
-        // Everything the booster needs to be recognised and flown, recorded before the split, because afterwards the parts belong to a vehicle we have no handle on. The split happens when the machine takes the request, on a later step.
+        // The reserve belongs to one separation. The booster itself is handed over when the row fires (OnSequenceActivating), as any separation's is.
         if (reserveDone)
-        {
-            ArmBoosterHandover(vehicle, sequenceList, now);
-            GuidanceLog.Debug(vehicle, $"booster hand-over armed for {_handovers.Count} record(s), site lat {_s.SiteLatDeg:F3} lon {_s.SiteLonDeg:F3}.");
-        }
+            _s.ReserveStaged = true;
     }
 
     private static void DisarmStaging(Vehicle vehicle)
@@ -195,7 +192,7 @@ public static partial class GuidanceWindow
         return remaining <= _s.ReserveKg;
     }
 
-    // Keep pending handovers outside vehicle state because the detached vehicles do not exist yet. Each sequence has one landing target, so boosters in the same sequence share a site.
+    // Keep pending handovers outside vehicle state because the detached vehicles do not exist yet. Each separated root has its own landing target, so two boosters leaving on one sequence go to their own sites (#130).
     private sealed class BoosterHandover
     {
         internal uint RootId;
@@ -216,68 +213,53 @@ public static partial class GuidanceWindow
     private const double HandoverWindowS = 30.0;
 
     /// <summary>
-    /// Record what the imminent separation is about to throw overboard, so the vehicle
-    /// it becomes can be recognised and handed the landing site.
+    /// Record what a staging row is about to throw overboard, so each craft it becomes can be recognised and handed its own landing site.
+    ///
+    /// ANY SEPARATION, not only the reserve cue's (#175). AutoStage raises this as a row fires, whatever fired it: the ascent's reserve cue, a burnout, the spent drop that sheds side boosters, or the player's staging key. Before, only the reserve cue armed a hand-over, so a booster dropped any other way came away with nothing to fly it home.
+    ///
+    /// ONLY A ROOT WITH A TARGET. A stage site (LAUNCH > BOOSTERS) is what asks for a booster to come home, and each root is sent to its own (#130): two side boosters leaving on one row go to their own pads. A root with no site of its own is not handed over at all, where it once followed the targeted booster beside it to the same pad.
     /// </summary>
-    private static void ArmBoosterHandover(Vehicle vehicle, SequenceList sequenceList,
-                                           double now)
+    internal static void OnSequenceActivating(Vehicle vehicle, Sequence sequence)
     {
+        if (!VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState s) || s.StageTargets.Count == 0)
+            return;
+
+        double now = SimNow();
         DropExpiredHandovers(now);
-        _s.ReserveStaged = true;
-
-        Sequence next = null;
-        ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
-        for (int i = 0; i < sequences.Length; i++)
+        SequenceRoots(sequence, _handoverRoots);
+        int armed = 0;
+        for (int i = 0; i < _handoverRoots.Count; i++)
         {
-            if (!sequences[i].Activated && !sequences[i].Parts.IsEmpty)
+            Part root = _handoverRoots[i];
+            // Nested separations have overlapping subtrees but distinct roots. Matching the root keeps the inner vehicle from claiming the outer vehicle's record.
+            if (!s.StageTargets.TryGetValue(root.InstanceId, out double2 site) || AlreadyArmed(root.InstanceId, vehicle))
+                continue;
+            _handovers.Add(new BoosterHandover
             {
-                next = sequences[i];
-                break;
-            }
+                RootId = root.InstanceId,
+                SiteLatDeg = site.X,
+                SiteLonDeg = site.Y,
+                ExpiresAt = now + HandoverWindowS,
+                From = vehicle,
+            });
+            armed++;
+            GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                $"booster hand-over armed for '{root.DisplayName}' on sequence {sequence.Number}, site lat {site.X:F3} lon {site.Y:F3}."));
         }
-        if (next == null)
-            return;
-
-        int firstArmed = _handovers.Count;
-        Part detached = null;
-        ReadOnlySpan<Part> parts = next.Parts;
-        for (int i = 0; i < parts.Length; i++)
-        {
-            Span<Decoupler> decouplers = parts[i].SubtreeModules.Get<Decoupler>();
-            for (int j = 0; j < decouplers.Length; j++)
-            {
-                Part root = DetachedRoot(decouplers[j]);
-                if (root == null || AlreadyArmed(root.InstanceId, firstArmed))
-                    continue;
-                detached ??= root;
-
-                // Nested separations have overlapping subtrees but distinct roots. Matching the root keeps the inner vehicle from claiming the outer vehicle's record.
-                _handovers.Add(new BoosterHandover
-                {
-                    RootId = root.InstanceId,
-                    ExpiresAt = now + HandoverWindowS,
-                    From = vehicle,
-                });
-            }
-        }
-
-        if (detached == null || _handovers.Count == firstArmed)
-            return;
-
-        // Use the first detached root, as RefreshReturnableStages does, to find the stage's target. HashSet order can select a different root and cause a silent fallback to the vehicle's site.
-        ResolveStageTarget(detached.InstanceId, out double siteLatDeg, out double siteLonDeg);
-        for (int i = firstArmed; i < _handovers.Count; i++)
-        {
-            _handovers[i].SiteLatDeg = siteLatDeg;
-            _handovers[i].SiteLonDeg = siteLonDeg;
-        }
+        _handoverRoots.Clear();
+        if (armed == 0)
+            GuidanceLog.Debug(vehicle, $"sequence {sequence.Number} fires with no targeted booster to hand over.");
     }
 
-    private static bool AlreadyArmed(uint rootId, int firstArmed)
+    // The roots one firing row separates, filled and consumed inside OnSequenceActivating.
+    private static readonly List<Part> _handoverRoots = new List<Part>();
+
+    // The player's staging key and AutoStage can both announce one row, so a root already recorded from this stack is not recorded twice.
+    private static bool AlreadyArmed(uint rootId, Vehicle from)
     {
-        for (int i = firstArmed; i < _handovers.Count; i++)
+        for (int i = 0; i < _handovers.Count; i++)
         {
-            if (_handovers[i].RootId == rootId)
+            if (_handovers[i].RootId == rootId && ReferenceEquals(_handovers[i].From, from))
                 return true;
         }
         return false;
