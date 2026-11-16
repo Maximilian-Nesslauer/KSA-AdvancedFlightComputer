@@ -293,18 +293,29 @@ public static partial class GuidanceWindow
         _s.MoonChainNodeTime = node.ImpulseTime.Seconds();
         _s.MoonChainNodeDv = node.DeltaVVlf;
         _s.MoonChainManualSince = double.NaN;
+        _s.MoonChainCompleted = false;
         _s.MoonChainWarpAsked = false;
         return "";
     }
 
+    /// <summary>The completion of a stock burn, from the FlightComputer.RaisePendingAlerts postfix and before AutoRemove takes the burn out of the plan.</summary>
+    internal static void OnStockBurnCompleted(Vehicle vehicle, Burn burn)
+    {
+        if (VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState state)
+            && state.MoonChain is MoonChainStage.Injection or MoonChainStage.Correction or MoonChainStage.Capture
+            && state.MoonChainNode != null && ReferenceEquals(state.MoonChainNode, burn))
+            state.MoonChainCompleted = true;
+    }
+
     // The armed burn, until stock reports it complete. FlightComputer.UpdateBurnTarget ends an Auto burn when the delta v to go no longer points along the target and writes Manual, and the kept BurnTarget still shows that after the node is gone, as the stock deorbit phase reads it (StockDeorbitComplete).
+    // The reversal alone is not enough on a burn of a few cm/s. FlightComputer.ComputeControl decides the completion before the physics step, and FlightComputer.ReadMeasurements adds that step's delta v to the target after it, so a step that pushes against the burn, by a few mm/s, for example from the attitude thrusters, can turn the target back before the chain reads it. The completion that stock raised counts first for that reason.
     private static void StepMoonBurn(Vehicle vehicle, Orbit orbit, Celestial moon, IParentBody moonBody)
     {
         FlightComputer fc = vehicle.FlightComputer;
         BurnTarget target = _s.MoonChainTarget;
         Burn node = _s.MoonChainNode;
-        bool complete = target.DeltaVTargetCci.LengthSquared() > 0
-            && float3.Dot(target.DeltaVToGoCci, target.DeltaVTargetCci) <= 0;
+        bool complete = _s.MoonChainCompleted
+            || (target.DeltaVTargetCci.LengthSquared() > 0 && float3.Dot(target.DeltaVToGoCci, target.DeltaVTargetCci) <= 0);
         if (complete)
         {
             if (fc.BurnMode == FlightComputerBurnMode.Manual)
@@ -345,13 +356,18 @@ public static partial class GuidanceWindow
     private static void MoonBurnComplete(Vehicle vehicle, Orbit orbit, IParentBody moonBody)
     {
         MoonChainStage done = _s.MoonChain;
-        double residual = _s.MoonChainTarget.DeltaVToGoCci.Length();
+        BurnTarget target = _s.MoonChainTarget;
+        double residual = target.DeltaVToGoCci.Length();
+        double targetDv = target.DeltaVTargetCci.Length();
+        double along = targetDv > 0.0 ? float3.Dot(target.DeltaVAccumCci, target.DeltaVTargetCci) / targetDv : 0.0;
+        bool reported = _s.MoonChainCompleted;
         // FlightComputer.EndAutoBurn removes a completed node only when another burn follows it. The chain plans its next burn only into an empty plan, so it removes its own completed node.
         FlightComputer fc = vehicle.FlightComputer;
         if (fc.BurnPlan.TryGetBurn(_s.MoonChainNode) && fc.BurnPlan.BurnCount == 1)
             fc.RemoveBurn(_s.MoonChainNode);
         ClearMoonChainBurn();
-        GuidanceLog.Info(vehicle, $"chain to {moonBody.Id}: {done} burn complete, residual {residual:F3} m/s.");
+        GuidanceLog.Info(vehicle, $"chain to {moonBody.Id}: {done} burn complete, residual {residual:F3} m/s, flown {along:F3} of {targetDv:F3} m/s along the target, "
+            + (reported ? "completion reported by stock." : "completion read from the burn target."));
         if (done == MoonChainStage.Capture)
         {
             double peKm = (orbit.Periapsis - moonBody.MeanRadius) / 1000.0;
@@ -523,6 +539,7 @@ public static partial class GuidanceWindow
         _s.MoonChainNodeTime = double.NaN;
         _s.MoonChainNodeDv = default;
         _s.MoonChainManualSince = double.NaN;
+        _s.MoonChainCompleted = false;
         _s.MoonChainWarpAsked = false;
         _s.MoonChainWarpTime = double.NaN;
     }
