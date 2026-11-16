@@ -1634,7 +1634,8 @@ public static partial class GuidanceWindow
         if (_s.Running)
         {
             double altM = r.Length() - parent.MeanRadius;
-            fc.RollMode = _s.ForceRoll && altM >= ForceRollMinAltM
+            // And never while the ascent is still clearing the pad (PadHold): ForceRollMinAltM is above the mean radius, which a pad on high ground already is.
+            fc.RollMode = _s.ForceRoll && altM >= ForceRollMinAltM && !PadHold(r)
                 ? FlightComputerRollMode.Up
                 : FlightComputerRollMode.Decoupled;
         }

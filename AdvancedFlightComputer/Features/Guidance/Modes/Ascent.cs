@@ -398,6 +398,13 @@ public static partial class GuidanceWindow
         _s.LastSolveTime = double.NegativeInfinity;
         _s.LastStepTime = SimNow();
         _s.RollLatched = false;    // re-measure the vehicle's roll at this engagement
+        // The pad hold's datum, only for an ascent that engages standing on the pad: see PadHold.
+        {
+            double3 r0 = vehicle.Orbit.StateVectors.PositionCci;
+            double3 v0 = vehicle.Orbit.StateVectors.VelocityCci;
+            double3 surface = v0 - double3.Cross(new double3(0, 0, parent.GetAngularVelocity()), r0);
+            _s.LiftoffRadius = surface.Length() < PadHoldMaxSpeedMs ? r0.Length() : double.NaN;
+        }
         _s.CutoffDone = false;
         _s.TerminalLaw = null;
         _s.ReserveStaged = false;   // a fresh ascent gets its reserve staging back
@@ -663,6 +670,20 @@ public static partial class GuidanceWindow
     }
     private const double GuidanceLogIntervalS = 5.0;
 
+    /// <summary>How far the vehicle climbs straight up, with no roll, before the ascent may turn it: clear of the tower (#171).</summary>
+    internal const double PadClearM = 50.0;
+
+    /// <summary>The surface speed under which an engagement counts as standing on the pad, m/s: a vehicle engaged in flight gets no pad hold.</summary>
+    private const double PadHoldMaxSpeedMs = 30.0;
+
+    /// <summary>
+    /// Whether the ascent is still clearing the pad: engaged on the pad and not yet <see cref="PadClearM"/> above where it engaged. Until then the command is straight up and the flight computer's roll stays decoupled, whatever the solved profile or the forced roll asks for.
+    ///
+    /// WHY. A high-TWR stack's solved profile turns 5 deg in its first second and 16 deg in five, and the forced roll waited only for 200 m above the mean radius, which a pad on high ground is already over: the vehicle pitched and rolled before it was clear of the tower (#171). The plan is unchanged; the hold only delays following it, and the command then slews onto it at the usual rate.
+    /// </summary>
+    internal static bool PadHold(double3 r)
+        => double.IsFinite(_s.LiftoffRadius) && r.Length() - _s.LiftoffRadius < PadClearM;
+
     // Ascent phase state machine. Transitions cascade naturally over successive frames, so initializing mid-flight fast-forwards to the right phase. stepDt is the sim time since the previous step, for the command slew limit.
     private static void UpdatePhase(Vehicle vehicle, double3 r, double3 v, IParentBody parent,
                                     double bodyRadius, double stepDt)
@@ -780,6 +801,13 @@ public static partial class GuidanceWindow
             default:
                 want = default;
                 break;
+        }
+
+        // Off the pad: straight up until the tower is cleared, whatever the phase wants (PadHold). The phase's own command above still runs, so a solved profile's clock keeps pace with the climb, and the slew takes the command onto it once the hold lets go.
+        if (PadHold(r) && want.Length() > 0.5)
+        {
+            want = up;
+            wantRate = default;
         }
 
         // The command SLEWS toward the solution rather than jumping to it. With the law evaluated continuously above this should never bind in flight - what is left for it is the hand-over out of the open-loop turn and whatever a stage list changing shape mid-burn does to the solution. When it DOES bind, the commanded rate is the slew's own, not the law's: publishing a feedforward the command is not actually following would have the flight computer drive toward one rate while the target moved at another.
