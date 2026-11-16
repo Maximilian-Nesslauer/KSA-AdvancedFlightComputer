@@ -1,5 +1,7 @@
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Guidance;
+using AdvancedFlightComputer.Features.Ui.Logic;
+using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
@@ -10,16 +12,21 @@ namespace AdvancedFlightComputer.HarnessTests;
 
 // The legs of a landing, on a craft with stowed landing legs that falls toward the ground of an airless moon with its engine off.
 // The landing is a held claim and a landing phase, so no mode flies and the fall is the game's own. Each step runs the leg deploy
-// the guidance prefix runs, and the test reads the goal times of the legs:
-//  - no leg is commanded while the legs are above LEGS DOWN AT, every leg on the first step at or below it, and no other animation;
+// the guidance prefix runs, and the test reads the goal times of the legs. The deploy time is the deploy time of the legs plus the
+// buffer:
+//  - with an entry plan that ends 10 s after the start, no leg is commanded while the plan has more than the deploy time to go,
+//    every leg on the first step at or under it, far above where the fall would have them, and no other animation;
 //  - the legs come down in the length of their animation, and the vehicle height the plans use stays where it was;
 //  - a retract by hand after the deploy stands for the rest of that landing;
-//  - with the setting off, or with no claim on the craft, nothing is commanded, and a new landing that starts below the height
-//    deploys at once.
+//  - with the setting off, or with no claim on the craft, nothing is commanded, and a new landing whose plan already has less than
+//    the deploy time to go deploys at once;
+//  - with no plan, the clock is the fall of the legs to the ground at the descent rate under gravity, and the legs are commanded on
+//    the first step whose fall time is at or under the deploy time.
 public sealed class GuidanceLandingLegsTest : AfcTest
 {
     private const double StepS = 0.05;
-    private const double DeployAtM = 1000.0;
+    private const double BufferS = 1.0;
+    private const double PlanS = 10.0;
     private const double StartLegsM = 1800.0;
     private const double SinkMs = 30.0;
 
@@ -73,8 +80,11 @@ public sealed class GuidanceLandingLegsTest : AfcTest
             state.VehicleHeightAuto = false;
             state.VehicleHeightM = before.DeployedM;
             state.LegsAutoDeploy = true;
-            state.LegsDeployHeightM = DeployAtM;
-            Fall(t, craft, state, driver, before, others);
+            state.LegsDeployBufferS = BufferS;
+            double deployAt = KsaLandingLegs.DeploySeconds(craft) + BufferS;
+            t.CheckAbs("the deploy time is the deploy time of the legs plus the buffer", LegsRules.DeployAtS(KsaLandingLegs.DeploySeconds(craft), BufferS), deployAt, 1e-12);
+            if (PlanLanding(t, craft, state, driver, before, others, deployAt))
+                FallLanding(t, craft, state, driver, deployAt);
         }
         finally
         {
@@ -89,49 +99,56 @@ public sealed class GuidanceLandingLegsTest : AfcTest
         }
     }
 
-    private static void Fall(TestContext t, Vehicle craft, VehicleAutopilotState state, SimDriver driver,
-                             KsaVehicleHeight.Result before, List<(KeyframeAnimationModule Anim, float Goal)> others)
+    private static bool PlanLanding(TestContext t, Vehicle craft, VehicleAutopilotState state, SimDriver driver,
+                                    KsaVehicleHeight.Result before, List<(KeyframeAnimationModule Anim, float Goal)> others, double deployAt)
     {
         if (!t.Check("guidance takes the claim", VehicleControlOwnership.TryClaim(craft, ControlClaimant.Guidance, out _)))
-            return;
-        state.LandingPhase = GuidanceWindow.LandingPhase.TerminalCoast;
+            return false;
+        double planEnd = Universe.GetElapsedSeconds() + PlanS;
+        FlyEntryPlan(state, planEnd);
 
-        double commandedAt = double.NaN, lowestBefore = double.NaN, highestStep = 0.0, last = double.NaN;
+        double commandedToGo = double.NaN, commandedAtM = double.NaN, lastToGoBefore = double.NaN, fallAtCommand = double.NaN;
+        LegsClock clockAtCommand = LegsClock.None;
         double sim = 0.0;
-        while (sim < 120.0)
+        while (sim < 2.0 * PlanS)
         {
             double h = GuidanceWindow.LegsHeightM(craft, state);
-            if (double.IsFinite(last))
-                highestStep = Math.Max(highestStep, last - h);
-            last = h;
+            double toGo = GuidanceWindow.LegsToGo(craft, state, h, Universe.GetElapsedSeconds(), out LegsClock clock);
             GuidanceWindow.StepLandingLegs(craft, state);
             int legs = KsaLandingLegs.Count(craft, out int stowed);
             if (stowed < legs)
             {
-                commandedAt = h;
+                (commandedToGo, commandedAtM, clockAtCommand) = (toGo, h, clock);
+                fallAtCommand = FallSeconds(craft, h);
                 t.Check("every leg is commanded at once", stowed == 0, $"{stowed} of {legs} still stowed");
                 break;
             }
-            lowestBefore = h;
+            lastToGoBefore = toGo;
             driver.Step(StepS);
             sim += StepS;
         }
-        t.Info($"fall: legs commanded at {commandedAt:F1} m, last step above at {lowestBefore:F1} m, {highestStep:F2} m per step, after {sim:F1} s");
-        if (!t.Check("the legs are commanded in the fall", double.IsFinite(commandedAt)))
-            return;
-        t.Check("no leg is commanded above the height", lowestBefore > DeployAtM, $"last step without a command at {lowestBefore:F1} m");
-        t.Check("the legs are commanded on the first step at or below the height", commandedAt <= DeployAtM && commandedAt > DeployAtM - highestStep - 1e-6,
-            $"commanded at {commandedAt:F1} m, {highestStep:F2} m per step");
-        t.CheckAbs("the landing records the height", state.LegsFiredAtM, commandedAt, 1e-9);
+        t.Info($"plan: legs commanded at {commandedToGo:F2} s to go on the {LegsRules.ClockName(clockAtCommand)}, {commandedAtM:F1} m, " +
+               $"where the fall has {fallAtCommand:F1} s to go; last step without a command at {lastToGoBefore:F2} s, after {sim:F2} s");
+        if (!t.Check("the legs are commanded in the landing", double.IsFinite(commandedToGo)))
+            return false;
+        t.Check("the clock is the plan that flies", clockAtCommand == LegsClock.EntryPlan, clockAtCommand.ToString());
+        t.Check("no leg is commanded with more than the deploy time to go", lastToGoBefore > deployAt, $"{lastToGoBefore:F3} s");
+        t.Check("the legs are commanded on the first step at or under the deploy time", commandedToGo <= deployAt && commandedToGo > deployAt - StepS - 1e-6,
+            $"{commandedToGo:F3} s, deploy time {deployAt:F3} s");
+        t.Check("the plan, not the height, sets the deploy", fallAtCommand > 2.0 * deployAt, $"fall {fallAtCommand:F1} s");
+        t.CheckAbs("the landing records the time to go", state.LegsFiredToGoS, commandedToGo, 1e-9);
+        t.CheckAbs("the landing records the height", state.LegsFiredAtM, commandedAtM, 1e-9);
         t.Check("no other animation is commanded", others.TrueForAll(o => o.Anim.TimeGoal == o.Goal));
 
         double deployStart = Universe.GetElapsedSeconds();
         bool down = Settle(driver, craft, () => GuidanceWindow.StepLandingLegs(craft, state));
         double deployS = Universe.GetElapsedSeconds() - deployStart;
-        double h1 = GuidanceWindow.LegsHeightM(craft, state);
-        t.Info($"deploy: down after {deployS:F2} s, legs at {h1:F1} m, {commandedAt - h1:F1} m below the command");
+        t.Info($"deploy: down after {deployS:F2} s, {planEnd - Universe.GetElapsedSeconds():F2} s before the plan end");
         if (t.Check("the legs come down", down))
+        {
             t.CheckAbs("the legs come down in the length of their animation", deployS, KsaLandingLegs.DeploySeconds(craft), 3.0 * StepS);
+            t.Check("the legs are down before the plan ends", Universe.GetElapsedSeconds() < planEnd, $"{planEnd - Universe.GetElapsedSeconds():F2} s left");
+        }
         if (t.Check("measures the deployed craft", KsaVehicleHeight.TryMeasure(craft, out KsaVehicleHeight.Result after)))
         {
             t.Info($"vehicle height: stowed {before.DeployedM:F3} m, deployed {after.DeployedM:F3} m, as is {after.CurrentM:F3} m");
@@ -141,11 +158,7 @@ public sealed class GuidanceLandingLegsTest : AfcTest
             t.CheckAbs("the deployed legs are where the plan put them", after.CurrentM, after.DeployedM, 0.01);
         }
 
-        foreach (KeyframeAnimationModule anim in craft.Parts.Modules.Get<KeyframeAnimationModule>())
-        {
-            if (KsaLandingLegs.IsLeg(anim))
-                anim.TimeGoal = 0f;
-        }
+        Retract(craft);
         for (int i = 0; i < 20; i++)
         {
             GuidanceWindow.StepLandingLegs(craft, state);
@@ -154,18 +167,14 @@ public sealed class GuidanceLandingLegsTest : AfcTest
         KsaLandingLegs.Count(craft, out int retracted);
         t.Check("a retract by hand stands for the rest of the landing", retracted == KsaLandingLegs.Count(craft), $"{retracted} retracted");
 
-        // The landing ends: the claim and the phase go, and the next landing may deploy again.
-        VehicleControlOwnership.Release(craft, ControlClaimant.Guidance);
-        state.LandingPhase = GuidanceWindow.LandingPhase.Idle;
-        GuidanceWindow.StepLandingLegs(craft, state);
-        t.Check("the end of the landing rearms the deploy", !state.LegsFired && double.IsNaN(state.LegsFiredAtM));
+        EndLanding(craft, state);
+        t.Check("the end of the landing rearms the deploy", !state.LegsFired && double.IsNaN(state.LegsFiredAtM) && double.IsNaN(state.LegsFiredToGoS));
         Settle(driver, craft);
 
-        double low = GuidanceWindow.LegsHeightM(craft, state);
-        t.Info($"second landing at {low:F1} m");
+        // A second landing whose plan ends within the deploy time.
         state.LegsAutoDeploy = false;
         VehicleControlOwnership.TryClaim(craft, ControlClaimant.Guidance, out _);
-        state.LandingPhase = GuidanceWindow.LandingPhase.TerminalCoast;
+        FlyEntryPlan(state, Universe.GetElapsedSeconds() + 0.5 * deployAt);
         GuidanceWindow.StepLandingLegs(craft, state);
         t.Check("with the setting off no leg is commanded", KsaLandingLegs.Count(craft, out int offStowed) == offStowed && !state.LegsFired);
 
@@ -176,10 +185,89 @@ public sealed class GuidanceLandingLegsTest : AfcTest
 
         VehicleControlOwnership.TryClaim(craft, ControlClaimant.Guidance, out _);
         GuidanceWindow.StepLandingLegs(craft, state);
-        t.Check("a landing that starts below the height deploys at once", KsaLandingLegs.Count(craft, out int nowStowed) > 0 && nowStowed == 0 && state.LegsFired,
-            $"{nowStowed} stowed, legs at {low:F1} m");
+        t.Check("a landing that starts within the deploy time deploys at once", KsaLandingLegs.Count(craft, out int nowStowed) > 0 && nowStowed == 0 && state.LegsFired,
+            $"{nowStowed} stowed, {state.LegsFiredToGoS:F2} s to go");
         t.Check("still no other animation is commanded", others.TrueForAll(o => o.Anim.TimeGoal == o.Goal));
+
+        EndLanding(craft, state);
+        Retract(craft);
+        return t.Check("the legs stow for the fall", Settle(driver, craft));
+    }
+
+    // The fall ends on the ground about a second after the legs are down, so the test steps no further than the command.
+    private static void FallLanding(TestContext t, Vehicle craft, VehicleAutopilotState state, SimDriver driver, double deployAt)
+    {
+        VehicleControlOwnership.TryClaim(craft, ControlClaimant.Guidance, out _);
+        state.LandingPhase = GuidanceWindow.LandingPhase.TerminalCoast;
+        double commandedToGo = double.NaN, commandedAtM = double.NaN, lastToGoBefore = double.NaN, oracle = double.NaN;
+        LegsClock clockAtCommand = LegsClock.None;
+        double sim = 0.0, worstOracle = 0.0;
+        while (sim < 60.0)
+        {
+            double h = GuidanceWindow.LegsHeightM(craft, state);
+            double toGo = GuidanceWindow.LegsToGo(craft, state, h, Universe.GetElapsedSeconds(), out LegsClock clock);
+            oracle = FallSeconds(craft, h);
+            worstOracle = Math.Max(worstOracle, Math.Abs(toGo - oracle));
+            GuidanceWindow.StepLandingLegs(craft, state);
+            int legs = KsaLandingLegs.Count(craft, out int stowed);
+            if (stowed < legs)
+            {
+                (commandedToGo, commandedAtM, clockAtCommand) = (toGo, h, clock);
+                t.Check("every leg is commanded at once in the fall", stowed == 0, $"{stowed} of {legs} still stowed");
+                break;
+            }
+            lastToGoBefore = toGo;
+            driver.Step(StepS);
+            sim += StepS;
+        }
+        t.Info($"fall: legs commanded at {commandedToGo:F2} s to go on the {LegsRules.ClockName(clockAtCommand)}, {commandedAtM:F1} m; " +
+               $"last step without a command at {lastToGoBefore:F2} s, after {sim:F2} s");
+        if (!t.Check("the legs are commanded in the fall", double.IsFinite(commandedToGo)))
+            return;
+        t.Check("with no plan the clock is the fall", clockAtCommand == LegsClock.Fall, clockAtCommand.ToString());
+        t.Check("the fall time is the one of the height, the descent rate and gravity", worstOracle < 1e-9, $"{worstOracle:E2} s");
+        t.Check("no leg is commanded with more than the deploy time to fall", lastToGoBefore > deployAt, $"{lastToGoBefore:F3} s");
+        t.Check("the legs are commanded on the first step at or under the deploy time", commandedToGo <= deployAt && commandedToGo > deployAt - 2.0 * StepS,
+            $"{commandedToGo:F3} s, deploy time {deployAt:F3} s");
+        t.CheckAbs("the fall landing records the height", state.LegsFiredAtM, commandedAtM, 1e-9);
+        EndLanding(craft, state);
+    }
+
+    private static void FlyEntryPlan(VehicleAutopilotState state, double endS)
+    {
+        state.ThreeDofPhase = GuidanceWindow.ThreeDofPhase.Burn;
+        state.ThreeDofPlan = new Plan3Dof(Array.Empty<double>(), Array.Empty<double>(), 0, 0, 0.0, endS - Universe.GetElapsedSeconds(),
+            Universe.GetElapsedSeconds(), Universe.GetElapsedSeconds(), Phase3Dof.Burn, 0.0);
+    }
+
+    // The landing ends: the claim, the plan and the phases go, and the next landing may deploy again.
+    private static void EndLanding(Vehicle craft, VehicleAutopilotState state)
+    {
+        VehicleControlOwnership.Release(craft, ControlClaimant.Guidance);
+        state.ThreeDofPhase = GuidanceWindow.ThreeDofPhase.Idle;
+        state.ThreeDofPlan = null;
         state.LandingPhase = GuidanceWindow.LandingPhase.Idle;
+        GuidanceWindow.StepLandingLegs(craft, state);
+    }
+
+    private static void Retract(Vehicle craft)
+    {
+        foreach (KeyframeAnimationModule anim in craft.Parts.Modules.Get<KeyframeAnimationModule>())
+        {
+            if (KsaLandingLegs.IsLeg(anim))
+                anim.TimeGoal = 0f;
+        }
+    }
+
+    // The fall time of the legs from the craft's own state vectors, as an oracle for the clock the landing reads.
+    private static double FallSeconds(Vehicle craft, double legsM)
+    {
+        double3 r = craft.Orbit.StateVectors.PositionCci;
+        double3 v = craft.Orbit.StateVectors.VelocityCci;
+        double radius = r.Length();
+        double sink = -double3.Dot(v, r) / radius;
+        double g = craft.Orbit.Parent.Mu / (radius * radius);
+        return LegsRules.FallSeconds(legsM, sink, g);
     }
 
     // A craft at legsM over the terrain under it, sinking at sinkMs, with its legs heightM under the centre of mass.

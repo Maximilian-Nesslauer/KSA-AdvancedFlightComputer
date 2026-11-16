@@ -706,12 +706,13 @@ public sealed class VehicleAutopilotState
     internal string VehicleHeightCard = "";
     internal long VehicleHeightNextMs;
 
-    /// <summary>A landing that guidance flies deploys the landing legs once, when they come below LegsDeployHeightM over the ground under the craft (StepLandingLegs).</summary>
+    /// <summary>A landing that guidance flies deploys the landing legs once, when its time to the touchdown comes down to the deploy time of the legs plus LegsDeployBufferS (StepLandingLegs).</summary>
     public bool LegsAutoDeploy = true;
-    public double LegsDeployHeightM = 1000.0;
+    public double LegsDeployBufferS = 1.0;
 
-    // The landing that flies has deployed the legs, or found them down, at LegsFiredAtM of leg height, commanding LegsCommanded of them. Cleared when no landing holds the craft any more.
+    // The landing that flies has deployed the legs, or found them down, at LegsFiredToGoS before the touchdown and LegsFiredAtM of leg height, commanding LegsCommanded of them. Cleared when no landing holds the craft any more.
     internal bool LegsFired;
+    internal double LegsFiredToGoS = double.NaN;
     internal double LegsFiredAtM = double.NaN;
     internal int LegsCommanded;
 

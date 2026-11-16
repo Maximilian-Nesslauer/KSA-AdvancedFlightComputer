@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- A landing deploys the landing legs on the clock of the plan that flies it, when the time to the touchdown is the time the legs take to open plus a buffer (#169). Before, the legs came down at a height over the ground, 1000 m by default. On a fast landing burn that is only a few seconds, so the legs were still opening at the touchdown. The stock leg takes 5 s to open, so with the default buffer of 1 s it now deploys 6 s before the touchdown.
+  - The time to the touchdown is the one of the plan that flies the landing: touchdown guidance, entry guidance, the G-FOLD descent (at the gate of the vertical approach, which comes before the touchdown), touchdown guidance on standby, or the predicted impact of a boostback glide. Without a plan it is the fall time of the legs to the ground at the descent rate, with gravity, which is never longer than the height divided by the descent rate.
+  - The **LEGS** fold shows **DEPLOY TIME** (the longest deploy animation of the legs), **BUFFER** in place of **LEGS DOWN AT**, and **DEPLOYS AT**, the time to go that results. The fold title, the legs note, **THIS LANDING** and the log line give the time to go, and the last two also the height of the legs at the deploy.
+  - A save with **LEGS DOWN AT** from an earlier version loads with the default buffer. The old height is skipped like any key that AFC does not know.
+  - Only landing legs deploy, once per landing, and a landing never retracts them. A deploy or retract by hand stands.
+
 - An ascent from the Moon hands over to UPFG (#167). The solved climb waited for UPFG FROM, 80 km, and a lunar orbit is reached far below that, so it never handed over.
   - No ascent waits to hand over above 75 % of the target periapsis, on any body. The solved climb hands over at UPFG FROM or there, whichever is lower, and the gravity turn's 50 km failsafe is held to the same limit. A 30 km orbit hands over at 22.5 km. The row under UPFG FROM says when this applies.
   - Guidance settings have per-body defaults. Each craft takes the defaults of the body whose sphere of influence it is in. When it moves to another body, a value still at the old body's default takes the new one, and a value you changed stays. The setting's tooltip names the body when the default is that body's own.

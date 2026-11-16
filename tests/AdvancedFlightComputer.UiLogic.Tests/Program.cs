@@ -571,45 +571,106 @@ internal static class Program
 
     private static void LandingLegRules()
     {
-        const double At = 1000.0;
-        static LegsStep Decide(bool enabled = true, bool flies = true, bool holds = true, bool fired = false, bool contact = false, double height = 900.0)
-            => LegsRules.Decide(enabled, flies, holds, fired, contact, height, At);
+        // A stock leg takes 5 s to open, and the default buffer is 1 s.
+        double at = LegsRules.DeployAtS(5.0, 1.0);
+        LegsStep Decide(bool enabled = true, bool flies = true, bool holds = true, bool fired = false, bool contact = false, double toGo = 4.0)
+            => LegsRules.Decide(enabled, flies, holds, fired, contact, toGo, at);
 
-        Check("the legs deploy below the height", Decide() == LegsStep.Deploy);
-        Check("the legs deploy at the height itself", Decide(height: At) == LegsStep.Deploy);
-        Check("no deploy above the height", Decide(height: At + 0.01) == LegsStep.Wait && Decide(height: 5000.0) == LegsStep.Wait);
+        Check("the deploy is at the deploy time plus the buffer", at == 6.0, $"{at}");
+        Check("no buffer and no legs give no time", LegsRules.DeployAtS(0.0, 0.0) == 0.0 && LegsRules.DeployAtS(double.NaN, 1.0) == 1.0 && LegsRules.DeployAtS(5.0, -2.0) == 5.0);
+        Check("the legs deploy inside the time", Decide() == LegsStep.Deploy);
+        Check("the legs deploy at the time itself", Decide(toGo: at) == LegsStep.Deploy);
+        Check("no deploy before the time", Decide(toGo: at + 0.01) == LegsStep.Wait && Decide(toGo: 60.0) == LegsStep.Wait);
         Check("no deploy with the setting off", Decide(enabled: false) == LegsStep.Wait);
         Check("no deploy while no landing flies", Decide(flies: false) == LegsStep.Wait);
         Check("no deploy without the claim on the craft", Decide(holds: false) == LegsStep.Wait);
-        Check("no deploy on the ground", Decide(contact: true, height: -0.2) == LegsStep.Wait);
-        Check("no deploy with no height to read", Decide(height: double.NaN) == LegsStep.Wait);
-        Check("a landing deploys once: a retract by hand stands", Decide(fired: true, height: 300.0) == LegsStep.Wait);
+        Check("no deploy on the ground", Decide(contact: true, toGo: 0.0) == LegsStep.Wait);
+        Check("no deploy with no time to read", Decide(toGo: double.NaN) == LegsStep.Wait);
+        Check("a landing deploys once: a retract by hand stands", Decide(fired: true, toGo: 2.0) == LegsStep.Wait);
         Check("the deploy stays done through a handover that keeps the claim", Decide(fired: true, flies: false, holds: true) == LegsStep.Wait);
         Check("the next landing may deploy again once nothing holds the craft", Decide(fired: true, flies: false, holds: false) == LegsStep.Rearm);
         Check("a craft that never deployed has nothing to rearm", Decide(fired: false, flies: false, holds: false) == LegsStep.Wait);
         Check("the setting off after the deploy does not undo it", Decide(enabled: false, fired: true) == LegsStep.Wait);
 
-        // Walk a fall down through the height in steps, and the deploy comes on the first step at or below it and on no other.
+        // A landing burn whose plan ends at t = 20 s, read every 0.07 s: the deploy comes once, on the first read at or under 6 s to go.
         bool fired = false;
         int deploys = 0;
-        double firstAt = double.NaN;
-        for (double h = 3000.0; h > 0.0; h -= 7.3)
+        double firstToGo = double.NaN;
+        for (double now = 0.0; now < 20.0; now += 0.07)
         {
-            if (Decide(fired: fired, height: h) != LegsStep.Deploy)
+            double toGo = LegsRules.PlanToGo(20.0, now);
+            if (Decide(fired: fired, toGo: toGo) != LegsStep.Deploy)
                 continue;
             deploys++;
             if (!fired)
-                firstAt = h;
+                firstToGo = toGo;
             fired = true;
         }
-        Check("a fall through the height deploys once, at the first step at or below it", deploys == 1 && firstAt <= At && firstAt > At - 7.3, $"{deploys} deploys, first at {firstAt}");
+        Check("a plan deploys once, on the first step at or under the time", deploys == 1 && firstToGo <= at && firstToGo > at - 0.07, $"{deploys} deploys, first at {firstToGo} s");
+        Check("a plan that has ended gives no time", double.IsNaN(LegsRules.PlanToGo(20.0, 20.0)) && double.IsNaN(LegsRules.PlanToGo(double.NaN, 1.0)));
 
-        Check("the fold says what the landing does", LegsRules.Label(true, 1000.0, 4) == "LEGS: AUTO AT 1000 m" && LegsRules.Label(false, 1000.0, 4) == "LEGS: OFF");
-        Check("a craft with no legs has none", LegsRules.Label(true, 1000.0, 0) == "LEGS: NONE ON CRAFT");
-        Check("the height of the fold is whole metres", LegsRules.Summary(true, 499.6, 2) == "AUTO AT 500 m");
-        Check("the landing says what it did", LegsRules.Done(true, 812.4, 4) == "DEPLOYED AT 812 m." && LegsRules.Done(true, 812.4, 0) == "ALREADY DOWN AT 812 m." && LegsRules.Done(false, 812.4, 4).Length == 0);
-        Check("the deploy is on by default at 1000 m", GuidanceSettingSpecs.LegsAutoDeploy.Default && GuidanceSettingSpecs.LegsDeployHeightM.Default == 1000.0);
-        Check("the note names the height", PageText.LegsStowedAuto(1000.0) == "LEGS STOWED. THE LANDING DEPLOYS THEM AT 1000 m.");
+        // The clock is the one of the mode that flies, and the fall only without a plan.
+        static LegsClock ClockOf(LegsClocks c)
+        {
+            LegsRules.ToGo(in c, out LegsClock clock);
+            return clock;
+        }
+        double n = double.NaN;
+        var all = new LegsClocks(3.0, 8.0, 12.0, 15.0, 20.0, 2.0);
+        Check("touchdown guidance comes first", LegsRules.ToGo(in all, out LegsClock first) == 3.0 && first == LegsClock.TouchdownPlan);
+        Check("entry guidance before G-FOLD", ClockOf(new LegsClocks(n, 8.0, 12.0, 15.0, 20.0, 2.0)) == LegsClock.EntryPlan);
+        Check("G-FOLD before the standby plan", ClockOf(new LegsClocks(n, n, 12.0, 15.0, 20.0, 2.0)) == LegsClock.GfoldPlan);
+        Check("the standby plan before the glide", ClockOf(new LegsClocks(n, n, n, 15.0, 20.0, 2.0)) == LegsClock.TouchdownStandby);
+        Check("the glide impact before the fall", ClockOf(new LegsClocks(n, n, n, n, 20.0, 2.0)) == LegsClock.Impact);
+        Check("the fall without a plan", LegsRules.ToGo(new LegsClocks(n, n, n, n, n, 2.0), out LegsClock fall) == 2.0 && fall == LegsClock.Fall);
+        Check("no clock gives no time", double.IsNaN(LegsRules.ToGo(new LegsClocks(n, n, n, n, n, n), out LegsClock none)) && none == LegsClock.None);
+        Check("a plan far from the touchdown holds the deploy back while the fall would not", Decide(toGo: LegsRules.ToGo(new LegsClocks(n, 30.0, n, n, n, 2.0), out _)) == LegsStep.Wait);
+
+        // The fall: the height over the descent rate with no gravity, and never longer than that with it.
+        Check("the fall without gravity is the height over the descent rate", Math.Abs(LegsRules.FallSeconds(600.0, 100.0, 0.0) - 6.0) < 1e-12);
+        double lunar = LegsRules.FallSeconds(600.0, 100.0, 1.62);
+        Check("gravity shortens the fall", lunar < 6.0 && Math.Abs(100.0 * lunar + 0.5 * 1.62 * lunar * lunar - 600.0) < 1e-9, $"{lunar}");
+        Check("a craft at rest falls in sqrt(2 h / g)", Math.Abs(LegsRules.FallSeconds(29.16, 0.0, 1.62) - 6.0) < 1e-9);
+        double up = LegsRules.FallSeconds(100.0, -5.0, 1.62);
+        Check("a climbing craft comes back down", double.IsFinite(up) && Math.Abs(-5.0 * up + 0.5 * 1.62 * up * up - 100.0) < 1e-9, $"{up}");
+        Check("a craft that climbs or hangs with no gravity never comes down",
+            double.IsPositiveInfinity(LegsRules.FallSeconds(100.0, -5.0, 0.0)) && double.IsPositiveInfinity(LegsRules.FallSeconds(100.0, 0.0, 0.0)));
+        Check("the ground is no time away", LegsRules.FallSeconds(0.0, 3.0, 1.62) == 0.0 && LegsRules.FallSeconds(-0.4, 3.0, 1.62) == 0.0);
+        Check("no height gives no fall", double.IsNaN(LegsRules.FallSeconds(double.NaN, 3.0, 1.62)) && double.IsNaN(LegsRules.FallSeconds(100.0, double.NaN, 1.62)));
+
+        // A fall from 1800 m at 30 m/s on Luna, read every 0.05 s: the legs go once, on the first step whose fall time is at or under 6 s.
+        fired = false;
+        deploys = 0;
+        double firstH = double.NaN, firstFall = double.NaN;
+        for (double t = 0.0; t < 60.0; t += 0.05)
+        {
+            double v = 30.0 + 1.62 * t;
+            double h = 1800.0 - 30.0 * t - 0.81 * t * t;
+            if (h <= 0.0)
+                break;
+            double fallS = LegsRules.FallSeconds(h, v, 1.62);
+            if (Decide(fired: fired, toGo: fallS) != LegsStep.Deploy)
+                continue;
+            deploys++;
+            if (!fired)
+            {
+                firstH = h;
+                firstFall = fallS;
+            }
+            fired = true;
+        }
+        Check("a fall deploys once, at 6 s of fall", deploys == 1 && firstFall <= at && firstFall > at - 0.06, $"{deploys} deploys, first at {firstFall} s, {firstH} m");
+
+        Check("the fold says what the landing does", LegsRules.Label(true, 6.0, 4) == "LEGS: AUTO AT 6.0 s TO GO" && LegsRules.Label(false, 6.0, 4) == "LEGS: OFF");
+        Check("a craft with no legs has none", LegsRules.Label(true, 6.0, 0) == "LEGS: NONE ON CRAFT" && LegsRules.Label(true, double.NaN, 0) == "LEGS: NONE ON CRAFT");
+        Check("the time of the fold has its tenth", LegsRules.Summary(true, 6.54, 2) == "AUTO AT 6.5 s TO GO");
+        Check("the landing says when and where it deployed", LegsRules.Done(true, 5.96, 812.4, 4) == "DEPLOYED AT 6.0 s TO GO, 812 m."
+            && LegsRules.Done(true, 5.96, 812.4, 0) == "ALREADY DOWN AT 6.0 s TO GO, 812 m."
+            && LegsRules.Done(true, 5.96, double.NaN, 4) == "DEPLOYED AT 6.0 s TO GO."
+            && LegsRules.Done(false, 5.96, 812.4, 4).Length == 0);
+        Check("the deploy is on by default with a 1 s buffer", GuidanceSettingSpecs.LegsAutoDeploy.Default && GuidanceSettingSpecs.LegsDeployBufferS.Default == 1.0
+            && GuidanceSettingSpecs.LegsDeployBufferS.Min == 0.0);
+        Check("the note names the time", PageText.LegsStowedAuto(6.0) == "LEGS STOWED. THE LANDING DEPLOYS THEM AT 6.0 s TO GO.");
     }
 
     private static void SiteSlopeRules()
