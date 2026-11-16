@@ -830,13 +830,10 @@ public sealed class VehicleAutopilotState
 
     /// <summary>
     /// Set once touchdown guidance has had the craft descending, so a craft that stops is known to have stopped SHORT, not to have been engaged while climbing.
-    /// And set when it has cut the engine for that: a craft that cannot throttle below its weight climbs from wherever it stops, so it drops the rest of the way with the engine off.
+    /// And set once it has stopped planning and flies the rest of the way to contact (StepSixDofToContact): at the plan end with no contact, or after a climb cut the engine.
     /// And whether it took a burn over from another mode - the 3-DOF or the braking burn - rather than being engaged directly: such a craft has no plan of its own until the first solve lands, and near the ground the burn's last command it is still flying is as stale as an expired plan.
     /// </summary>
-    public bool SixDofSeenDescending, SixDofEngineCut, SixDofTookBurn;
-
-    // The simulation time since which the craft has rested at the end of its plan without contact, NaN while it does not (NoPlanNearGround).
-    internal double SixDofArrivedSince = double.NaN;
+    public bool SixDofSeenDescending, SixDofToContact, SixDofTookBurn;
 
     /// <summary>
     /// Set while a COLD restart converges: the last plan is flown open loop, without the tracker, until the new plan lands. A cold restart means the plan was abandoned - the vehicle drifted off it, or the target moved, which moves the frame so the plan reads as hundreds of metres off - and tracking an abandoned plan pushes the vehicle around for an error that is not one (throttle 0.01 then 1.0 after a 250 m move, 2026-10-13 08:40). A warm restart keeps the plan it is refining, and keeps tracking it.
