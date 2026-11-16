@@ -170,6 +170,11 @@ public sealed class VehicleAutopilotState
     public bool RollLatched;
 
     /// <summary>
+    /// The radius the ascent engaged at, CCI m, when it engaged on the pad; NaN when it engaged already moving (see GuidanceWindow.PadHold). Until the vehicle has climbed GuidanceWindow.PadClearM above it, the ascent commands straight up and no roll.
+    /// </summary>
+    public double LiftoffRadius = double.NaN;
+
+    /// <summary>
     /// FORCE A SPECIFIC ROLL instead of holding the one the vehicle lifted off with.
     /// The angle is about the thrust axis, measured in the same plane-referenced frame
     /// RollOffset uses: 0 puts the vehicle's body Y along the target plane's normal
