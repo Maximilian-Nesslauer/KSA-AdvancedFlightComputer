@@ -76,7 +76,11 @@ internal static class SharedVehicleHooks
         }
         // Before AutoRemove, which takes the completed burn out of the plan.
         if (ended.Completed)
+        {
             FlybyCourse.OnBurnCompleted(vehicle, ended.Burn!);
+            if (GuidanceEnabled)
+                GuidanceWindow.OnStockBurnCompleted(vehicle, ended.Burn!);
+        }
         if (AutoRemoveEnabled && ended.Completed)
         {
             try
@@ -136,7 +140,7 @@ internal static class SharedVehicleHooks
     private static class PendingAlertsPatch
     {
         static void Prefix(FlightComputer __instance, out StockBurnEnd __state)
-            => __state = MultiPassEnabled || AutoRemoveEnabled || FlybyCourse.Watching ? StockBurnEnd.Capture(__instance) : default;
+            => __state = MultiPassEnabled || AutoRemoveEnabled || GuidanceEnabled || FlybyCourse.Watching ? StockBurnEnd.Capture(__instance) : default;
 
         static void Postfix(Vehicle vehicle, StockBurnEnd __state)
         {

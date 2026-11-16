@@ -1,5 +1,6 @@
 using System.Reflection;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.AutoRemove;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
@@ -394,6 +395,12 @@ public sealed class MoonChainTest : AfcTest
                 MoonTestWorld.FlownInjection(home, moon, now, out _), spawned);
             Vehicle atMoon = MoonTestWorld.Spawn(t, moonBody, save, "MoonChainAtMoon",
                 MoonTestWorld.FlybyAtMoon(moonBody, now, out UniverseTime periapsis), spawned);
+            // A copy of the loaded craft in its physics bubble, as the AutoRemove tests spawn theirs, so that the driver ends its burns through FlightComputer.RaisePendingAlerts.
+            Vehicle? source = AutoRemoveBurnTest.FirstVehicle(t.System);
+            Vehicle? completed = source == null ? null
+                : VehicleSpawner.SpawnCopy(source, home, "MoonChainCompleted", MoonTestWorld.FlownInjection(home, moon, now, out _));
+            if (completed != null)
+                spawned.Add(completed);
             driver.Step(1e-3, 2);
 
             SetModActiveRaw(true);
@@ -401,6 +408,13 @@ public sealed class MoonChainTest : AfcTest
             CheckRefusedWithPlannedBurn(t, withBurn, moon, driver);
             CheckCourse(t, flown, moon, capture: false);
             CheckCapture(t, atMoon, moon, periapsis);
+            if (completed == null)
+                t.Skip("completion: no loaded craft to copy.");
+            else
+            {
+                CheckCompletionCounts(t, completed, moon, driver, autoRemove: true);
+                CheckCompletionCounts(t, completed, moon, driver, autoRemove: false);
+            }
         }
         finally
         {
@@ -555,6 +569,56 @@ public sealed class MoonChainTest : AfcTest
         t.Info($"second burn status: {state.Status}");
         t.Check("second burn: the chain stops and both burns stay planned",
             Ended(state) && state.Status.Contains("ANOTHER BURN") && fc.BurnPlan.BurnCount == 2, state.Status);
+    }
+
+    // A correction that stock completed must count as completed, with AutoRemove on, which takes the node out of the plan in the same frame, and with it off.
+    // FlightComputer.ComputeControl decides the completion before the physics step, and FlightComputer.ReadMeasurements adds the delta v of that step to the burn target after it. On a burn of a few cm/s that step can turn the target back below the target delta v.
+    // The test makes the completion with an overshoot as the AutoRemove tests do, and then sets the target back to 99 % of the target delta v, as that step can leave it before the chain reads it.
+    private static void CheckCompletionCounts(TestContext t, Vehicle vehicle, Celestial moon, SimDriver driver, bool autoRemove)
+    {
+        string label = autoRemove ? "completed with AutoRemove" : "completed without AutoRemove";
+        FlightComputer fc = vehicle.FlightComputer;
+        bool guidanceBefore = SharedVehicleHooks.GuidanceEnabled;
+        using AutoRemoveTestPatches.Scope patches = AutoRemoveTestPatches.Apply();
+        SharedVehicleHooks.GuidanceEnabled = true;
+        AutoRemoveConfig.Enabled = autoRemove;
+        try
+        {
+            VehicleAutopilotState state = Queue(vehicle, moon, MoonChainStage.Course, capture: false);
+            GuidanceWindow.ApplyAutopilot(vehicle);
+            if (!t.Check($"{label}: the course check arms a correction",
+                    state.MoonChain == MoonChainStage.Correction && state.MoonChainCorrections == 1 && Armed(vehicle, state),
+                    $"stage {state.MoonChain}, status '{state.Status}'"))
+                return;
+            Burn node = state.MoonChainNode;
+            BurnTarget target = state.MoonChainTarget;
+            // One step in Auto first, so the craft is awake and the flight computer steps again in the next one.
+            driver.Step(1.0);
+            target.DeltaVAccumCci = target.DeltaVTargetCci * 1.01f;
+            driver.Step(1.0);
+            if (!t.Check($"{label}: stock completed the burn and selected Manual",
+                    fc.AutoBurnCompleted && fc.BurnMode == FlightComputerBurnMode.Manual, $"completed {fc.AutoBurnCompleted}, mode {fc.BurnMode}"))
+                return;
+            target.DeltaVAccumCci = target.DeltaVTargetCci * 0.99f;
+            driver.Step(1.0);
+            t.Check($"{label}: the node left the plan only when AutoRemove is on",
+                fc.BurnPlan.TryGetBurn(node) != autoRemove, $"burns {fc.BurnPlan.BurnCount}");
+            t.Info($"{label} before the chain step: mode {fc.BurnMode}, node planned {fc.BurnPlan.TryGetBurn(node)}, "
+                + $"to go along the target {float3.Dot(target.DeltaVToGoCci, target.DeltaVTargetCci) / target.DeltaVTargetCci.Length():F3} m/s");
+            GuidanceWindow.ApplyAutopilot(vehicle);
+            t.Info($"{label} status: {state.Status}");
+            t.Check($"{label}: the chain counts the burn as completed and checks the course",
+                state.MoonChain == MoonChainStage.Course && state.MoonChainCorrections == 1 && !state.Status.Contains("STOPPED")
+                && state.MoonTransferId == moon.Id && fc.BurnPlan.BurnCount == 0,
+                $"stage {state.MoonChain}, status '{state.Status}', burns {fc.BurnPlan.BurnCount}");
+        }
+        finally
+        {
+            SharedVehicleHooks.GuidanceEnabled = guidanceBefore;
+            fc.AutoBurnCompleted = false;
+            RcsFlightSupport.CleanupBurns(fc);
+            fc.BurnMode = FlightComputerBurnMode.Manual;
+        }
     }
 
     // Inside the moon's sphere with the capture asked for: the capture node at the periapsis.

@@ -399,6 +399,8 @@ public sealed class VehicleAutopilotState
     public double3 MoonChainNodeDv;
     /// <summary>Sim time since which the chain's armed burn reads Manual without being complete, s, or NaN while it reads Auto.</summary>
     public double MoonChainManualSince = double.NaN;
+    /// <summary>Stock reported the chain's node complete (FlightComputer.AutoBurnCompleted), which counts even when AutoRemove took the node out of the plan in the same frame.</summary>
+    public bool MoonChainCompleted;
     /// <summary>The chain asked for the warp of the current stage. It asks once, so a warp the player stops stays stopped.</summary>
     public bool MoonChainWarpAsked;
     /// <summary>The sim time the chain's own warp runs to, s, or NaN.</summary>
