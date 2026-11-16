@@ -133,13 +133,6 @@ public static partial class GuidanceWindow
             }
         }
 
-        // After a stop-short cut the engine stays off, upright, to the touchdown StepLanding watches for.
-        if (_s.TermEngineCut)
-        {
-            _s.GfoldThrottle = 0.0;
-            return;
-        }
-
         double3 r = orbit.StateVectors.PositionCci;
         double3 up = double3.Normalize(r);
         double3 vSrf = orbit.StateVectors.VelocityCci
@@ -165,6 +158,25 @@ public static partial class GuidanceWindow
         double dh = Math.Max(h - _s.TermConstAltM, 0.0);
         double vDesc = Math.Min(_s.TermTouchdownRate + _s.TermQuadK * dh * dh, _s.TermMaxDescRate);
         double vSetUp = -vDesc + _s.TermSetUp;
+        double g = mu / (r.Length() * r.Length());
+
+        // After a stop-short cut the engine stays off, upright, to the touchdown StepLanding watches for, while the fall from here ends no faster than SixDofSafeDropMs. A fall that would end faster lights the engine again once it is down at the profile's rate, on clean integrators, so a climb cut high up comes back down on the profile.
+        if (_s.TermEngineCut)
+        {
+            double sink = Math.Max(-vUp, 0.0);
+            bool unsafeDrop = Math.Sqrt(sink * sink + 2.0 * g * Math.Max(h, 0.0)) > SixDofSafeDropMs;
+            if (!(unsafeDrop && sink >= vDesc))
+            {
+                _s.GfoldThrottle = 0.0;
+                _s.CommandDir = up;
+                _s.HasCommand = true;
+                return;
+            }
+            _s.TermEngineCut = false;
+            _s.TermPidUp = _s.TermPidE = _s.TermPidN = default;
+            _s.TermInit = false;
+            GuidanceLog.Info(vehicle, FormattableString.Invariant($"Terminal hover falling at {sink:F1} m/s {h:F1} m above the pad - engine lit again."));
+        }
 
         (double3 east, double3 north) = EnuBasis(up);
         double vE = double3.Dot(vSrf, east);
@@ -178,7 +190,6 @@ public static partial class GuidanceWindow
             _s.TermInit = true;
         }
 
-        double g = mu / (r.Length() * r.Length());
         double aUp = g + StepPid(ref _s.TermPidUp, vSetUp - vUp, _s.TermKpV, _s.TermKiV, _s.TermKdV, dt);
         double aE = StepPid(ref _s.TermPidE, _s.TermSetE - vE, _s.TermKpL, _s.TermKiL, _s.TermKdL, dt);
         double aN = StepPid(ref _s.TermPidN, _s.TermSetN - vN, _s.TermKpL, _s.TermKiL, _s.TermKdL, dt);
@@ -189,21 +200,18 @@ public static partial class GuidanceWindow
         KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(
             vehicle, local.Length() * vehicle.TotalMass, pressure);
 
-        // STOPPED SHORT, the rule 6-DOF and the 3-DOF apply: rising while asking for less than the engine's minimum thrust means the craft cannot throttle below its weight - as a landing booster's minimum climbs past it with the last of the propellant - and every second lit takes it higher. The engine is cut and it drops the rest of the way.
+        // STOPPED SHORT: rising while asking for less than the engine's minimum thrust means the minimum thrust cannot take the climb out - as a landing booster's minimum climbs past its weight with the last of the propellant - and every second lit takes it higher. The engine is cut at any thrust-to-weight, and lit again above if the fall would end too hard.
         if (vUp > TermRisingMs && command.Status == KsaEnginePerf.ThrustStatus.BelowMinimum)
         {
             double minTwr = TerminalMinThrottleTwr(vehicle, orbit, mu);
-            if (minTwr > 1.0)
-            {
-                _s.TermEngineCut = true;
-                _s.GfoldThrottle = 0.0;
-                _s.CommandDir = up;
-                _s.HasCommand = true;
-                _s.WarnLanding(FormattableString.Invariant($"HOVER CUT ENGINE: TWR {minTwr:F2} AT MIN THROTTLE."));
-                GuidanceLog.Info(vehicle, FormattableString.Invariant($"Terminal hover rising at {vUp:F1} m/s {h:F1} m above the pad and cannot throttle below its weight ")
-                                 + FormattableString.Invariant($"({minTwr:F2} at minimum) - engine cut, dropping to the pad."));
-                return;
-            }
+            _s.TermEngineCut = true;
+            _s.GfoldThrottle = 0.0;
+            _s.CommandDir = up;
+            _s.HasCommand = true;
+            _s.WarnLanding(FormattableString.Invariant($"HOVER CUT ENGINE: RISING, TWR {minTwr:F2} AT MIN THROTTLE."));
+            GuidanceLog.Info(vehicle, FormattableString.Invariant($"Terminal hover rising at {vUp:F1} m/s {h:F1} m above the pad on its minimum thrust ")
+                             + FormattableString.Invariant($"({minTwr:F2} TWR) - engine cut."));
+            return;
         }
         _s.GfoldThrottle = command.Throttle;
         _s.GfoldThrustStatus = command.Message;

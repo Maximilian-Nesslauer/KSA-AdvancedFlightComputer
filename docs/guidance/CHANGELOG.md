@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Touchdown guidance takes a craft all the way to the ground after its plan ends, and cuts the engine of a craft that climbs. A booster whose minimum throttle lifts about its own weight ended its plan at rest just above the ground, already rising. The climb cut needed a TWR above 1 at minimum throttle, so it did not fire, and the terminal hover took over. The hover could not stop the climb, cut the engine 4 m up, and the booster hit the ground at about 9 m/s (#103).
+  - The touchdown plan now ends 0.3 m/s down where the first point of the craft meets the ground, instead of at rest there.
+  - After the descent, a craft that rises faster than 0.1 m/s with the engine lit and no ground contact has its engine cut, at any TWR. A craft whose minimum throttle lifts more than 0.9 of its weight is cut as soon as it stops descending.
+  - When the plan ends without ground contact, no new plan is solved and the terminal hover does not take over. Fallback rules fly the last part without a plan, with the gimbals centred. A craft that can hover (minimum throttle up to 0.9 of its weight) holds a descent rate on the engine until a leg touches: 0.3 m/s at the plan end, faster higher up. Any other craft has its engine cut and drops if the fall ends at 3 m/s or less, and from higher up the no-plan law brakes it. The message is "TOUCHDOWN AT PLAN END WITHOUT CONTACT ... FLYING TO CONTACT". The 3 s rest at the plan end that went to the terminal hover is gone.
+  - The terminal hover takes a lost plan only for a craft that can hover. Its climb cut applies at any TWR, and after the cut it lights the engine again if the fall would end faster than 3 m/s.
+
 ## [0.16.0] - 2026-11-16
 
 An insertion search that shows the right saving at a quarter of the solves, and a small turn at the hand-over on stacks with solid boosters and a throttle floor.

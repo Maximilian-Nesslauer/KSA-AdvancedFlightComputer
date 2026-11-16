@@ -301,8 +301,7 @@ public static partial class GuidanceWindow
         _s.RefusalRun = 0;
         _s.TouchdownArmed = false;
         _s.SixDofSeenDescending = _s.SixDofTookBurn;
-        _s.SixDofArrivedSince = double.NaN;
-        _s.SixDofEngineCut = false;
+        _s.SixDofToContact = false;
         _s.SixDofRestartOpenLoop = false;
         _s.SixDofFromBrakingBurn = false;
         _s.DiagError(converging ? "converging..." : "");

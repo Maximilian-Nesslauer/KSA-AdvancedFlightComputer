@@ -444,9 +444,7 @@ public static partial class GuidanceWindow
     private static RebuildRequest PrepareRebuild(Vehicle vehicle, IParentBody parent,
                                                  double3 siteCci, double[] x, double now, int nodes)
     {
-        var xf = new double[14];
-        xf[2] = _s.SixDofTargetComAltM;
-        TerminalAttitude(x, xf);
+        var xf = PlanEndState(x);
 
         double sigmaSeed = _s.Guidance.HasPlan ? SixDofSeedFloor : _s.SixDofEntrySigmaSeed;
         EnsureBoostbackAero(vehicle, parent);
@@ -1005,10 +1003,35 @@ public static partial class GuidanceWindow
     // A plan lost below this height of the legs over the pad is lost near the ground: a craft that can hold its weight is handed to terminal hover.
     private const double SixDofLostPlanGateM = 500;
 
-    // A craft no higher than this over the plan end and no faster than this vertically for this long, with no contact, has ended its plan in the air.
+    // A craft no higher than this over the plan end, with no contact, whose plan has run out, or which is no faster than SixDofArrivedMs vertically, has reached the end of its plan in the air.
     private const double SixDofArrivedM = 1.0;
     private const double SixDofArrivedMs = 0.1;
-    private const double SixDofArrivedHoldS = 3.0;
+
+    // The plan ends this fast downward at the height of the first contact, and past the plan end the craft sinks at least this fast until a leg touches.
+    // The plan end is an upper bound of the first contact on a slope (TouchdownContact). A plan that ended at rest there left a craft that can hover resting above lower ground, with every re-solve from rest to rest succeeding. Aiming down carries it on to the ground.
+    private const double SixDofTouchdownSinkMs = 0.3;
+
+    // Past the plan end the sink rate grows with the height above it, SixDofTouchdownSinkMs + SixDofSinkPerM * height and at most SixDofSinkMaxMs, so a craft cut high up by a climb comes down in seconds rather than at the touchdown rate.
+    private const double SixDofSinkPerM = 0.5;
+    private const double SixDofSinkMaxMs = 5.0;
+    // The vertical acceleration asked per m/s of sink-rate error, 1/s.
+    private const double SixDofSinkGain = 2.0;
+
+    // A climb faster than this after the descent, with the engine lit and no contact, is a stop short: the engine is cut at any height and any thrust-to-weight.
+    private const double SixDofClimbCutMs = 0.1;
+
+    // Above this thrust-to-weight at the minimum throttle a craft cannot be trusted to brake a climb or hold a sink. It is not sunk to contact or handed to the hover: it drops once the drop is safe, and the no-plan law flies it down from above that. Below 1.0, so a craft whose minimum creeps past its weight as the propellant drains is not caught on the line.
+    private const double SixDofHoverMaxMinTwr = 0.9;
+
+    /// <summary>The end state of every touchdown plan: the centre of mass at the first-contact height over the target, sinking at SixDofTouchdownSinkMs, upright with the current heading and no rates.</summary>
+    private static double[] PlanEndState(double[] x)
+    {
+        var xf = new double[14];
+        xf[2] = _s.SixDofTargetComAltM;
+        xf[5] = -SixDofTouchdownSinkMs;
+        TerminalAttitude(x, xf);
+        return xf;
+    }
 
     // The no-plan law lights the engine once stopping on the pad needs this share of the minimum thrust, and cuts it below the lower share, so a demand sitting on the minimum does not toggle the engine every step.
     private const double SixDofNoPlanLightShare = 1.0;
@@ -1044,47 +1067,49 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// What touchdown guidance does about a craft that has stopped short of the pad or has no plan near the ground; true when it has taken the craft out of the normal step.
-    ///  - STOPPED SHORT, and unable to throttle below its weight: the engine is cut, whatever the height. Any thrust it can make is a climb, so the rest of the way is a drop; the engine stays off to the touchdown latch.
-    ///  - NO LIVE PLAN near the ground - the last one expired, the craft rests at the end of its plan without contact, or a burn was taken over from another mode and no plan has been published yet - and the craft can hold its weight: terminal hover takes it. A craft that cannot is left to the no-plan law (FlyWithoutPlan).
-    /// Neither waits for a first plan: a burn handed over without one is in the same position as one whose plan ran out.
+    /// What touchdown guidance does about a craft that has stopped short, reached the end of its plan without contact, or has no plan near the ground; true when it has taken the craft out of the normal step.
+    ///  - CLIMBING after the descent, engine lit and no contact: the engine is cut, at any height and any thrust-to-weight. A landing that climbs has gone wrong, and every second lit takes the craft higher. The rest of the way is flown to contact (StepSixDofToContact). A craft that cannot brake a climb is cut as soon as it stops descending.
+    ///  - AT THE PLAN END with no contact - the plan ran out within SixDofArrivedM of its end, the craft is at or below the end, or it rests near the end - the rest of the way is flown to contact.
+    ///  - NO LIVE PLAN elsewhere near the ground - the last one expired, or a burn was taken over from another mode and no plan has been published yet - and the craft can brake a climb: terminal hover takes it. A craft that cannot is left to the no-plan law (FlyWithoutPlan).
+    /// None waits for a first plan: a burn handed over without one is in the same position as one whose plan ran out.
     /// </summary>
-    private static bool NoPlanNearGround(Vehicle vehicle, IParentBody parent, double[] x, double now, bool lastPlanExpired)
+    private static bool NoPlanNearGround(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x, double now, bool lastPlanExpired)
     {
         if (!_s.Active || _s.Guidance == null)
             return false;
 
+        bool contact = vehicle.Situation.HasAnyContact();
         if (x[5] < -SixDofDescendingMs)
             _s.SixDofSeenDescending = true;
-        if (_s.SixDofSeenDescending && x[5] >= 0.0 && ManualInputs(vehicle).EngineOn
-            && !vehicle.Situation.HasAnyContact())
+        if (_s.SixDofSeenDescending && !contact && ManualInputs(vehicle).EngineOn)
         {
             double minTwr = TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu);
-            if (minTwr > 1.0)
+            if (x[5] > SixDofClimbCutMs || (x[5] >= 0.0 && minTwr > SixDofHoverMaxMinTwr))
             {
-                CutSixDofEngine(vehicle, now, x, minTwr);
+                CutSixDofEngine(vehicle, parent, siteCci, now, x, minTwr);
                 return true;
             }
         }
 
-        // A plan that ends above the ground leaves a craft that can hover at rest there, and each re-solve from rest to rest succeeds, so the plan never expires. The plan end is an upper bound of the first contact on a slope (TouchdownContact), so that happens with nothing wrong.
-        bool atRest = _s.SixDofLastPublishedPlan != null && !vehicle.Situation.HasAnyContact()
-            && x[2] - _s.SixDofTargetComAltM <= SixDofArrivedM && Math.Abs(x[5]) <= SixDofArrivedMs;
-        if (!atRest)
-            _s.SixDofArrivedSince = double.NaN;
-        else if (!double.IsFinite(_s.SixDofArrivedSince))
-            _s.SixDofArrivedSince = now;
-        bool arrived = atRest && now - _s.SixDofArrivedSince >= SixDofArrivedHoldS;
+        double aboveEnd = x[2] - _s.SixDofTargetComAltM;
+        if (_s.SixDofLastPublishedPlan != null && _s.SixDofSeenDescending && !contact && aboveEnd <= SixDofArrivedM
+            && (lastPlanExpired || aboveEnd <= 0.0 || Math.Abs(x[5]) <= SixDofArrivedMs))
+        {
+            string why = FormattableString.Invariant($"TOUCHDOWN AT PLAN END WITHOUT CONTACT, {aboveEnd:F1} m OVER IT, {x[5]:F1} m/s. FLYING TO CONTACT.");
+            SixDofLog.Event(_s, now, why);
+            GuidanceLog.Info(vehicle, why);
+            _s.DiagError(why);
+            _s.SixDofToContact = true;
+            StepSixDofToContact(vehicle, parent, siteCci, now, x);
+            return true;
+        }
 
-        bool noPlan = arrived || (_s.SixDofLastPublishedPlan == null ? _s.SixDofTookBurn : lastPlanExpired);
-        // A plan flown to its last node leaves the craft at the plan end, and the plan runs out there before the rest is long enough to count as arrived. That is the plan's end and no loss.
-        bool endedAtPlanEnd = arrived || (lastPlanExpired && !vehicle.Situation.HasAnyContact()
-            && x[2] - _s.SixDofTargetComAltM <= SixDofArrivedM);
+        bool noPlan = _s.SixDofLastPublishedPlan == null ? _s.SixDofTookBurn : lastPlanExpired;
         if (noPlan && x[2] - _s.VehicleHeightM <= SixDofLostPlanGateM
-            && !(TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) > 1.0)
+            && !(TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) > SixDofHoverMaxMinTwr)
             && TerminalHoverAvailable(vehicle, out _))
         {
-            string why = $"TOUCHDOWN {(endedAtPlanEnd ? "ENDED ITS PLAN WITHOUT CONTACT" : _s.SixDofLastPublishedPlan == null ? "TOOK BURN WITH NO PLAN" : "LOST PLAN")} "
+            string why = $"TOUCHDOWN {(_s.SixDofLastPublishedPlan == null ? "TOOK BURN WITH NO PLAN" : "LOST PLAN")} "
                        + $"{x[2] - _s.VehicleHeightM:F0} m ABOVE PAD. HANDOVER: HOVER.";
             SixDofLog.Event(_s, now, why);
             GuidanceLog.Info(vehicle, why);
@@ -1097,48 +1122,83 @@ public static partial class GuidanceWindow
         return false;
     }
 
-    private static void CutSixDofEngine(Vehicle vehicle, double now, double[] x, double minTwr)
+    private static void CutSixDofEngine(Vehicle vehicle, IParentBody parent, double3 siteCci, double now, double[] x, double minTwr)
     {
-        _s.SixDofEngineCut = true;
+        _s.SixDofToContact = true;
         ref ManualControlInputs manual = ref ManualInputs(vehicle);
         manual.EngineOn = false;
         manual.EngineThrottle = 0f;
         _s.LastThrottle = 0.0;
         KsaGimbalControl.SetLsq(vehicle, default);
-        string why = FormattableString.Invariant($"TOUCHDOWN STOPPED SHORT {x[2] - _s.SixDofTargetComAltM:F1} m ABOVE PAD, ")
-                   + FormattableString.Invariant($"RISING {x[5]:F1} m/s, CANNOT THROTTLE BELOW WEIGHT (TWR {minTwr:F2} AT MIN). ENGINE CUT, DROP TO PAD.");
+        string why = FormattableString.Invariant($"TOUCHDOWN STOPPED SHORT {x[2] - _s.SixDofTargetComAltM:F1} m ABOVE PLAN END, ")
+                   + FormattableString.Invariant($"RISING {x[5]:F1} m/s (TWR {minTwr:F2} AT MIN). ENGINE CUT, FLYING TO CONTACT.");
         SixDofLog.Event(_s, now, why);
         GuidanceLog.Info(vehicle, why);
         _s.WarnError(why);
     }
 
-    // The speed at the pad that the stop-short cut may leave to a free fall, m/s. A drop that ends faster is flown by the no-plan law.
+    // The speed at the pad that a craft which cannot brake a climb may be left to reach in free fall, m/s. A drop that ends faster is flown by the no-plan law.
     private const double SixDofSafeDropMs = 3.0;
 
-    /// <summary>After the stop-short cut: no torque and no solving until the craft touches down. The engine stays off while the fall from here ends at the pad no faster than SixDofSafeDropMs. The fall is measured to VehicleHeightM, the lowest height at which the craft meets the ground at the site, because the plan end is an upper bound of the first contact. From higher up the no-plan law flies the fall, which lights the engine again once the stop on the pad needs it.</summary>
-    private static void StepSixDofEngineCut(Vehicle vehicle, IParentBody parent, double3 siteCci, double now, double[] x)
+    /// <summary>
+    /// After the plan end or a climb cut: no solving and no gimbal torque until the craft touches down.
+    ///  - A craft that can brake a climb (thrust-to-weight at the minimum throttle no more than SixDofHoverMaxMinTwr) sinks to contact on its engine (SinkToContact).
+    ///  - One that cannot drops with the engine off while the fall from here ends at the pad no faster than SixDofSafeDropMs. The fall is measured to VehicleHeightM, the lowest height at which the craft meets the ground at the site, because the plan end is an upper bound of the first contact. From higher up the no-plan law flies the fall, which lights the engine again once the stop on the pad needs it.
+    /// </summary>
+    private static void StepSixDofToContact(Vehicle vehicle, IParentBody parent, double3 siteCci, double now, double[] x)
     {
+        KsaGimbalControl.SetLsq(vehicle, default);
+        ref ManualControlInputs manual = ref ManualInputs(vehicle);
+        if (vehicle.Situation.HasAnyContact())
+        {
+            manual.EngineOn = false;
+            manual.EngineThrottle = 0f;
+            _s.LastThrottle = 0.0;
+            string what = FormattableString.Invariant($"TOUCHDOWN AFTER PLAN END, {-x[5]:F1} m/s, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m FROM TARGET");
+            SixDofLog.Event(_s, now, what);
+            GuidanceLog.Info(vehicle, "Touchdown guidance: " + what + ".");
+            ReportLogStop(SixDofLog.Stop(_s));
+            Disengage6Dof(vehicle);
+            _s.Error = "TOUCHDOWN. ENGINE CUT. GUIDANCE ENDED.";
+            return;
+        }
+
+        if (!(TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) > SixDofHoverMaxMinTwr))
+        {
+            SinkToContact(vehicle, parent, siteCci, x);
+            return;
+        }
+
         double gravity = parent.Mu / vehicle.Orbit.StateVectors.PositionCci.LengthSquared();
         double legs = Math.Max(x[2] - _s.VehicleHeightM, 0.0);
         double sink = Math.Max(-x[5], 0.0);
-        if (!vehicle.Situation.HasAnyContact() && Math.Sqrt(sink * sink + 2.0 * gravity * legs) > SixDofSafeDropMs)
+        if (Math.Sqrt(sink * sink + 2.0 * gravity * legs) > SixDofSafeDropMs)
         {
-            KsaGimbalControl.SetLsq(vehicle, default);
             FlyWithoutPlan(vehicle, parent, siteCci, x, "STOPPED SHORT");
             return;
         }
-        ref ManualControlInputs manual = ref ManualInputs(vehicle);
         manual.EngineOn = false;
         manual.EngineThrottle = 0f;
-        KsaGimbalControl.SetLsq(vehicle, default);
-        if (!vehicle.Situation.HasAnyContact())
-            return;
-        string what = FormattableString.Invariant($"TOUCHDOWN AFTER STOP-SHORT CUT, {-x[5]:F1} m/s, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m FROM TARGET");
-        SixDofLog.Event(_s, now, what);
-        GuidanceLog.Info(vehicle, "Touchdown guidance: " + what + ".");
-        ReportLogStop(SixDofLog.Stop(_s));
-        Disengage6Dof(vehicle);
-        _s.Error = "TOUCHDOWN. ENGINE CUT. GUIDANCE ENDED.";
+        _s.LastThrottle = 0.0;
+    }
+
+    /// <summary>The engine holds a sink rate down to contact: SixDofTouchdownSinkMs at and below the plan end, faster above it. Asked for less than the minimum thrust while climbing, the engine goes off and gravity takes the climb out.</summary>
+    private static void SinkToContact(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x)
+    {
+        double3 position = vehicle.Orbit.StateVectors.PositionCci;
+        double3 up = double3.Normalize(position);
+        double vertical = Math.Max(double3.Dot(KsaFrameBridge.ThrustAxisCci(vehicle), up), 0.5);
+        double rate = Math.Min(SixDofTouchdownSinkMs + SixDofSinkPerM * Math.Max(x[2] - _s.SixDofTargetComAltM, 0.0), SixDofSinkMaxMs);
+        double gravity = parent.Mu / position.LengthSquared();
+        double demand = vehicle.TotalMass * (gravity + SixDofSinkGain * (-rate - x[5])) / vertical;
+        double pressure = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
+        KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(vehicle, demand, pressure);
+        bool climbing = command.Status == KsaEnginePerf.ThrustStatus.BelowMinimum && x[5] > SixDofClimbCutMs;
+        double throttle = climbing ? 0.0 : command.Throttle;
+        ref ManualControlInputs manual = ref ManualInputs(vehicle);
+        manual.EngineOn = throttle > 0.0;
+        manual.EngineThrottle = (float)throttle;
+        _s.LastThrottle = throttle;
     }
 
     private static void Step6DofCore(Vehicle vehicle)
@@ -1183,9 +1243,9 @@ public static partial class GuidanceWindow
             RecordGfoldTrace(Math.Sqrt(sdLocal.X * sdLocal.X + sdLocal.Y * sdLocal.Y), sdLocal.Z);
         }
 
-        if (_s.Active && _s.SixDofEngineCut)
+        if (_s.Active && _s.SixDofToContact)
         {
-            StepSixDofEngineCut(vehicle, parent, siteCci, now, x);
+            StepSixDofToContact(vehicle, parent, siteCci, now, x);
             return;
         }
 
@@ -1248,13 +1308,13 @@ public static partial class GuidanceWindow
             && now - _s.SixDofLastPublishedPlan.SolveTime >= _s.SixDofLastPublishedPlan.Sigma;
 
         // STOPPED SHORT, OR NO PLAN NEAR THE GROUND. The 6-DOF model keeps the engine lit at T >= Tmin, so a craft whose minimum thrust is above its weight climbs from wherever it stops, and no plan with the engine lit brings it back down: the engine is cut. A plan lost near the ground goes to terminal hover when the craft can hold its weight. Neither falls back to G-FOLD, which cannot plan what 6-DOF could not.
-        if (NoPlanNearGround(vehicle, parent, x, now, lastPlanExpired))
+        if (NoPlanNearGround(vehicle, parent, siteCci, x, now, lastPlanExpired))
             return;
 
         // TOUCHDOWN.
         // Without this the guidance kept commanding the plan's terminal control forever after arriving - nothing watched the ground, nothing cut the engine.
         // Armed only once the vehicle has been seen OFF the ground, because a vehicle on the pad already reports contact against the pad.
-        // Ahead of the restart branch: the plan ends at zero/zero, so contact is the plan's own end, and the last re-solves of a collapsing horizon are the likeliest to be refused into a restart. Behind it, contact during a restart left the engine burning on the pad.
+        // Ahead of the restart branch: the plan ends at the first contact, so contact is the plan's own end, and the last re-solves of a collapsing horizon are the likeliest to be refused into a restart. Behind it, contact during a restart left the engine burning on the pad.
         //
         // This MUST live in the step, not the draw: the draw only runs when the tab is open, and writes from it are erased by the sim copy-back a frame later.
         if (_s.Active && _s.Guidance != null)
@@ -1314,9 +1374,7 @@ public static partial class GuidanceWindow
         if (!_s.Converging && _s.Guidance != null && GuidanceIdle &&
             (driftedOff || _s.RefusalRun >= RefusalsBeforeRestart))
         {
-            var xfR = new double[14];
-            xfR[2] = _s.SixDofTargetComAltM;
-            TerminalAttitude(x, xfR);
+            var xfR = PlanEndState(x);
             // No pacing when threaded: spacing iterations out exists to keep frames smooth, and off the sim thread there is no frame to protect - it would only make the vehicle fall further before it has a plan.
             _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
             double sigmaR = Math.Max(_s.Guidance.Sigma, SixDofSeedFloor);
@@ -1418,9 +1476,7 @@ public static partial class GuidanceWindow
                     $"COLD SOLVE stalled at {_s.Guidance.DefectText} with {_s.Guidance.Nodes} nodes " +
                     $"after {_s.Guidance.LastIterations} iterations - retrying at {nodes} nodes");
 
-                var xfMore = new double[14];
-                xfMore[2] = _s.SixDofTargetComAltM;
-                TerminalAttitude(x, xfMore);
+                var xfMore = PlanEndState(x);
                 double retrySigma = RetrySigma(_s.Guidance);
                 bool rebuilt = _s.Guidance.HasPlan
                     ? RebuildAt(vehicle, parent, siteCci, x, now, nodes)
@@ -1671,12 +1727,10 @@ public static partial class GuidanceWindow
         if (_s.SixDofFloorAuto)
             _s.SixDofThrottleFloor = Ksa6DofSetup.VehicleThrottleFloor(vehicle);
 
-        // Target: hover point above the pad, upright and at rest.
+        // Target: the first contact over the pad, sinking at the touchdown rate, upright.
         // Mass is free, so the terminal state carries 13 of the 14 components.
         // Built BEFORE the config because the problem scaling is sized from the x0 -> xf extent.
-        xf = new double[14];
-        xf[2] = _s.SixDofTargetComAltM;
-        TerminalAttitude(x, xf);
+        xf = PlanEndState(x);
 
         // Spread cold solves engage COARSE; everything else uses the configured count.
         // The ladder takes over from the first cycle, so this is a starting point rather than a choice about how the descent is flown.
@@ -1724,9 +1778,7 @@ public static partial class GuidanceWindow
         if (FallBackToGfold(vehicle, now, why))
             return true;
 
-        var xf = new double[14];
-        xf[2] = _s.SixDofTargetComAltM;
-        TerminalAttitude(x, xf);
+        var xf = PlanEndState(x);
         _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
         _s.Guidance.BeginCold(x, xf, Math.Clamp(RetrySigma(_s.Guidance), _s.Guidance.SigmaMin, _s.Guidance.SigmaMax));
         _s.Converging = true;
@@ -1807,8 +1859,7 @@ public static partial class GuidanceWindow
             _s.Active = true;
             _s.TouchdownArmed = false;
             _s.SixDofSeenDescending = _s.SixDofTookBurn;
-        _s.SixDofArrivedSince = double.NaN;
-            _s.SixDofEngineCut = false;
+            _s.SixDofToContact = false;
             _s.GateIndex = -1;
             _s.RefusalRun = 0;
             _s.RungFloor = int.MaxValue;
@@ -1857,8 +1908,7 @@ public static partial class GuidanceWindow
         _s.Worker = _s.SixDofThreaded ? new Ksa6DofSolveWorker() : null;
         _s.TouchdownArmed = false;
         _s.SixDofSeenDescending = _s.SixDofTookBurn;
-        _s.SixDofArrivedSince = double.NaN;
-        _s.SixDofEngineCut = false;
+        _s.SixDofToContact = false;
         _s.GateIndex = -1;
         _s.LastReplan = now;
         _s.PrevV = null;
