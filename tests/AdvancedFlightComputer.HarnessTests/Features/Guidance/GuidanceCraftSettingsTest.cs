@@ -279,6 +279,33 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
         t.Check("an unknown ascent method is skipped", s.AscentMethod == GuidanceWindow.AscentMethod.CatsUpfg);
         t.Check("a capture without a moon is skipped", !s.MoonTransferCapture && s.MoonTransferId.Length == 0);
 
+        // A record that names its body and still holds the legs height of an older version takes the body and the default buffer.
+        BodyDefaults.Reset();
+        File.WriteAllLines(FilePath(save), new[]
+        {
+            "format = 1",
+            "[[craft]]",
+            "id = \"" + id + "\"",
+            "DefaultsBody = \"Luna\"",
+            "LegsDeployHeightM = 500",
+            "SiteLonDeg = 12.5",
+        });
+        VehicleAutopilotState.Remove(craft);
+        error = null;
+        try
+        {
+            restored = CraftSettings.RestoreFrom(save, Universe.CurrentSystem);
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+        }
+        t.Check("a record with a body and a legs height loads without an error", error == null && restored == 1, error?.ToString() ?? $"{restored}");
+        s = VehicleAutopilotState.For(craft);
+        t.Check("the record with the legs height follows its body", s.DefaultsBody == "Luna" && s.ConvexHandoverAltKm == 10.0, $"body '{s.DefaultsBody}', {s.ConvexHandoverAltKm} km");
+        t.CheckAbs("the record with the legs height keeps its other values", s.SiteLonDeg, 12.5, 1e-12);
+        t.CheckAbs("the record with the legs height gets the default buffer", s.LegsDeployBufferS, GuidanceSettingSpecs.LegsDeployBufferS.Default, 1e-12);
+
         foreach (string format in new[] { "", "format = 0", "format = 2" })
         {
             var lines = new List<string>();
