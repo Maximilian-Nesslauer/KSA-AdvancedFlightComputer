@@ -308,7 +308,7 @@ public static partial class GuidanceWindow
     }
 
     // The armed burn, until stock reports it complete. FlightComputer.UpdateBurnTarget ends an Auto burn when the delta v to go no longer points along the target and writes Manual, and the kept BurnTarget still shows that after the node is gone, as the stock deorbit phase reads it (StockDeorbitComplete).
-    // The reversal alone is not enough on a burn of a few cm/s. FlightComputer.ComputeControl decides the completion before the physics step, and FlightComputer.ReadMeasurements adds that step's delta v to the target after it, so the delta v of that step, such as an attitude pulse against the burn, can turn the target back before the chain reads it. The completion that stock raised counts first for that reason.
+    // The reversal alone is not enough on a burn of a few cm/s. FlightComputer.ComputeControl decides the completion before the physics step, and FlightComputer.ReadMeasurements adds that step's delta v to the target after it, so a step that pushes against the burn, by a few mm/s, for example from the attitude thrusters, can turn the target back before the chain reads it. The completion that stock raised counts first for that reason.
     private static void StepMoonBurn(Vehicle vehicle, Orbit orbit, Celestial moon, IParentBody moonBody)
     {
         FlightComputer fc = vehicle.FlightComputer;
