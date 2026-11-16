@@ -208,17 +208,17 @@ public sealed class VehicleAutopilotState
     public double ReserveBoosterDryKg;
 
     /// <summary>
-    /// True when the next separation drops EVERY engine now producing thrust, so the
-    /// vehicle that separates really is the booster doing the flying.
+    /// True when the targeted booster is the next to separate and it takes burning engines with it, so the reserve has a booster to stay in.
     ///
-    /// This is what keeps the reserve off a strap-on stack. While boosters burn
-    /// alongside a core, the next separation drops the boosters and the core keeps
-    /// firing - reserving propellant there would stage the whole first stage early to
-    /// leave fuel in casings that are about to be thrown away. Once the strap-ons are
-    /// gone and the next separation is the core's own, this goes true and the reserve
-    /// arms itself.
+    /// A core under strap-ons is not next: the strap-ons are, so the reserve arms once they are gone. Side boosters are, and they leave beside a core that burns on (#176); see <see cref="ReserveFlowShare"/>.
     /// </summary>
     public bool ReserveArmed;
+
+    /// <summary>The separating engines' share of the burning engines' propellant flow: one when the booster is all that burns, below one for side boosters beside a core, whose share of a shortened burn stays aboard (AscentRecovery.FlowShare).</summary>
+    public double ReserveFlowShare = 1.0;
+
+    /// <summary>For side boosters, the tanks in them that feed their own engines: what the reserve is counted in, since the vehicle's mass against the stage model's mixes in the core's propellant. Empty otherwise.</summary>
+    public readonly System.Collections.Generic.List<Tank> ReserveTanks = new();
 
     /// <summary>Why the reserve is not armed, empty when it is.</summary>
     public string ReserveNote = "";

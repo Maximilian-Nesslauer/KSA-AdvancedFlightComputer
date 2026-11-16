@@ -54,6 +54,8 @@ internal sealed class AscentCase
     public readonly BoostbackOracle? Oracle;
     /// <summary>The reserve the stage list already holds back, canonical; the solve's variable is the change from it, between <see cref="RMinC"/> and <see cref="RMaxC"/>: none at all, to the same 98 % of the stage's liquid load UPFG's reserve stops at.</summary>
     public readonly double R0C, RMinC, RMaxC;
+    /// <summary>The booster's share of its stage's propellant flow (AscentRecovery.FlowShare): one, or below one for side boosters beside a core that burns on.</summary>
+    public readonly double RecShare = 1.0;
     /// <summary>Each node's solids, at its fixed second of its stage.</summary>
     public readonly SolidPoint[] NodeSolid;
     public readonly double SigScale;
@@ -214,8 +216,16 @@ internal sealed class AscentCase
             RecStage = rec.Stage;
             Oracle = new BoostbackOracle(p, rec);
             R0C = rec.InitialReserveKg / mu;
+            RecShare = rec.FlowShare;
             RMinC = -R0C;
-            RMaxC = Math.Max(0.0, 0.98 * (PropC[RecStage] + R0C) - R0C);
+            // The booster's own load is its share of the stage's, with what it already keeps added back.
+            RMaxC = Math.Max(0.0, 0.98 * (RecShare * PropC[RecStage] + R0C) - R0C);
+            // A side booster's core burns its share of the reserve in the next stage, so that stage may run longer than its load as built.
+            if (RecShare < 1.0 && !p.Stages[RecStage + 1].IsPinned && PropC[RecStage + 1] > 0.0)
+            {
+                double extra = (RMaxC + R0C) * (1.0 / RecShare - 1.0);
+                SigMax[RecStage + 1] *= (PropC[RecStage + 1] + extra) / PropC[RecStage + 1];
+            }
         }
 
         NodeSolid = new SolidPoint[N];

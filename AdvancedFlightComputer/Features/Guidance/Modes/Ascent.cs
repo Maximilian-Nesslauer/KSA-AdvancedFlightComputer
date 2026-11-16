@@ -556,7 +556,7 @@ public static partial class GuidanceWindow
                     GuidanceLog.Debug(vehicle, "thrust is back, solving again.");
                 // The reserve BEFORE the g-limit split, so a stage that gets divided is divided at the masses it will actually fly through. Applied to this copy only - the cached model stays the vehicle as it is, which is what the stage table and the staging cue both need it to be.
                 if (_s.ReserveArmed)
-                    ApplyAscentReserve(live, _s.ReserveKg);
+                    ApplyAscentReserve(live, _s.ReserveKg, _s.ReserveFlowShare);
                 double gLimit = EffectiveAccelLimitG(vehicle);
                 if (double.IsFinite(gLimit))
                     ApplyGLimit(live, gLimit);

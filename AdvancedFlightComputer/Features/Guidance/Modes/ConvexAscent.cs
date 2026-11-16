@@ -470,8 +470,9 @@ public static partial class GuidanceWindow
         string recoveryNote = "";
         ReturnableStage booster = BoostbackTarget();
         string recoverySite = RecoverySiteKey(booster);
+        double flowShare = 1.0;
         int boosterStage = booster == null ? -1
-            : BoosterPlanStage(vehicle, booster, model, stageParts, allStages, out recoveryNote);
+            : BoosterPlanStage(vehicle, booster, model, stageParts, allStages, out flowShare, out recoveryNote);
         // A booster with no stage of its own in the plan already has its note.
         if (boosterStage >= 0 && !AscentPhasePlan.CanKeepReserve(allStages, boosterStage))
             recoveryNote = "NO BOOSTER RESERVE: SEPARATING STAGE HAS NO LIQUID LOAD OF ITS OWN";
@@ -495,6 +496,7 @@ public static partial class GuidanceWindow
                     Stage = boosterStage,
                     InitialReserveKg = 0.0,
                     BoosterDryKg = boosterDryKg,
+                    FlowShare = flowShare,
                     ExhaustVelocity = b.Thrust / b.MassFlow,
                     SiteCci = [site.X, site.Y, site.Z],
                     ReferenceArea = aero.ReferenceArea,
@@ -503,7 +505,7 @@ public static partial class GuidanceWindow
                     Alpha = GlideNominalAlpha(aero),
                     Air = aero.Atmosphere,
                 };
-                recoveryNote = FormattableString.Invariant($"BOOSTER RESERVE FROM PLAN: '{booster.Name}' ({boosterDryKg / 1000.0:F2} t dry, stage {boosterStage + 1}) HOME TO lat {latDeg:F3} lon {lonDeg:F3}");
+                recoveryNote = FormattableString.Invariant($"BOOSTER RESERVE FROM PLAN: '{booster.Name}' ({boosterDryKg / 1000.0:F2} t dry, stage {boosterStage + 1}{(flowShare < 1.0 ? $", side boosters drawing {flowShare:P0} of its flow" : "")}) HOME TO lat {latDeg:F3} lon {lonDeg:F3}");
             }
         }
 
@@ -682,14 +684,16 @@ public static partial class GuidanceWindow
     /// A stage that lights below the hand-over altitude keeps its throttle, because the plan flies it through the air. Only liquid stages that are free to throttle are candidates: solids follow their grain, and a pinned stage is already held.
     /// </summary>
     /// <summary>
-    /// The plan stage whose end separates <paramref name="booster"/>: the last stage of the staging model that burns any of its engines. The plan's stages are the model's, one for one. -1, with <paramref name="note"/> saying why, when the booster has no such stage, or leaves while the stage's other engines burn on.
+    /// The plan stage whose end separates <paramref name="booster"/>: the last stage of the staging model that burns any of its engines. The plan's stages are the model's, one for one. -1, with <paramref name="note"/> saying why, when the booster has no such stage.
     ///
-    /// SIDE BOOSTERS ARE NOT PLANNED YET (#176). A stage whose engines partly burn on into the next is boosters and core burning together, one load and one throttle in the plan. A reserve there would shorten the core's burn with the boosters' and count the core's share as thrown away, and in flight the reserve does not arm for a separation that leaves the core burning. So none is planned rather than a wrong one.
+    /// SIDE BOOSTERS (#176). When the stage's liquid engines partly burn on into the next, what leaves is side boosters beside a core, all on one throttle. <paramref name="flowShare"/> is then the leaving engines' share of the stage's propellant flow, at vacuum design performance; one otherwise. Every side booster on that row leaves with the stage, so the stage's jettison and the reserve are all of theirs together.
     /// </summary>
     private static int BoosterPlanStage(Vehicle vehicle, ReturnableStage booster, UpfgVehicle model,
-                                        Dictionary<UpfgStage, HashSet<Part>> stageParts, AscentStage[] allStages, out string note)
+                                        Dictionary<UpfgStage, HashSet<Part>> stageParts, AscentStage[] allStages,
+                                        out double flowShare, out string note)
     {
         note = "";
+        flowShare = 1.0;
         int planStages = allStages.Length;
         if (model.Stages.Count != planStages)
         {
@@ -735,13 +739,33 @@ public static partial class GuidanceWindow
             && stageParts.TryGetValue(model.Stages[last], out HashSet<Part> here)
             && stageParts.TryGetValue(model.Stages[last + 1], out HashSet<Part> after))
         {
+            bool coreBurnsOn = false;
             foreach (Part p in here)
+                coreBurnsOn |= after.Contains(p) && !BurnsSolid(p);
+            if (coreBurnsOn)
             {
-                if (after.Contains(p) && !BurnsSolid(p))
+                // SIDE BOOSTERS (#176): one throttle drives them and the core, so what they keep back is their share of the stage's flow, and the core's share stays aboard (AscentRecovery.FlowShare).
+                double leaving = 0.0, all = 0.0;
+                foreach (Part p in here)
                 {
-                    note = "NO BOOSTER RESERVE: SIDE BOOSTERS NOT PLANNED YET (#176)";
+                    if (BurnsSolid(p))
+                    {
+                        note = "NO BOOSTER RESERVE: SIDE BOOSTERS BESIDE SOLIDS ARE NOT PLANNED";
+                        return -1;
+                    }
+                    (_, double flow) = KsaVehicleAdapter.PartDesignPerformance(vehicle.Parts, p, 0.0);
+                    if (!(flow > 0.0))
+                        continue;
+                    all += flow;
+                    if (!after.Contains(p))
+                        leaving += flow;
+                }
+                if (!(leaving > 0.0) || !(all > 0.0))
+                {
+                    note = "NO BOOSTER RESERVE: NO FLOW FOR THE SIDE BOOSTERS' ENGINES";
                     return -1;
                 }
+                flowShare = leaving / all;
             }
         }
 

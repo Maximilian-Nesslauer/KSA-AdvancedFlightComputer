@@ -200,9 +200,11 @@ internal sealed class AscentSubproblem
                 rows.Add(row, IX(c.Ends[s], 6), sign);
                 rows.Add(row, IX(c.Starts[s], 6), -sign);
             }
-            // The booster's load burns its propellant less what it keeps back: dR more kept is dR less burned.
+            // The booster's load burns its propellant less what it keeps back: dR more kept is dR less burned, over the booster's share of the stage's flow (AscentRecovery.FlowShare). With side boosters that ends the stage dR / share sooner, and the core's part of it, dR (1 / share - 1), is burned in the next stage instead.
             if (_recovery && last == c.RecStage)
-                rows.Add(row, IDR, -sign);
+                rows.Add(row, IDR, -sign / c.RecShare);
+            if (_recovery && c.RecShare < 1.0 && first == c.RecStage + 1)
+                rows.Add(row, IDR, sign * (1.0 / c.RecShare - 1.0));
         }
 
         // ---- a pinned burn time: a solid's burn, or a liquid held at full thrust, sets it.

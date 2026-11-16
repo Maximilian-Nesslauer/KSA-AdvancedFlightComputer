@@ -18,6 +18,12 @@ public sealed class AscentRecovery
     public required double InitialReserveKg { get; init; }
     /// <summary>The booster's dry mass, kg: what leaves at separation besides the reserve.</summary>
     public required double BoosterDryKg { get; init; }
+    /// <summary>
+    /// The share of <see cref="Stage"/>'s propellant flow that the separating booster draws, in (0, 1]. One for a booster that is all that burns in its stage.
+    ///
+    /// SIDE BOOSTERS (#176). Below one, the booster leaves beside a core whose liquid burns on into the next stage, and the one throttle drives both. A reserve R kept in the booster ends the stage R / share of propellant sooner, and the core's part of that, R (1 / share - 1), is still aboard. It is burned in the next stage, not jettisoned with the booster.
+    /// </summary>
+    public double FlowShare { get; init; } = 1.0;
     /// <summary>The booster's engines' exhaust velocity, m/s.</summary>
     public required double ExhaustVelocity { get; init; }
     /// <summary>The landing site at lift-off, in the problem's inertial frame, m. Fixed to the ground: at separation it has turned with the body.</summary>
@@ -47,7 +53,7 @@ public sealed class AscentRecovery
     /// <summary>The same booster, its reserve starting at <paramref name="initialReserveKg"/>.</summary>
     public AscentRecovery WithInitialReserve(double initialReserveKg) => new()
     {
-        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, ExhaustVelocity = ExhaustVelocity, BurnDelayS = BurnDelayS,
+        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, FlowShare = FlowShare, ExhaustVelocity = ExhaustVelocity, BurnDelayS = BurnDelayS,
         SiteCci = SiteCci, ReferenceArea = ReferenceArea, Drag = Drag, Lift = Lift, Alpha = Alpha, Air = Air,
         LandingFactor = LandingFactor, BoostbackMargin = BoostbackMargin,
     };
@@ -60,6 +66,10 @@ public sealed class AscentRecovery
             return "the recovered booster is not valid";
         if (SiteCci is not { Length: 3 } || !SiteCci.All(double.IsFinite))
             return "the landing site is not valid";
+        if (!(FlowShare > 0.0 && FlowShare <= 1.0))
+            return "the booster's flow share is not in (0, 1]";
+        if (FlowShare < 1.0 && !p.Stages[Stage + 1].HasLiquid)
+            return "a side booster's core has no liquid to burn on in the next stage";
         return "";
     }
 }

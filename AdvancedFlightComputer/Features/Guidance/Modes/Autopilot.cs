@@ -184,6 +184,18 @@ public static partial class GuidanceWindow
             && vehicle.Orbit.StateVectors.PositionCci.Length() - body.MeanRadius < TraceMinAltitude)
             return false;
 
+        // SIDE BOOSTERS: counted in their own engines' tanks. The vehicle's mass against the stage model's burnout mixes in the core's propellant, which burns on, and would stage them with a third of their reserve on the heavy (#176).
+        if (_s.ReserveFlowShare < 1.0)
+        {
+            if (_s.ReserveTanks.Count == 0)
+                return false;
+            ReadOnlySpan<MoleState> moles = vehicle.Parts.Moles.States;
+            double inBoosters = 0.0;
+            foreach (Tank tank in _s.ReserveTanks)
+                inBoosters += tank.ComputeSubstanceMass(moles);
+            return inBoosters <= _s.ReserveKg;
+        }
+
         UpfgVehicle model = _s.StageModel;
         if (model == null || model.Stages.Count < 2)
             return false;
@@ -555,15 +567,9 @@ public static partial class GuidanceWindow
     private static readonly HashSet<EngineController> _pendingIgnition = new HashSet<EngineController>();
 
     /// <summary>
-    /// True when the next separation drops every engine currently producing thrust.
+    /// True when the next separation takes burning engines with it, so a reserve kept back stays in what leaves. <paramref name="flowShare"/> is their share of the burning engines' propellant flow: one when everything burning leaves, as a core's or an in-line booster's separation does.
     ///
-    /// THIS IS THE GUARD THAT KEEPS THE RESERVE OFF A STRAP-ON STACK. "The next thing
-    /// that separates" is not the same as "the booster": while solids burn beside a
-    /// core, the next separation is the casings, and reserving against that would end
-    /// the whole first stage early to leave propellant in something about to be thrown
-    /// away. Requiring the separation to take ALL the live engines with it says the
-    /// thing that leaves is the thing doing the flying, which is what a boostback needs
-    /// to be true. Once the strap-ons are gone it becomes true on its own.
+    /// SIDE BOOSTERS LEAVE BESIDE A CORE THAT BURNS ON (#176), so the share is below one, and the reserve is counted in their own tanks (<see cref="CollectReserveTanks"/>). This once refused any separation that left an engine burning. The guard it kept, a core's reserve armed against its strap-ons' separation, is now RefreshReserve's: the targeted booster has to be the next to separate, and casings with no pod are never a target.
     ///
     /// ON THE PAD THE NEXT SEQUENCE IS USUALLY THE IGNITION, which separates nothing.
     /// Stopping there left the reserve unarmed until the engines were lit, and the
@@ -574,9 +580,10 @@ public static partial class GuidanceWindow
     /// nothing are passed over to the first that does, and the engines they will light
     /// count as burning, as they will be when that separation comes.
     /// </summary>
-    private static bool NextSeparationDropsAllEngines(Vehicle vehicle, out string why)
+    private static bool NextSeparationTakesBurningEngines(Vehicle vehicle, out double flowShare, out string why)
     {
         why = "";
+        flowShare = 1.0;
         PartTree tree = vehicle?.Parts;
         SequenceList sequenceList = tree?.SequenceList;
         if (tree == null || sequenceList == null)
@@ -629,21 +636,72 @@ public static partial class GuidanceWindow
             return false;
         }
 
-        bool anyLit = false;
+        // By engine part, as the stage model and the plan's flow share count them (KsaVehicleAdapter.PartDesignPerformance).
+        _litLeaving.Clear();
+        _litStaying.Clear();
         foreach (var engine in engineStates.ModulesAndStates)
         {
             if ((!engine.Module.IsActive || !engine.State.IsPropellantAvailable) && !_pendingIgnition.Contains(engine.Module))
                 continue;
-            anyLit = true;
-            if (!_separationDrops.Contains(engine.Module.Parent.FullPart))
+            Part part = engine.Module.Parent;
+            if (_separationDrops.Contains(part.FullPart))
+                _litLeaving.Add(part);
+            else
+                _litStaying.Add(part);
+        }
+        if (_litLeaving.Count == 0)
+        {
+            why = _litStaying.Count == 0 ? "NO ENGINE BURNING" : "NEXT SEPARATION TAKES NO BURNING ENGINE";
+            return false;
+        }
+        if (_litStaying.Count > 0)
+        {
+            double leaving = 0.0, staying = 0.0;
+            foreach (Part part in _litLeaving)
+                leaving += KsaVehicleAdapter.PartDesignPerformance(tree, part, 0.0).massFlow;
+            foreach (Part part in _litStaying)
+                staying += KsaVehicleAdapter.PartDesignPerformance(tree, part, 0.0).massFlow;
+            if (!(leaving > 0.0))
             {
-                why = "NEXT SEPARATION LEAVES ENGINE BURNING: NOT A BOOSTER";
+                why = "NO FLOW FOR THE SEPARATING ENGINES";
                 return false;
             }
+            flowShare = leaving / (leaving + staying);
         }
-        if (!anyLit)
-            why = "NO ENGINE BURNING";
-        return anyLit;
+        return true;
+    }
+
+    // Scratch for the separation walk: the burning engine parts that leave with it and that stay.
+    private static readonly HashSet<Part> _litLeaving = new HashSet<Part>();
+    private static readonly HashSet<Part> _litStaying = new HashSet<Part>();
+    private static readonly HashSet<RocketCore> _leavingCores = new HashSet<RocketCore>();
+
+    /// <summary>The tanks in what the next separation drops (<see cref="_separationDrops"/>, as NextSeparationTakesBurningEngines left it) that feed the engines dropped with them: the side boosters' own propellant, which their reserve is counted in. A pod's tank that only RCS draws on is not one.</summary>
+    private static void CollectReserveTanks(Vehicle vehicle, List<Tank> into)
+    {
+        into.Clear();
+        _leavingCores.Clear();
+        foreach (Part part in _separationDrops)
+            foreach (EngineController engine in part.SubtreeModules.Get<EngineController>())
+                if (engine.Cores != null)
+                    foreach (RocketCore core in engine.Cores)
+                        _leavingCores.Add(core);
+        foreach (Part part in _separationDrops)
+        {
+            Span<Tank> tanks = part.SubtreeModules.Get<Tank>();
+            for (int i = 0; i < tanks.Length; i++)
+            {
+                foreach ((ResourceManager manager, int _) in tanks[i].AvailableConsumers)
+                {
+                    if (manager.Consumer is PlumbedCore core && _leavingCores.Contains(core))
+                    {
+                        into.Add(tanks[i]);
+                        break;
+                    }
+                }
+            }
+        }
+        _leavingCores.Clear();
     }
 
     /// <summary>
@@ -682,6 +740,8 @@ public static partial class GuidanceWindow
         _s.ReserveKg = 0.0;
         _s.ReserveBoosterDryKg = 0.0;
         _s.ReserveArmed = false;
+        _s.ReserveFlowShare = 1.0;
+        _s.ReserveTanks.Clear();
 
         ReturnableStage booster = BoostbackTarget();
         if (booster == null)
@@ -710,11 +770,21 @@ public static partial class GuidanceWindow
             _s.ReserveNote = "NO SEPARATION IN STAGE MODEL FOR A RESERVE";
             return;
         }
-        if (!NextSeparationDropsAllEngines(vehicle, out string why))
+        if (!NextSeparationTakesBurningEngines(vehicle, out double flowShare, out string why))
         {
             _s.ReserveNote = why;
             return;
         }
+        if (flowShare < 1.0)
+        {
+            CollectReserveTanks(vehicle, _s.ReserveTanks);
+            if (_s.ReserveTanks.Count == 0)
+            {
+                _s.ReserveNote = "NO TANKS FEED THE SIDE BOOSTERS' ENGINES";
+                return;
+            }
+        }
+        _s.ReserveFlowShare = flowShare;
 
         // The convex plan sized it for the booster it brings home: stage it there, so the booster leaves where the plan separates it.
         double planned = PlannedBoosterReserveKg(vehicle);
@@ -739,7 +809,7 @@ public static partial class GuidanceWindow
     /// stage table and the landing flows read the same cache and should see the vehicle
     /// as it is.
     /// </summary>
-    private static void ApplyAscentReserve(UpfgVehicle live, double reserveKg)
+    private static void ApplyAscentReserve(UpfgVehicle live, double reserveKg, double flowShare)
     {
         if (live == null || live.Stages.Count == 0 || !(reserveKg > 0.0))
             return;
@@ -747,8 +817,13 @@ public static partial class GuidanceWindow
         UpfgStage s0 = live.Stages[0];
 
         // burnTimes goes NEGATIVE if MassDry passes MassTotal, and a negative burn time propagates into tgo without complaint. Once the live mass is already inside the reserve there is nothing left to plan on this stage anyway - the staging cue is about to fire - so the floor here is a guard, not a policy.
+        // SIDE BOOSTERS end the stage reserve / share sooner, where share is their part of its flow; the core's part of that stays aboard and starts the next stage heavier (#176).
+        double share = flowShare > 0.0 && flowShare <= 1.0 ? flowShare : 1.0;
         double floor = s0.MassTotal - 0.02 * (s0.MassTotal - s0.MassDry);
-        s0.MassDry = Math.Min(s0.MassDry + reserveKg, floor);
+        double before = s0.MassDry;
+        s0.MassDry = Math.Min(s0.MassDry + reserveKg / share, floor);
+        if (share < 1.0 && live.Stages.Count > 1)
+            live.Stages[1].MassTotal += (s0.MassDry - before) * (1.0 - share);
     }
 
     // The thrust acceleration limit every plan honours, in g, which is the lower of the player's g-limit when it is on and the structural limit stock holds the throttle to (KsaEnginePerf.StructuralAccelerationLimit).

@@ -469,7 +469,7 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// What the booster with a stage site keeps for its way home. There is nothing to set: the stage site arms the reserve, and the calculated climb sizes it for the boostback to that site and the landing burn (RefreshReserve). Idle is normal for part of a flight, because a strap-on stack does not arm until the strap-ons are gone, so the row says why (NextSeparationDropsAllEngines).
+    /// What the booster with a stage site keeps for its way home. There is nothing to set: the stage site arms the reserve, and the calculated climb sizes it for the boostback to that site and the landing burn (RefreshReserve). Idle is normal for part of a flight, because a strap-on stack does not arm until the strap-ons are gone, so the row says why (NextSeparationTakesBurningEngines).
     /// </summary>
     private static void DrawBoosterReserve()
     {

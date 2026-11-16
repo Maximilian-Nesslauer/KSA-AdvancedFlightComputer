@@ -437,14 +437,19 @@ public sealed class AscentProblem
         Recovery = recovery,
     };
 
-    /// <summary>This problem with its booster's reserve starting at <paramref name="reserveKg"/> instead (AscentProblem.Recovery): that much less burned in its stage and that much more dropped with it.</summary>
+    /// <summary>This problem with its booster's reserve starting at <paramref name="reserveKg"/> instead (AscentProblem.Recovery): that much more dropped with it, its stage burning that much over its flow share less, and a side booster's core burning its own share of that in the next stage (AscentRecovery.FlowShare).</summary>
     public AscentProblem WithInitialReserve(double reserveKg)
     {
         AscentRecovery rec = Recovery ?? throw new InvalidOperationException("no booster to keep a reserve in");
         var stages = (AscentStage[])Stages.Clone();
         AscentStage b = stages[rec.Stage];
         double d = reserveKg - rec.InitialReserveKg;
-        stages[rec.Stage] = b.With(b.PropellantMass - d, b.JettisonMass + d, b.LiquidCarriesOver);
+        stages[rec.Stage] = b.With(b.PropellantMass - d / rec.FlowShare, b.JettisonMass + d, b.LiquidCarriesOver);
+        if (rec.FlowShare < 1.0)
+        {
+            AscentStage core = stages[rec.Stage + 1];
+            stages[rec.Stage + 1] = core.With(core.PropellantMass + d * (1.0 / rec.FlowShare - 1.0), core.JettisonMass, core.LiquidCarriesOver);
+        }
         return new AscentProblem
         {
             Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = stages,
