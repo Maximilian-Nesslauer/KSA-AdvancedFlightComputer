@@ -71,9 +71,7 @@ public static partial class GuidanceWindow
             return double.NaN;
         double3 r = orbit.StateVectors.PositionCci;
         double3 dirCcf = double3.Normalize(r).Transform(parent.GetCci2Ccf());
-        double terrain = (parent as Celestial)?.GetTerrainHeightFromDirCcf(dirCcf) ?? 0.0;
-        if (!double.IsFinite(terrain))
-            terrain = 0.0;
+        double terrain = KsaSurfaceHeight.At(parent, dirCcf);
         return r.Length() - (parent.MeanRadius + terrain) - s.VehicleHeightM;
     }
 }

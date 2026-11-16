@@ -456,9 +456,8 @@ public static partial class GuidanceWindow
         if (_s.SiteLatDeg != _s.SiteTerrainCacheLat || _s.SiteLonDeg != _s.SiteTerrainCacheLon
             || !ReferenceEquals(parent, _s.SiteTerrainCacheBody))
         {
-            _s.SiteTerrainHeightM = (parent as Celestial)?.GetTerrainHeightFromDirCcf(SiteDirCcf()) ?? 0.0;
-            if (!double.IsFinite(_s.SiteTerrainHeightM))
-                _s.SiteTerrainHeightM = 0.0;
+            // The sea where it covers the ground, so a site at sea is on the water and not the seabed (KsaSurfaceHeight).
+            _s.SiteTerrainHeightM = KsaSurfaceHeight.At(parent, SiteDirCcf());
             _s.SiteTerrainCacheLat = _s.SiteLatDeg;
             _s.SiteTerrainCacheLon = _s.SiteLonDeg;
             _s.SiteTerrainCacheBody = parent;
@@ -489,7 +488,7 @@ public static partial class GuidanceWindow
             double3 east = double3.Cross(new double3(0, 0, 1), up);
             east = east.LengthSquared() > 1e-12 ? double3.Normalize(east) : new double3(1, 0, 0);
             double3 north = double3.Cross(up, east);
-            double centre = body.GetTerrainHeightFromDirCcf(up);
+            double centre = KsaSurfaceHeight.At(body, up);
             double radius = body.MeanRadius + centre;
             var highest = new double[(int)Math.Round(reach / SiteGroundRingStepM)];
             for (int ring = 0; ring < highest.Length; ring++)
@@ -500,7 +499,7 @@ public static partial class GuidanceWindow
                 {
                     double a = i * 2.0 * Math.PI / SiteGroundRingPoints;
                     double3 point = up * radius + (east * Math.Cos(a) + north * Math.Sin(a)) * r;
-                    high = Math.Max(high, body.GetTerrainHeightFromDirCcf(double3.Normalize(point)) - centre);
+                    high = Math.Max(high, KsaSurfaceHeight.At(body, double3.Normalize(point)) - centre);
                 }
                 highest[ring] = high;
             }

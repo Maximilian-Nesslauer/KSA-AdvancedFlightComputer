@@ -529,7 +529,8 @@ public static partial class GuidanceWindow
         ConsoleUi.PartsFold(PageText.Numbers, LandNumbersFoldId,
         [
             new FoldPart(FoldNames.Distance, siteRows, () => GaugeRowText("DISTANCE TO SITE", Fmt.Distance(AngleBetween(orbit.StateVectors.PositionCci, SiteDirCciAt(parent, 0)) * parent.MeanRadius))),
-            new FoldPart(FoldNames.Terrain, siteRows, () => GaugeRowText("SITE TERRAIN", Fmt.Distance(SiteTerrainHeight(parent)))),
+            new FoldPart(FoldNames.Terrain, siteRows, () => GaugeRowText("SITE TERRAIN", KsaSurfaceHeight.IsWater(parent, SiteDirCcf(_s.SiteLatDeg, _s.SiteLonDeg))
+                ? Fmt.Distance(SiteTerrainHeight(parent)) + " (SEA)" : Fmt.Distance(SiteTerrainHeight(parent)))),
             new FoldPart(FoldNames.Impact, impact, DrawBoostbackImpactDetails),
             new FoldPart(FoldNames.Feasibility, LandWays.HasSolver(way) && (descent.Known || FirstSolveStops(way, solver)), () => DrawDescentRows(way, solver, in descent, noSite, feasibilityAlone)),
             new FoldPart(FoldNames.Deorbit, deorbit, DrawDeorbitFigures),
