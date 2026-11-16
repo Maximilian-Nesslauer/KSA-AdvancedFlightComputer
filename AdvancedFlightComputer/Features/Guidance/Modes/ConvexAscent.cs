@@ -464,14 +464,18 @@ public static partial class GuidanceWindow
         double throttleRequestedPct = _s.ConvexThrottleMinPct;
         double[] r0 = [r.X, r.Y, r.Z], v0 = [v.X, v.Y, v.Z], n0 = [normal.X, normal.Y, normal.Z];
 
-        // THE BOOSTER THE PLAN BRINGS HOME: a stage that can fly home has a landing target (BoostbackTarget). The plan sizes its reserve from nothing, for the boostback to that target and the landing, in the first stage that drops its liquid load whole (AscentPhasePlan.ReserveStage) - a core under strap-ons included, which is why the reserve need not be armed yet: it arms when that booster is next to separate. The site has turned with the body to the launch, like the pad.
+        // THE BOOSTER THE PLAN BRINGS HOME: a stage that can fly home has a landing target (BoostbackTarget). The plan sizes its reserve from nothing, for the boostback to that target and the landing, in the stage whose end drops that booster (BoosterPlanStage) - a core under strap-ons included, which is why the reserve need not be armed yet: it arms when that booster is next to separate. The site has turned with the body to the launch, like the pad.
+        // THE STAGE THAT DROPS THAT BOOSTER, not the first liquid load whatever is targeted: on a heavy the first load ends with the side boosters, and a core-only target was sized there, with the side boosters' dry mass and the core's site (#130).
         AscentRecovery recovery = null;
         string recoveryNote = "";
         ReturnableStage booster = BoostbackTarget();
         string recoverySite = RecoverySiteKey(booster);
-        if (booster != null && stagePlan.ReserveStage < 0)
+        int boosterStage = booster == null ? -1
+            : BoosterPlanStage(vehicle, booster, model, stageParts, allStages, out recoveryNote);
+        // A booster with no stage of its own in the plan already has its note.
+        if (boosterStage >= 0 && !AscentPhasePlan.CanKeepReserve(allStages, boosterStage))
             recoveryNote = "NO BOOSTER RESERVE: SEPARATING STAGE HAS NO LIQUID LOAD OF ITS OWN";
-        else if (booster != null)
+        else if (boosterStage >= 0)
         {
             if (aero.Table == null || aero.Atmosphere == null)
                 recoveryNote = "NO BOOSTER RESERVE: NO AIR FOR RETURN";
@@ -483,12 +487,14 @@ public static partial class GuidanceWindow
                 double turn = omega * (launchAt - now);
                 double cs = Math.Cos(turn), sn = Math.Sin(turn);
                 site = new double3(cs * site.X - sn * site.Y, sn * site.X + cs * site.Y, site.Z);
-                AscentStage b = allStages[stagePlan.ReserveStage];
+                // Built with no reserve, so the drop at the stage's end is the booster's dry mass alone.
+                AscentStage b = allStages[boosterStage];
+                double boosterDryKg = b.JettisonMass;
                 recovery = new AscentRecovery
                 {
-                    Stage = stagePlan.ReserveStage,
-                    InitialReserveKg = stagePlan.ReserveKeptKg,
-                    BoosterDryKg = stagePlan.BoosterDryKg,
+                    Stage = boosterStage,
+                    InitialReserveKg = 0.0,
+                    BoosterDryKg = boosterDryKg,
                     ExhaustVelocity = b.Thrust / b.MassFlow,
                     SiteCci = [site.X, site.Y, site.Z],
                     ReferenceArea = aero.ReferenceArea,
@@ -497,7 +503,7 @@ public static partial class GuidanceWindow
                     Alpha = GlideNominalAlpha(aero),
                     Air = aero.Atmosphere,
                 };
-                recoveryNote = FormattableString.Invariant($"BOOSTER RESERVE FROM PLAN: '{booster.Name}' ({stagePlan.BoosterDryKg / 1000.0:F2} t dry) HOME TO lat {latDeg:F3} lon {lonDeg:F3}");
+                recoveryNote = FormattableString.Invariant($"BOOSTER RESERVE FROM PLAN: '{booster.Name}' ({boosterDryKg / 1000.0:F2} t dry, stage {boosterStage + 1}) HOME TO lat {latDeg:F3} lon {lonDeg:F3}");
             }
         }
 
@@ -675,6 +681,92 @@ public static partial class GuidanceWindow
     ///
     /// A stage that lights below the hand-over altitude keeps its throttle, because the plan flies it through the air. Only liquid stages that are free to throttle are candidates: solids follow their grain, and a pinned stage is already held.
     /// </summary>
+    /// <summary>
+    /// The plan stage whose end separates <paramref name="booster"/>: the last stage of the staging model that burns any of its engines. The plan's stages are the model's, one for one. -1, with <paramref name="note"/> saying why, when the booster has no such stage, or leaves while the stage's other engines burn on.
+    ///
+    /// SIDE BOOSTERS ARE NOT PLANNED YET (#176). A stage whose engines partly burn on into the next is boosters and core burning together, one load and one throttle in the plan. A reserve there would shorten the core's burn with the boosters' and count the core's share as thrown away, and in flight the reserve does not arm for a separation that leaves the core burning. So none is planned rather than a wrong one.
+    /// </summary>
+    private static int BoosterPlanStage(Vehicle vehicle, ReturnableStage booster, UpfgVehicle model,
+                                        Dictionary<UpfgStage, HashSet<Part>> stageParts, AscentStage[] allStages, out string note)
+    {
+        note = "";
+        int planStages = allStages.Length;
+        if (model.Stages.Count != planStages)
+        {
+            note = "NO BOOSTER RESERVE: PLAN STAGES DO NOT MATCH THE STAGE MODEL";
+            return -1;
+        }
+        Part root = null;
+        ReadOnlySpan<Part> parts = vehicle.Parts.Parts;
+        for (int i = 0; i < parts.Length && root == null; i++)
+            if (parts[i].InstanceId == booster.RootId)
+                root = parts[i];
+        if (root == null)
+        {
+            note = "NO BOOSTER RESERVE: BOOSTER NOT FOUND ON THE VEHICLE";
+            return -1;
+        }
+
+        _boosterParts.Clear();
+        CollectSubtree(root, _boosterParts);
+        int last = -1;
+        for (int i = 0; i < model.Stages.Count; i++)
+        {
+            if (!stageParts.TryGetValue(model.Stages[i], out HashSet<Part> burning))
+                continue;
+            foreach (Part p in burning)
+            {
+                if (_boosterParts.Contains(p) || _boosterParts.Contains(p.FullPart))
+                {
+                    last = i;
+                    break;
+                }
+            }
+        }
+        _boosterParts.Clear();
+        if (last < 0)
+        {
+            note = "NO BOOSTER RESERVE: NO STAGE BURNS THE BOOSTER'S ENGINES";
+            return -1;
+        }
+
+        // Liquid engines only: solids burning on past a core that runs dry first are not a core burning on past side boosters.
+        if (last + 1 < model.Stages.Count
+            && stageParts.TryGetValue(model.Stages[last], out HashSet<Part> here)
+            && stageParts.TryGetValue(model.Stages[last + 1], out HashSet<Part> after))
+        {
+            foreach (Part p in here)
+            {
+                if (after.Contains(p) && !BurnsSolid(p))
+                {
+                    note = "NO BOOSTER RESERVE: SIDE BOOSTERS NOT PLANNED YET (#176)";
+                    return -1;
+                }
+            }
+        }
+
+        // A core the plan throttles down to outlast its solids burns its load on into the next stage (AscentStage.LiquidCarriesOver), and leaves where that load ends.
+        while (last < planStages - 1 && allStages[last].LiquidCarriesOver)
+            last++;
+        return last;
+    }
+
+    private static bool BurnsSolid(Part part)
+    {
+        foreach (EngineController engine in part.Modules.Get<EngineController>())
+        {
+            if (engine.Cores == null)
+                continue;
+            foreach (RocketCore core in engine.Cores)
+                if (core is SolidMotor)
+                    return true;
+        }
+        return false;
+    }
+
+    // Scratch for BoosterPlanStage, filled and consumed inside one call.
+    private static readonly HashSet<Part> _boosterParts = new HashSet<Part>();
+
     private static bool[] StagesUpfgFliesThrottled(AscentProblem problem, AscentSolution sol, double handoverRadius)
     {
         bool[] held = null;
