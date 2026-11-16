@@ -312,7 +312,7 @@ public static partial class GuidanceWindow
     private static PlanWord AscentWord() => _s.Phase switch
     {
         AscentPhase.ClosedLoop or AscentPhase.Terminal => _s.Upfg.Converged ? PlanWords.OnPlan : PlanWords.Of(false, StepFaultLasts),
-        AscentPhase.Profile => PlanWords.FlyingPlan(_s.ConvexHandoverAltKm),
+        AscentPhase.Profile => PlanWords.FlyingPlan(_s.HandoverAltKm),
         _ => PlanWords.FlyingTurn,
     };
 

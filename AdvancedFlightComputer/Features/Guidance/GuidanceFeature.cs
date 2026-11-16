@@ -58,6 +58,7 @@ internal static class GuidanceFeature
 
         SaveLoadObserver.SaveLoaded += OnSaveLoaded;
         SaveLoadObserver.SaveWritten += CraftSettings.OnSaveWritten;
+        BodySettings.LoadFile();
     }
 
     // A save replaces every vehicle, so the state keyed on the old ones is dropped, and the craft of the save then get the settings that were saved with them.

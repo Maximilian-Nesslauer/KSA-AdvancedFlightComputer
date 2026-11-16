@@ -273,7 +273,7 @@ public static partial class GuidanceWindow
         double highKm = Math.Max(_s.PeKm, _s.ApKm), lowKm = Math.Min(_s.PeKm, _s.ApKm);
         float bandTop = Math.Max(v.Sy(highKm), plot.Y);
         float bandBottom = v.Sy(lowKm);
-        bool hasHandover = _s.FlyConvexAscent && double.IsFinite(_s.ConvexHandoverAltKm) && (!_s.Running || _s.FlyingPlan != null);
+        bool hasHandover = _s.FlyConvexAscent && double.IsFinite(_s.HandoverAltKm) && (!_s.Running || _s.FlyingPlan != null);
         int n = series != null ? Math.Min(series.DownrangeKm.Length, series.AltitudeKm.Length) : 0;
         int shownStages = 0;
 
@@ -286,7 +286,7 @@ public static partial class GuidanceWindow
             }
             dl.AddRectFilled(new float2(plot.X, bandTop - 1f * s), new float2(plot.Right, bandBottom + 1f * s), Palette.Target.A(0.15f), 0f);
             if (hasHandover)
-                Picture.GuideY(in f, in plot, v.Sy(_s.ConvexHandoverAltKm), Palette.Dim.A(0.6f));
+                Picture.GuideY(in f, in plot, v.Sy(_s.HandoverAltKm), Palette.Dim.A(0.6f));
 
             if (n > 0 && series.StagingNodes != null)
                 DrawStageRibbon(in f, in plot, series.StagingNodes, series.DownrangeKm, n, x => v.Sx(x), old);
@@ -335,7 +335,7 @@ public static partial class GuidanceWindow
         bool handoverNamed = true;
         if (hasHandover)
         {
-            handoverNamed = labels.Guide("UPFG FROM " + Fmt.Km(_s.ConvexHandoverAltKm), v.Sy(_s.ConvexHandoverAltKm), Palette.Dim.Solid);
+            handoverNamed = labels.Guide("UPFG FROM " + Fmt.Km(_s.HandoverAltKm), v.Sy(_s.HandoverAltKm), Palette.Dim.Solid);
         }
         bool airNamed = atmoKm <= 0.0 || labels.Guide("AIR", v.Sy(atmoKm), Palette.Air.Solid);
         int qPeak = n > 0 ? ArgMaxFinite(series.QFraction) : -1;

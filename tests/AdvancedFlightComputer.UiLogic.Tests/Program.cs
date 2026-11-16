@@ -15,6 +15,8 @@ internal static class Program
         TakeOverQuestion();
         StatusOrdering();
         SettingMathRules();
+        BodyDefaultRules();
+        AscentHandoverRules();
         SpecKeysAreUnique();
         TierArraysHoldOneTier();
         EveryValueHasAHome();
@@ -1040,6 +1042,54 @@ internal static class Program
             new CommitGates(false, false, "", "", false)).Reason == CommitResolver.StockDeorbitStatus);
         Check("the landing itself flies after the burn", CommitResolver.Resolve(GuidanceModeId.DeorbitLand, new CraftActivity { DescentLive = true },
             new CommitGates(false, false, "", "", false)).Reason == "AFC: LANDING");
+    }
+
+    private static void BodyDefaultRules()
+    {
+        BodyDefaults.Reset();
+        SettingSpec handover = GuidanceSettingSpecs.ConvexHandoverAltKm;
+        Check("Luna has its own UPFG FROM", BodyDefaults.Overrides("Luna", handover.Key) && BodyDefaults.DefaultOf(handover, "Luna") == 10.0);
+        Check("a body with no table takes the default of every body", BodyDefaults.DefaultOf(handover, "Earth") == handover.Default && !BodyDefaults.Overrides("Earth", handover.Key));
+        Check("no body is the default of every body", BodyDefaults.DefaultOf(handover, "") == handover.Default && BodyDefaults.DefaultOf(handover, null) == handover.Default);
+        Check("a setting Luna leaves alone keeps its default there", BodyDefaults.DefaultOf(GuidanceSettingSpecs.PeKm, "Luna") == GuidanceSettingSpecs.PeKm.Default);
+        Check("the spec on Luna marks the global default as changed", SettingMath.IsChanged(BodyDefaults.On(handover, "Luna"), handover.Default)
+            && !SettingMath.IsChanged(BodyDefaults.On(handover, "Luna"), 10.0));
+        Check("the ghost text names the body of its default", BodyDefaults.GhostText(handover, "Luna") == "LUNA DEFAULT 10.0 km", BodyDefaults.GhostText(handover, "Luna"));
+        Check("the ghost text of a global default names no body", BodyDefaults.GhostText(handover, "Earth") == "DEFAULT 80.0 km", BodyDefaults.GhostText(handover, "Earth"));
+
+        int taken = BodyDefaults.Load(new[]
+        {
+            "# a comment",
+            "[Luna]",
+            "ConvexHandoverAltKm = 12.5 # lower still",
+            "FlyConvexAscent = false",
+            "TurnRateDegS = 999",
+            "NoSuchSetting = 1",
+            "[\"Mars\"]",
+            "PeKm = 150",
+        }, out string unread);
+        Check("the file takes its three good values", taken == 3, taken.ToString());
+        Check("the file overrides the built-in value", BodyDefaults.DefaultOf(handover, "Luna") == 12.5);
+        Check("the file adds a switch", BodyDefaults.DefaultOf(GuidanceSettingSpecs.FlyConvexAscent, "Luna") == false
+            && BodyDefaults.DefaultOf(GuidanceSettingSpecs.FlyConvexAscent, "Earth") == GuidanceSettingSpecs.FlyConvexAscent.Default);
+        Check("the file adds a body", BodyDefaults.DefaultOf(GuidanceSettingSpecs.PeKm, "Mars") == 150.0);
+        Check("a value out of range and an unknown key are skipped and named", unread.Contains("TurnRateDegS") && unread.Contains("NoSuchSetting")
+            && BodyDefaults.DefaultOf(GuidanceSettingSpecs.TurnRateDegS, "Luna") == GuidanceSettingSpecs.TurnRateDegS.Default, unread);
+        BodyDefaults.Load(new[] { "[Luna]", "TurnStartAltKm = 0.2" }, out _);
+        Check("a second file replaces the first, over the built-in table", BodyDefaults.DefaultOf(handover, "Luna") == 10.0
+            && !BodyDefaults.Overrides("Mars", GuidanceSettingSpecs.PeKm.Key) && BodyDefaults.DefaultOf(GuidanceSettingSpecs.TurnStartAltKm, "Luna") == 0.2);
+        BodyDefaults.Reset();
+        Check("a reset puts back the built-in table alone", !BodyDefaults.Overrides("Luna", GuidanceSettingSpecs.TurnStartAltKm.Key) && BodyDefaults.DefaultOf(handover, "Luna") == 10.0);
+    }
+
+    private static void AscentHandoverRules()
+    {
+        Check("a high orbit keeps UPFG FROM", AscentHandover.AltitudeKm(80.0, 200.0, 420.0) == 80.0 && !AscentHandover.CappedByPe(80.0, 200.0, 420.0));
+        Check("a low orbit hands over at 75 % of Pe", AscentHandover.AltitudeKm(80.0, 30.0, 100.0) == 22.5 && AscentHandover.CappedByPe(80.0, 30.0, 100.0));
+        Check("a Pe typed above the Ap counts the lower of the two", AscentHandover.AltitudeKm(80.0, 100.0, 40.0) == 30.0);
+        Check("a lower UPFG FROM stands under the cap", AscentHandover.AltitudeKm(10.0, 30.0, 30.0) == 10.0);
+        Check("the gravity turn failsafe takes the cap too", AscentHandover.AltitudeKm(50.0, 40.0, 40.0) == 30.0);
+        Check("a target at the surface leaves the setting alone", AscentHandover.AltitudeKm(80.0, 0.0, 100.0) == 80.0);
     }
 
     private static void SettingMathRules()

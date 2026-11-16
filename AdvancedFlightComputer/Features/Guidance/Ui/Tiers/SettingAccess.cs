@@ -103,31 +103,32 @@ internal static class SettingAccess
         }
     }
 
+    /// <summary>Counts the values that differ from their default on the body the craft follows (BodySettings), and that no other writer owns.</summary>
     public static int CountChanged(VehicleAutopilotState state, SettingSpec[]? doubles, BoolSpec[]? bools = null)
     {
         int count = 0;
         if (doubles != null)
             foreach (SettingSpec spec in doubles)
-                if (TryGetDouble(state, spec.Key, out double v) && SettingMath.IsChanged(spec, v) && SetBy(state, spec.Key).Length == 0)
+                if (TryGetDouble(state, spec.Key, out double v) && SettingMath.IsChanged(BodyDefaults.On(spec, state.DefaultsBody), v) && SetBy(state, spec.Key).Length == 0)
                     count++;
         if (bools != null)
             foreach (BoolSpec spec in bools)
-                if (TryGetBool(state, spec.Key, out bool b) && SettingMath.IsChanged(spec, b) && SetBy(state, spec.Key).Length == 0)
+                if (TryGetBool(state, spec.Key, out bool b) && SettingMath.IsChanged(BodyDefaults.On(spec, state.DefaultsBody), b) && SetBy(state, spec.Key).Length == 0)
                     count++;
         return count;
     }
 
-    /// <summary>Writes the defaults of the given values. A value that <paramref name="locked"/> names is left as it is, the same as a value another writer owns.</summary>
+    /// <summary>Writes the defaults of the given values, those of the body the craft follows. A value that <paramref name="locked"/> names is left as it is, the same as a value another writer owns.</summary>
     public static void ResetToDefaults(VehicleAutopilotState state, SettingSpec[]? doubles, BoolSpec[]? bools = null,
                                        Func<string, bool>? locked = null)
     {
         if (doubles != null)
             foreach (SettingSpec spec in doubles)
                 if (SetBy(state, spec.Key).Length == 0 && locked?.Invoke(spec.Key) != true)
-                    SetDouble(state, spec.Key, spec.Default);
+                    SetDouble(state, spec.Key, BodyDefaults.DefaultOf(spec, state.DefaultsBody));
         if (bools != null)
             foreach (BoolSpec spec in bools)
                 if (SetBy(state, spec.Key).Length == 0 && locked?.Invoke(spec.Key) != true)
-                    SetBool(state, spec.Key, spec.Default);
+                    SetBool(state, spec.Key, BodyDefaults.DefaultOf(spec, state.DefaultsBody));
     }
 }

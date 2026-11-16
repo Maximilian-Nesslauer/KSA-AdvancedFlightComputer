@@ -493,8 +493,14 @@ public sealed class VehicleAutopilotState
     public double ConvexQMaxKpa = 195.0;
     public double ConvexQAlphaMax = 3500.0;
 
-    /// <summary>Above this altitude the open-loop profile hands over to UPFG.</summary>
+    /// <summary>Above this altitude the open-loop profile hands over to UPFG, unless the target periapsis is low enough to bring the hand-over lower: see <see cref="HandoverAltKm"/>.</summary>
     public double ConvexHandoverAltKm = 80.0;
+
+    /// <summary>The altitude the solved climb actually hands over to UPFG at: UPFG FROM, but never above three quarters of the target periapsis, on any body. Every readout of the hand-over shows this one.</summary>
+    public double HandoverAltKm => AscentHandover.AltitudeKm(ConvexHandoverAltKm, PeKm, ApKm);
+
+    /// <summary>The body whose defaults the settings of this craft follow, the one whose sphere of influence it was last seen in. Empty until then, which is the defaults of every body. See BodySettings.Follow.</summary>
+    public string DefaultsBody = "";
 
     /// <summary>The plan's throttle floor, percent of full thrust. The script's 99 % keeps the plan at full throttle; lower lets it throttle a liquid stage, through max-q say. 80 % by default. A stage burning a solid motor is held at 99 % whatever this says, and no stage goes below its engines' own minimum.</summary>
     public double ConvexThrottleMinPct = 80.0;

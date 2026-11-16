@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- An ascent from the Moon hands over to UPFG (#167). The solved climb waited for UPFG FROM, 80 km, and a lunar orbit is reached far below that, so it never handed over.
+  - No ascent waits to hand over above 75 % of the target periapsis, on any body. The solved climb hands over at UPFG FROM or there, whichever is lower, and the gravity turn's 50 km failsafe is held to the same limit. A 30 km orbit hands over at 22.5 km. The row under UPFG FROM says when this applies.
+  - Guidance settings have per-body defaults. Each craft takes the defaults of the body whose sphere of influence it is in. When it moves to another body, a value still at the old body's default takes the new one, and a value you changed stays. The setting's tooltip names the body when the default is that body's own.
+  - On Luna, UPFG FROM defaults to 10 km: with no air, the solved climb has nothing to shape past the pitch-over.
+  - `body-defaults.toml` in the mod folder adds or overrides defaults, one table per body id, for example `[Luna]` and `ConvexHandoverAltKm = 10`. A key that is no setting or a value out of its range is skipped, and the game log names it.
+  - The settings kept with a save now record the body their defaults were for, so a value you set that equals another body's default comes back as yours.
+
 - Touchdown guidance takes a craft all the way to the ground after its plan ends, and cuts the engine of a craft that climbs. A booster whose minimum throttle lifts about its own weight ended its plan at rest just above the ground, already rising. The climb cut needed a TWR above 1 at minimum throttle, so it did not fire, and the terminal hover took over. The hover could not stop the climb, cut the engine 4 m up, and the booster hit the ground at about 9 m/s (#103).
   - The touchdown plan now ends 0.3 m/s down where the first point of the craft meets the ground, instead of at rest there.
   - After the descent, a craft that rises faster than 0.1 m/s with the engine lit and no ground contact has its engine cut, at any TWR. A craft whose minimum throttle lifts more than 0.9 of its weight is cut as soon as it stops descending.

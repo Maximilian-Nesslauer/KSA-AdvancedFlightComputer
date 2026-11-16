@@ -658,7 +658,7 @@ public static partial class GuidanceWindow
                 GuidanceLog.DebugWrapped(vehicle, "convex note: ", note);
         }
 
-        double handoverRadius = bodyRadius + _s.ConvexHandoverAltKm * 1000.0;
+        double handoverRadius = bodyRadius + _s.HandoverAltKm * 1000.0;
         job = new AscentPlanJob(Build, count, initial, qMax, Publish,
                                 (problem, sol) => StagesUpfgFliesThrottled(problem, sol, handoverRadius), qCeiling);
         error = "";
@@ -900,9 +900,13 @@ public static partial class GuidanceWindow
             why = "PLAN RAN OUT";
             return true;
         }
-        if (alt >= _s.ConvexHandoverAltKm * 1000.0 && _s.Upfg.Converged)
+        // HandoverAltKm is UPFG FROM, held under three quarters of the target periapsis: a target orbit below UPFG FROM, as on the Moon, would be reached without the altitude ever being crossed.
+        double handoverKm = _s.HandoverAltKm;
+        if (alt >= handoverKm * 1000.0 && _s.Upfg.Converged)
         {
-            why = $"ABOVE {_s.ConvexHandoverAltKm:F0} km";
+            why = AscentHandover.CappedByPe(_s.ConvexHandoverAltKm, _s.PeKm, _s.ApKm)
+                ? $"ABOVE {handoverKm:F1} km, 75 % OF PE"
+                : $"ABOVE {handoverKm:F0} km";
             return true;
         }
         why = "";

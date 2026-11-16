@@ -152,12 +152,12 @@ public static partial class GuidanceWindow
             }
 
         for (int k = 0; k < n; k++)
-            if (plan.Series.AltitudeKm[k] >= _s.ConvexHandoverAltKm)
+            if (plan.Series.AltitudeKm[k] >= _s.HandoverAltKm)
             {
                 if (TryProjectCci(_planPoints[k], out float2 s))
                 {
                     dl.AddCircle(s, 5f, col, 0, 1.5f);
-                    OvText(dl, s + new float2(7f, 6f), col, FormattableString.Invariant($"UPFG {_s.ConvexHandoverAltKm:F0} km"));
+                    OvText(dl, s + new float2(7f, 6f), col, FormattableString.Invariant($"UPFG {_s.HandoverAltKm:F0} km"));
                 }
                 break;
             }

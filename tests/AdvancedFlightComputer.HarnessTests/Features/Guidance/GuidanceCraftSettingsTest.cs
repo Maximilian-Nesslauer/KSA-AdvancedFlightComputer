@@ -44,6 +44,7 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
 
             CheckFreshCraftHasNoRecord(t);
             CheckSaveAndLoad(t, craft, other, Save(temp, "first"));
+            CheckBodyDefaults(t, craft, home, Save(temp, "luna"));
             CheckSecondSave(t, craft, Save(temp, "first"), Save(temp, "second"), Save(temp, "empty"));
             CheckRename(t, craft, renamedId, Save(temp, "renamed"));
             CheckOldRecords(t, craft, temp);
@@ -141,6 +142,50 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
         t.Check("a load starts no mode", !s.Active && !s.EngagePending && !s.Running && !s.LaunchArmed && !s.ControlAcquired
             && s.LandingPhase == GuidanceWindow.LandingPhase.Idle && s.MoonChain == MoonChainStage.Idle);
         t.Check("a new craft keeps its defaults", !VehicleAutopilotState.TryGet(other, out _));
+    }
+
+    // A craft follows the defaults of the body it is at: a value still at the old body's default moves with it, one the player set stays, and a save measures its record against that body.
+    private static void CheckBodyDefaults(TestContext t, Vehicle craft, IParentBody home, DirectoryInfo save)
+    {
+        const string Handover = nameof(VehicleAutopilotState.ConvexHandoverAltKm);
+        BodyDefaults.Reset();
+        VehicleAutopilotState.Remove(craft);
+        VehicleAutopilotState s = VehicleAutopilotState.For(craft);
+        s.ConvexQMaxKpa = 150.0;
+        int moved = BodySettings.Follow(s, "Luna");
+        t.Check("Luna's UPFG FROM is taken", moved == 1 && s.ConvexHandoverAltKm == 10.0 && s.DefaultsBody == "Luna", $"moved {moved}, {s.ConvexHandoverAltKm} km, body '{s.DefaultsBody}'");
+        t.CheckAbs("a value the player set stays", s.ConvexQMaxKpa, 150.0, 1e-12);
+        t.Check("a value at Luna's default is not counted as changed", SettingAccess.CountChanged(s, GuidanceSettingSpecs.TuningAscent) == 0);
+        List<(string Key, string Value)> record = CraftSettings.Record(s);
+        string keys = string.Join(", ", record.Select(r => r.Key + "=" + r.Value));
+        t.Check("a value at the body's default is not kept", !record.Any(r => r.Key == Handover), keys);
+        t.Check("the record names its body", record.Any(r => r.Key == nameof(VehicleAutopilotState.DefaultsBody) && r.Value == "\"Luna\""), keys);
+
+        // 80 km on Luna is the player's value, though it is the default of every other body.
+        s.ConvexHandoverAltKm = 80.0;
+        t.Check("80 km on Luna counts as changed", SettingAccess.CountChanged(s, GuidanceSettingSpecs.TuningAscent) == 1);
+        CraftSettings.WriteTo(save, Universe.CurrentSystem);
+        VehicleAutopilotState.Remove(craft);
+        CraftSettings.RestoreFrom(save, Universe.CurrentSystem);
+        if (!t.Check("the craft has a state after the load", VehicleAutopilotState.TryGet(craft, out s)))
+            return;
+        t.Check("the restored craft follows Luna", s.DefaultsBody == "Luna", s.DefaultsBody);
+        t.CheckAbs("80 km comes back as the player's", s.ConvexHandoverAltKm, 80.0, 1e-12);
+        BodySettings.Follow(s, craft);
+        t.Check("the craft follows the body it is at", s.DefaultsBody == home.Id, s.DefaultsBody);
+        t.CheckAbs("the player's 80 km stays at home", s.ConvexHandoverAltKm, 80.0, 1e-12);
+
+        // A value at Luna's default goes back to the home default, and a reset on Luna writes Luna's.
+        VehicleAutopilotState.Remove(craft);
+        s = VehicleAutopilotState.For(craft);
+        BodySettings.Follow(s, "Luna");
+        BodySettings.Follow(s, craft);
+        t.CheckAbs("Luna's default goes back to the home default", s.ConvexHandoverAltKm, GuidanceSettingSpecs.ConvexHandoverAltKm.Default, 1e-12);
+        BodySettings.Follow(s, "Luna");
+        s.ConvexHandoverAltKm = 33.0;
+        SettingAccess.ResetToDefaults(s, GuidanceSettingSpecs.TuningAscent);
+        t.CheckAbs("a reset on Luna writes Luna's default", s.ConvexHandoverAltKm, 10.0, 1e-12);
+        VehicleAutopilotState.Remove(craft);
     }
 
     private static void CheckSecondSave(TestContext t, Vehicle craft, DirectoryInfo first, DirectoryInfo second, DirectoryInfo empty)
