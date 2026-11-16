@@ -132,8 +132,8 @@ internal static class GuidanceSettingSpecs
         "Height where G-FOLD hands the descent to the hover.");
     public static readonly SettingSpec LandingAccelLimitG = new("LandingAccelLimitG", "MAX BURN ACCEL", "g", E, 3.0, 0.0, 100.0, "%.2f",
         "Largest thrust acceleration in the ENTRY and TOUCHDOWN plans, one value for both. 0 switches the limit off.");
-    public static readonly SettingSpec LegsDeployHeightM = new("LegsDeployHeightM", "LEGS DOWN AT", "m", P, 1000.0, 10.0, 1e5, "%.0f",
-        "Height of the legs over the ground under the craft where a landing deploys them. The stock leg takes 5 s to deploy.");
+    public static readonly SettingSpec LegsDeployBufferS = new("LegsDeployBufferS", "BUFFER", "s", P, 1.0, 0.0, 60.0, "%.1f",
+        "Time the legs are fully down before the touchdown. A landing deploys them when its time to the touchdown is DEPLOY TIME plus this: the time of the plan that flies the landing, or without a plan the fall time of the legs to the ground.");
     public static readonly SettingSpec LandingPlanFloorMargin = new("LandingPlanFloorMargin", "PLAN MIN THROTTLE MARGIN", "frac", T, 0.05, 0.0, 0.5, "%.2f",
         "Throttle margin above the real engine minimum in the ENTRY and TOUCHDOWN plans, kept for thrust feedback. One value for both, 0 plans on the minimum itself.");
 
@@ -144,7 +144,7 @@ internal static class GuidanceSettingSpecs
     public static readonly BoolSpec VehicleHeightAuto = new("VehicleHeightAuto", "MEASURE COM ABOVE LEGS", P, true,
         "Measures the COM above the legs from the colliders of the craft, with the legs deployed, and keeps it current.");
     public static readonly BoolSpec LegsAutoDeploy = new("LegsAutoDeploy", "DEPLOY LEGS IN A LANDING", P, true,
-        "A landing that AFC flies deploys every landing leg once, at LEGS DOWN AT. A retract or a deploy by hand stands.");
+        "A landing that AFC flies deploys every landing leg once, DEPLOY TIME plus BUFFER before the touchdown. A retract or a deploy by hand stands.");
 
     #endregion
 
@@ -302,7 +302,7 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec[] LandGfoldPlayer = { GfoldHoverHandoffAltM };
 
     /// <summary>The LEGS settings of every landing.</summary>
-    public static readonly SettingSpec[] LandLegs = { LegsDeployHeightM };
+    public static readonly SettingSpec[] LandLegs = { LegsDeployBufferS };
     public static readonly BoolSpec[] LandLegsBools = { LegsAutoDeploy };
 
     public static readonly SettingSpec[] LandFromOrbitExpert = { BrakingAltitudeKm, DeorbitArrivalDescentDeg, DescentRate, LandingVerticalGateM };
@@ -377,7 +377,7 @@ internal static class GuidanceSettingSpecs
         BoostbackSlewDegS, GlideKp, GlideKi, GlideKd,
         SiteLatDeg, SiteLonDeg, BrakingAltitudeKm, DeorbitArrivalDescentDeg, DescentRate, LandingVerticalGateM,
         DownrangeFactor, AimAltKm, GateUprangeKm, GfoldHandoffTgo, VehicleHeightM, GfoldHoverHandoffAltM,
-        LegsDeployHeightM, LandingAccelLimitG, LandingPlanFloorMargin,
+        LegsDeployBufferS, LandingAccelLimitG, LandingPlanFloorMargin,
         GfoldGlideSlopeDeg, GfoldPointingDeg, GfoldVMaxMs, GfoldThrottleMin, GfoldThrottleMax, GfoldSlewReg,
         GfoldIntervalS, GfoldNodes, GfoldKp, GfoldKd, GfoldSmoothTau, GfoldSolveTimeLimitS,
         SixDofNodes, SixDofTiltDeg, SixDofThrottleFloor, SixDofSigmaSeed,

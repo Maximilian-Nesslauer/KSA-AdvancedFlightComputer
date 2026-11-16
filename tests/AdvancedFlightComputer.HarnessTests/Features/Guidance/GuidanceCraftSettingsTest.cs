@@ -88,7 +88,7 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
     {
         s.SiteLatDeg = -12.5;
         s.SiteLonDeg = 47.25;
-        s.LegsDeployHeightM = 500.0;
+        s.LegsDeployBufferS = 2.5;
         s.LandingGimbalSteers = false;
         s.GfoldPointingDeg = 45.0;
         s.SixDofTiltDeg = 60.0;
@@ -129,7 +129,7 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
             return;
         t.CheckAbs("site latitude", s.SiteLatDeg, -12.5, 1e-12);
         t.CheckAbs("site longitude", s.SiteLonDeg, 47.25, 1e-12);
-        t.CheckAbs("legs down at", s.LegsDeployHeightM, 500.0, 1e-12);
+        t.CheckAbs("legs buffer", s.LegsDeployBufferS, 2.5, 1e-12);
         t.Check("steer burn with gimbal", !s.LandingGimbalSteers);
         t.CheckAbs("G-FOLD max tilt", s.GfoldPointingDeg, 45.0, 1e-12);
         t.CheckAbs("touchdown max tilt", s.SixDofTiltDeg, 60.0, 1e-12);
@@ -191,18 +191,18 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
     private static void CheckSecondSave(TestContext t, Vehicle craft, DirectoryInfo first, DirectoryInfo second, DirectoryInfo empty)
     {
         VehicleAutopilotState.Remove(craft);
-        VehicleAutopilotState.For(craft).LegsDeployHeightM = 400.0;
+        VehicleAutopilotState.For(craft).LegsDeployBufferS = 0.5;
         CraftSettings.WriteTo(first, Universe.CurrentSystem);
-        VehicleAutopilotState.For(craft).LegsDeployHeightM = 800.0;
+        VehicleAutopilotState.For(craft).LegsDeployBufferS = 3.0;
         CraftSettings.WriteTo(second, Universe.CurrentSystem);
 
         VehicleAutopilotState.Remove(craft);
         CraftSettings.RestoreFrom(first, Universe.CurrentSystem);
-        t.CheckAbs("the first save keeps its value", VehicleAutopilotState.For(craft).LegsDeployHeightM, 400.0, 1e-12);
+        t.CheckAbs("the first save keeps its value", VehicleAutopilotState.For(craft).LegsDeployBufferS, 0.5, 1e-12);
 
         VehicleAutopilotState.Remove(craft);
         CraftSettings.RestoreFrom(second, Universe.CurrentSystem);
-        t.CheckAbs("the second save keeps its value", VehicleAutopilotState.For(craft).LegsDeployHeightM, 800.0, 1e-12);
+        t.CheckAbs("the second save keeps its value", VehicleAutopilotState.For(craft).LegsDeployBufferS, 3.0, 1e-12);
 
         VehicleAutopilotState.Remove(craft);
         int restored = CraftSettings.RestoreFrom(empty, Universe.CurrentSystem);
@@ -249,7 +249,8 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
             "LegsAutoDeploy = maybe",
             "AscentMethod = \"Hopper\"",
             "MoonTransferCapture = true",
-            "LegsDeployHeightM",
+            "LegsDeployBufferS",
+            "LegsDeployHeightM = 500",
             "",
             "[[future]]",
             "SiteLatDeg = 5",
@@ -274,8 +275,36 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
         t.CheckAbs("a value of another table is not taken", s.SiteLatDeg, GuidanceSettingSpecs.SiteLatDeg.Default, 1e-12);
         t.CheckAbs("a value out of range is skipped", s.GfoldPointingDeg, GuidanceSettingSpecs.GfoldPointingDeg.Default, 1e-12);
         t.Check("an unreadable switch is skipped", s.LegsAutoDeploy == GuidanceSettingSpecs.LegsAutoDeploy.Default);
+        t.CheckAbs("a legs height of an older version leaves the default buffer", s.LegsDeployBufferS, GuidanceSettingSpecs.LegsDeployBufferS.Default, 1e-12);
         t.Check("an unknown ascent method is skipped", s.AscentMethod == GuidanceWindow.AscentMethod.CatsUpfg);
         t.Check("a capture without a moon is skipped", !s.MoonTransferCapture && s.MoonTransferId.Length == 0);
+
+        // A record that names its body and still holds the legs height of an older version takes the body and the default buffer.
+        BodyDefaults.Reset();
+        File.WriteAllLines(FilePath(save), new[]
+        {
+            "format = 1",
+            "[[craft]]",
+            "id = \"" + id + "\"",
+            "DefaultsBody = \"Luna\"",
+            "LegsDeployHeightM = 500",
+            "SiteLonDeg = 12.5",
+        });
+        VehicleAutopilotState.Remove(craft);
+        error = null;
+        try
+        {
+            restored = CraftSettings.RestoreFrom(save, Universe.CurrentSystem);
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+        }
+        t.Check("a record with a body and a legs height loads without an error", error == null && restored == 1, error?.ToString() ?? $"{restored}");
+        s = VehicleAutopilotState.For(craft);
+        t.Check("the record with the legs height follows its body", s.DefaultsBody == "Luna" && s.ConvexHandoverAltKm == 10.0, $"body '{s.DefaultsBody}', {s.ConvexHandoverAltKm} km");
+        t.CheckAbs("the record with the legs height keeps its other values", s.SiteLonDeg, 12.5, 1e-12);
+        t.CheckAbs("the record with the legs height gets the default buffer", s.LegsDeployBufferS, GuidanceSettingSpecs.LegsDeployBufferS.Default, 1e-12);
 
         foreach (string format in new[] { "", "format = 0", "format = 2" })
         {
@@ -328,7 +357,7 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
             MultiPassRegistry.Reset();
 
             VehicleAutopilotState.Remove(craft);
-            VehicleAutopilotState.For(craft).LegsDeployHeightM = 250.0;
+            VehicleAutopilotState.For(craft).LegsDeployBufferS = 1.5;
             UncompressedSave written = MakeSave("events", save);
             InvokePatch("WritePatch", "Postfix", [written, false]);
             t.Check("a failed write writes no settings", !File.Exists(FilePath(save)));
@@ -347,7 +376,7 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
             loaded.UniverseData = new UniverseData();
             InvokePatch("LoadPatch", "Postfix", [loaded, prefixArgs[1]]);
             t.Check("a completed load restores the settings", VehicleAutopilotState.TryGet(craft, out VehicleAutopilotState s)
-                && Math.Abs(s.LegsDeployHeightM - 250.0) < 1e-12);
+                && Math.Abs(s.LegsDeployBufferS - 1.5) < 1e-12);
         }
         finally
         {
