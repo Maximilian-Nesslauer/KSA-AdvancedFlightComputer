@@ -63,6 +63,15 @@ internal static class AscentSideBoosterCheck
         };
     }
 
+    // v turned by angle about the unit axis k (Rodrigues).
+    private static double[] Rotate(double[] v, double[] k, double angle)
+    {
+        double c = Math.Cos(angle), s = Math.Sin(angle);
+        double kv = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+        double[] cross = [k[1] * v[2] - k[2] * v[1], k[2] * v[0] - k[0] * v[2], k[0] * v[1] - k[1] * v[0]];
+        return [v[0] * c + cross[0] * s + k[0] * kv * (1 - c), v[1] * c + cross[1] * s + k[1] * kv * (1 - c), v[2] * c + cross[2] * s + k[2] * kv * (1 - c)];
+    }
+
     // A stage's first and last node: the last node of one stage and the first of the next are the same instant, either side of the separation.
     private static (int First, int Last) Nodes(AscentSolution s, int stage)
         => (Array.IndexOf(s.NodeStage, stage), Array.LastIndexOf(s.NodeStage, stage));
@@ -115,8 +124,74 @@ internal static class AscentSideBoosterCheck
         Check("and the core's share burns in stage 2", Math.Abs(held.Stages[1].PropellantMass - (p.Stages[1].PropellantMass + 6000.0 * (1.0 / Share - 1.0))) < 1e-6);
         Check("and lift-off mass is unchanged", Math.Abs(held.Stages.Sum(st => st.PropellantMass + st.JettisonMass) - p.Stages.Sum(st => st.PropellantMass + st.JettisonMass)) < 1e-6);
 
+        ThreeHome(s);
+
         Console.WriteLine();
         Console.WriteLine(_fails == 0 ? "ALL PASS" : $"{_fails} FAILED");
         return _fails == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Every booster home at once (#130): the two side boosters, each to its own site, sharing their stage's reserve, and the core with a reserve of its own from its own separation.
+    /// </summary>
+    private static void ThreeHome(AscentSolution sideOnly)
+    {
+        AscentProblem side = Heavy(Share);
+        AscentRecovery a = side.Recovery!;
+        // Side booster B lands 20 km east of A's pad; the core lands on A's.
+        double turn = 20e3 / side.BodyRadius;
+        double[] siteA = a.SiteCci;
+        double[] siteB = [Math.Cos(turn) * siteA[0] - Math.Sin(turn) * siteA[1], Math.Sin(turn) * siteA[0] + Math.Cos(turn) * siteA[1], siteA[2]];
+        AscentRecovery b = new()
+        {
+            Stage = a.Stage, InitialReserveKg = a.InitialReserveKg, BoosterDryKg = a.BoosterDryKg, FlowShare = a.FlowShare,
+            ExhaustVelocity = a.ExhaustVelocity, SiteCci = siteB, ReferenceArea = a.ReferenceArea, Drag = a.Drag, Air = a.Air,
+        };
+        // The core separates too fast to come back to the pad (a strap-on stack's core needed some 4 km/s for that), so it lands downrange, as a heavy's core does on a drone ship: 300 km on along the plane from where the side-booster plan separates it.
+        (_, int coreEnd) = Nodes(sideOnly, 1);
+        double[] sep = sideOnly.Position[(coreEnd * 3)..(coreEnd * 3 + 3)];
+        double sepR = Math.Sqrt(sep[0] * sep[0] + sep[1] * sep[1] + sep[2] * sep[2]);
+        double[] siteCore = Rotate(sep.Select(x => x / sepR * side.BodyRadius).ToArray(), side.PlaneNormal, 300e3 / side.BodyRadius);
+        AscentRecovery core = new()
+        {
+            Stage = 1, InitialReserveKg = 0.0, BoosterDryKg = DryKg, FlowShare = 1.0,
+            ExhaustVelocity = a.ExhaustVelocity, SiteCci = siteCore, ReferenceArea = a.ReferenceArea, Drag = a.Drag, Air = a.Air,
+        };
+        AscentProblem p = side.WithRecoveries([a, b, core]);
+        Check("three home: the problem is valid", p.Validate().Length == 0, p.Validate());
+
+        AscentSolution s = AscentScvx.Solve(p);
+        Console.WriteLine($"  three home: {s.Message}, {s.FinalMass / 1000.0:F2} t to orbit");
+        foreach (AscentRecoveryResult r in s.Recoveries)
+            Console.WriteLine($"    stage {r.Stage + 1}: keeps {r.ReserveKg:F0} kg against a need of {r.RequiredKg:F0} kg (boostback {r.BoostbackDv:F0} m/s), separates at {r.SeparationTime:F1} s");
+        Check("three home: usable", s.Usable, s.Message);
+        Check("three home: a result per booster", s.Recoveries.Length == 3, $"{s.Recoveries.Length}");
+        if (s.Recoveries.Length != 3)
+            return;
+        AscentRecoveryResult ra = s.Recoveries[0], rb = s.Recoveries[1], rc = s.Recoveries[2];
+        double tol = 1e-4 * p.M0;
+        Check("three home: the side boosters share one reserve", ra.Stage == 0 && rb.Stage == 0 && ra.ReserveKg == rb.ReserveKg);
+        Check("three home: it meets both side boosters' needs", ra.ReserveKg >= ra.RequiredKg - tol && ra.ReserveKg >= rb.RequiredKg - tol,
+            $"{ra.ReserveKg:F0} kg against {ra.RequiredKg:F0} and {rb.RequiredKg:F0} kg");
+        Check("three home: and is held to the costlier of them", ra.ReserveKg <= Math.Max(ra.RequiredKg, rb.RequiredKg) * 1.01 + 50.0,
+            $"{ra.ReserveKg:F0} kg against {Math.Max(ra.RequiredKg, rb.RequiredKg):F0} kg");
+        Check("three home: the two sites cost differently", Math.Abs(ra.RequiredKg - rb.RequiredKg) > 10.0, $"{ra.RequiredKg:F0} and {rb.RequiredKg:F0} kg");
+        Check("three home: the core's reserve meets its own need", rc.Stage == 1 && rc.ReserveKg >= rc.RequiredKg - tol && rc.ReserveKg <= rc.RequiredKg * 1.01 + 50.0,
+            $"{rc.ReserveKg:F0} kg against {rc.RequiredKg:F0} kg");
+        Check("three home: the core separates after the side boosters", rc.SeparationTime > ra.SeparationTime + 5.0,
+            $"T+{ra.SeparationTime:F0} s against T+{rc.SeparationTime:F0} s");
+
+        (int f1, int l1) = Nodes(s, 1);
+        (int f2, _) = Nodes(s, 2);
+        double burned1 = s.Mass[f1] - s.Mass[l1];
+        double want1 = p.Stages[1].PropellantMass + ra.ReserveKg * (1.0 / Share - 1.0) - rc.ReserveKg;
+        double dropped1 = s.Mass[l1] - s.Mass[f2];
+        Check("three home: the core burns the side boosters' share, less its own reserve", Math.Abs(burned1 - want1) < 50.0, $"{burned1:F0} kg against {want1:F0} kg");
+        Check("three home: the core leaves with its dry mass and its reserve", Math.Abs(dropped1 - (DryKg + rc.ReserveKg)) < 50.0, $"{dropped1:F0} kg against {DryKg + rc.ReserveKg:F0} kg");
+        Check("three home: bringing the core home costs payload", sideOnly.Usable && s.FinalMass < sideOnly.FinalMass,
+            $"{s.FinalMass / 1000.0:F2} t against {sideOnly.FinalMass / 1000.0:F2} t");
+
+        AscentProblem back = AscentProblemFile.FromJson(AscentProblemFile.ToJson(p));
+        Check("three home: the problem file keeps every booster", back.Recoveries.Count == 3 && back.Recoveries[2].Stage == 1 && back.Recoveries[1].SiteCci[0] == siteB[0]);
     }
 }

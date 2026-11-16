@@ -456,28 +456,45 @@ public static partial class GuidanceWindow
         GuidanceRegion.End();
     }
 
-    /// <summary>The booster reserve the calculated climb sized for the booster with a stage site, kg; NaN with no usable plan for that site.</summary>
-    private static double PlannedReserveBoostbackDv(out double landingDvMs)
-    {
-        landingDvMs = double.NaN;
-        AscentPlan p = _s.AscentPlan;
-        AscentSolution sol = p?.Solution;
-        if (p == null || !p.Usable || !double.IsFinite(sol.RecoveryReserveKg) || p.RecoverySite != RecoverySiteKey(BoostbackTarget()))
-            return double.NaN;
-        landingDvMs = sol.LandingDv;
-        return sol.BoostbackDv;
-    }
-
     /// <summary>
-    /// What the booster with a stage site keeps for its way home. There is nothing to set: the stage site arms the reserve, and the calculated climb sizes it for the boostback to that site and the landing burn (RefreshReserve). Idle is normal for part of a flight, because a strap-on stack does not arm until the strap-ons are gone, so the row says why (NextSeparationTakesBurningEngines).
+    /// What each booster with a stage site keeps for its way home, a row each (#130: a heavy's side boosters and its core). There is nothing to set: a stage site arms the reserve, and the calculated climb sizes it for the boostback to that site and the landing burn (RefreshReserve). Idle is normal for part of a flight, because a booster's reserve does not arm until the stages below it are gone, so the row says why (NextSeparationTakesBurningEngines).
     /// </summary>
     private static void DrawBoosterReserve()
     {
-        double boostbackDv = PlannedReserveBoostbackDv(out double landingDv);
-        string text = PageText.BoosterReserve(BoostbackTarget() != null, _s.ReserveArmed, _s.ReserveStaged, _s.ReserveKg, boostbackDv, landingDv, _s.ReserveNote, out bool warn);
-        if (text.Length == 0)
+        var list = _s.ReturnableStages;
+        int targeted = 0;
+        foreach (GuidanceWindow.ReturnableStage st in list)
+            if (st.HasTarget)
+                targeted++;
+
+        // Every targeted booster has left: the last of them staged on its reserve.
+        if (targeted == 0)
+        {
+            if (_s.ReserveStagedRoots.Count > 0)
+                GaugeRowText(UiTier.Player, "RESERVE", PageText.BoosterReserve(true, true, true, 0.0, double.NaN, double.NaN, "", out _), ConsoleStyle.TextMuted);
             return;
-        GaugeRowText(UiTier.Player, "RESERVE", text, warn ? ConsoleUi.WarnInk : _s.ReserveStaged ? ConsoleStyle.TextMuted : ConsoleStyle.TextPrimary);
+        }
+
+        int n = 0;
+        for (int i = 0; i < list.Count; i++)
+        {
+            GuidanceWindow.ReturnableStage stage = list[i];
+            if (!stage.HasTarget)
+                continue;
+            n++;
+            // Side boosters leaving together share the reserve armed for the first of them.
+            bool armed = _s.ReserveArmed && stage.IsNext;
+            bool staged = _s.ReserveStagedRoots.Contains(stage.RootId);
+            bool planned = PlannedRecovery(null, stage.RootId, out var plan);
+            double kg = armed ? _s.ReserveKg : planned ? plan.ReserveKg : 0.0;
+            string note = armed ? "" : stage.IsNext ? _s.ReserveNote : "ARMS AFTER STAGES BELOW SEPARATE";
+            string text = PageText.BoosterReserve(true, armed, staged, kg,
+                planned ? plan.BoostbackDv : double.NaN, planned ? plan.LandingDv : double.NaN, note, out bool warn);
+            if (text.Length == 0)
+                continue;
+            GaugeRowText(UiTier.Player, targeted > 1 ? FormattableString.Invariant($"RESERVE {n}") : "RESERVE", text,
+                warn ? ConsoleUi.WarnInk : staged ? ConsoleStyle.TextMuted : ConsoleStyle.TextPrimary);
+        }
     }
 
     /// <summary>

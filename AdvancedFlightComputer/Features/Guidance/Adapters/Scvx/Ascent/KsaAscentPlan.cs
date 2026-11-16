@@ -374,8 +374,21 @@ public sealed class AscentPlan
     public bool LanChosen { get; init; }
     /// <summary>ConvexOptimiseTiming when it was planned, so a change to it asks for a new plan.</summary>
     public bool OptimisedTiming { get; init; }
-    /// <summary>The booster and landing target it sized the reserve for, GuidanceWindow.RecoverySiteKey; empty with no target. A target set, moved or cleared since asks for a new plan.</summary>
+    /// <summary>The boosters and landing targets it sized reserves for, GuidanceWindow.RecoverySitesKey; empty with no target. A target set, moved or cleared since asks for a new plan.</summary>
     public string RecoverySite { get; init; } = "";
+    /// <summary>The root part of each booster the plan brings home, in the order of the problem's recoveries: entry j of <see cref="AscentSolution.Recoveries"/> is the booster rooted at entry j here. A stack planned on fewer stages solves only a head of them.</summary>
+    public uint[] RecoveryRoots { get; init; } = [];
+
+    /// <summary>The plan's entry for the booster rooted at <paramref name="rootId"/>, or false when it brings no such booster home.</summary>
+    public bool TryGetRecovery(uint rootId, out AdvancedFlightComputer.Guidance.Scvx.Ascent.AscentRecoveryResult result)
+    {
+        result = default;
+        int j = Array.IndexOf(RecoveryRoots, rootId);
+        if (Solution == null || j < 0 || j >= Solution.Recoveries.Length)
+            return false;
+        result = Solution.Recoveries[j];
+        return true;
+    }
     public double Mass0 { get; init; }
     /// <summary>The lift-off position in the body-fixed frame, to tell whether the vehicle has moved since.</summary>
     public double3 StartCcf { get; init; }

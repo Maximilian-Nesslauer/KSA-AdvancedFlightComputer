@@ -12,6 +12,7 @@ using HarmonyLib;
 using KSA;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AscentRecoveryResult = AdvancedFlightComputer.Guidance.Scvx.Ascent.AscentRecoveryResult;
 
 // Shared plumbing used by every flow: the per-vehicle step-and-apply entry point (ApplyAutopilot, called from the Vehicle.PrepareWorker Harmony prefix for each craft in turn), the commanded attitude, auto-staging, the UPFG vehicle builder, the warp-confirmation prompt, and small math helpers.
 //
@@ -145,9 +146,14 @@ public static partial class GuidanceWindow
         if (request != StagingDetector.StagingRequest.Queued)
             return;
 
-        // The reserve belongs to one separation. The booster itself is handed over when the row fires (OnSequenceActivating), as any separation's is.
+        // Each reserve belongs to one separation: every targeted booster on the row it stages is done with. The boosters themselves are handed over when the row fires (OnSequenceActivating), as any separation's are.
         if (reserveDone)
-            _s.ReserveStaged = true;
+        {
+            _s.ReserveStagedRoots.Add(_s.ReserveRootId);
+            foreach (ReturnableStage stage in _s.ReturnableStages)
+                if (stage.IsNext && stage.HasTarget)
+                    _s.ReserveStagedRoots.Add(stage.RootId);
+        }
     }
 
     private static void DisarmStaging(Vehicle vehicle)
@@ -712,21 +718,41 @@ public static partial class GuidanceWindow
     internal static ReturnableStage BoostbackTarget()
         => _s.ReturnableStages.Find(st => st.HasTarget);
 
-    /// <summary>The booster and site a plan was asked to bring home to, as the plan records it (AscentPlan.RecoverySite): a target moved or cleared since makes that plan's reserve stale.</summary>
+    /// <summary>The first targeted stage that is next to separate, else null: the booster whose reserve can arm now (RefreshReserve). Side boosters leaving together share one reserve, so the first of them stands for the row.</summary>
+    internal static ReturnableStage NextTargetedBooster()
+        => _s.ReturnableStages.Find(st => st.HasTarget && st.IsNext);
+
+    /// <summary>One booster and its site, as a plan records it (AscentPlan.RecoverySite).</summary>
     internal static string RecoverySiteKey(ReturnableStage booster)
         => booster == null ? "" : FormattableString.Invariant($"{booster.RootId}:{booster.TargetLatDeg:F6}:{booster.TargetLonDeg:F6}");
 
-    /// <summary>The reserve a usable convex plan for this vehicle sized for its booster, for the target that booster has now, kg (AscentSolution.RecoveryReserveKg); NaN when there is none, or the gravity turn flies instead.</summary>
-    private static double PlannedBoosterReserveKg(Vehicle vehicle)
+    /// <summary>Every targeted booster and its site, in staging order, as a plan records them (AscentPlan.RecoverySite): a target set, moved or cleared since makes that plan's reserves stale.</summary>
+    internal static string RecoverySitesKey()
     {
-        AscentPlan p = _s.AscentPlan;
-        if (!_s.FlyConvexAscent || _s.BackupAscent || p == null || !p.Usable || p.VehicleId != vehicle.Id)
-            return double.NaN;
-        // Once flying, the target cannot move the plan - the climb is committed - but before then a plan for another site is not this booster's.
-        if (!_s.Running && p.RecoverySite != RecoverySiteKey(BoostbackTarget()))
-            return double.NaN;
-        return p.Solution.RecoveryReserveKg;
+        var keys = new List<string>();
+        foreach (ReturnableStage stage in _s.ReturnableStages)
+            if (stage.HasTarget)
+                keys.Add(RecoverySiteKey(stage));
+        return string.Join(";", keys);
     }
+
+    /// <summary>The plan's entry for a booster: a usable convex plan for this vehicle, for the targets the boosters have now, that brings the booster rooted at <paramref name="rootId"/> home. False when there is none, or the gravity turn flies instead.</summary>
+    internal static bool PlannedRecovery(Vehicle vehicle, uint rootId, out AscentRecoveryResult result)
+    {
+        result = default;
+        AscentPlan p = _s.AscentPlan;
+        // With no vehicle given (a page drawing the controlled craft's state), the plan is taken as this state's own.
+        if (!_s.FlyConvexAscent || _s.BackupAscent || p == null || !p.Usable || (vehicle != null && p.VehicleId != vehicle.Id))
+            return false;
+        // Once flying, the targets cannot move the plan - the climb is committed, and a booster that has left takes its target with it - but before then a plan for other sites is not these boosters'.
+        if (!_s.Running && p.RecoverySite != RecoverySitesKey())
+            return false;
+        return p.TryGetRecovery(rootId, out result);
+    }
+
+    /// <summary>The reserve the convex plan sized for the booster rooted at <paramref name="rootId"/>, kg (AscentRecoveryResult.ReserveKg); NaN when there is none.</summary>
+    private static double PlannedBoosterReserveKg(Vehicle vehicle, uint rootId)
+        => PlannedRecovery(vehicle, rootId, out AscentRecoveryResult r) ? r.ReserveKg : double.NaN;
 
     /// <summary>
     /// Decide whether the booster reserve is armed, and how much it keeps. Runs with the stage model, on
@@ -742,25 +768,27 @@ public static partial class GuidanceWindow
         _s.ReserveArmed = false;
         _s.ReserveFlowShare = 1.0;
         _s.ReserveTanks.Clear();
+        _s.ReserveRootId = 0;
 
-        ReturnableStage booster = BoostbackTarget();
-        if (booster == null)
+        if (BoostbackTarget() == null)
         {
             _s.ReserveNote = "";
             return;
         }
 
-        // ONCE ONLY, and this is not just belt-and-braces. After the booster is gone the next separation is a perfectly good one - an upper stage over a payload, say - and re-arming there would reserve propellant in a stage that is never coming back. The reserve belongs to the first separation of an ascent.
+        // Something else separates first - strap-ons round a core - so the next staging is no targeted booster's. Not a refusal: it arms when they are gone. A heavy arms its side boosters' reserve first, then its core's once they are gone (#130).
+        ReturnableStage booster = NextTargetedBooster();
+        if (booster == null)
+        {
+            _s.ReserveNote = "ARMS AFTER STAGES BELOW SEPARATE";
+            return;
+        }
+        _s.ReserveRootId = booster.RootId;
+
+        // ONCE PER BOOSTER, and this is not just belt-and-braces. A booster staged on its reserve can sit in the list until the split lands, and re-arming on it would stage the row after it - an upper stage over a payload, say - early.
         if (_s.ReserveStaged)
         {
             _s.ReserveNote = "ALREADY STAGED";
-            return;
-        }
-
-        // Something else separates first - strap-ons round a core - so the next staging is not this booster's. Not a refusal: it arms when they are gone.
-        if (!booster.IsNext)
-        {
-            _s.ReserveNote = "ARMS AFTER STAGES BELOW SEPARATE";
             return;
         }
 
@@ -787,7 +815,7 @@ public static partial class GuidanceWindow
         _s.ReserveFlowShare = flowShare;
 
         // The convex plan sized it for the booster it brings home: stage it there, so the booster leaves where the plan separates it.
-        double planned = PlannedBoosterReserveKg(vehicle);
+        double planned = PlannedBoosterReserveKg(vehicle, booster.RootId);
         double kg = double.IsFinite(planned) ? planned : 0.0;
 
         _s.ReserveKg = kg;

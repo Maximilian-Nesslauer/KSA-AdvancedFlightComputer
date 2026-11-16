@@ -223,8 +223,14 @@ public sealed class VehicleAutopilotState
     /// <summary>Why the reserve is not armed, empty when it is.</summary>
     public string ReserveNote = "";
 
-    /// <summary>Set once the reserve has fired its staging, so it fires once.</summary>
-    public bool ReserveStaged;
+    /// <summary>The root part of each booster whose reserve has fired its staging, so each fires once (#130: a heavy's side boosters, then its core).</summary>
+    public readonly HashSet<uint> ReserveStagedRoots = new();
+
+    /// <summary>The booster the armed reserve belongs to: the targeted booster next to separate, its root part's InstanceId; 0 when there is none.</summary>
+    public uint ReserveRootId;
+
+    /// <summary>The armed reserve's booster has staged on it already.</summary>
+    public bool ReserveStaged => ReserveRootId != 0 && ReserveStagedRoots.Contains(ReserveRootId);
 
     /// <summary>
     /// Sim time until which this vehicle is a booster waiting for boostback to engage.

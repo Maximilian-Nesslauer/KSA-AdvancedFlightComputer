@@ -140,7 +140,7 @@ public static partial class GuidanceWindow
         ImGui.PushID(BoostersFoldId);
         try
         {
-            if (stages == 0 && !_s.ReserveStaged)
+            if (stages == 0 && _s.ReserveStagedRoots.Count == 0)
             {
                 ConsoleUi.MutedWrapped(PageText.BoostersNone);
                 return;

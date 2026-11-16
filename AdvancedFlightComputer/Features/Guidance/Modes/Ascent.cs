@@ -407,7 +407,7 @@ public static partial class GuidanceWindow
         }
         _s.CutoffDone = false;
         _s.TerminalLaw = null;
-        _s.ReserveStaged = false;   // a fresh ascent gets its reserve staging back
+        _s.ReserveStagedRoots.Clear();   // a fresh ascent gets its reserve stagings back
         _s.StagingActive = false;
         _s.LastSequenceTime = double.NegativeInfinity;
         _s.LastGuidanceLogTime = double.NegativeInfinity;

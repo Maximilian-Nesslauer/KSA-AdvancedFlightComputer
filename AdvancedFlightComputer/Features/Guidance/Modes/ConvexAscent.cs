@@ -92,9 +92,7 @@ public static partial class GuidanceWindow
                 // A chosen LAN is the target now: the LAUNCH page shows it, UPFG flies it after the hand-over, and the plan's own target check compares against it.
                 if (plan.Usable && plan.LanChosen)
                     _s.LanDeg = plan.LanDeg;
-                string booster = plan.Usable && double.IsFinite(sol.RecoveryReserveKg)
-                    ? FormattableString.Invariant($" BOOSTER RESERVE {sol.RecoveryReserveKg / 1000.0:F2} t: BOOSTBACK {sol.BoostbackDv:F0} m/s, LANDING {sol.LandingDv:F0} m/s.")
-                    : "";
+                string booster = plan.Usable ? PlanReservesText(sol) : "";
                 string timing = !plan.Usable ? ""
                     : plan.LaunchDelayS != 0.0 ? FormattableString.Invariant($" LIFTOFF {Math.Abs(plan.LaunchDelayS):F0} s {(plan.LaunchDelayS > 0.0 ? "AFTER" : "BEFORE")} WINDOW.")
                     : plan.LanChosen ? FormattableString.Invariant($" LAN {plan.LanDeg:F2} deg.") : "";
@@ -464,23 +462,23 @@ public static partial class GuidanceWindow
         double throttleRequestedPct = _s.ConvexThrottleMinPct;
         double[] r0 = [r.X, r.Y, r.Z], v0 = [v.X, v.Y, v.Z], n0 = [normal.X, normal.Y, normal.Z];
 
-        // THE BOOSTER THE PLAN BRINGS HOME: a stage that can fly home has a landing target (BoostbackTarget). The plan sizes its reserve from nothing, for the boostback to that target and the landing, in the stage whose end drops that booster (BoosterPlanStage) - a core under strap-ons included, which is why the reserve need not be armed yet: it arms when that booster is next to separate. The site has turned with the body to the launch, like the pad.
-        // THE STAGE THAT DROPS THAT BOOSTER, not the first liquid load whatever is targeted: on a heavy the first load ends with the side boosters, and a core-only target was sized there, with the side boosters' dry mass and the core's site (#130).
-        AscentRecovery recovery = null;
-        string recoveryNote = "";
-        ReturnableStage booster = BoostbackTarget();
-        string recoverySite = RecoverySiteKey(booster);
-        double flowShare = 1.0;
-        int boosterStage = booster == null ? -1
-            : BoosterPlanStage(vehicle, booster, model, stageParts, allStages, out flowShare, out recoveryNote);
-        // A booster with no stage of its own in the plan already has its note.
-        if (boosterStage >= 0 && !AscentPhasePlan.CanKeepReserve(allStages, boosterStage))
-            recoveryNote = "NO BOOSTER RESERVE: SEPARATING STAGE HAS NO LIQUID LOAD OF ITS OWN";
-        else if (boosterStage >= 0)
+        // THE BOOSTERS THE PLAN BRINGS HOME: every stage that can fly home and has a landing target (ReturnableStage.HasTarget). The plan sizes each one's reserve from nothing, for the boostback to its target and the landing, in the stage whose end drops it (BoosterPlanStage) - a core under strap-ons included, which is why a reserve need not be armed yet: it arms when that booster is next to separate. Each site has turned with the body to the launch, like the pad.
+        // THE STAGE THAT DROPS EACH BOOSTER, not the first liquid load whatever is targeted: on a heavy the first load ends with the side boosters, and a core-only target was sized there, with the side boosters' dry mass and the core's site (#130).
+        // SEVERAL AT ONCE (#130): a heavy's side boosters and its core each keep their own reserve. Side boosters leaving together share their stage's, held to each one's own site.
+        // In stage order, so a stack planned on fewer stages drops a tail of them and the plan's roots still line up with its solution (AscentPlan.RecoveryRoots).
+        var planned = new List<(AscentRecovery Recovery, uint RootId)>();
+        var recoveryNotes = new List<string>();
+        string recoverySite = RecoverySitesKey();
+        foreach (ReturnableStage booster in _s.ReturnableStages)
         {
-            if (aero.Table == null || aero.Atmosphere == null)
-                recoveryNote = "NO BOOSTER RESERVE: NO AIR FOR RETURN";
-            else
+            if (!booster.HasTarget)
+                continue;
+            int boosterStage = BoosterPlanStage(vehicle, booster, model, stageParts, allStages, out double flowShare, out string note);
+            if (boosterStage >= 0 && !AscentPhasePlan.CanKeepReserve(allStages, boosterStage))
+                note = "NO BOOSTER RESERVE: SEPARATING STAGE HAS NO LIQUID LOAD OF ITS OWN";
+            else if (boosterStage >= 0 && (aero.Table == null || aero.Atmosphere == null))
+                note = "NO BOOSTER RESERVE: NO AIR FOR RETURN";
+            else if (boosterStage >= 0)
             {
                 double latDeg = booster.TargetLatDeg;
                 double lonDeg = booster.TargetLonDeg;
@@ -488,10 +486,10 @@ public static partial class GuidanceWindow
                 double turn = omega * (launchAt - now);
                 double cs = Math.Cos(turn), sn = Math.Sin(turn);
                 site = new double3(cs * site.X - sn * site.Y, sn * site.X + cs * site.Y, site.Z);
-                // Built with no reserve, so the drop at the stage's end is the booster's dry mass alone.
+                // Built with no reserve, so the drop at the stage's end is the dry mass of every booster leaving there.
                 AscentStage b = allStages[boosterStage];
                 double boosterDryKg = b.JettisonMass;
-                recovery = new AscentRecovery
+                planned.Add((new AscentRecovery
                 {
                     Stage = boosterStage,
                     InitialReserveKg = 0.0,
@@ -504,10 +502,15 @@ public static partial class GuidanceWindow
                     Lift = aero.Lift,
                     Alpha = GlideNominalAlpha(aero),
                     Air = aero.Atmosphere,
-                };
-                recoveryNote = FormattableString.Invariant($"BOOSTER RESERVE FROM PLAN: '{booster.Name}' ({boosterDryKg / 1000.0:F2} t dry, stage {boosterStage + 1}{(flowShare < 1.0 ? $", side boosters drawing {flowShare:P0} of its flow" : "")}) HOME TO lat {latDeg:F3} lon {lonDeg:F3}");
+                }, booster.RootId));
+                note = FormattableString.Invariant($"BOOSTER RESERVE FROM PLAN: '{booster.Name}' ({boosterDryKg / 1000.0:F2} t dry, stage {boosterStage + 1}{(flowShare < 1.0 ? $", side boosters drawing {flowShare:P0} of its flow" : "")}) HOME TO lat {latDeg:F3} lon {lonDeg:F3}");
             }
+            recoveryNotes.Add(note);
         }
+        planned.Sort((x, y) => x.Recovery.Stage.CompareTo(y.Recovery.Stage));
+        AscentRecovery[] recoveries = planned.Select(r => r.Recovery).ToArray();
+        uint[] recoveryRoots = planned.Select(r => r.RootId).ToArray();
+        string recoveryNote = string.Join("; ", recoveryNotes);
 
         AscentProblem Build(int stages, double qLimit, bool[] held)
         {
@@ -535,8 +538,8 @@ public static partial class GuidanceWindow
                 QAlphaMax = qAlphaMax,
                 PlaneTurnMin = turnMin,
                 PlaneTurnMax = turnMax,
-                // Only while the booster is a lower stage: a stack planned on fewer stages carries it to the end.
-                Recovery = recovery != null && recovery.Stage < stages - 1 ? recovery : null,
+                // Only while a booster's stage is a lower stage: a stack planned on fewer stages carries it to the end. Sorted by stage, so what is kept is a head of the list.
+                Recoveries = recoveries.Where(r => r.Stage < stages - 1).ToArray(),
             };
         }
 
@@ -581,6 +584,7 @@ public static partial class GuidanceWindow
             LanChosen = freeLan,
             OptimisedTiming = optimiseTiming,
             RecoverySite = recoverySite,
+            RecoveryRoots = recoveryRoots,
             Mass0 = m0,
             StartCcf = startCcf,
             PeKm = peKm,
@@ -788,6 +792,26 @@ public static partial class GuidanceWindow
         return false;
     }
 
+    /// <summary>The plan status's booster part: one booster's reserve and burns, or each stage's reserve when several boosters come home (#130). Empty with none.</summary>
+    private static string PlanReservesText(AscentSolution sol)
+    {
+        AscentRecoveryResult[] rs = sol.Recoveries;
+        if (rs.Length == 0 || !double.IsFinite(rs[0].ReserveKg))
+            return "";
+        if (rs.Length == 1)
+            return FormattableString.Invariant($" BOOSTER RESERVE {rs[0].ReserveKg / 1000.0:F2} t: BOOSTBACK {rs[0].BoostbackDv:F0} m/s, LANDING {rs[0].LandingDv:F0} m/s.");
+        var parts = new List<string>();
+        int lastStage = -1;
+        foreach (AscentRecoveryResult r in rs)
+        {
+            if (r.Stage == lastStage)
+                continue;
+            lastStage = r.Stage;
+            parts.Add(FormattableString.Invariant($"{r.ReserveKg / 1000.0:F2} t AT STAGE {r.Stage + 1}"));
+        }
+        return " BOOSTER RESERVES " + string.Join(", ", parts) + ".";
+    }
+
     // Scratch for BoosterPlanStage, filled and consumed inside one call.
     private static readonly HashSet<Part> _boosterParts = new HashSet<Part>();
 
@@ -871,7 +895,7 @@ public static partial class GuidanceWindow
             why = "LIMITS CHANGED";
             return false;
         }
-        if (p.RecoverySite != RecoverySiteKey(BoostbackTarget()))
+        if (p.RecoverySite != RecoverySitesKey())
         {
             why = "BOOSTER LANDING TARGET CHANGED SINCE PLAN";
             return false;

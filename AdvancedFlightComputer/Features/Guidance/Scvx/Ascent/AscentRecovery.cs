@@ -74,6 +74,9 @@ public sealed class AscentRecovery
     }
 }
 
+/// <summary>One booster brought home, as a plan has it (AscentSolution.Recoveries): the stage it leaves at; the reserve that stage keeps, kg, shared by every booster leaving there; what this booster needs from the plan's separation, kg; that need's boostback impulse and landing burn, m/s; and when it separates, s from lift-off.</summary>
+public readonly record struct AscentRecoveryResult(int Stage, double ReserveKg, double RequiredKg, double BoostbackDv, double LandingDv, double SeparationTime);
+
 /// <summary>
 /// What a booster separated at a given state and time needs to come home, and how that moves with the state: the ascent's recovery row (AscentSubproblem) is that need linearised.
 ///
