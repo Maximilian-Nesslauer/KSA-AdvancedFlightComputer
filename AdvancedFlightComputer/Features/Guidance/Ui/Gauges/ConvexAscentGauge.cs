@@ -82,6 +82,9 @@ public static partial class GuidanceWindow
             GaugeRowCheck(Specs.ConvexOptimiseTiming with { Label = PageText.OptimiseTimingLabel(_s.TargetId.Length > 0) }, ref _s.ConvexOptimiseTiming);
         }
         GaugeRow(Specs.ConvexHandoverAltKm, ref _s.ConvexHandoverAltKm);
+        // A target periapsis under UPFG FROM brings the hand-over down to three quarters of it, on any body, so the row says where it really is.
+        if (AscentHandover.CappedByPe(_s.ConvexHandoverAltKm, _s.PeKm, _s.ApKm))
+            GaugeRowText(Specs.ConvexHandoverAltKm.Tier, "", FormattableString.Invariant($"HANDS OVER AT {_s.HandoverAltKm:F1} km, 75 % OF PE"), CvxDim);
 
         DrawConvexStatusRows(vehicle, orbit, parent);
 
@@ -170,7 +173,7 @@ public static partial class GuidanceWindow
 
         if (_s.Running && _s.FlyingPlan != null)
             GaugeRowText(D, "FLIGHT", _s.Phase == AscentPhase.Profile
-                ? FormattableString.Invariant($"AFC: PROFILE TO {_s.ConvexHandoverAltKm:F0} km")
+                ? FormattableString.Invariant($"AFC: PROFILE TO {_s.HandoverAltKm:F0} km")
                 : "HANDOVER: UPFG", CvxLive);
     }
 

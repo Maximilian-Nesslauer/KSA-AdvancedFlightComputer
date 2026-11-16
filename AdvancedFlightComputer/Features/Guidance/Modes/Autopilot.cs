@@ -959,7 +959,10 @@ public static partial class GuidanceWindow
         if (focused)
             Use(vehicle);
         else if (VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState state))
+        {
             _s = state;
+            BodySettings.Follow(_s, vehicle);
+        }
         else if (!TryAdoptBooster(vehicle))
             return;
 

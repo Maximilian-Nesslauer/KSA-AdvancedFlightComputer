@@ -45,7 +45,7 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec ConvexQAlphaMax = new("ConvexQAlphaMax", "MAX Q-ALPHA", "Pa rad", T, 3500.0, 0.0, 1e7, "%.1f",
         "Limit of dynamic pressure times angle of attack for the solved climb.");
     public static readonly SettingSpec ConvexHandoverAltKm = new("ConvexHandoverAltKm", "UPFG FROM", "km", T, 80.0, 0.0, 1e4, "%.1f",
-        "Altitude of the handover from the solved climb to UPFG.");
+        "Altitude of the handover from the solved climb to UPFG. The ascent never waits above 75 % of the target periapsis, on any body, so a low orbit still hands over.");
 
     public static readonly BoolSpec GLimitEnabled = new("GLimitEnabled", "G-LIMIT", P, false,
         "Caps acceleration of the whole ascent at MAX ACCELERATION.");

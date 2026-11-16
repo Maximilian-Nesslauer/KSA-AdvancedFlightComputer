@@ -895,14 +895,14 @@ public static partial class GuidanceWindow
             foreach (SettingSpec spec in doubles)
             {
                 string reason = SettingLockReason(spec.Key);
-                if (reason.Length > 0 && SettingAccess.TryGetDouble(_s, spec.Key, out double value) && SettingMath.IsChanged(spec, value))
+                if (reason.Length > 0 && SettingAccess.TryGetDouble(_s, spec.Key, out double value) && SettingMath.IsChanged(BodyDefaults.On(spec, _s.DefaultsBody), value))
                     return reason;
             }
         if (bools != null)
             foreach (BoolSpec spec in bools)
             {
                 string reason = SettingLockReason(spec.Key);
-                if (reason.Length > 0 && SettingAccess.TryGetBool(_s, spec.Key, out bool value) && SettingMath.IsChanged(spec, value))
+                if (reason.Length > 0 && SettingAccess.TryGetBool(_s, spec.Key, out bool value) && SettingMath.IsChanged(BodyDefaults.On(spec, _s.DefaultsBody), value))
                     return reason;
             }
         return "";

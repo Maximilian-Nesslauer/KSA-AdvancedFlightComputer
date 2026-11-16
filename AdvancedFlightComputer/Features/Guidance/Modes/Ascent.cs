@@ -20,7 +20,7 @@ public static partial class GuidanceWindow
 {
     // The target orbit, launch-to-target pick, and gravity-turn shaping are stored in VehicleAutopilotState for the vehicle they describe. LAN is seeded from the vessel's position when the LAUNCH page first draws and can be re-seeded with LAN FROM POSITION.
     private const double TerminalTgo = 10.0;
-    // Hand over to UPFG no later than this altitude, even if the pitch profiles never crossed - the failsafe against an open-loop runaway vehicle.
+    // Hand over to UPFG no later than this altitude, even if the pitch profiles never crossed - the failsafe against an open-loop runaway vehicle. Never above three quarters of the target periapsis either (AscentHandover), or a low orbit is reached with no hand-over.
     private const double FailsafeAltKm = 50.0;
 
     /// <summary>
@@ -409,7 +409,7 @@ public static partial class GuidanceWindow
             + $" (engage {_s.Engage}, auto engines and staging {_s.AutoStage}, g-limit {(_s.GLimitEnabled ? _s.GLimitG.ToString("F1") + " g" : "off")}, structural limit {KsaEnginePerf.StructuralAccelerationLimit(vehicle) / StandardGravity:F1} g"
             + $", booster reserve {(BoostbackTarget() == null ? "off (no booster target set)" : _s.ReserveArmed ? (_s.ReserveKg > 0.0 ? $"{_s.ReserveKg:F0} kg, sized by the plan" : $"none ({_s.ReserveNote})") : $"off ({(_s.ReserveNote.Length > 0 ? _s.ReserveNote : "no stage model yet")})")}, "
             + (_s.FlyingPlan != null
-                ? $"convex profile to {_s.ConvexHandoverAltKm:F0} km, planned {_s.FlyingPlan.Solution.FinalMass / 1000.0:F2} t to orbit"
+                ? $"convex profile to {_s.HandoverAltKm:F0} km, planned {_s.FlyingPlan.Solution.FinalMass / 1000.0:F2} t to orbit"
                 : $"turn from {_s.TurnStartAltKm:F1} km at {_s.TurnRateDegS:F2} deg/s"
                   + (_s.BackupAscent ? ", the backup the player chose"
                      : _s.FlyConvexAscent && _s.AscentPlan != null ? $", convex plan not flown: {convexWhy}" : ""))
@@ -692,7 +692,7 @@ public static partial class GuidanceWindow
             case AscentPhase.Turn:
                 // Pitch ramps down at the fixed rate; hand over to UPFG when it meets the closed-loop solution - or at the failsafe altitude regardless, so an open-loop profile can't run away.
                 if ((_s.Upfg.Converged && turnPitch <= upfgPitch)
-                    || alt >= FailsafeAltKm * 1000.0)
+                    || alt >= AscentHandover.AltitudeKm(FailsafeAltKm, _s.PeKm, _s.ApKm) * 1000.0)
                 {
                     _s.Phase = AscentPhase.ClosedLoop;
                     GuidanceLog.Debug(vehicle, $"closed loop from {alt / 1000.0:F1} km, turn pitch {turnPitch:F1} deg, UPFG pitch {upfgPitch:F1} deg, converged {_s.Upfg.Converged}.");

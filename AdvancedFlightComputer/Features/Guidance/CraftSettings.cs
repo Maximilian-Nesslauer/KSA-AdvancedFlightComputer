@@ -27,6 +27,8 @@ internal static class CraftSettings
     private const string AscentMethodKey = nameof(VehicleAutopilotState.AscentMethod);
     private const string MoonKey = nameof(VehicleAutopilotState.MoonTransferId);
     private const string MoonCaptureKey = nameof(VehicleAutopilotState.MoonTransferCapture);
+    // The body whose defaults the record is measured against (BodySettings). A record without one, from before per-body defaults, is measured against the defaults of every body.
+    private const string BodyKey = nameof(VehicleAutopilotState.DefaultsBody);
 
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -144,14 +146,17 @@ internal static class CraftSettings
         foreach (SettingSpec spec in GuidanceSettingSpecs.AllDoubles)
         {
             if (Kept(state, spec.Key) && SettingAccess.TryGetDouble(state, spec.Key, out double value)
-                && double.IsFinite(value) && SettingMath.IsChanged(spec, value))
+                && double.IsFinite(value) && SettingMath.IsChanged(BodyDefaults.On(spec, state.DefaultsBody), value))
                 record.Add((spec.Key, value.ToString("R", Inv)));
         }
         foreach (BoolSpec spec in GuidanceSettingSpecs.AllBools)
         {
-            if (Kept(state, spec.Key) && SettingAccess.TryGetBool(state, spec.Key, out bool value) && SettingMath.IsChanged(spec, value))
+            if (Kept(state, spec.Key) && SettingAccess.TryGetBool(state, spec.Key, out bool value) && SettingMath.IsChanged(BodyDefaults.On(spec, state.DefaultsBody), value))
                 record.Add((spec.Key, value ? "true" : "false"));
         }
+        // Only a record that holds a value needs its body, and a body with defaults of its own is all that changes what a value is measured against.
+        if (record.Count > 0 && state.DefaultsBody.Length > 0)
+            record.Insert(0, (BodyKey, Quote(state.DefaultsBody)));
         if (state.AscentMethod != GuidanceWindow.AscentMethod.CatsUpfg)
             record.Add((AscentMethodKey, Quote(state.AscentMethod.ToString())));
         if (!string.IsNullOrEmpty(state.MoonTransferId))
@@ -167,6 +172,12 @@ internal static class CraftSettings
     internal static int Apply(VehicleAutopilotState state, IReadOnlyDictionary<string, string> record)
     {
         int applied = 0;
+        // The craft first takes the defaults of the body the record was measured against, so a value the record leaves out is that body's default and one it holds stands as the player's.
+        if (record.TryGetValue(BodyKey, out string? bodyRaw) && TryUnquote(bodyRaw, out string body) && body.Length > 0)
+        {
+            BodySettings.Follow(state, body);
+            applied++;
+        }
         foreach (SettingSpec spec in GuidanceSettingSpecs.AllDoubles)
         {
             if (!NotKept.Contains(spec.Key) && record.TryGetValue(spec.Key, out string? raw)

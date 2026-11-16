@@ -109,6 +109,7 @@ public static partial class GuidanceWindow
     {
         AssertOwner();
         _s = vehicle != null ? VehicleAutopilotState.For(vehicle) : new VehicleAutopilotState();
+        BodySettings.Follow(_s, vehicle);
         return _s;
     }
 

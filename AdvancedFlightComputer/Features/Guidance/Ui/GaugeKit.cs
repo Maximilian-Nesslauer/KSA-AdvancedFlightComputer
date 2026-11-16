@@ -42,8 +42,9 @@ public static partial class GuidanceWindow
     /// the value is clamped to the spec's range once the edit ends. RowEditEnded says whether the
     /// edit of the row ended in this frame. On TUNE a changed value also shows its default and a RESET (ResetTail).
     /// </summary>
-    private static bool GaugeRow(in SettingSpec spec, ref double value)
+    private static bool GaugeRow(in SettingSpec setting, ref double value)
     {
+        SettingSpec spec = BodyDefaults.On(setting, _s.DefaultsBody);
         if (!TierScope.Show(spec.Tier))
             return false;
         string lockReason = SettingLockReason(spec.Key);
@@ -76,7 +77,7 @@ public static partial class GuidanceWindow
             changed = true;
             ended = true;
         }
-        SpecTooltip(label, hovered, spec.Key, LockedHelp(lockReason, spec.Help), SettingMath.GhostText(spec), SettingMath.IsChanged(spec, value));
+        SpecTooltip(label, hovered, spec.Key, LockedHelp(lockReason, spec.Help), BodyDefaults.GhostText(setting, _s.DefaultsBody), SettingMath.IsChanged(spec, value));
         ConsoleUi.EndRow();
         _lastRowKey = spec.Key;
         _lastRowEditEnded = ended;
@@ -148,8 +149,9 @@ public static partial class GuidanceWindow
     /// <summary>
     /// One number field of a row that holds several, in the row just begun: a short name, the field and its unit, from <paramref name="x"/> at the row top <paramref name="y"/>. It behaves as <see cref="GaugeRow"/> does: the same id, the same clamp when the edit ends, the same card on a hover, and RowEditEnded answers for it. Moves <paramref name="x"/> to the next field. A row with little room can leave out the unit and show the value at a shorter <paramref name="format"/>, which changes only what the field shows, because ImGui parses a value only from an edit. <paramref name="marksChange"/> is false for a goal that a pilot always sets, such as a landing site, which no default makes normal. A name that ties to a colour of a picture takes <paramref name="nameInk"/>.
     /// </summary>
-    private static bool GaugeCell(in SettingSpec spec, string name, ref float x, float y, float fieldW, ref double value, string format = null, bool showUnit = true, bool marksChange = true, uint? nameInk = null)
+    private static bool GaugeCell(in SettingSpec setting, string name, ref float x, float y, float fieldW, ref double value, string format = null, bool showUnit = true, bool marksChange = true, uint? nameInk = null)
     {
+        SettingSpec spec = BodyDefaults.On(setting, _s.DefaultsBody);
         if (!TierScope.Show(spec.Tier))
             return false;
         string lockReason = SettingLockReason(spec.Key);
@@ -183,7 +185,7 @@ public static partial class GuidanceWindow
         }
 
         bool hovered = ConsoleWidgets.RowHovered && ImGui.IsMouseHoveringRect(new float2(from, y), new float2(x, y + h));
-        SpecTooltip(spec.Label, hovered, spec.Key, LockedHelp(lockReason, spec.Help), SettingMath.GhostText(spec), SettingMath.IsChanged(spec, value));
+        SpecTooltip(spec.Label, hovered, spec.Key, LockedHelp(lockReason, spec.Help), BodyDefaults.GhostText(setting, _s.DefaultsBody), SettingMath.IsChanged(spec, value));
         ConsoleUi.NoteRow(spec.Key, new float2(from, y), new float2(x - from, h));
         x += CellGap;
         _lastRowKey = spec.Key;
@@ -195,8 +197,9 @@ public static partial class GuidanceWindow
     private static bool RowEditEnded(in SettingSpec spec)
         => TierScope.Show(spec.Tier) && _lastRowEditEnded && _lastRowKey == spec.Key;
 
-    private static bool GaugeRowInt(in SettingSpec spec, ref int value)
+    private static bool GaugeRowInt(in SettingSpec setting, ref int value)
     {
+        SettingSpec spec = BodyDefaults.On(setting, _s.DefaultsBody);
         if (!TierScope.Show(spec.Tier))
             return false;
         string lockReason = SettingLockReason(spec.Key);
@@ -216,13 +219,14 @@ public static partial class GuidanceWindow
         double whole = value;
         ClampOnEnd(in spec, ref whole, ref changed, round: true);
         value = (int)whole;
-        SpecTooltip(label, hovered, spec.Key, LockedHelp(lockReason, spec.Help), SettingMath.GhostText(spec), SettingMath.IsChanged(spec, value));
+        SpecTooltip(label, hovered, spec.Key, LockedHelp(lockReason, spec.Help), BodyDefaults.GhostText(setting, _s.DefaultsBody), SettingMath.IsChanged(spec, value));
         ConsoleUi.EndRow();
         return changed;
     }
 
-    private static bool GaugeRowCheck(in BoolSpec spec, ref bool value)
+    private static bool GaugeRowCheck(in BoolSpec setting, ref bool value)
     {
+        BoolSpec spec = BodyDefaults.On(setting, _s.DefaultsBody);
         if (!TierScope.Show(spec.Tier))
             return false;
         string lockReason = SettingLockReason(spec.Key);
@@ -238,7 +242,7 @@ public static partial class GuidanceWindow
             value = spec.Default;
             changed = true;
         }
-        SpecTooltip(spec.Label, hovered, spec.Key, LockedHelp(lockReason, spec.Help), SettingMath.GhostText(spec), SettingMath.IsChanged(spec, value));
+        SpecTooltip(spec.Label, hovered, spec.Key, LockedHelp(lockReason, spec.Help), BodyDefaults.GhostText(setting, _s.DefaultsBody), SettingMath.IsChanged(spec, value));
         ConsoleUi.EndRow();
         return changed;
     }
@@ -337,7 +341,7 @@ public static partial class GuidanceWindow
         }
         GaugeRowText(height.Tier, height.Label, Fmt.Meters(_s.VehicleHeightM));
         if (TierScope.Show(height.Tier))
-            SpecTooltip(height.Label, ImGui.IsItemHovered(), height.Key, height.Help, SettingMath.GhostText(height), false);
+            SpecTooltip(height.Label, ImGui.IsItemHovered(), height.Key, height.Help, BodyDefaults.GhostText(height, _s.DefaultsBody), false);
         if (_s.VehicleHeightStatus.Length == 0 || _s.VehicleHeightStowed)
             return;
         bool warn = _s.VehicleHeightStatus.StartsWith("NO COLLIDERS", StringComparison.Ordinal);
