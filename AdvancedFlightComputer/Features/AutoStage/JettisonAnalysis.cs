@@ -141,11 +141,42 @@ internal static class JettisonAnalysis
 
     // The crossfeed case: a booster whose own engine is spent may still feed the core.
     // Live, not cached, so the caller runs it as the last gate before staging.
+    //
+    // Only an engine that stays aboard counts as fed (#174).
+    // A recoverable booster carries its own pod, whose tank the core's RCS thrusters can reach.
+    // RCS losing a tank it happened to reach is no reason to keep a spent booster, and counting it held every such booster until the player staged by hand.
     public static bool CarriesOffUsablePropellant(Vehicle vehicle, IReadOnlySet<Part> jettison, out string? reason)
     {
         reason = null;
         ReadOnlySpan<MoleState> moleStates = vehicle.Parts.Moles.States;
 
+        _stayingEngineCores.Clear();
+        Span<EngineController> engines = vehicle.Parts.Modules.Get<EngineController>();
+        for (int i = 0; i < engines.Length; i++)
+        {
+            if (jettison.Contains(engines[i].Parent.FullPart) || engines[i].Cores == null)
+                continue;
+            foreach (RocketCore core in engines[i].Cores)
+                _stayingEngineCores.Add(core);
+        }
+
+        try
+        {
+            return FeedsStayingEngine(jettison, moleStates, out reason) || CrossesFuelLink(vehicle, jettison, out reason);
+        }
+        finally
+        {
+            // Cleared on the way out, so the scratch set does not pin a shed stage's cores.
+            _stayingEngineCores.Clear();
+        }
+    }
+
+    // Scratch for the crossfeed gate: the cores of every engine that stays aboard.
+    private static readonly HashSet<RocketCore> _stayingEngineCores = new();
+
+    private static bool FeedsStayingEngine(IReadOnlySet<Part> jettison, ReadOnlySpan<MoleState> moleStates, out string? reason)
+    {
+        reason = null;
         foreach (Part part in jettison)
         {
             // SubtreeModules, because a tank usually sits on a sub-part of the tree part.
@@ -159,18 +190,21 @@ internal static class JettisonAnalysis
                 // AvailableConsumers is narrower than what a FurtherestToNearest flow rule drains, which is fine on stock parts, whose decoupler joints carry no BulkFluid capability.
                 foreach ((ResourceManager manager, int _) in tank.AvailableConsumers)
                 {
-                    if (manager.Consumer is not PlumbedCore consumer)
-                        continue;
-                    if (jettison.Contains(consumer.Parent.FullPart))
+                    if (manager.Consumer is not PlumbedCore consumer || !_stayingEngineCores.Contains(consumer))
                         continue;
 
-                    reason = $"a tank on '{part.DisplayName}' still feeds '{consumer.Parent.FullPart.DisplayName}', which stays aboard";
+                    reason = $"a tank on '{part.DisplayName}' still feeds the engine on '{consumer.Parent.FullPart.DisplayName}', which stays aboard";
                     return true;
                 }
             }
         }
+        return false;
+    }
 
-        // A player-drawn fuel link is plumbing the resource graph does not necessarily model.
+    // A player-drawn fuel link is plumbing the resource graph does not necessarily model.
+    private static bool CrossesFuelLink(Vehicle vehicle, IReadOnlySet<Part> jettison, out string? reason)
+    {
+        reason = null;
         ReadOnlySpan<FuelLink> links = vehicle.Parts.FuelLinks.Links;
         for (int i = 0; i < links.Length; i++)
         {
