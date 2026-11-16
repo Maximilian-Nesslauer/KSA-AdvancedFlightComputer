@@ -85,14 +85,19 @@ public static partial class GuidanceWindow
     /// </summary>
     internal static double LegsToGo(Vehicle vehicle, VehicleAutopilotState s, double legsHeightM, double now, out LegsClock clock)
     {
-        Ksa6DofPlan touchdown = s.Guidance?.Published;
+        LegsClocks clocks = LegsClocksOf(s, s.Guidance?.Published, LegsFallSeconds(vehicle, legsHeightM), now);
+        return LegsRules.ToGo(in clocks, out clock);
+    }
+
+    /// <summary>The time to go that each clock of LegsToGo gives at <paramref name="now"/>, from the modes of <paramref name="s"/>, the published plan <paramref name="touchdown"/> of touchdown guidance and the fall time <paramref name="fall"/>.</summary>
+    internal static LegsClocks LegsClocksOf(VehicleAutopilotState s, Ksa6DofPlan touchdown, double fall, double now)
+    {
         Plan3Dof entry = s.ThreeDofPhase is ThreeDofPhase.Glide or ThreeDofPhase.Burn ? s.ThreeDofPlan : null;
-        double fall = LegsFallSeconds(vehicle, legsHeightM);
         // The glide holds its time to impact at GlideMinTgo or more, so near the ground the fall time, which is the shorter one there, is what reaches the deploy time.
         double impact = s.BoostbackPhase == BoostbackPhase.Glide ? LegsRules.PlanToGo(s.GlideLastUpdate + s.GlideTgo, now) : double.NaN;
         if (double.IsFinite(impact) && double.IsFinite(fall))
             impact = Math.Min(impact, fall);
-        var clocks = new LegsClocks(
+        return new LegsClocks(
             TouchdownPlanS: s.Active && touchdown != null ? LegsRules.PlanToGo(touchdown.SolveTime + touchdown.Sigma, now) : double.NaN,
             EntryPlanS: entry != null ? LegsRules.PlanToGo(entry.EndTime, now) : double.NaN,
             GfoldPlanS: s.LandingPhase == LandingPhase.GfoldDescent && s.GfoldPlan != null && !s.GfoldForceSearch
@@ -100,7 +105,6 @@ public static partial class GuidanceWindow
             StandbyPlanS: s.SixDofStandby && touchdown != null ? LegsRules.PlanToGo(touchdown.SolveTime + touchdown.Sigma, now) : double.NaN,
             ImpactS: impact,
             FallS: fall);
-        return LegsRules.ToGo(in clocks, out clock);
     }
 
     /// <summary>The fall time of the legs from <paramref name="legsHeightM"/> to the ground at the descent rate of <paramref name="vehicle"/> and the gravity of its body, s (LegsRules.FallSeconds).</summary>

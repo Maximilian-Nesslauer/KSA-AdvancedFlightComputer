@@ -1,6 +1,8 @@
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.Ui.Logic;
+using AdvancedFlightComputer.Guidance.Conic;
+using AdvancedFlightComputer.Guidance.Gfold;
 using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
@@ -22,6 +24,9 @@ namespace AdvancedFlightComputer.HarnessTests;
 //    the deploy time to go deploys at once;
 //  - with no plan, the clock is the fall of the legs to the ground at the descent rate under gravity, and the legs are commanded on
 //    the first step whose fall time is at or under the deploy time.
+// Before the craft, the test reads which clock the modes of a bare state select (GuidanceWindow.LegsClocksOf): the touchdown plan
+// while touchdown guidance flies or stands by, the entry plan in its glide or burn, the G-FOLD arrival unless a search runs, the
+// impact of a boostback glide capped by the fall time, a plan whose end has passed never, and the order between them.
 public sealed class GuidanceLandingLegsTest : AfcTest
 {
     private const double StepS = 0.05;
@@ -34,6 +39,7 @@ public sealed class GuidanceLandingLegsTest : AfcTest
 
     protected override void Execute(TestContext t)
     {
+        ClockSelection(t);
         IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves("Luna 2", "Luna 1");
         if (saves.Count == 0 || t.System.All.Get("Luna") is not Celestial lunaBody || lunaBody is not IParentBody luna)
         {
@@ -231,6 +237,65 @@ public sealed class GuidanceLandingLegsTest : AfcTest
             $"{commandedToGo:F3} s, deploy time {deployAt:F3} s");
         t.CheckAbs("the fall landing records the height", state.LegsFiredAtM, commandedAtM, 1e-9);
         EndLanding(craft, state);
+    }
+
+    private static void ClockSelection(TestContext t)
+    {
+        const double Now = 1000.0, Fall = 7.0;
+        var touchdown = new Ksa6DofPlan(Array.Empty<double>(), Array.Empty<double>(), 10.0, Now - 5.0, 0);
+        var ended = new Ksa6DofPlan(Array.Empty<double>(), Array.Empty<double>(), 4.0, Now - 5.0, 0);
+        var entry = new Plan3Dof(Array.Empty<double>(), Array.Empty<double>(), 0, 0, 5.0, 15.0, Now, Now, Phase3Dof.Burn, 0.0);
+        var gfold = new GfoldTrajectory
+        {
+            Status = ConicStatus.Optimal, Dt = 1.0, Position = Array.Empty<double[]>(), Velocity = Array.Empty<double[]>(),
+            AccelCmd = Array.Empty<double[]>(), Sigma = Array.Empty<double>(), Mass = Array.Empty<double>(),
+            LandingPoint = new double[3], LandingErrorNorm = 0.0, Iterations = 0,
+        };
+
+        void Expect(string name, VehicleAutopilotState s, Ksa6DofPlan? plan, double fall, LegsClock clock, double toGo)
+        {
+            LegsClocks clocks = GuidanceWindow.LegsClocksOf(s, plan!, fall, Now);
+            double got = LegsRules.ToGo(in clocks, out LegsClock gotClock);
+            t.Check("clock: " + name, gotClock == clock && (Math.Abs(got - toGo) < 1e-9 || (double.IsNaN(got) && double.IsNaN(toGo))), $"{gotClock} at {got:F3} s, expected {clock} at {toGo:F3} s");
+        }
+
+        var s = new VehicleAutopilotState();
+        Expect("no mode gives the fall", s, touchdown, Fall, LegsClock.Fall, Fall);
+        s.Active = true;
+        Expect("touchdown guidance flies its plan", s, touchdown, Fall, LegsClock.TouchdownPlan, 5.0);
+        Expect("a touchdown plan whose end has passed gives no time", s, ended, Fall, LegsClock.Fall, Fall);
+        Expect("touchdown guidance with no plan gives no time", s, null, Fall, LegsClock.Fall, Fall);
+        s.ThreeDofPlan = entry;
+        s.ThreeDofPhase = GuidanceWindow.ThreeDofPhase.Burn;
+        Expect("the touchdown plan comes before the entry plan", s, touchdown, Fall, LegsClock.TouchdownPlan, 5.0);
+        s.Active = false;
+        Expect("entry guidance in its burn flies its plan", s, touchdown, Fall, LegsClock.EntryPlan, 20.0);
+        s.ThreeDofPhase = GuidanceWindow.ThreeDofPhase.Glide;
+        Expect("entry guidance in its glide flies its plan", s, touchdown, Fall, LegsClock.EntryPlan, 20.0);
+        s.LandingPhase = GuidanceWindow.LandingPhase.GfoldDescent;
+        s.GfoldPlan = gfold;
+        s.GfoldArrivalTime = Now + 30.0;
+        Expect("the entry plan comes before the G-FOLD arrival", s, touchdown, Fall, LegsClock.EntryPlan, 20.0);
+        s.ThreeDofPhase = GuidanceWindow.ThreeDofPhase.Idle;
+        Expect("entry guidance out of its glide and burn gives no time", s, null, double.NaN, LegsClock.GfoldPlan, 30.0);
+        s.SixDofStandby = true;
+        Expect("the G-FOLD arrival comes before the standby plan", s, touchdown, Fall, LegsClock.GfoldPlan, 30.0);
+        s.GfoldForceSearch = true;
+        Expect("a G-FOLD search hides its arrival", s, touchdown, Fall, LegsClock.TouchdownStandby, 5.0);
+        s.GfoldForceSearch = false;
+        s.GfoldPlan = null;
+        Expect("G-FOLD with no plan gives no time", s, touchdown, Fall, LegsClock.TouchdownStandby, 5.0);
+        s.LandingPhase = GuidanceWindow.LandingPhase.Idle;
+        s.BoostbackPhase = GuidanceWindow.BoostbackPhase.Glide;
+        s.GlideLastUpdate = Now - 2.0;
+        s.GlideTgo = 40.0;
+        Expect("the standby plan comes before the glide impact", s, touchdown, Fall, LegsClock.TouchdownStandby, 5.0);
+        s.SixDofStandby = false;
+        Expect("a glide gives its impact", s, touchdown, 50.0, LegsClock.Impact, 38.0);
+        Expect("the fall time caps the glide impact", s, touchdown, Fall, LegsClock.Impact, Fall);
+        s.BoostbackPhase = GuidanceWindow.BoostbackPhase.Boostback;
+        Expect("a boostback out of its glide gives no impact", s, touchdown, 50.0, LegsClock.Fall, 50.0);
+        Expect("no clock at all gives none", s, null, double.NaN, LegsClock.None, double.NaN);
     }
 
     private static void FlyEntryPlan(VehicleAutopilotState state, double endS)
