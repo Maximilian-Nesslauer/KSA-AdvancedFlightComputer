@@ -710,9 +710,10 @@ public static partial class GuidanceWindow
         _leavingCores.Clear();
         foreach (Part part in _separationDrops)
             foreach (EngineController engine in part.SubtreeModules.Get<EngineController>())
-                if (engine.Cores != null)
-                    foreach (RocketCore core in engine.Cores)
-                        _leavingCores.Add(core);
+                if (engine.Rockets != null)
+                    foreach (Rocket rocket in engine.Rockets)
+                        foreach (RocketCore core in rocket.Cores)
+                            _leavingCores.Add(core);
         foreach (Part part in _separationDrops)
         {
             Span<Tank> tanks = part.SubtreeModules.Get<Tank>();

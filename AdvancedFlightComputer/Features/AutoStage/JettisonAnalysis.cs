@@ -154,10 +154,11 @@ internal static class JettisonAnalysis
         Span<EngineController> engines = vehicle.Parts.Modules.Get<EngineController>();
         for (int i = 0; i < engines.Length; i++)
         {
-            if (jettison.Contains(engines[i].Parent.FullPart) || engines[i].Cores == null)
+            if (jettison.Contains(engines[i].Parent.FullPart) || engines[i].Rockets == null)
                 continue;
-            foreach (RocketCore core in engines[i].Cores)
-                _stayingEngineCores.Add(core);
+            foreach (Rocket rocket in engines[i].Rockets)
+                foreach (RocketCore core in rocket.Cores)
+                    _stayingEngineCores.Add(core);
         }
 
         try

@@ -877,11 +877,12 @@ public static partial class GuidanceWindow
     {
         foreach (EngineController engine in part.Modules.Get<EngineController>())
         {
-            if (engine.Cores == null)
+            if (engine.Rockets == null)
                 continue;
-            foreach (RocketCore core in engine.Cores)
-                if (core is SolidMotor)
-                    return true;
+            foreach (Rocket rocket in engine.Rockets)
+                foreach (RocketCore core in rocket.Cores)
+                    if (core is SolidMotor)
+                        return true;
         }
         return false;
     }
