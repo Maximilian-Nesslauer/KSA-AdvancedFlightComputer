@@ -16,6 +16,10 @@ internal static class RcsComputeControlPatch
         if (!RcsCommandChannel.TryGet(fc.BurnPlan, out RcsWorkerCommand cmd) || !cmd.Active)
             return;
 
+        // A queued kFS pilot start can take control in VehicleComputer.Dispatch after the main-thread tick.
+        if (cmd.Owner != null && VehicleControlOwnership.KfsOwns(cmd.Owner))
+            return;
+
         cmd.MarkConsumed();
 
         // Suppress engine commands even if another caller changed BurnMode directly.

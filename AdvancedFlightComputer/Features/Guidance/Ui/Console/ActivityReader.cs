@@ -57,6 +57,7 @@ public static partial class GuidanceWindow
             LaunchArmed = s.LaunchArmed,
             ConvexLaunchPending = s.ConvexLaunchPending,
             BoostbackLive = s.BoostbackPhase != BoostbackPhase.Idle && s.BoostbackPhase != BoostbackPhase.Done,
+            BoostbackPending = s.BoostbackEngagePending,
             DescentLive = s.LandingPhase != LandingPhase.Idle && s.LandingPhase != LandingPhase.Done,
             LandingMachineLive = machine,
             TerminalBurnActive = s.LandingPhase == LandingPhase.TerminalCoast || s.LandingPhase == LandingPhase.TerminalBrake,
@@ -65,7 +66,7 @@ public static partial class GuidanceWindow
             LandingAirborne = machine || s.LandingPhase == LandingPhase.TerminalHover,
             ControlAcquired = s.ControlAcquired,
             HoldsNoControl = !s.ControlAcquired && !s.Active && !s.EngagePending
-                && (!s.Engage || (!s.Running && (s.LaunchArmed || s.ConvexLaunchPending || LandingWaits(s.LandingPhase)))),
+                && (!s.Engage || (!s.Running && (s.LaunchArmed || s.ConvexLaunchPending || s.BoostbackEngagePending || LandingWaits(s.LandingPhase)))),
             EngineOff =Ui.Console.ConsoleFrame.EngineKnownOff(vehicle),
             EnginePercent = Ui.Console.ConsoleFrame.EnginePercent(vehicle),
             LandingStockAuto = s.DeorbitNodeClaimed && vehicle?.FlightComputer?.BurnMode == FlightComputerBurnMode.Auto,
@@ -138,6 +139,9 @@ public static partial class GuidanceWindow
             }
             case StopTarget.Boostback:
             {
+                if (_s.BoostbackEngagePending)
+                    return new ModeReadout(a, "BOOSTBACK", "", "WAITING FOR AERO MESH", Tone(false), double.NaN, "",
+                        Array.Empty<HeadValue>(), PhaseBesideName: true);
                 string phase = BoostbackPhaseName(_s.BoostbackPhase).ToUpperInvariant();
                 double miss = vehicle?.Orbit?.Parent is IParentBody body ? ImpactMissDistance(body) : double.NaN;
                 string missText = double.IsFinite(miss) ? "MISS " + Fmt.KmFine(miss / 1000.0) : "";

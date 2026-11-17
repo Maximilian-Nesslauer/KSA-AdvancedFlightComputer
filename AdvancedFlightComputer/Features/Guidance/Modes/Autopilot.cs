@@ -892,7 +892,10 @@ public static partial class GuidanceWindow
             _s.LandingPhase = LandingPhase.Idle;
 
         if (mode != GuidanceMode.Boostback)
+        {
+            _s.BoostbackEngagePending = false;
             _s.BoostbackPhase = BoostbackPhase.Idle;
+        }
 
         // The 6-DOF standby the 3-DOF's burn keeps is for 6-DOF only; anything else taking the craft ends it.
         if (mode != GuidanceMode.SixDof)

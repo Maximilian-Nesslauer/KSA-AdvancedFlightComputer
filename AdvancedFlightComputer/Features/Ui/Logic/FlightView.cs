@@ -31,7 +31,7 @@ internal static class FlightView
     public static bool ModeFlies(GuidanceModeId mode, in CraftActivity a) => mode switch
     {
         GuidanceModeId.AscentUpfg => a.AscentRunning || a.LaunchArmed || a.ConvexLaunchPending,
-        GuidanceModeId.Boostback => a.BoostbackLive,
+        GuidanceModeId.Boostback => a.BoostbackLive || a.BoostbackPending,
         GuidanceModeId.DeorbitLand => a.DescentLive,
         GuidanceModeId.GfoldHere => a.LandingMachineLive,
         GuidanceModeId.SixDofHere => a.SixDofEngaged,
@@ -57,7 +57,7 @@ internal static class FlightView
             return LandWay.Hover;
         if (a.DescentLive)
             return LandWay.FromOrbit;
-        return a.BoostbackLive ? LandWay.Boostback : null;
+        return a.BoostbackLive || a.BoostbackPending ? LandWay.Boostback : null;
     }
 
     public static bool FooterGoes(bool flies, bool footerHeld) => flies && !footerHeld;

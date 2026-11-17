@@ -288,6 +288,7 @@ public static partial class GuidanceWindow
     /// <summary>ABORT: stop steering, cut the engine, leave the vehicle where it is.</summary>
     private static void AbortBoostback()
     {
+        _s.BoostbackEngagePending = false;
         _s.BoostbackPhase = BoostbackPhase.Done;
         _s.BoostbackHasPlan = false;
         _s.BoostbackTerminal = false;

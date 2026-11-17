@@ -132,7 +132,7 @@ public static class KsaGimbalControl
             return;
 
         // A craft out of control flies only what stock commands, as with the player's inputs, which ControlsLockout blocks.
-        if (st.Owner is { IsControllable: false })
+        if (st.Owner != null && (!st.Owner.IsControllable || VehicleControlOwnership.KfsOwns(st.Owner)))
             return;
 
         if (mode == GimbalOverrideMode.Lsq)

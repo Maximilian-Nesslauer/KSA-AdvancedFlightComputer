@@ -12,6 +12,8 @@ internal static class StagingExecution
 {
     public static PendingStaging? ActivateNextSequenceSplit(Vehicle vehicle)
     {
+        if (!StagingDetector.ControlAvailable(vehicle))
+            return null;
         StagingHelpers.InvalidateSequenceCache();
         SequenceList.RequestScrollToBottom();
 
@@ -101,6 +103,8 @@ internal static class StagingExecution
     // An earlier decouple may have carried a module's part away.
     public static void ActivatePendingModules(Vehicle vehicle, List<ISequenced> modules, string label)
     {
+        if (!StagingDetector.ControlAvailable(vehicle))
+            return;
         foreach (ISequenced module in modules)
         {
             Part part = module.Parent.FullPart;

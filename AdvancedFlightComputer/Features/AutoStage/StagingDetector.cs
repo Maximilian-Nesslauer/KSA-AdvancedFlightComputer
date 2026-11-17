@@ -44,6 +44,8 @@ internal static class StagingDetector
     internal static void Arm(Vehicle vehicle, bool active)
     {
         StagingState state = StateOf(vehicle);
+        if (!ControlAvailable(vehicle))
+            return;
         if (state.Active == active)
             return;
         state.Active = active;
@@ -70,12 +72,16 @@ internal static class StagingDetector
         Deferred,
         // A staging is still in flight and its evaluation would drop the request, so nothing is kept.
         Busy,
+        // No request is kept when the vehicle cannot accept AFC commands.
+        Unavailable,
     }
 
     // Asks for one row, for a caller with a cue of its own such as a planned stage boundary or a cold ignition.
     // The answer says whether the row is on its way, so a caller that records something for the separation records it only for a request that was kept.
     internal static StagingRequest RequestStaging(Vehicle vehicle)
     {
+        if (!ControlAvailable(vehicle))
+            return StagingRequest.Unavailable;
         StagingState state = StateOf(vehicle);
         if (state.State != StagingState.Phase.Monitoring)
             return StagingRequest.Busy;
@@ -84,6 +90,31 @@ internal static class StagingDetector
     }
 
     internal static bool HasState(Vehicle vehicle) => _states.ContainsKey(vehicle);
+
+    internal static bool ControlAvailable(Vehicle vehicle)
+    {
+        if (!vehicle.IsDisposed && vehicle.IsControllable && !VehicleControlOwnership.KfsOwns(vehicle))
+            return true;
+        if (_states.TryGetValue(vehicle, out StagingState? state))
+        {
+            // Cancel AFC's delayed work without reversing a row or touching stock's input buffers.
+            state.Active = false;
+            state.Requested = false;
+            state.Pending = null;
+            state.HeldBurn = null;
+            state.HeldForControl = false;
+            state.ActivationEngines = null;
+            state.ActivationFrames = 0;
+            state.PropagationFrames = 0;
+            state.PropagationCountedAt = double.NaN;
+            state.Sampled = false;
+            state.SampledBurnMode = FlightComputerBurnMode.Manual;
+            state.SampledHadPropellant = false;
+            state.State = StagingState.Phase.Monitoring;
+            state.ResetDwell();
+        }
+        return false;
+    }
 
     internal static int ActivationsOf(Vehicle vehicle)
         => _states.TryGetValue(vehicle, out StagingState? state) ? state.Activations : 0;
@@ -133,6 +164,9 @@ internal static class StagingDetector
                 _states.Remove(vehicle);
                 continue;
             }
+
+            if (!ControlAvailable(vehicle))
+                continue;
 
             // First, armed or not: the row is already marked activated and stock skips activated rows forever, so a module dropped here could never fire again.
             TickPendingStaging(vehicle, state, now);
@@ -292,6 +326,8 @@ internal static class StagingDetector
     // The activation only queues, so the burn is held from here on, through the frame the activation lands in and the frame the stale stop of the new engines arrives in.
     internal static void OnPlayerStaged(Vehicle vehicle, List<EngineController> engines)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         FlightComputer fc = vehicle.FlightComputer;
         if (vehicle.IsDisposed || fc.BurnMode != FlightComputerBurnMode.Auto || fc.Burn == null)
             return;
@@ -398,6 +434,8 @@ internal static class StagingDetector
     // Fires whichever pending parts have reached their deadline.
     private static void TickPendingStaging(Vehicle vehicle, StagingState state, double now)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         PendingStaging? p = state.Pending;
         if (p == null)
             return;
@@ -422,7 +460,7 @@ internal static class StagingDetector
             BeginPropagation(state, Universe.GetElapsedSeconds());
     }
 
-    // A held staging cannot be dropped: its already-activated row would stay unfired for good, and firing it early only shortens a delay that exists for looks.
+    // A second staging completes the held row early, unless control loss has cancelled its modules.
     private static void FlushPendingStaging(Vehicle vehicle, StagingState state)
     {
         if (state.Pending == null)
@@ -436,6 +474,8 @@ internal static class StagingDetector
     private static void ExecuteStaging(Vehicle vehicle, StagingState state, FlightComputer fc,
         BurnTarget? heldBurn, string trigger)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         if (JettisonAnalysis.WouldSeparateLastControl(vehicle))
         {
             // Once per row: the triggers keep asking every frame while the row stands.
@@ -502,6 +542,8 @@ internal static class StagingDetector
     // The hold ends when stock completes the burn or loads another one, which leaves the burn to stock.
     private static void KeepAutoBurn(Vehicle vehicle, StagingState state, FlightComputer fc)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         BurnTarget? held = state.HeldBurn;
         if (held == null)
             return;
@@ -548,6 +590,8 @@ internal static class StagingDetector
         _walk.AddRange(_states);
         foreach (KeyValuePair<Vehicle, StagingState> entry in _walk)
         {
+            if (!ControlAvailable(entry.Key))
+                continue;
             PendingStaging? p = entry.Value.Pending;
             if (p == null || entry.Key.IsDisposed)
                 continue;
