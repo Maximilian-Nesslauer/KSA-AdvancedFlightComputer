@@ -272,6 +272,7 @@ public static partial class GuidanceWindow
         _s.BoostbackSettleFrom = double.NaN;
         _s.BoostbackSmall = false;
         _s.BoostbackApexCheckPending = false;
+        _s.BoostbackSmallDeferred = false;
         _s.BoostbackPhaseStart = SimNow();
         _s.BoostbackLastStep = SimNow();
         _s.BoostbackLocked = false;
@@ -444,6 +445,16 @@ public static partial class GuidanceWindow
                     if (!_s.HasSteer && now - _s.BoostbackPhaseStart < BoostbackDecideTimeoutS)
                         break;
                     // SMALL BOOSTBACK (#197): a miss up to BoostbackLargeMissKm flies no settle and turns with the engine off. A lit flip lays down dV of its own, as big as a small correction, which then moves under the booster as it turns.
+                    // A SMALL CORRECTION WAITS FOR THE APEX while the booster still climbs: separated in the air, it drifts while it turns round, so a burn now is followed by a second at the apex recheck. Gliding up and burning once at the top does it in one. A booster already falling has no apex to wait for, and a large miss burns at once.
+                    if (_s.HasSteer && missKm <= _s.BoostbackLargeMissKm && vUp > 0.0)
+                    {
+                        _s.BoostbackStatus = FormattableString.Invariant($"MISS {missKm:F1} km: SMALL CORRECTION AT THE APEX.");
+                        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, small correction (miss {missKm:F1} km, {missDv:F0} m/s) while climbing: no burn now, it burns once at the apex."));
+                        EnterBoostbackPhase(BoostbackPhase.Glide, now);
+                        _s.BoostbackApexCheckPending = true;
+                        _s.BoostbackSmallDeferred = true;
+                        break;
+                    }
                     if (_s.HasSteer && missKm <= _s.BoostbackLargeMissKm)
                     {
                         _s.BoostbackSmall = true;
@@ -570,11 +581,11 @@ public static partial class GuidanceWindow
                 double apexDv = _s.SteerDv.Length();
                 if (apexKm <= _s.BoostbackGlideMissKm)
                 {
-                    GuidanceLog.Debug(vehicle, FormattableString.Invariant($"apex: miss {apexKm:F1} km ({apexDv:F1} m/s), still within the glide's reach, gliding on."));
+                    GuidanceLog.Debug(vehicle, FormattableString.Invariant($"apex: miss {apexKm:F1} km ({apexDv:F1} m/s), within the glide's reach{(_s.BoostbackSmallDeferred ? ", so the deferred correction needs no burn" : "")}, gliding on."));
                     break;
                 }
                 // Past the glide's reach: start the boostback again from the top, as a manual BOOSTBACK would, and let the Separation phase choose small or large on the miss it predicts now. It needs no clearance: the stage it left is long gone.
-                GuidanceLog.Info(vehicle, FormattableString.Invariant($"apex: miss grew to {apexKm:F1} km ({apexDv:F0} m/s) on the way up: boostback again."));
+                GuidanceLog.Info(vehicle, FormattableString.Invariant($"apex: miss {apexKm:F1} km ({apexDv:F0} m/s){(_s.BoostbackSmallDeferred ? ", the small correction deferred from separation" : ", grew on the way up")}: boostback now."));
                 StartBoostbackRun(vehicle);
                 _s.BoostbackClearOf = null;
                 _s.BoostbackStatus = FormattableString.Invariant($"APEX: MISS {apexKm:F1} km. BOOSTBACK AGAIN.");
