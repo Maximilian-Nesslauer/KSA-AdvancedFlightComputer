@@ -1280,7 +1280,7 @@ public sealed class VehicleAutopilotState
     /// <summary>
     /// The miss, km, beyond which a boostback is a large one: it settles and turns on the lit engine's gimbal. Between <see cref="BoostbackGlideMissKm"/> and this it is a small one, flown without the settling burn and turned with the engine off, then burned (#197). The lit flip lays down dV of its own as it sweeps through every direction on the way round; for a small correction that is as big as the correction, which moves while the booster turns, and the short burn after it chases its own tail. A small correction leaves time to turn.
     /// </summary>
-    public double BoostbackLargeMissKm = 100.0;
+    public double BoostbackLargeMissKm = 20.0;
 
     /// <summary>The reserve every returning booster keeps for small corrections, m/s, on top of its boostback and landing burn (AscentRecovery.CorrectionDv): sized into the calculated climb.</summary>
     public double BoosterCorrectionDvMs = 100.0;
@@ -1402,7 +1402,7 @@ public sealed class VehicleAutopilotState
     public double GlideKd = 0.0;
 
     /// <summary>Largest angle of attack the glide commands, degrees off engine-first into the wind.</summary>
-    public double GlideMaxAoaDeg = 1.0;
+    public double GlideMaxAoaDeg = 7.5;
 
     /// <summary>
     /// The angle of attack the boostback plans the glide at, degrees: every impact prediction - the burn's shot, its cutoff correction, the overlay and the glide PID's own - assumes the vehicle glides at this angle with its lift pointed up the trajectory, which stretches the range so the burn can stop short and save propellant. The PID flies it as its nominal and trims about it. It sits below the maximum so the PID keeps room to trim, and both are small because the aero moment of KSA 5901 can turn a booster at a larger angle of attack. 0 plans the engine-first ballistic coast.
