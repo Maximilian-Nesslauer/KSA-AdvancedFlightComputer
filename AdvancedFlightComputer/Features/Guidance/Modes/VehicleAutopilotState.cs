@@ -1263,7 +1263,7 @@ public sealed class VehicleAutopilotState
     /// <summary>
     /// How far off its site a booster's predicted impact may be, km, for it to fly no boostback at all: the glide's lift makes up a miss this size. Judged once it is clear of its stage.
     /// </summary>
-    public double BoostbackGlideMissKm = 5.0;
+    public double BoostbackGlideMissKm = 3.0;
 
     /// <summary>
     /// The miss, km, beyond which a boostback is a large one: it settles and turns on the lit engine's gimbal. Between <see cref="BoostbackGlideMissKm"/> and this it is a small one, flown without the settling burn and turned with the engine off, then burned (#197). The lit flip lays down dV of its own as it sweeps through every direction on the way round; for a small correction that is as big as the correction, which moves while the booster turns, and the short burn after it chases its own tail. A small correction leaves time to turn.
@@ -1286,6 +1286,11 @@ public sealed class VehicleAutopilotState
 
     /// <summary>A drone-ship booster (optimal return), handed over at separation to its frozen point. It follows the same miss rule as any booster (BoostbackGlideMissKm, BoostbackLargeMissKm); the flag only labels its status.</summary>
     public bool BoostbackGlideOnly;
+
+    /// <summary>
+    /// The booster went into the glide without a burn while still climbing, so its miss is judged again at the apex (Boostback, Glide): once its vertical speed turns negative, the miss is re-predicted and the same rules applied as at separation. A booster separated in the air drifts while it turns round, and a miss inside BoostbackGlideMissKm at separation can be well outside it by the top of the arc (2026-11-17). Once per boostback.
+    /// </summary>
+    public bool BoostbackApexCheckPending;
 
     // Separating a drone-ship booster on its live impact (DroneShipSeparation).
     /// <summary>The drone-ship booster next to separate, by root InstanceId, and its own aero, swept once when its reserve arms.</summary>

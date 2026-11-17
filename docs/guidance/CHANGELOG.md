@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **GLIDE ONLY WITHIN** defaults to 3 km, down from 5 km: a booster whose predicted miss is over 3 km flies a boostback. A booster that went to the glide without a burn while still climbing is judged again at the top of its arc, once its vertical speed turns negative. Separated in the air, it drifts while it turns round, so a miss inside the limit at separation can be outside it by then. The miss is predicted again and the same rules apply: still within GLIDE ONLY WITHIN, it glides on; up to LARGE BOOSTBACK FROM, it flies a small boostback; beyond, a large one. It is judged once, and a booster that has burned is not judged again.
+
 - During an ascent that AFC flies, the head of the console counts down to the next separation: **SEPARATION T-** (**SEP T-** when the head is narrow), first among the ascent numbers. It counts to the parts coming off, decoupler delay included, from whichever comes first: the booster reserve, the burnout of the burning stage, or a drone-ship booster reaching its ship. Each is the propellant left before its cue over the rate it is burning now, so throttle and the g-limit are in it. It shows while AutoStage is armed and a stage will separate, and not on the last stage. In the last 10 s a green **SEPARATION T-** band also shows under the altitude counter, with the console open or closed, and pulses in the last 3 s. It stands under the red failure band when both show.
 
 - The **BOOSTERS** fold on LAUNCH is now **REUSE**, and it is the first fold under the picture, above **LIMITS**.
