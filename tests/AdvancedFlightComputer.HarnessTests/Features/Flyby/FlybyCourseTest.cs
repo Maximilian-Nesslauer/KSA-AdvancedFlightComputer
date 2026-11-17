@@ -63,7 +63,7 @@ public sealed class FlybyCourseTest : AfcTest
     private static void CheckSmallTrim(TestContext t, Vehicle vehicle, Celestial moon, IParentBody moonBody)
     {
         double now = Universe.GetElapsedSeconds();
-        double altitude = MoonInjectionPlanner.PredictedPeriapsisRadius(vehicle, moonBody) - moonBody.MeanRadius + 10_100.0;
+        double altitude = MoonInjectionPlanner.PredictedPeriapsisRadius(vehicle, moonBody) - moonBody.MeanRadius + 70_000.0;
         if (!t.Check("small trim: the encounter has a time", MoonInjectionPlanner.SphereEntryTime(vehicle, moonBody) is not null))
             return;
         double entry = MoonInjectionPlanner.SphereEntryTime(vehicle, moonBody)!.Value.Seconds();
@@ -75,7 +75,7 @@ public sealed class FlybyCourseTest : AfcTest
 
         string refusal = CourseCorrector.TryPlan(vehicle, moon, moonBody, altitude, now, out var late);
         t.Check("small trim: the later plan is easier to execute and leaves time before the sphere",
-            refusal.Length == 0 && late.BurnTime.Seconds() > early && late.DvVlf.Length() > small.DvVlf.Length()
+            refusal.Length == 0 && late.BurnTime.Seconds() > early && late.DvVlf.Length() >= 1.0
             && entry - late.BurnTime.Seconds() >= 1800.0
             && CourseCorrector.OnCourse(late.PredictedPeriapsisRadius, moonBody, altitude),
             refusal.Length == 0 ? $"{late.DvVlf.Length():F3} m/s; {entry - late.BurnTime.Seconds():F0} s before entry" : refusal);

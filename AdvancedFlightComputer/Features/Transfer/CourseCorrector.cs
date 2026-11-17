@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.Flyby;
 using Brutal.Numerics;
 using KSA;
 
@@ -52,12 +54,14 @@ internal static class CourseCorrector
     {
         plan = default;
         var leads = new List<double> { FirstCorrectionS };
+        int earlyCount = leads.Count;
         if (MoonInjectionPlanner.SphereEntryTime(vehicle, moonBody) is UniverseTime entry)
         {
             double timeToEntry = entry.Seconds() - now;
             foreach (double share in CorrectionShares)
                 if (share * timeToEntry > leads[^1])
                     leads.Add(share * timeToEntry);
+            earlyCount = leads.Count;
 
             // A final trim may still be smaller than the engine can repeat at three quarters of the coast.
             // Nearer the moon it needs more delta-v for the same change to the approach.
@@ -70,8 +74,9 @@ internal static class CourseCorrector
         }
         string refusal = "";
         bool found = false;
-        foreach (double lead in leads)
+        for (int i = 0; i < leads.Count; i++)
         {
+            double lead = leads[i];
             if (!MoonInjectionPlanner.TryPlanCorrection(vehicle, moon, altitudeM, new UniverseTime(now + lead),
                     out MoonInjectionPlanner.MoonInjection candidate, out string why))
             {
@@ -79,12 +84,45 @@ internal static class CourseCorrector
                     refusal = why;
                 continue;
             }
+            if (i >= earlyCount)
+            {
+                if (!TryCheckLateTrim(vehicle, moon, moonBody, altitudeM, candidate, out double periapsis)
+                    || (found && OnCourse(plan.PredictedPeriapsisRadius, moonBody, altitudeM)
+                        && candidate.DvVlf.Length() <= plan.DvVlf.Length()))
+                    continue;
+                candidate = candidate with { PredictedPeriapsisRadius = periapsis };
+            }
             plan = candidate;
             found = true;
             if (candidate.DvVlf.Length() >= LeastDvMs)
                 break;
         }
         return found ? "" : refusal;
+    }
+
+    private static bool TryCheckLateTrim(Vehicle vehicle, Celestial moon, IParentBody moonBody,
+        double altitudeM, MoonInjectionPlanner.MoonInjection candidate, out double periapsis)
+    {
+        periapsis = double.NaN;
+        double targetRadius = moonBody.MeanRadius + altitudeM;
+        // The planner already refined this vector. Check the burn that the node will use.
+        var departure = new FlybyTargeting.FlybyResult(candidate.DvVlf, default, candidate.BurnTime,
+            double.NaN, double.NaN, targetRadius, IsCrossParent: false,
+            PlannerVInfMs: double.NaN, PlannerApoTargetMeters: double.NaN);
+        FlybyPrediction prediction = HohmannFlybyUI.BuildPreview(vehicle, moon, moonBody, departure,
+            out FlightPlan? preview, refineDeparture: false);
+        if (preview == null || prediction.PeriapsisRadius is not double radius || !OnCourse(radius, moonBody, altitudeM))
+            return false;
+
+        UniverseTime cutoff = FiniteBurns.LastBurnPiece(preview)?.EndTime ?? candidate.BurnTime;
+        foreach (PatchedConic patch in preview.Patches)
+        {
+            if (patch.Orbit.Parent?.Id != moonBody.Id)
+                continue;
+            periapsis = radius;
+            return (patch.StartTime - cutoff).Seconds() >= FirstCorrectionS;
+        }
+        return false;
     }
 
     /// <summary>
