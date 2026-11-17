@@ -30,6 +30,15 @@ public sealed class AscentRecovery
     public bool OptimalReturn { get; init; }
     /// <summary>The booster's engines' exhaust velocity, m/s.</summary>
     public required double ExhaustVelocity { get; init; }
+    /// <summary>
+    /// The booster's engines' exhaust velocity at sea level, m/s, for the landing burn; NaN takes <see cref="ExhaustVelocity"/>.
+    ///
+    /// THE LANDING BURN IS NEAR THE GROUND, where back pressure takes a large share of a vacuum-tuned engine's exhaust velocity: a heavy's core read 436 s in vacuum and flew its landing at 342 s, 22 % less burn per kilogram than the reserve was sized for, and came down short of propellant (2026-11-17). The boostback stays on <see cref="ExhaustVelocity"/>, high up.
+    /// </summary>
+    public double LandingExhaustVelocity { get; init; } = double.NaN;
+
+    /// <summary>The exhaust velocity the landing burn is priced at: <see cref="LandingExhaustVelocity"/>, or the vacuum one where that is not known.</summary>
+    public double LandingVe => LandingExhaustVelocity > 0.0 && double.IsFinite(LandingExhaustVelocity) ? LandingExhaustVelocity : ExhaustVelocity;
     /// <summary>The landing site at lift-off, in the problem's inertial frame, m. Fixed to the ground: at separation it has turned with the body.</summary>
     public required double[] SiteCci { get; init; }
     /// <summary>Drag reference area, m^2, for <see cref="Drag"/> and <see cref="Lift"/>.</summary>
@@ -57,7 +66,7 @@ public sealed class AscentRecovery
     /// <summary>The same booster, its reserve starting at <paramref name="initialReserveKg"/>.</summary>
     public AscentRecovery WithInitialReserve(double initialReserveKg) => new()
     {
-        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, FlowShare = FlowShare, OptimalReturn = OptimalReturn, ExhaustVelocity = ExhaustVelocity, BurnDelayS = BurnDelayS,
+        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, FlowShare = FlowShare, OptimalReturn = OptimalReturn, ExhaustVelocity = ExhaustVelocity, LandingExhaustVelocity = LandingExhaustVelocity, BurnDelayS = BurnDelayS,
         SiteCci = SiteCci, ReferenceArea = ReferenceArea, Drag = Drag, Lift = Lift, Alpha = Alpha, Air = Air,
         LandingFactor = LandingFactor, BoostbackMargin = BoostbackMargin,
     };
@@ -131,7 +140,7 @@ public sealed class BoostbackOracle
             : 0.0;
         LandingDv = r.LandingFactor * TerminalVelocity;
         // Through the coast the booster carries its landing propellant.
-        double coastMass = r.BoosterDryKg * Math.Exp(LandingDv / r.ExhaustVelocity);
+        double coastMass = r.BoosterDryKg * Math.Exp(LandingDv / r.LandingVe);
         _sys = new DragCoastSystem
         {
             Mu = mu,
@@ -149,14 +158,14 @@ public sealed class BoostbackOracle
         _opt.PathStride = 0;
     }
 
-    /// <summary>The propellant the booster needs for a boostback of <paramref name="boostbackDv"/>, kg.</summary>
+    /// <summary>The propellant the booster needs for a boostback of <paramref name="boostbackDv"/>, kg: the boostback high up at the vacuum exhaust velocity, then the landing burn at the sea-level one (AscentRecovery.LandingExhaustVelocity).</summary>
     public double RequiredKg(double boostbackDv)
-        => _r.BoosterDryKg * (Math.Exp((_r.BoostbackMargin * boostbackDv + LandingDv) / _r.ExhaustVelocity) - 1.0);
+        => _r.BoosterDryKg * (Math.Exp(_r.BoostbackMargin * boostbackDv / _r.ExhaustVelocity + LandingDv / _r.LandingVe) - 1.0);
 
     /// <summary>d(RequiredKg)/d(boostback dv), kg per m/s.</summary>
     public double RequiredKgSlope(double boostbackDv)
         => _r.BoosterDryKg * _r.BoostbackMargin / _r.ExhaustVelocity
-           * Math.Exp((_r.BoostbackMargin * boostbackDv + LandingDv) / _r.ExhaustVelocity);
+           * Math.Exp(_r.BoostbackMargin * boostbackDv / _r.ExhaustVelocity + LandingDv / _r.LandingVe);
 
     /// <summary>
     /// The smallest impulse at separation, state (<paramref name="r"/>, <paramref name="v"/>) in SI at <paramref name="tSep"/> s after lift-off, that lands the booster on the site; <paramref name="dv"/> carries the starting guess in and the impulse out. False if the coast never lands or the correction cannot be solved.

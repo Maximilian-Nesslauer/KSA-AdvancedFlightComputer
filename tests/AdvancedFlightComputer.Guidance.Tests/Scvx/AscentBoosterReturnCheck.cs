@@ -89,6 +89,29 @@ internal static class AscentBoosterReturnCheck
                 $"{ship.FinalMass / 1000.0:F2} t against {opt.FinalMass / 1000.0:F2} t");
         }
 
+        // ---- the landing burn at sea level: a vacuum-tuned engine's exhaust velocity near the ground is far below the stage's (a heavy's core read 436 s and landed at 342 s), and the reserve must grow by exactly what the rocket equation says.
+        var seaLevel = new AscentRecovery
+        {
+            Stage = 0, InitialReserveKg = 0.0, BoosterDryKg = optRec.BoosterDryKg, OptimalReturn = true,
+            ExhaustVelocity = optRec.ExhaustVelocity, LandingExhaustVelocity = optRec.ExhaustVelocity * 342.0 / 436.0,
+            SiteCci = optRec.SiteCci, ReferenceArea = optRec.ReferenceArea, Drag = optRec.Drag, Air = optRec.Air,
+        };
+        var vacOracle = new BoostbackOracle(optP, optRec);
+        var slOracle = new BoostbackOracle(optP, seaLevel);
+        double wantSl = seaLevel.BoosterDryKg * (Math.Exp(slOracle.LandingDv / seaLevel.LandingExhaustVelocity) - 1.0);
+        Check("sea level: the landing reserve is priced at the sea-level exhaust velocity", Math.Abs(slOracle.RequiredKg(0.0) - wantSl) < 1e-6,
+            $"{slOracle.RequiredKg(0.0):F1} against {wantSl:F1} kg");
+        Check("sea level: and is larger than at vacuum", slOracle.RequiredKg(0.0) > vacOracle.RequiredKg(0.0) * 1.2,
+            $"{slOracle.RequiredKg(0.0):F0} against {vacOracle.RequiredKg(0.0):F0} kg");
+        double bb = 1000.0;
+        double wantBoth = seaLevel.BoosterDryKg * (Math.Exp(seaLevel.BoostbackMargin * bb / seaLevel.ExhaustVelocity + slOracle.LandingDv / seaLevel.LandingExhaustVelocity) - 1.0);
+        Check("sea level: the boostback stays at the vacuum exhaust velocity", Math.Abs(slOracle.RequiredKg(bb) - wantBoth) < 1e-6,
+            $"{slOracle.RequiredKg(bb):F1} against {wantBoth:F1} kg");
+        AscentProblem slBack = AscentProblemFile.FromJson(AscentProblemFile.ToJson(optP.WithRecovery(seaLevel)));
+        Check("sea level: the problem file keeps it", slBack.Recovery?.LandingExhaustVelocity == seaLevel.LandingExhaustVelocity);
+        AscentProblem vacBack = AscentProblemFile.FromJson(AscentProblemFile.ToJson(optP));
+        Check("sea level: and an unset one stays unset", vacBack.Recovery != null && double.IsNaN(vacBack.Recovery.LandingExhaustVelocity));
+
         // ---- expendable.
         AscentProblem bare = optP.WithRecovery(null);
         AscentSolution exp = AscentScvx.Solve(bare);

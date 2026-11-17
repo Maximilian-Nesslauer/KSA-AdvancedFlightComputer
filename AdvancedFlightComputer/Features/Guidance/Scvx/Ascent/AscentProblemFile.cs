@@ -79,6 +79,8 @@ public static class AscentProblemFile
         // Missing in an older dump, which reads as a booster that is all its stage burns.
         public double FlowShare { get; set; } = 1.0;
         public bool OptimalReturn { get; set; }
+        // Null, and missing in an older dump: the vacuum exhaust velocity is taken (JSON has no NaN).
+        public double? LandingExhaustVelocity { get; set; }
         public double ExhaustVelocity { get; set; }
         public double[] SiteCci { get; set; } = [];
         public double ReferenceArea { get; set; }
@@ -172,6 +174,7 @@ public static class AscentProblemFile
                 BoosterDryKg = rec.BoosterDryKg,
                 FlowShare = rec.FlowShare,
                 OptimalReturn = rec.OptimalReturn,
+                LandingExhaustVelocity = double.IsFinite(rec.LandingExhaustVelocity) ? rec.LandingExhaustVelocity : null,
                 ExhaustVelocity = rec.ExhaustVelocity,
                 SiteCci = rec.SiteCci,
                 ReferenceArea = rec.ReferenceArea,
@@ -220,6 +223,7 @@ public static class AscentProblemFile
                 BoosterDryKg = r.BoosterDryKg,
                 FlowShare = r.FlowShare,
                 OptimalReturn = r.OptimalReturn,
+                LandingExhaustVelocity = r.LandingExhaustVelocity ?? double.NaN,
                 ExhaustVelocity = r.ExhaustVelocity,
                 SiteCci = r.SiteCci,
                 ReferenceArea = r.ReferenceArea,

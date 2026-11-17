@@ -479,6 +479,7 @@ public static partial class GuidanceWindow
         foreach (ReturnableStage booster in _s.ReturnableStages)
         {
             int boosterStage = BoosterPlanStage(vehicle, booster, model, stageParts, allStages, out double flowShare, out string note);
+            double landingVe = BoosterSeaLevelVe(vehicle, booster, aero.Atmosphere?.SeaLevelPressure ?? 0.0);
             if (boosterStage < 0 || aero.Table == null || aero.Atmosphere == null)
             {
                 if (booster.ComesHome)
@@ -504,6 +505,7 @@ public static partial class GuidanceWindow
                 FlowShare = flowShare,
                 OptimalReturn = booster.OptimalReturn,
                 ExhaustVelocity = b.HasLiquid ? b.Thrust / b.MassFlow : b.ExhaustVelocity,
+                LandingExhaustVelocity = landingVe,
                 SiteCci = [site.X, site.Y, site.Z],
                 ReferenceArea = aero.ReferenceArea,
                 Drag = aero.Table,
@@ -522,7 +524,7 @@ public static partial class GuidanceWindow
                 continue;
             }
             planned.Add((rec, booster.RootId));
-            recoveryNotes.Add(FormattableString.Invariant($"BOOSTER RESERVE FROM PLAN: '{booster.Name}' ({boosterDryKg / 1000.0:F2} t dry, stage {boosterStage + 1}{(flowShare < 1.0 ? $", side boosters drawing {flowShare:P0} of its flow" : "")}) ")
+            recoveryNotes.Add(FormattableString.Invariant($"BOOSTER RESERVE FROM PLAN: '{booster.Name}' ({boosterDryKg / 1000.0:F2} t dry, stage {boosterStage + 1}{(flowShare < 1.0 ? $", side boosters drawing {flowShare:P0} of its flow" : "")}, landing burn at Isp {rec.LandingVe / 9.80665:F0} s) ")
                 + (booster.HasTarget ? FormattableString.Invariant($"HOME TO lat {booster.TargetLatDeg:F3} lon {booster.TargetLonDeg:F3}") : "OPTIMAL RETURN, LANDING BURN ONLY"));
         }
         planned.Sort((x, y) => x.Recovery.Stage.CompareTo(y.Recovery.Stage));
@@ -869,6 +871,39 @@ public static partial class GuidanceWindow
             parts.Add(FormattableString.Invariant($"{r.ReserveKg / 1000.0:F2} t AT STAGE {r.Stage + 1}"));
         }
         return " BOOSTER RESERVES " + string.Join(", ", parts) + ".";
+    }
+
+    /// <summary>
+    /// The exhaust velocity of <paramref name="booster"/>'s own engines at sea-level pressure <paramref name="seaLevelPressure"/> (Pa), m/s: their design thrust over their mass flow there (KsaVehicleAdapter.PartDesignPerformance). The landing burn is flown near the ground, where a vacuum-tuned engine gives far less than the stage's vacuum figure (AscentRecovery.LandingExhaustVelocity). NaN when the booster has no engine that flows.
+    /// </summary>
+    private static double BoosterSeaLevelVe(Vehicle vehicle, ReturnableStage booster, double seaLevelPressure)
+    {
+        Part root = null;
+        ReadOnlySpan<Part> parts = vehicle.Parts.Parts;
+        for (int i = 0; i < parts.Length && root == null; i++)
+            if (parts[i].InstanceId == booster.RootId)
+                root = parts[i];
+        if (root == null)
+            return double.NaN;
+
+        _boosterParts.Clear();
+        CollectSubtree(root, _boosterParts);
+        // By the part that carries each engine, once: PartDesignPerformance takes all of a part's engines.
+        var engineParts = new HashSet<Part>();
+        foreach (Part part in _boosterParts)
+            foreach (EngineController engine in part.SubtreeModules.Get<EngineController>())
+                engineParts.Add(engine.Parent);
+        _boosterParts.Clear();
+
+        double thrust = 0.0, flow = 0.0;
+        foreach (Part part in engineParts)
+        {
+            (float3 thrustVec, double massFlow) = KsaVehicleAdapter.PartDesignPerformance(vehicle.Parts, part, seaLevelPressure);
+            thrust += thrustVec.Length();
+            flow += massFlow;
+        }
+        double ve = flow > 0.0 ? thrust / flow : double.NaN;
+        return ve > 0.0 && double.IsFinite(ve) ? ve : double.NaN;
     }
 
     // Scratch for BoosterPlanStage, filled and consumed inside one call.
