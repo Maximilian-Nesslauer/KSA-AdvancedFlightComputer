@@ -114,7 +114,8 @@ internal static class CourseCorrector
         if (preview == null || prediction.PeriapsisRadius is not double radius || !OnCourse(radius, moonBody, altitudeM))
             return false;
 
-        UniverseTime cutoff = FiniteBurns.LastBurnPiece(preview)?.EndTime ?? candidate.BurnTime;
+        // The conic can extend past the burn to the next encounter.
+        UniverseTime cutoff = FiniteBurns.LastBurnPiece(preview)?.BurnTrajectory?.Cutoff ?? candidate.BurnTime;
         foreach (PatchedConic patch in preview.Patches)
         {
             if (patch.Orbit.Parent?.Id != moonBody.Id)

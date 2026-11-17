@@ -74,11 +74,21 @@ public sealed class FlybyCourseTest : AfcTest
             return;
 
         string refusal = CourseCorrector.TryPlan(vehicle, moon, moonBody, altitude, now, out var late);
-        t.Check("small trim: the later plan is easier to execute and leaves time before the sphere",
+        if (!t.Check("small trim: the later plan reaches one m/s and stays on target",
             refusal.Length == 0 && late.BurnTime.Seconds() > early && late.DvVlf.Length() >= 1.0
-            && entry - late.BurnTime.Seconds() >= 1800.0
             && CourseCorrector.OnCourse(late.PredictedPeriapsisRadius, moonBody, altitude),
-            refusal.Length == 0 ? $"{late.DvVlf.Length():F3} m/s; {entry - late.BurnTime.Seconds():F0} s before entry" : refusal);
+            refusal.Length == 0 ? $"{late.DvVlf.Length():F3} m/s" : refusal))
+            return;
+
+        var departure = new FlybyTargeting.FlybyResult(late.DvVlf, default, late.BurnTime,
+            double.NaN, double.NaN, moonBody.MeanRadius + altitude, IsCrossParent: false,
+            PlannerVInfMs: double.NaN, PlannerApoTargetMeters: double.NaN);
+        HohmannFlybyUI.BuildPreview(vehicle, moon, moonBody, departure, out FlightPlan? plan, refineDeparture: false);
+        PatchedConic? moonPatch = plan?.Patches.FirstOrDefault(patch => ReferenceEquals(patch.PrimaryBody, moonBody));
+        UniverseTime? cutoff = plan == null ? null : FiniteBurns.LastBurnPiece(plan)?.BurnTrajectory?.Cutoff;
+        double margin = moonPatch == null || cutoff == null ? double.NaN : (moonPatch.StartTime - cutoff.Value).Seconds();
+        t.Check("small trim: the flown plan leaves thirty minutes from finite cutoff to corrected entry",
+            margin >= 1800.0, $"{margin:F0} s after the burn");
     }
 
     private static void CheckTolerance(TestContext t, IParentBody moonBody)
