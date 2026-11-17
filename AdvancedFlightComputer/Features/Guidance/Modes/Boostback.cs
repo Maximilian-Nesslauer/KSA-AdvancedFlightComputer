@@ -501,7 +501,7 @@ public static partial class GuidanceWindow
                         _s.BoostbackClimbHold = true;
                         break;
                     }
-                    if (smallMiss && CanCoastBeforeSmallBoostback(vehicle, 0.0))
+                    if (smallMiss && (CanCoastBeforeSmallBoostback(vehicle, 0.0) || !CanPowerBoostbackTurn(vehicle)))
                     {
                         _s.BoostbackSmall = true;
                         GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, small boostback (miss {missKm:F1} km, {missDv:F0} m/s): no settle, turning engine-off."));
@@ -518,9 +518,14 @@ public static partial class GuidanceWindow
 
             case BoostbackPhase.Rotation:
             {
+                bool turnTimedOut = now - _s.BoostbackPhaseStart > BoostbackSmallTurnTimeoutS;
+                bool descentDue = _s.HasImpact && _s.Impact.TimeOfFlight.V <= BoostbackDescentLead();
                 if (!_s.HasSteer)
                 {
-                    _s.WarnBoostback("NO STEERING SOLUTION. HOLDING ATTITUDE.");
+                    if (descentDue || turnTimedOut)
+                        SkipBoostbackForDescent(vehicle, now, "STEERING SOLUTION LOST");
+                    else
+                        _s.WarnBoostback("NO STEERING SOLUTION. HOLDING ATTITUDE.");
                     break;
                 }
                 if (_s.SteerMissM / 1000.0 <= _s.BoostbackGlideMissKm)
@@ -533,39 +538,34 @@ public static partial class GuidanceWindow
                     break;
                 }
                 _s.BoostbackStatus = _s.BoostbackSmall ? "SMALL BOOSTBACK: TURNING ENGINE-OFF, THEN BURN." : "";
+                bool canPowerTurn = CanPowerBoostbackTurn(vehicle);
+                double cmdErr = planDir.Length() > 0.5 ? AngleBetween(_s.CommandDir, planDir) * 180.0 / Math.PI : double.NaN;
+                double craftErr = planDir.Length() > 0.5
+                    ? AngleBetween(KsaFrameBridge.ThrustAxisCci(vehicle), planDir) * 180.0 / Math.PI
+                    : double.NaN;
 
                 // A turn that takes long says why, every few seconds: the burn waits on a plan and on both the command and the craft lining up with it.
                 if (now - _s.BoostbackPhaseStart > BoostbackWaitLogS && now - _s.BoostbackWaitLogAt >= BoostbackWaitLogS)
                 {
                     _s.BoostbackWaitLogAt = now;
-                    double cmdOff = planDir.Length() > 0.5 ? AngleBetween(_s.CommandDir, planDir) * 180.0 / Math.PI : double.NaN;
-                    double craftOff = vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI;
                     GuidanceLog.Debug(vehicle, FormattableString.Invariant(
-                        $"turning for {now - _s.BoostbackPhaseStart:F0} s: plan {(_s.BoostbackHasPlan ? "ready" : "none (" + (_s.BoostbackPlanError.Length > 0 ? _s.BoostbackPlanError : "solving") + ")")}, command {cmdOff:F1} deg and craft {craftOff:F1} deg off (lights within {BoostbackAlignDeg:F0}), {(_s.BoostbackSmall ? "small, engine off" : "large, engine lit")}, miss {_s.SteerMissM / 1000.0:F1} km."));
-                }
-
-                // An engine-off turn that never lines up - too little RCS to turn the booster - lights the engine at the settling throttle and turns on its gimbal, as a large boostback does. There is time for a small correction, but not for ever.
-                if (_s.BoostbackSmall && (now - _s.BoostbackPhaseStart > BoostbackSmallTurnTimeoutS
-                    || !CanCoastBeforeSmallBoostback(vehicle, 0.0)))
-                {
-                    _s.BoostbackSmall = false;
-                    GuidanceLog.Info(vehicle, FormattableString.Invariant(
-                        $"Small boostback: engine-off turn ended after {now - _s.BoostbackPhaseStart:F1} s. Turning on the lit engine."));
+                        $"turning for {now - _s.BoostbackPhaseStart:F0} s: plan {(_s.BoostbackHasPlan ? "ready" : "none (" + (_s.BoostbackPlanError.Length > 0 ? _s.BoostbackPlanError : "solving") + ")")}, command {cmdErr:F1} deg and craft {craftErr:F1} deg off (lights within {BoostbackAlignDeg:F0}), {(_s.BoostbackEngineOn ? "engine lit" : "engine off")}, miss {_s.SteerMissM / 1000.0:F1} km."));
                 }
 
                 if (!_s.BoostbackHasPlan)
                 {
-                    _s.DiagBoostback(_s.BoostbackPlanError.Length > 0
-                        ? "No burn plan: " + _s.BoostbackPlanError
-                        : "Solving the burn plan...");
+                    if (descentDue || turnTimedOut)
+                        SkipBoostbackForDescent(vehicle, now, "NO BURN PLAN");
+                    else
+                        _s.DiagBoostback(_s.BoostbackPlanError.Length > 0
+                            ? "No burn plan: " + _s.BoostbackPlanError
+                            : "Solving the burn plan...");
                     break;
                 }
 
                 // BOTH the command and the vehicle.
                 // The command reaching the target only says the slew has finished issuing; the flight computer is still some way behind it, and lighting the engine there points the thrust at the last of the turn instead of at the target.
-                double cmdErr = AngleBetween(_s.CommandDir, planDir) * 180.0 / Math.PI;
-                double fcErr = vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI;
-                if (cmdErr <= BoostbackAlignDeg && fcErr <= BoostbackAlignDeg)
+                if (cmdErr <= BoostbackAlignDeg && craftErr <= BoostbackAlignDeg)
                 {
                     EnterBoostbackPhase(BoostbackPhase.Boostback, now);
 
@@ -580,6 +580,17 @@ public static partial class GuidanceWindow
                     _s.BoostbackBurnLimit = now + (double.IsFinite(planTgo)
                         ? Math.Max(planTgo * BoostbackBurnLimitFactor, 30.0)
                         : 120.0);
+                    break;
+                }
+
+                if (!canPowerTurn && (descentDue || turnTimedOut))
+                    SkipBoostbackForDescent(vehicle, now, "INSUFFICIENT TURN AUTHORITY");
+                else if (_s.BoostbackSmall && canPowerTurn
+                    && (turnTimedOut || !CanCoastBeforeSmallBoostback(vehicle, 0.0)))
+                {
+                    _s.BoostbackSmall = false;
+                    GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                        $"Small boostback: using gimbals after {now - _s.BoostbackPhaseStart:F1} s of engine-off rotation."));
                 }
                 break;
             }
@@ -730,18 +741,40 @@ public static partial class GuidanceWindow
         ApplyBoostbackActuation(vehicle, now);
     }
 
+    private static void SkipBoostbackForDescent(Vehicle vehicle, double now, string reason)
+    {
+        EnterBoostbackPhase(BoostbackPhase.Glide, now);
+        _s.BoostbackApexCheckPending = false;
+        _s.BoostbackClimbHold = false;
+        string status = $"BOOSTBACK SKIPPED: {reason}. STARTING DESCENT.";
+        _s.WarnBoostback(status);
+        GuidanceLog.Info(vehicle, status);
+    }
+
+    private static double BoostbackDescentLead() => _s.ThreeDofFromGlide ? _s.ThreeDofEngageTgoS : 0.0;
+
     private static bool CanCoastBeforeSmallBoostback(Vehicle vehicle, double waitS)
-        => HasSmallBoostbackCoastTime(_s.HasImpact ? _s.Impact.TimeOfFlight.V : double.NaN,
-            waitS, vehicle.FlightComputer.ConservativeFlipTime, _s.BoostbackSlewDegS, _s.BoostbackTgo,
-            _s.ThreeDofFromGlide ? _s.ThreeDofEngageTgoS : 0.0);
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        return _s.HasImpact && HasBoostbackTurnAuthority(fc.RcsTorqueAuthority)
+            && HasSmallBoostbackCoastTime(_s.Impact.TimeOfFlight.V, waitS, fc.ConservativeFlipTime,
+                _s.BoostbackSlewDegS, _s.BoostbackTgo, BoostbackDescentLead());
+    }
+
+    private static bool CanPowerBoostbackTurn(Vehicle vehicle)
+        => double.IsFinite(_s.BoostbackTgo) && _s.BoostbackTgo > 0.0
+            && HasBoostbackTurnAuthority(vehicle.FlightComputer.TvcTorqueAuthorityMax);
+
+    // KSA reports angular acceleration in the control frame. Both lateral axes must be available because the target changes through the turn.
+    internal static bool HasBoostbackTurnAuthority(float3 authority)
+        => float.IsFinite(authority.Y) && authority.Y > 0f
+            && float.IsFinite(authority.Z) && authority.Z > 0f;
 
     internal static bool HasSmallBoostbackCoastTime(double impactS, double waitS, double rcsFlipS,
         double slewDegS, double burnS, double descentLeadS)
     {
-        if (!double.IsFinite(rcsFlipS))
+        if (!double.IsFinite(rcsFlipS) || !double.IsFinite(impactS) || !double.IsFinite(burnS))
             return false;
-        if (!double.IsFinite(impactS))
-            return true;
 
         // Give both the slew command and the RCS turn time to finish before the burn and the descent handover.
         double slewS = slewDegS > 0.0 ? 180.0 / slewDegS : 0.0;
@@ -964,7 +997,8 @@ public static partial class GuidanceWindow
         {
             case BoostbackPhase.Separation:
                 // Still alongside the stage it left, or not yet decided whether a burn is coming: coasting, see TryAdoptBooster and the Separation transition.
-                if (_s.BoostbackClearOf != null || double.IsNaN(_s.BoostbackSettleFrom))
+                if (_s.BoostbackClearOf != null || double.IsNaN(_s.BoostbackSettleFrom)
+                    || !CanPowerBoostbackTurn(vehicle))
                 {
                     _s.BoostbackThrottle = 0.0;
                     _s.BoostbackEngineOn = false;
@@ -976,7 +1010,7 @@ public static partial class GuidanceWindow
 
             case BoostbackPhase.Rotation:
                 // A small boostback turns with the engine off (VehicleAutopilotState.BoostbackSmall, #197): its correction is too small to spend a lit flip on.
-                if (_s.BoostbackSmall)
+                if (_s.BoostbackSmall || !_s.HasSteer || !_s.BoostbackHasPlan || !CanPowerBoostbackTurn(vehicle))
                 {
                     _s.BoostbackThrottle = 0.0;
                     _s.BoostbackEngineOn = false;
