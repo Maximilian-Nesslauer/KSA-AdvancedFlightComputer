@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- A booster glides at a smaller angle of attack: **GLIDE MAX AoA** defaults to 2.5 deg, down from 15, and **GLIDE PLAN AoA** to 1 deg, down from 7.5. On KSA 2026.11.16.5901 the air pushes a booster with a turning moment, and at a larger angle of attack it can turn the booster further than its controls hold. **GLIDE MAX AoA** also limits entry guidance. A value you set stays.
+
 - AFC works on KSA 2026.11.16.5901. The game moved the throttle, the burn timers and the propellant state from the rocket core to the rocket, and AFC now reads them there.
 
 - The aero sweep measures the new aerodynamics of KSA 2026.11.16.5901, pressure and skin friction on the surface of the craft, in place of the old box model. The solved climb, the impact prediction, boostback and entry guidance plan with the forces the game flies.
