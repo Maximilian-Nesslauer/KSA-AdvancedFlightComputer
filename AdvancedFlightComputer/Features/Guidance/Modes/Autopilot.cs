@@ -134,6 +134,9 @@ public static partial class GuidanceWindow
 
         // The reserve's own cue fires while the stage could still burn, because the propellant left in it is spoken for. UPFG plans stage boundaries but never commands one.
         bool reserveDone = ShouldStageForReserve(vehicle);
+        // A drone-ship booster separates where its live impact reaches its ship, if that comes before its reserve (DroneShipSeparation).
+        bool shipDone = !reserveDone && ShouldStageForDroneShip(vehicle);
+        reserveDone |= shipDone;
 
         _s.StagingActive = !thrustOn || reserveDone;
         if (!_s.StagingActive || now - _s.LastSequenceTime < SequenceCooldown)
@@ -142,7 +145,7 @@ public static partial class GuidanceWindow
         // A staging still in flight refuses the request, and the cue asks again after the cooldown. Only a queued request records the reserve as staged, otherwise a booster jettison still in flight would cost the reserve its only staging. A queued request can still stage nothing when the machine holds a row that would separate the control module, and the reserve then stays held with that row.
         _s.LastSequenceTime = now;
         StagingDetector.StagingRequest request = StagingDetector.RequestStaging(vehicle);
-        GuidanceLog.Debug(vehicle, $"staging requested for {(reserveDone ? "the booster reserve" : "no thrust")}: {request}.");
+        GuidanceLog.Debug(vehicle, $"staging requested for {(shipDone ? "the drone ship" : reserveDone ? "the booster reserve" : "no thrust")}: {request}.");
         if (request != StagingDetector.StagingRequest.Queued)
             return;
 
@@ -839,6 +842,7 @@ public static partial class GuidanceWindow
         _s.ReserveBoosterDryKg = boosterDry;
         _s.ReserveArmed = true;
         _s.ReserveNote = double.IsFinite(planned) ? "" : "SIZED WHEN PLAN IS SOLVED";
+        PrepareDroneShipAero(vehicle, booster);
     }
 
     /// <summary>

@@ -1287,6 +1287,17 @@ public sealed class VehicleAutopilotState
     /// <summary>A drone-ship booster (optimal return), handed over at separation to its frozen point. It follows the same miss rule as any booster (BoostbackGlideMissKm, BoostbackLargeMissKm); the flag only labels its status.</summary>
     public bool BoostbackGlideOnly;
 
+    // Separating a drone-ship booster on its live impact (DroneShipSeparation).
+    /// <summary>The drone-ship booster next to separate, by root InstanceId, and its own aero, swept once when its reserve arms.</summary>
+    public uint DroneShipAeroRoot;
+    public AdvancedFlightComputer.Features.Guidance.KsaAeroSweep.Result DroneShipAero;
+    /// <summary>When the live impact was last predicted, sim time; how far the ship lay beyond it along the ground track then, m, and when; and how far off the ship it was, m.</summary>
+    public double DroneShipCueAt = double.NegativeInfinity;
+    public double DroneShipLastD = double.NaN;
+    public double DroneShipLastT = double.NaN;
+    public double DroneShipMissM = double.NaN;
+    public AdvancedFlightComputer.Guidance.Numerics.Dual[] DroneShipScratch;
+
     /// <summary>Distance to BoostbackClearOf at the split, m, and how far it has opened since, the gauge's readout.</summary>
     public double BoostbackClearFromM, BoostbackClearGapM;
 
