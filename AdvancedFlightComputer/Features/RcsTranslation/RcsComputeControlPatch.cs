@@ -21,6 +21,10 @@ internal static class RcsComputeControlPatch
         // Suppress engine commands even if another caller changed BurnMode directly.
         ZeroEngineCommands(ref outputs);
 
+        // A craft out of control fires no pulse, as with the player's inputs, which ControlsLockout blocks.
+        if (cmd.Owner is { IsControllable: false })
+            return;
+
         BurnTarget? bt = fc.Burn;
         if (bt == null)
             return;

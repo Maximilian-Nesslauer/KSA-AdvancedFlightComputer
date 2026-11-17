@@ -990,6 +990,13 @@ public static partial class GuidanceWindow
         bool flying = sixDof || _s.Running || landingActive || BoostbackLive || ThreeDofLive || _s.ThreeDofEngagePending
                    || _s.WasEngaged || _s.LandingCutPending || _s.LaunchArmed || handingOver || _s.MoonChain != MoonChainStage.Idle;
 
+        // A craft that loses control stops all guidance, ahead of the takeover test. Vehicle.UpdateControl runs in Universe.ApplyVehicleSolvers, before this prefix in the same frame, and its ReleaseFlightComputer has already put Attitude and Burn to Manual, which the takeover test would read as a takeover that leaves the engine burning. The player cannot cut that engine, because ControlsLockout blocks the engine keys of a craft out of control, so guidance cuts it. A reboot of the avionics stops guidance too.
+        if (!vehicle.IsControllable && (HoldsReleasableState(_s) || _s.MoonChain != MoonChainStage.Idle))
+        {
+            StopForControlLoss(vehicle);
+            return;
+        }
+
         // Check ownership per actuator before mode steps can overwrite a changed command. The attitude is compared by value. The engine belongs to whoever arms stock Auto, because Vehicle.PrepareWorker then clears EngineOn on every step after this prefix and stock's own burn logic never writes Auto by itself. Keep cleanup ahead of the idle return so unfocused vehicles can release control too.
         bool attitudeTaken = _s.ControlAcquired
             && !_s.AttitudeOwnership.IsCurrent(vehicle.FlightComputer);
@@ -1436,6 +1443,11 @@ public static partial class GuidanceWindow
     // Takes the shared claim for guidance, or says who holds the craft. With acquire, the flight computer settings guidance writes are taken as well.
     private static bool TryTakeCraft(Vehicle vehicle, bool acquire)
     {
+        if (!vehicle.IsControllable)
+        {
+            _s.WarnStatus(ControlLostReason(vehicle, "GUIDANCE REFUSED"));
+            return false;
+        }
         if (!VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.Guidance, out ControlClaimant holder))
         {
             _s.WarnStatus($"GUIDANCE HELD BY {VehicleControlOwnership.Describe(holder)}.");
@@ -1457,6 +1469,31 @@ public static partial class GuidanceWindow
     // Not inlined, because a harness test patches it by name to fail a release.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static bool HandBackVehicle(Vehicle vehicle) => ReleaseVehicle(vehicle, keepWaitingCoast: false);
+
+    /// <summary>
+    /// Stops all guidance of a craft that is not controllable, with an engine cut when guidance held it. A craft guidance never acquired keeps its engine, and the stop says the claim was refused.
+    /// </summary>
+    private static void StopForControlLoss(Vehicle vehicle)
+    {
+        string reason = ControlLostReason(vehicle, _s.ControlAcquired ? "GUIDANCE STOPPED" : "GUIDANCE REFUSED");
+        GuidanceLog.Info(vehicle, "control lost: " + reason);
+        if (_s.MoonChain != MoonChainStage.Idle)
+            StopMoonChain(vehicle, "CONTROL LOST", disarm: true);
+        _s.TakeoverStop = true;
+        _s.TakeoverReason = reason;
+        _s.ReleaseWithoutEngineCut = false;
+        _s.ShutdownRequested = true;
+        HandBackVehicle(vehicle);
+    }
+
+    /// <summary>The status line for a craft out of control, with the game's own reason (Vehicle.NoControlTooltip).</summary>
+    internal static string ControlLostReason(Vehicle vehicle, string head)
+    {
+        string why = vehicle.NoControlTooltip.Format();
+        return string.IsNullOrWhiteSpace(why)
+            ? head + ": VEHICLE OUT OF CONTROL."
+            : head + ": VEHICLE OUT OF CONTROL. " + why.Trim().ToUpperInvariant();
+    }
 
     // A failed release is retried with the intent it had, and a release the player or a save load asked for drops the coast.
     private static bool RetryRelease(Vehicle vehicle) => ReleaseVehicle(vehicle, _s.ReleaseRetryKeepsCoast);
@@ -1535,8 +1572,9 @@ public static partial class GuidanceWindow
         {
             if (cutEngine)
                 Attempt(() => vehicle.SetEnum(VehicleEngine.MainShutdown));
-            bool onGround = cutEngine && vehicle.Situation.HasAnyContact();
-            Attempt(() => _s.AttitudeOwnership.Release(vehicle.FlightComputer, leaveManual: onGround));
+            // A craft out of control keeps Manual, because the flight computer steers in Auto whether or not the craft is controllable.
+            bool leaveManual = (cutEngine && vehicle.Situation.HasAnyContact()) || !vehicle.IsControllable;
+            Attempt(() => _s.AttitudeOwnership.Release(vehicle.FlightComputer, leaveManual: leaveManual));
         }
         Attempt(() =>
         {

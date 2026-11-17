@@ -1232,6 +1232,7 @@ internal static partial class RcsExecutor
         RcsWorkerCommand command = new()
         {
             Active = exec.ControlTaken,
+            Owner = vehicle,
             IgnitionTime = bt.ImpulsiveInstant - ignitionLead,
             RequireAttitude = align,
             MaxPulseSec = MaxPulseSec,

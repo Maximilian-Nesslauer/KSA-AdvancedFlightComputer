@@ -10,6 +10,9 @@ namespace AdvancedFlightComputer.HarnessTests.Fixtures;
 //
 // Each spawn deserializes its own part tree: Vehicle.CreateVehicle(..., Part root, ...) does
 // Parts = root.Tree, so reusing one design without deserializing would alias the tree across both.
+//
+// Each spawn seats crew in every free seat, as VehicleSpawner does: Vehicle.ComputeControl gives a crew
+// pod without able crew no control, and the first step then hands Attitude and Burn back to Manual.
 public static class VehicleFixtures
 {
     // No staged state. A test that reads engines, sequences or fuel flow wants SpawnFromSaveData.
@@ -25,6 +28,7 @@ public static class VehicleFixtures
             vehicle = Vehicle.CreateVehicle(
                 system, doubleQuat.Identity, double3.Zero, parent, id, tree.Root, orbit);
             parent.Children.Add(vehicle);
+            VehicleSpawner.SeatRandomCrew(vehicle);
             return vehicle;
         }
         catch
@@ -56,6 +60,7 @@ public static class VehicleFixtures
             vehicle.Parts.SequenceList.ApplyEnvironments(data.SequenceEnvironments);
             vehicle.Parts.FuelLinks.ApplySaveData(data.FuelLinks, design);
             parent.Children.Add(vehicle);
+            VehicleSpawner.SeatRandomCrew(vehicle);
             return vehicle;
         }
         catch
