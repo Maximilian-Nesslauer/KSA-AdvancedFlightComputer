@@ -1291,7 +1291,7 @@ public sealed class VehicleAutopilotState
     public bool BoostbackGlideOnly;
 
     /// <summary>
-    /// The booster went into the glide while still climbing, without a burn or after one that ended on target, so its miss is judged again at the apex (Boostback, Glide): once its vertical speed turns negative, the miss is re-predicted and the same rules applied as at separation. A booster separated in the air drifts while it turns round, and a miss inside BoostbackGlideMissKm at separation can be well outside it by the top of the arc (2026-11-17). Once per boostback.
+    /// The booster went into the glide while still climbing, with or without a burn, so its miss is judged again at the apex (Boostback, Glide): once its vertical speed turns negative, the miss is re-predicted and the same rules applied as at separation. A booster separated in the air drifts while it turns round, and a miss inside BoostbackGlideMissKm at separation can be well outside it by the top of the arc (2026-11-17). Once per boostback.
     /// </summary>
     public bool BoostbackApexCheckPending;
 

@@ -528,15 +528,15 @@ public static partial class GuidanceWindow
                     else
                         _s.BoostbackStatus = FormattableString.Invariant($"CUTOFF: MISS {_s.SteerMissM / 1000.0:F1} km");
                     EnterBoostbackPhase(BoostbackPhase.Glide, now);
-                    // A burn that ended ON TARGET while still climbing is judged again at the apex too: a 0.24 s burn at 38 km cut off 0.3 km from the site, and turning round in the air moved the impact 10 km short (2026-11-17). Not one that ran dry or out of time, which would burn again into the landing.
-                    _s.BoostbackApexCheckPending = !(dry || overrun) && vUp > 0.0;
+                    // Judged again at the apex too, whatever ended the burn: a 0.24 s burn at 38 km cut off 0.3 km from the site, and turning round in the air moved the impact 10 km short (2026-11-17). A booster that ran dry has nothing to burn or land with either way.
+                    _s.BoostbackApexCheckPending = vUp > 0.0;
                 }
                 break;
             }
 
             case BoostbackPhase.Glide:
             {
-                // THE APEX RECHECK. A booster that went to the glide while still climbing, without a burn or after one that ended on target, is judged again once it starts to fall: separated in the air, it drifts while it turns round, and a miss inside BoostbackGlideMissKm at separation grew past it by the top of the arc (2026-11-17). The miss is predicted afresh and the separation's rules applied again: still within BoostbackGlideMissKm, glide on; up to BoostbackLargeMissKm, a small boostback (engine-off turn, then burn); beyond, a large one (settle, lit flip). Once only: a booster sent back to burn here is falling when that burn ends, so it is not judged again.
+                // THE APEX RECHECK. A booster that went to the glide while still climbing, with or without a burn, is judged again once it starts to fall: separated in the air, it drifts while it turns round, and a miss inside BoostbackGlideMissKm at separation grew past it by the top of the arc (2026-11-17). The miss is predicted afresh and the separation's rules applied again: still within BoostbackGlideMissKm, glide on; up to BoostbackLargeMissKm, a small boostback (engine-off turn, then burn); beyond, a large one (settle, lit flip). Once only: a booster sent back to burn here is falling when that burn ends, so it is not judged again.
                 if (!_s.BoostbackApexCheckPending || vUp >= 0.0)
                     break;
                 _s.BoostbackApexCheckPending = false;
