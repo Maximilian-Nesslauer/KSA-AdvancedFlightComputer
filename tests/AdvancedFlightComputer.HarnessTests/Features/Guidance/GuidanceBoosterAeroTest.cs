@@ -16,8 +16,10 @@ namespace AdvancedFlightComputer.HarnessTests;
 // booster is swept as the vehicle it becomes - its own colliders' box along its root part's axes, the properties the
 // game derives from it - and that has to be what the game measures once it really is that vehicle.
 //
-// For each separating row of each save that carries a booster with a command pod: sweep the booster still attached,
-// fire the row, find the vehicle the booster became and sweep it. The two must agree on the box, the reference area
+// Every booster with a command pod is swept at the start, still attached, as the plan sweeps it on the pad: from the
+// parts that leave with it (GuidanceWindow.PartsLeavingWith), not its whole subtree - side boosters hang off the core
+// in the part tree, and a heavy's core measured whole came out the whole stack's width (2026-11-17). Then the rows are
+// fired one by one, and each booster is swept again as the vehicle it became. The two must agree on the box, the reference area
 // and the drag coefficients, and so on the drag area the terminal velocity comes from. Run under stock aero and under
 // KSAero. Saves that are not installed are skipped.
 public sealed class GuidanceBoosterAeroTest : AfcTest
@@ -76,37 +78,41 @@ public sealed class GuidanceBoosterAeroTest : AfcTest
                 return 0;
             }
 
-            for (int row = 0; row < MaxRows; row++)
+            // Every booster with a pod, swept on the pad from the parts that leave with it.
+            var before = new List<(Part Root, KsaAeroSweep.Result Aero)>();
+            ReadOnlySpan<Sequence> sequences = stack.Parts.SequenceList.Sequences;
+            for (int i = 0; i < sequences.Length; i++)
             {
-                Sequence? next = NextRow(stack);
-                if (next == null)
-                    break;
-
-                // Every booster this row drops that is a vehicle of its own - a pod aboard - swept while still attached.
+                if (sequences[i].Activated || sequences[i].Parts.IsEmpty)
+                    continue;
                 var roots = new List<Part>();
-                SequenceRoots.Invoke(null, new object[] { next, roots });
-                var before = new List<(Part Root, KsaAeroSweep.Result Aero)>();
+                SequenceRoots.Invoke(null, new object[] { sequences[i], roots });
                 foreach (Part root in roots)
                 {
-                    if (!HasControl(stack, root))
+                    HashSet<Part> leaving = GuidanceWindow.PartsLeavingWith(stack, root, i);
+                    if (!HasControl(stack, leaving))
                         continue;
-                    if (KsaAeroSweep.TryBuildBooster(stack, root, home, Universe.GetElapsedSeconds(), out KsaAeroSweep.Result pre, out string preError))
+                    if (KsaAeroSweep.TryBuildBooster(stack, root, leaving, home, Universe.GetElapsedSeconds(), out KsaAeroSweep.Result pre, out string preError))
                         before.Add((root, pre));
                     else
                         t.Fail($"{tag}: '{root.DisplayName}'", "could not be swept attached: " + preError);
                 }
+            }
 
+            var done = new HashSet<uint>();
+            for (int row = 0; row < MaxRows && NextRow(stack) != null; row++)
+            {
                 stack.Parts.SequenceList.ActivateNextSequence(stack);
                 driver.Step(0.05, 20);
 
                 foreach ((Part root, KsaAeroSweep.Result pre) in before)
                 {
+                    if (done.Contains(root.InstanceId))
+                        continue;
                     Vehicle? split = VehicleWith(t, root.InstanceId, stack);
                     if (split == null)
-                    {
-                        t.Fail($"{tag}: '{root.DisplayName}'", "no separated vehicle carries it");
-                        continue;
-                    }
+                        continue;   // not separated yet
+                    done.Add(root.InstanceId);
                     if (!KsaAeroSweep.TryBuild(split, home, Universe.GetElapsedSeconds(), out KsaAeroSweep.Result post, out string postError))
                     {
                         t.Fail($"{tag}: '{root.DisplayName}'", "could not be swept separated: " + postError);
@@ -118,6 +124,8 @@ public sealed class GuidanceBoosterAeroTest : AfcTest
             }
             if (compared == 0)
                 t.Info($"{tag}: no row drops a booster with a pod.");
+            else
+                t.Check($"{tag}: every booster swept on the pad was found separated", compared == before.Count, $"{compared} of {before.Count}");
         }
         finally
         {
@@ -145,9 +153,8 @@ public sealed class GuidanceBoosterAeroTest : AfcTest
             $"{preCdA:F2} against {postCdA:F2} m^2; the stack's {stackCdA:F2} m^2 put its terminal velocity {Math.Sqrt(postCdA / stackCdA):F2} x its own");
     }
 
-    private static bool HasControl(Vehicle vehicle, Part root)
+    private static bool HasControl(Vehicle vehicle, HashSet<Part> parts)
     {
-        HashSet<Part> parts = KsaBoosterGeometry.Subtree(root);
         foreach (Control c in vehicle.Parts.Modules.Get<Control>())
             if (parts.Contains(c.Parent.FullPart))
                 return true;

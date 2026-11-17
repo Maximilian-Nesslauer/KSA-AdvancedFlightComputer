@@ -81,6 +81,8 @@ public static class AscentProblemFile
         public bool OptimalReturn { get; set; }
         // Null, and missing in an older dump: the vacuum exhaust velocity is taken (JSON has no NaN).
         public double? LandingExhaustVelocity { get; set; }
+        public double? LandingAccel { get; set; }
+        public double LandingMargin { get; set; } = 1.1;
         public double ExhaustVelocity { get; set; }
         public double[] SiteCci { get; set; } = [];
         public double ReferenceArea { get; set; }
@@ -175,6 +177,8 @@ public static class AscentProblemFile
                 FlowShare = rec.FlowShare,
                 OptimalReturn = rec.OptimalReturn,
                 LandingExhaustVelocity = double.IsFinite(rec.LandingExhaustVelocity) ? rec.LandingExhaustVelocity : null,
+                LandingAccel = double.IsFinite(rec.LandingAccel) ? rec.LandingAccel : null,
+                LandingMargin = rec.LandingMargin,
                 ExhaustVelocity = rec.ExhaustVelocity,
                 SiteCci = rec.SiteCci,
                 ReferenceArea = rec.ReferenceArea,
@@ -224,6 +228,8 @@ public static class AscentProblemFile
                 FlowShare = r.FlowShare,
                 OptimalReturn = r.OptimalReturn,
                 LandingExhaustVelocity = r.LandingExhaustVelocity ?? double.NaN,
+                LandingAccel = r.LandingAccel ?? double.NaN,
+                LandingMargin = r.LandingMargin,
                 ExhaustVelocity = r.ExhaustVelocity,
                 SiteCci = r.SiteCci,
                 ReferenceArea = r.ReferenceArea,

@@ -112,6 +112,30 @@ internal static class AscentBoosterReturnCheck
         AscentProblem vacBack = AscentProblemFile.FromJson(AscentProblemFile.ToJson(optP));
         Check("sea level: and an unset one stays unset", vacBack.Recovery != null && double.IsNaN(vacBack.Recovery.LandingExhaustVelocity));
 
+        // ---- the landing burn held to an acceleration limit: braking from terminal velocity v at a against gravity g costs v a / (a - g), 1.5 v at 3 g, with its margin; the flat 1.3 v undersized it (2026-11-17).
+        double g0 = optP.Mu / (optP.BodyRadius * optP.BodyRadius);
+        var limited = new AscentRecovery
+        {
+            Stage = 0, InitialReserveKg = 0.0, BoosterDryKg = optRec.BoosterDryKg, OptimalReturn = true,
+            ExhaustVelocity = optRec.ExhaustVelocity, LandingAccel = 3.0 * g0,
+            SiteCci = optRec.SiteCci, ReferenceArea = optRec.ReferenceArea, Drag = optRec.Drag, Air = optRec.Air,
+        };
+        var limOracle = new BoostbackOracle(optP, limited);
+        double wantLanding = limited.LandingMargin * limOracle.TerminalVelocity * 1.5;
+        Check("landing at 3 g: the burn brakes from terminal velocity against gravity", Math.Abs(limOracle.LandingDv - wantLanding) < 1e-9,
+            $"{limOracle.LandingDv:F1} against {wantLanding:F1} m/s ({limOracle.TerminalVelocity:F1} m/s terminal)");
+        Check("landing at 3 g: more than the flat 1.3 times terminal velocity", limOracle.LandingDv > 1.3 * limOracle.TerminalVelocity);
+        var weak = new AscentRecovery
+        {
+            Stage = 0, InitialReserveKg = 0.0, BoosterDryKg = optRec.BoosterDryKg, OptimalReturn = true,
+            ExhaustVelocity = optRec.ExhaustVelocity, LandingAccel = 0.5 * g0,
+            SiteCci = optRec.SiteCci, ReferenceArea = optRec.ReferenceArea, Drag = optRec.Drag, Air = optRec.Air,
+        };
+        double weakDv = new BoostbackOracle(optP, weak).LandingDv;
+        Check("landing under 1 g: priced large and finite", double.IsFinite(weakDv) && weakDv > 5.0 * limOracle.TerminalVelocity, $"{weakDv:F0} m/s");
+        AscentProblem limBack = AscentProblemFile.FromJson(AscentProblemFile.ToJson(optP.WithRecovery(limited)));
+        Check("landing at 3 g: the problem file keeps it", limBack.Recovery?.LandingAccel == limited.LandingAccel && limBack.Recovery?.LandingMargin == limited.LandingMargin);
+
         // ---- expendable.
         AscentProblem bare = optP.WithRecovery(null);
         AscentSolution exp = AscentScvx.Solve(bare);

@@ -42,6 +42,14 @@ internal static class KsaBoosterGeometry
     /// The booster rooted at <paramref name="root"/>'s vehicle properties as the separated vehicle's, and its box along its own assembly axes (x the long one), m. Copied from <paramref name="vehicle"/>'s, with the box, its centre and the face areas the booster's own; the rest only matters to torques and the integrator's limiter, which a force sweep does not read.
     /// </summary>
     internal static bool TryProperties(Vehicle vehicle, Part root, out VehicleProperties props, out double3 extents, out string error)
+        => TryProperties(vehicle, root, Subtree(root), out props, out extents, out error);
+
+    /// <summary>
+    /// The same for the parts in <paramref name="parts"/>, rooted at <paramref name="root"/>: the booster's subtree short of whatever leaves before it or beside it (GuidanceWindow.PartsLeavingWith).
+    ///
+    /// NOT THE WHOLE SUBTREE. Side boosters hang off the core in the part tree, so the core's subtree on the pad holds them too: measured whole, a heavy's core came out three cores wide again, the stack's own 100 m^2 (2026-11-17).
+    /// </summary>
+    internal static bool TryProperties(Vehicle vehicle, Part root, HashSet<Part> parts, out VehicleProperties props, out double3 extents, out string error)
     {
         props = default;
         extents = default;
@@ -51,7 +59,7 @@ internal static class KsaBoosterGeometry
             error = "no booster to measure";
             return false;
         }
-        if (!TryBox(vehicle, root, out double3 min, out double3 max, out int colliders))
+        if (!TryBox(vehicle, root, parts, out double3 min, out double3 max, out int colliders))
         {
             error = colliders == 0 ? "the booster has no colliders to bound" : "the booster's bounds are not finite";
             return false;
@@ -66,12 +74,11 @@ internal static class KsaBoosterGeometry
     }
 
     /// <summary>The union of the booster's collider bounds along its root part's assembly axes, each collider at its live pose: the box Vehicle.UpdateCollisionGeometry would take for it once it is a vehicle of its own.</summary>
-    private static bool TryBox(Vehicle vehicle, Part root, out double3 min, out double3 max, out int colliders)
+    private static bool TryBox(Vehicle vehicle, Part root, HashSet<Part> parts, out double3 min, out double3 max, out int colliders)
     {
         min = new double3(double.PositiveInfinity);
         max = new double3(double.NegativeInfinity);
         colliders = 0;
-        HashSet<Part> parts = Subtree(root);
 
         // The separated vehicle's assembly axes, in the stack's: the root part's own.
         doubleQuat rootRot = root.Asmb2VehicleAsmb;

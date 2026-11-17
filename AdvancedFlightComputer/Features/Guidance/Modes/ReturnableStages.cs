@@ -194,6 +194,28 @@ public static partial class GuidanceWindow
         }
     }
 
+    /// <summary>
+    /// The parts that leave with the booster rooted at <paramref name="root"/> when its row fires (sequence list index <paramref name="sequenceIndex"/>): its subtree, short of every subtree a row up to and including its own separates from it first or beside it. Side boosters hang off the core in the part tree; by the time the core leaves they have gone.
+    /// </summary>
+    internal static HashSet<Part> PartsLeavingWith(Vehicle vehicle, Part root, int sequenceIndex)
+    {
+        var others = new List<Part>();
+        var rowRoots = new List<Part>();
+        ReadOnlySpan<Sequence> sequences = vehicle.Parts.SequenceList.Sequences;
+        for (int i = 0; i <= sequenceIndex && i < sequences.Length; i++)
+        {
+            if (sequences[i].Activated || sequences[i].Parts.IsEmpty)
+                continue;
+            SequenceRoots(sequences[i], rowRoots);
+            foreach (Part r in rowRoots)
+                if (r != root && !others.Contains(r))
+                    others.Add(r);
+        }
+        var parts = new HashSet<Part>();
+        CollectOwnSubtree(root, root, others, parts);
+        return parts;
+    }
+
     /// <summary>The parts that leave with <paramref name="root"/> itself: its subtree, short of any other separated root's, which leaves as a craft of its own.</summary>
     private static void CollectOwnSubtree(Part node, Part root, List<Part> roots, HashSet<Part> into)
     {

@@ -159,9 +159,14 @@ public static class KsaAeroSweep
     /// </summary>
     public static bool TryBuildBooster(Vehicle vehicle, Part root, IParentBody parent, double simTime,
                                        out Result result, out string error)
+        => TryBuildBooster(vehicle, root, KsaBoosterGeometry.Subtree(root), parent, simTime, out result, out error);
+
+    /// <summary>The same for the parts in <paramref name="parts"/>: the booster's subtree short of what separates before it or beside it (GuidanceWindow.PartsLeavingWith).</summary>
+    internal static bool TryBuildBooster(Vehicle vehicle, Part root, System.Collections.Generic.HashSet<Part> parts, IParentBody parent, double simTime,
+                                         out Result result, out string error)
     {
         result = null;
-        if (!KsaBoosterGeometry.TryProperties(vehicle, root, out VehicleProperties props, out double3 extents, out error))
+        if (!KsaBoosterGeometry.TryProperties(vehicle, root, parts, out VehicleProperties props, out double3 extents, out error))
             return false;
         return TryBuildFrom(vehicle, props, extents, props.TotalMass, parent, simTime, out result, out error);
     }

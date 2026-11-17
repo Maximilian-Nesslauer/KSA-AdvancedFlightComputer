@@ -51,8 +51,16 @@ public sealed class AscentRecovery
     public double Alpha { get; init; }
     /// <summary>The air the booster coasts through.</summary>
     public required AtmosphereModel Air { get; init; }
-    /// <summary>The landing burn, as a multiple of the booster's terminal velocity.</summary>
+    /// <summary>The landing burn, as a multiple of the booster's terminal velocity, where <see cref="LandingAccel"/> is not known; zero for a booster that does not land (an expendable one's fall).</summary>
     public double LandingFactor { get; init; } = 1.3;
+    /// <summary>
+    /// The thrust acceleration the landing burn is flown at, m/s^2: the lower of the booster's sea-level thrust over its mass and the landing guidance's acceleration limit (VehicleAutopilotState.LandingAccelLimitG). NaN prices the burn with <see cref="LandingFactor"/> instead.
+    ///
+    /// THE BURN IS HELD TO A LIMIT, so it is not short. Falling at terminal velocity v and braking at a, it fights gravity the whole way: it takes v / (a - g) and costs v a / (a - g). At the 3 g the landing flies to that is 1.5 v, which the flat 1.3 v undersized: a heavy's core lit at 97 m/s, burned 5.4 s and needed about 150 m/s (2026-11-17).
+    /// </summary>
+    public double LandingAccel { get; init; } = double.NaN;
+    /// <summary>The landing burn over what braking from terminal velocity at <see cref="LandingAccel"/> costs: ignition timing, the plan's last metres, steering.</summary>
+    public double LandingMargin { get; init; } = 1.1;
     /// <summary>The boostback, as a multiple of its impulse: a real burn is finite, flipped into and flown through gravity and drag, where the impulse is none of these.</summary>
     /// <summary>
     /// What a real boostback burn costs over the impulse, as a factor on its dv. Not small, and longer the burn the more it is: from boosters_controlled's planned separation (3.3 km/s at 241 km) the booster's own planner needed 5080 m/s for a 4383 m/s impulse, 16 % more, which at 1.15 left 0.2 t of the 0.32 t the landing needs (2026-11-05).
@@ -66,7 +74,7 @@ public sealed class AscentRecovery
     /// <summary>The same booster, its reserve starting at <paramref name="initialReserveKg"/>.</summary>
     public AscentRecovery WithInitialReserve(double initialReserveKg) => new()
     {
-        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, FlowShare = FlowShare, OptimalReturn = OptimalReturn, ExhaustVelocity = ExhaustVelocity, LandingExhaustVelocity = LandingExhaustVelocity, BurnDelayS = BurnDelayS,
+        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, FlowShare = FlowShare, OptimalReturn = OptimalReturn, ExhaustVelocity = ExhaustVelocity, LandingExhaustVelocity = LandingExhaustVelocity, LandingAccel = LandingAccel, LandingMargin = LandingMargin, BurnDelayS = BurnDelayS,
         SiteCci = SiteCci, ReferenceArea = ReferenceArea, Drag = Drag, Lift = Lift, Alpha = Alpha, Air = Air,
         LandingFactor = LandingFactor, BoostbackMargin = BoostbackMargin,
     };
@@ -138,7 +146,7 @@ public sealed class BoostbackOracle
         TerminalVelocity = cd > 0.0 && r.Air.SeaLevelDensity > 0.0
             ? Math.Sqrt(2.0 * r.BoosterDryKg * g / (r.Air.SeaLevelDensity * cd * r.ReferenceArea))
             : 0.0;
-        LandingDv = r.LandingFactor * TerminalVelocity;
+        LandingDv = LandingBurn(r, TerminalVelocity, g);
         // Through the coast the booster carries its landing propellant.
         double coastMass = r.BoosterDryKg * Math.Exp(LandingDv / r.LandingVe);
         _sys = new DragCoastSystem
@@ -156,6 +164,20 @@ public sealed class BoostbackOracle
         _opt = ImpactOptions.Default(siteRadius);
         _opt.MaxTime = 1800.0;
         _opt.PathStride = 0;
+    }
+
+    /// <summary>
+    /// The landing burn, m/s: braking from terminal velocity <paramref name="terminal"/> at the thrust acceleration it is flown at, against gravity <paramref name="g"/>, with its margin (AscentRecovery.LandingAccel); or the flat factor on the terminal velocity where that acceleration is not known. Zero for a booster that does not land.
+    /// </summary>
+    public static double LandingBurn(AscentRecovery r, double terminal, double g)
+    {
+        if (!(r.LandingFactor > 0.0))
+            return 0.0;
+        if (!(r.LandingAccel > 0.0) || !double.IsFinite(r.LandingAccel))
+            return r.LandingFactor * terminal;
+        // A booster that can barely outweigh gravity cannot land at all; held to 1.2 g here so the price stays finite and large rather than blowing up.
+        double a = Math.Max(r.LandingAccel, 1.2 * g);
+        return r.LandingMargin * terminal * a / (a - g);
     }
 
     /// <summary>The propellant the booster needs for a boostback of <paramref name="boostbackDv"/>, kg: the boostback high up at the vacuum exhaust velocity, then the landing burn at the sea-level one (AscentRecovery.LandingExhaustVelocity).</summary>
