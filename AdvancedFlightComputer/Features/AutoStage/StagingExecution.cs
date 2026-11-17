@@ -38,8 +38,6 @@ internal static class StagingExecution
         if (target == null)
             return null;
 
-        StagingHooks.RaiseSequenceActivating(vehicle, target);
-
         int seqNumber = target.Number;
         double engineDelay = StagingConfig.GetSequenceEngineDelay(vehicle, seqNumber);
         double decouplerDelay = StagingConfig.GetSequenceDecouplerDelay(vehicle, seqNumber);
@@ -67,13 +65,15 @@ internal static class StagingExecution
                     pendingEngines ??= new List<ISequenced>();
                     pendingEngines.Add(module);
                 }
-                else if (!module.IsActive && module is Decoupler && decouplerDelay > 0.0)
+                else if (module is Decoupler decoupler && StagingHooks.CanActivate(decoupler) && decouplerDelay > 0.0)
                 {
                     pendingDecouplers ??= new List<ISequenced>();
                     pendingDecouplers.Add(module);
                 }
                 else
                 {
+                    if (module is Decoupler immediate)
+                        StagingHooks.RaiseDecouplerActivating(vehicle, immediate);
                     module.Activate(vehicle);
                     firedNow++;
                 }
@@ -116,6 +116,8 @@ internal static class StagingExecution
                     $"[AFC] AutoStage: {label} {SequencedModules.Describe(module)} on '{part.DisplayName}' no longer belongs to the vehicle, skipping.");
                 continue;
             }
+            if (module is Decoupler decoupler)
+                StagingHooks.RaiseDecouplerActivating(vehicle, decoupler);
             module.Activate(vehicle);
         }
 

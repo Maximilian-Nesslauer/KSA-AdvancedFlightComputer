@@ -150,7 +150,7 @@ public static partial class GuidanceWindow
         if (request != StagingDetector.StagingRequest.Queued)
             return;
 
-        // Each reserve belongs to one separation: every targeted booster on the row it stages is done with. The boosters themselves are handed over when the row fires (OnSequenceActivating), as any separation's are.
+        // Each reserve belongs to one separation. Handover is armed when the decouplers fire.
         if (reserveDone)
         {
             _s.ReserveStagedRoots.Add(_s.ReserveRootId);
@@ -196,15 +196,7 @@ public static partial class GuidanceWindow
 
         // SIDE BOOSTERS: counted in their own engines' tanks. The vehicle's mass against the stage model's burnout mixes in the core's propellant, which burns on, and would stage them with a third of their reserve on the heavy (#176).
         if (_s.ReserveFlowShare < 1.0)
-        {
-            if (_s.ReserveTanks.Count == 0)
-                return false;
-            ReadOnlySpan<MoleState> moles = vehicle.Parts.Moles.States;
-            double inBoosters = 0.0;
-            foreach (Tank tank in _s.ReserveTanks)
-                inBoosters += tank.ComputeSubstanceMass(moles);
-            return inBoosters <= _s.ReserveKg;
-        }
+            return ReserveTankMass(vehicle) <= _s.ReserveKg;
 
         UpfgVehicle model = _s.StageModel;
         if (model == null || model.Stages.Count < 2)
@@ -212,6 +204,27 @@ public static partial class GuidanceWindow
 
         double remaining = vehicle.TotalMass - model.Stages[0].MassDry;
         return remaining <= _s.ReserveKg;
+    }
+
+    private static double ReserveTankMass(Vehicle vehicle)
+    {
+        if (_s.ReserveTanks.Count == 0)
+            return double.NaN;
+
+        PartTree tree = vehicle.Parts;
+        ReadOnlySpan<MoleState> moles = tree.Moles.States;
+        double mass = 0.0;
+        foreach (Tank tank in _s.ReserveTanks)
+        {
+            if (!ReferenceEquals(tank.Parent.FullPart.Tree, tree))
+            {
+                // A split moves the tank and reindexes its moles against the new tree.
+                InvalidateStageModel(_s);
+                return double.NaN;
+            }
+            mass += tank.ComputeSubstanceMass(moles);
+        }
+        return mass;
     }
 
     // Keep pending handovers outside vehicle state because the detached vehicles do not exist yet. Each separated root has its own landing target, so two boosters leaving on one sequence go to their own sites (#130).
@@ -238,56 +251,43 @@ public static partial class GuidanceWindow
     private const double HandoverWindowS = 30.0;
 
     /// <summary>
-    /// Record what a staging row is about to throw overboard, so each craft it becomes can be recognised and handed its own landing site.
-    ///
-    /// ANY SEPARATION, not only the reserve cue's (#175). AutoStage raises this as a row fires, whatever fired it: the ascent's reserve cue, a burnout, the spent drop that sheds side boosters, or the player's staging key. Before, only the reserve cue armed a hand-over, so a booster dropped any other way came away with nothing to fly it home.
-    ///
-    /// ONLY A ROOT WITH A TARGET. A stage site (LAUNCH > BOOSTERS) is what asks for a booster to come home, and each root is sent to its own (#130): two side boosters leaving on one row go to their own pads. A root with no site of its own is not handed over at all, where it once followed the targeted booster beside it to the same pad.
+    /// Records a targeted booster while its decoupler still connects it to the stack.
     /// </summary>
-    internal static void OnSequenceActivating(Vehicle vehicle, Sequence sequence)
+    internal static void OnDecouplerActivating(Vehicle vehicle, Decoupler decoupler)
     {
-        if (!VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState s) || (s.StageTargets.Count == 0 && s.StageOptimalReturn.Count == 0))
+        if (!ModActive || !VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState s)
+            || (s.StageTargets.Count == 0 && s.StageOptimalReturn.Count == 0)
+            || vehicle.IsDisposed || VehicleControlOwnership.KfsOwns(vehicle) || !vehicle.IsControllable
+            || !ReferenceEquals(decoupler.Parent.FullPart.Tree, vehicle.Parts))
             return;
 
         double now = SimNow();
         DropExpiredHandovers(now);
-        SequenceRoots(sequence, _handoverRoots);
-        int armed = 0;
-        for (int i = 0; i < _handoverRoots.Count; i++)
-        {
-            Part root = _handoverRoots[i];
-            // Nested separations have overlapping subtrees but distinct roots. Matching the root keeps the inner vehicle from claiming the outer vehicle's record.
-            if (AlreadyArmed(root.InstanceId, vehicle))
-                continue;
-            // A site set by the player, or an optimal return's drone-ship point, frozen from the plan at lift-off. An optimal return with no plan behind it has nowhere known to go, and is not handed over.
-            bool glideOnly = false;
-            if (!s.StageTargets.TryGetValue(root.InstanceId, out double2 site)
-                && !(glideOnly = s.StageOptimalReturn.Contains(root.InstanceId) && s.OptimalReturnSites.TryGetValue(root.InstanceId, out site)))
-            {
-                if (s.StageOptimalReturn.Contains(root.InstanceId))
-                    GuidanceLog.Info(vehicle, $"'{root.DisplayName}' is set to optimal return but no plan found its landing point: not handed over.");
-                continue;
-            }
-            _handovers.Add(new BoosterHandover
-            {
-                RootId = root.InstanceId,
-                SiteLatDeg = site.X,
-                SiteLonDeg = site.Y,
-                ExpiresAt = now + HandoverWindowS,
-                From = vehicle,
-                GlideOnly = glideOnly,
-            });
-            armed++;
-            GuidanceLog.Info(vehicle, FormattableString.Invariant(
-                $"booster hand-over armed for '{root.DisplayName}' on sequence {sequence.Number}, site lat {site.X:F3} lon {site.Y:F3}."));
-        }
-        _handoverRoots.Clear();
-        if (armed == 0)
-            GuidanceLog.Debug(vehicle, $"sequence {sequence.Number} fires with no targeted booster to hand over.");
-    }
+        Part root = DetachedRoot(decoupler);
+        if (root == null || AlreadyArmed(root.InstanceId, vehicle))
+            return;
 
-    // The roots one firing row separates, filled and consumed inside OnSequenceActivating.
-    private static readonly List<Part> _handoverRoots = new List<Part>();
+        // A drone ship's point comes from the ascent plan and stays fixed after lift-off.
+        bool glideOnly = false;
+        if (!s.StageTargets.TryGetValue(root.InstanceId, out double2 site)
+            && !(glideOnly = s.StageOptimalReturn.Contains(root.InstanceId) && s.OptimalReturnSites.TryGetValue(root.InstanceId, out site)))
+        {
+            if (s.StageOptimalReturn.Contains(root.InstanceId))
+                GuidanceLog.Info(vehicle, $"'{root.DisplayName}' is set to optimal return but no plan found its landing point: not handed over.");
+            return;
+        }
+        _handovers.Add(new BoosterHandover
+        {
+            RootId = root.InstanceId,
+            SiteLatDeg = site.X,
+            SiteLonDeg = site.Y,
+            ExpiresAt = now + HandoverWindowS,
+            From = vehicle,
+            GlideOnly = glideOnly,
+        });
+        GuidanceLog.Info(vehicle, FormattableString.Invariant(
+            $"booster hand-over armed for '{root.DisplayName}' on sequence {decoupler.Sequence}, site lat {site.X:F3} lon {site.Y:F3}."));
+    }
 
     // The player's staging key and AutoStage can both announce one row, so a root already recorded from this stack is not recorded twice.
     private static bool AlreadyArmed(uint rootId, Vehicle from)
@@ -320,22 +320,13 @@ public static partial class GuidanceWindow
         if (_handovers.Count == 0)
             return false;
 
-        PartTree tree = vehicle?.Parts;
-        if (tree == null)
+        Part root = vehicle?.Parts?.Root;
+        if (root == null)
             return false;
 
-        BoosterHandover mine = null;
-        ReadOnlySpan<Part> parts = tree.Parts;
-        for (int i = 0; i < _handovers.Count && mine == null; i++)
-        {
-            for (int j = 0; j < parts.Length; j++)
-            {
-                if (parts[j].InstanceId != _handovers[i].RootId)
-                    continue;
-                mine = _handovers[i];
-                break;
-            }
-        }
+        // A nested booster can still be attached to the craft that just separated.
+        BoosterHandover mine = _handovers.Find(record => record.RootId == root.InstanceId
+            && !ReferenceEquals(record.From, vehicle));
         if (mine == null)
             return false;
 
@@ -438,6 +429,16 @@ public static partial class GuidanceWindow
     // The game's recompute can run on a vehicle worker thread while the UI reads the stage list. The PrepareWorker prefix runs after JobSystems.VehicleSolver.Wait(), so the recompute and copy-out are safe there. UPFG reconciles stage 0 against the live mass on every step.
     private const long StageModelIntervalMs = 250;
     private const long HousekeepingRetryMs = 1000;
+
+    internal static void InvalidateStageModel(VehicleAutopilotState state)
+    {
+        state.StageModelDirty = true;
+        state.ReserveArmed = false;
+        state.ReserveTanks.Clear();
+        state.SeparationInS = double.NaN;
+        state.SeparationTakenAt = double.NegativeInfinity;
+        state.SeparationDrain.Reset();
+    }
 
     private static void RefreshStageModel(Vehicle vehicle)
     {
@@ -631,10 +632,11 @@ public static partial class GuidanceWindow
             ReadOnlySpan<Part> parts = sequences[s].Parts;
             for (int i = 0; i < parts.Length; i++)
             {
-                Span<Decoupler> decouplers = parts[i].SubtreeModules.Get<Decoupler>();
-                for (int j = 0; j < decouplers.Length; j++)
+                foreach (ISequenced module in parts[i].InSequence(sequences[s].Number))
                 {
-                    Part root = DetachedRoot(decouplers[j]);
+                    if (module is not Decoupler decoupler || !StagingHooks.CanActivate(decoupler))
+                        continue;
+                    Part root = DetachedRoot(decoupler);
                     if (root != null)
                         CollectSubtree(root, _separationDrops);
                 }
@@ -642,8 +644,9 @@ public static partial class GuidanceWindow
             // An ignition-only sequence: what it lights is burning by the time a later one separates. The separating sequence's own engines are not, since they light as it fires.
             if (_separationDrops.Count == 0)
                 for (int i = 0; i < parts.Length; i++)
-                    foreach (EngineController e in parts[i].SubtreeModules.Get<EngineController>())
-                        _pendingIgnition.Add(e);
+                    foreach (ISequenced module in parts[i].InSequence(sequences[s].Number))
+                        if (module is EngineController engine)
+                            _pendingIgnition.Add(engine);
         }
         if (!anySequence)
         {
@@ -1189,6 +1192,9 @@ public static partial class GuidanceWindow
         // Planning waits without control, and the stock node takes its claim before Auto is armed.
         // A direct braking coast enters Prep before the manual control claim below.
         StepDeorbitPlanning(vehicle, orbit, parent);
+        // Check the takeover while stock still owns the burn, because its step returns while it is active.
+        if (IsStockDeorbitPhase(_s.LandingPhase))
+            StepPendingBoostback(vehicle, orbit, parent);
         if (StepStockDeorbit(vehicle, orbit, parent)) return;
         StepLandingCoast();
 
@@ -1199,12 +1205,7 @@ public static partial class GuidanceWindow
             Engage3Dof(vehicle, SimNow());
         }
 
-        // The console's BOOSTBACK commit engages here, because the aero sweep it forces writes the aero flow buffers that the vehicle's worker also writes. It waits while the game rebuilds the aero mesh, because the sweep refuses then.
-        if (_s.BoostbackEngagePending && !KsaAeroSweep.MeshRebuilding(vehicle))
-        {
-            _s.BoostbackEngagePending = false;
-            ExecuteBoostback(vehicle, orbit, parent);
-        }
+        StepPendingBoostback(vehicle, orbit, parent);
 
         sixDof = _s.Active || _s.EngagePending;
         // Active, not EngagePending: a setup that Engage6Dof rejects never writes control, and must not leave the craft owned. A coast owns nothing either, see StepLandingCoast.

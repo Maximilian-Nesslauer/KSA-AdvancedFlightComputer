@@ -4,6 +4,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
 using System.Collections.Generic;
+using AdvancedFlightComputer.Features.AutoStage;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
@@ -184,10 +185,11 @@ public static partial class GuidanceWindow
         ReadOnlySpan<Part> parts = sequence.Parts;
         for (int j = 0; j < parts.Length; j++)
         {
-            Span<Decoupler> decouplers = parts[j].SubtreeModules.Get<Decoupler>();
-            for (int k = 0; k < decouplers.Length; k++)
+            foreach (ISequenced module in parts[j].InSequence(sequence.Number))
             {
-                Part root = DetachedRoot(decouplers[k]);
+                if (module is not Decoupler decoupler || !StagingHooks.CanActivate(decoupler))
+                    continue;
+                Part root = DetachedRoot(decoupler);
                 if (root != null && !roots.Contains(root))
                     roots.Add(root);
             }

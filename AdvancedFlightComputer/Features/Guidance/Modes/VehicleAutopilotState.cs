@@ -279,7 +279,7 @@ public sealed class VehicleAutopilotState
     public readonly HashSet<uint> StageOptimalReturn = new();
 
     /// <summary>
-    /// Each optimal-return stage's landing point, lat/lon deg: where the plan's coast comes down. Taken from each plan adopted on the ground, and FROZEN FROM LIFT-OFF, so a ship placed there before launch is where the booster is sent (BoosterReturn, OnSequenceActivating).
+    /// Each optimal-return stage's landing point, lat/lon deg: where the plan's coast comes down. Taken from each plan adopted on the ground, and FROZEN FROM LIFT-OFF, so a ship placed there before launch is where the booster is sent (BoosterReturn, OnDecouplerActivating).
     /// </summary>
     public readonly Dictionary<uint, double2> OptimalReturnSites = new();
 

@@ -231,6 +231,14 @@ public static partial class GuidanceWindow
 
     // ------------------------------------------------------------------ commit
 
+    private static void StepPendingBoostback(Vehicle vehicle, Orbit orbit, IParentBody parent)
+    {
+        if (!_s.BoostbackEngagePending || KsaAeroSweep.MeshRebuilding(vehicle))
+            return;
+        _s.BoostbackEngagePending = false;
+        ExecuteBoostback(vehicle, orbit, parent);
+    }
+
     /// <summary>
     /// The BOOSTBACK verb on LAND > BOOSTBACK: start the machine at separation, from whatever
     /// attitude and state the vehicle is in right now.
@@ -252,7 +260,7 @@ public static partial class GuidanceWindow
             _s.WarnBoostback("AERO MESH REBUILDING. BOOSTBACK WAITS FOR IT.");
             return;
         }
-        if (_s.Aero?.Table == null)
+        if (_s.Aero?.Table == null || (IsStockDeorbitPhase(_s.LandingPhase) && _s.AeroError.Length > 0))
         {
             _s.WarnBoostback(_s.AeroError.Length > 0
                 ? "NO AERO SURROGATE: " + _s.AeroError
@@ -260,7 +268,8 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // Boostback owns the vehicle now.
+        // The stock deorbit keeps its burn until the incoming mode has a usable aero table.
+        ReleaseStockDeorbit(vehicle);
         // Every mode drives the same flight-computer command path, and two of them writing it would fight.
         ClaimVehicle(GuidanceMode.Boostback, vehicle);
         StartBoostbackRun(vehicle);

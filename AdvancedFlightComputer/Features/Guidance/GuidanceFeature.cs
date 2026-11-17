@@ -55,11 +55,12 @@ internal static class GuidanceFeature
             prefix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnPrepareWorker)));
         harmony.Patch(GameReflection.FlightComputer_UpdateAttitudeTarget!,
             postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnUpdateAttitudeTarget)));
+        harmony.Patch(AccessTools.Method(typeof(Vehicle), nameof(Vehicle.UpdateAfterPartTreeModification), Type.EmptyTypes),
+            postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnPartTreeModified)));
 
         SaveLoadObserver.SaveLoaded += OnSaveLoaded;
         SaveLoadObserver.SaveWritten += CraftSettings.OnSaveWritten;
-        // Every staging row, whatever fires it, hands over the targeted boosters it separates (#175).
-        AutoStage.StagingHooks.SequenceActivating += GuidanceWindow.OnSequenceActivating;
+        AutoStage.StagingHooks.DecouplerActivating += GuidanceWindow.OnDecouplerActivating;
         BodySettings.LoadFile();
     }
 
@@ -92,7 +93,7 @@ internal static class GuidanceFeature
     {
         SaveLoadObserver.SaveLoaded -= OnSaveLoaded;
         SaveLoadObserver.SaveWritten -= CraftSettings.OnSaveWritten;
-        AutoStage.StagingHooks.SequenceActivating -= GuidanceWindow.OnSequenceActivating;
+        AutoStage.StagingHooks.DecouplerActivating -= GuidanceWindow.OnDecouplerActivating;
 
         // The feature flag is already off, so no later step retries a failed cleanup.
         GuidanceWindow.ReleaseAllVehicles();
@@ -112,6 +113,12 @@ internal static class GuidanceFeature
 
     // Runs on the main thread inside Universe.PrepareVehicleWorkers for every vehicle. See the handle in GameReflection for why this is the site.
     private static void OnPrepareWorker(Vehicle __instance) => StepVehicle(__instance);
+
+    private static void OnPartTreeModified(Vehicle __instance)
+    {
+        if (SharedVehicleHooks.GuidanceEnabled && VehicleAutopilotState.TryGet(__instance, out var state))
+            GuidanceWindow.InvalidateStageModel(state);
+    }
 
     private static void StepVehicle(Vehicle vehicle)
     {

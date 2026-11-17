@@ -1,3 +1,5 @@
+using System.Reflection;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.Ui.Logic;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
@@ -69,6 +71,8 @@ public sealed class GuidancePendingBoostbackTest : AfcTest
             harmony.Unpatch(AccessTools.Method(typeof(KsaAeroSweep), nameof(KsaAeroSweep.MeshRebuilding)), HarmonyPatchType.All, harmony.Id);
             GuidanceWindow.ApplyAutopilot(vehicle);
             t.Check("a ready mesh starts no cancelled boostback", _engages == 0 && !state.BoostbackEngagePending);
+            harmony.Unpatch(AccessTools.Method(typeof(GuidanceWindow), "ExecuteBoostback"), HarmonyPatchType.All, harmony.Id);
+            CheckStockDeorbitTakeover(t, harmony);
         }
         finally
         {
@@ -92,6 +96,64 @@ public sealed class GuidancePendingBoostbackTest : AfcTest
     private static bool CountEngages()
     {
         _engages++;
+        return false;
+    }
+
+    private static void CheckStockDeorbitTakeover(TestContext t, Harmony harmony)
+    {
+        using DeorbitFixture? fixture = DeorbitFixture.Open(t);
+        if (fixture == null)
+            return;
+        Vehicle craft = fixture.Vehicle;
+        var state = VehicleAutopilotState.For(craft);
+        state.HousekeepingRetryTick = long.MaxValue;
+        GuidanceDeorbitLifecycleTest.Seed(fixture, state);
+        if (!GuidanceDeorbitLifecycleTest.Arm(t, fixture, state))
+            return;
+
+        // Hold a valid older table while making the new sweep refuse.
+        IParentBody parent = craft.Orbit.Parent!;
+        if (!t.Check("the airless craft has an aero table",
+            KsaAeroSweep.TryBuild(craft, parent, Universe.GetElapsedSeconds(), out var aero, out string error), error))
+            return;
+        state.Aero = aero;
+        Burn node = state.DeorbitNode;
+        BurnTarget target = state.DeorbitTarget;
+        FlightComputer fc = craft.FlightComputer;
+        TestSupport.SetManualControlInputs(craft, 0.63f, engineOn: true);
+        var inputs = AccessTools.FieldRefAccess<Vehicle, ManualControlInputs>("_manualControlInputs");
+        MethodInfo resample = AccessTools.Method(typeof(GuidanceWindow), "ResampleBoostbackAero");
+        harmony.Patch(AccessTools.Method(typeof(KsaAeroSweep), nameof(KsaAeroSweep.MeshRebuilding)),
+            prefix: new HarmonyMethod(typeof(GuidancePendingBoostbackTest), nameof(MeshReady)));
+        harmony.Patch(resample,
+            prefix: new HarmonyMethod(typeof(GuidancePendingBoostbackTest), nameof(RefuseSweep)));
+        state.BoostbackEngagePending = true;
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("a refused takeover is consumed and leaves the deorbit burn alone",
+            !state.BoostbackEngagePending && state.LandingPhase == GuidanceWindow.LandingPhase.DeorbitBurn
+            && ReferenceEquals(fc.BurnPlan.FindFirstExecutableBurn(), node) && ReferenceEquals(fc.Burn, target)
+            && fc.BurnMode == FlightComputerBurnMode.Auto && inputs(craft).EngineOn && inputs(craft).EngineThrottle == 0.63f
+            && state.BoostbackStatus.Contains("TEST SWEEP REFUSAL"));
+
+        harmony.Unpatch(resample, HarmonyPatchType.All, harmony.Id);
+        state.BoostbackEngagePending = true;
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("a ready boostback takes over the stock deorbit on the same step",
+            !state.BoostbackEngagePending && state.LandingPhase == GuidanceWindow.LandingPhase.Idle
+            && !state.DeorbitNodeClaimed && !fc.BurnPlan.TryGetBurn(node)
+            && fc.BurnMode == FlightComputerBurnMode.Manual && state.ControlAcquired
+            && VehicleControlOwnership.Holds(craft, ControlClaimant.Guidance));
+    }
+
+    private static bool MeshReady(ref bool __result)
+    {
+        __result = false;
+        return false;
+    }
+
+    private static bool RefuseSweep()
+    {
+        Ambient().AeroError = "TEST SWEEP REFUSAL";
         return false;
     }
 }
