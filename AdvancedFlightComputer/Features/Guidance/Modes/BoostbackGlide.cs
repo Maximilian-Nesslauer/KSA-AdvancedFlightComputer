@@ -287,6 +287,7 @@ public static partial class GuidanceWindow
             MeanRadius = parent.MeanRadius,
             AreaOverMass = aero.ReferenceArea / mass,
             Alpha = GlideNominalAlpha(aero),
+            ClimbNoseFirst = _s.BoostbackClimbHold,
             Table = aero.Table,
             LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,

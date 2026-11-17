@@ -97,6 +97,7 @@ public static partial class GuidanceWindow
         // The colours of the LAUNCH picture, so the map and the picture read the same: target, plan, flown.
         DrawTargetOrbit(dl, orbit, parent, bodyRadius, Palette.Target.Solid);
         DrawConvexPlan(dl, orbit, parent);
+        DrawBoosterTracks(dl, orbit, parent);
         DrawTrace(dl, Palette.Flown.Solid);
     }
 
@@ -167,6 +168,68 @@ public static partial class GuidanceWindow
             dl.AddCircleFilled(end, 4f, col);
             OvText(dl, end + new float2(7f, -6f), col,
                 FormattableString.Invariant($"INSERT {plan.Series.AltitudeKm[n - 1]:F0} km, {sol.Time[n - 1]:F0} s, {sol.FinalMass / 1000.0:F1} t"));
+        }
+    }
+
+    private static double3[] _trackPoints = new double3[256];
+
+    /// <summary>
+    /// Each booster's way down from the plan's separation (AscentPlan.BoosterTracks), and where it lands:
+    ///   - to its site, after its boostback;
+    ///   - an optimal return to its drone ship's point;
+    ///   - dimmed, the fall of an expendable booster.
+    ///
+    /// DRAWN OVER THE GROUND, not inertial like the climb: each path is fixed to the ground, turned on by the body's spin since the plan's lift-off, so it ends on the ground point it lands on - where the site, and a ship placed there, are now. That puts its start some Omega t_sep off the climb's line, which is inertial.
+    /// </summary>
+    private static void DrawBoosterTracks(ImDrawListPtr dl, Orbit orbit, IParentBody parent)
+    {
+        if (!_s.ShowConvexPlan)
+            return;
+        AscentPlan plan = _s.Running && _s.FlyingPlan != null ? _s.FlyingPlan : _s.AscentPlan;
+        if (plan?.Solution == null || plan.BoosterTracks.Length == 0 || !ReferenceEquals(plan.Body, parent))
+            return;
+        if (!_s.Running)
+        {
+            double3 ccf = orbit.StateVectors.PositionCci.Transform(parent.GetCci2Ccf());
+            if ((ccf - plan.StartCcf).Length() > PlanStartToleranceM)
+                return;
+        }
+
+        double turn = plan.Omega * (SimNow() - plan.SolvedAt);
+        foreach (BoosterTrackView t in plan.BoosterTracks)
+        {
+            if (!t.Track.Ok)
+                continue;
+            int n = t.Track.Points;
+            if (_trackPoints.Length < n)
+                _trackPoints = new double3[Math.Max(n, _trackPoints.Length * 2)];
+            double[] g = t.Track.Ground;
+            for (int k = 0; k < n; k++)
+                _trackPoints[k] = RotZ(new double3(g[k * 3], g[k * 3 + 1], g[k * 3 + 2]), turn);
+
+            ImColor8 col = t.Mode switch
+            {
+                BoosterReturnMode.Site => Palette.Good.Solid,
+                BoosterReturnMode.OptimalReturn => Palette.Target.Solid,
+                _ => Palette.Dim.A(0.6f),
+            };
+            DrawCciPolyline(dl, _trackPoints.AsSpan(0, n), col, t.Mode == BoosterReturnMode.Expendable ? 1.0f : 1.5f);
+
+            double3 land = RotZ(new double3(t.Track.Impact[0], t.Track.Impact[1], t.Track.Impact[2]), turn);
+            if (TryProjectCci(land, out float2 s))
+            {
+                if (t.Mode == BoosterReturnMode.Expendable)
+                    dl.AddCircle(s, 3.5f, col, 0, 1.0f);
+                else
+                    dl.AddCircleFilled(s, 4f, col);
+                string what = t.Mode switch
+                {
+                    BoosterReturnMode.Site => FormattableString.Invariant($"SITE, BOOSTBACK {t.Track.BoostbackDv:F0} m/s"),
+                    BoosterReturnMode.OptimalReturn => "DRONE SHIP",
+                    _ => "EXPENDABLE",
+                };
+                OvText(dl, s + new float2(7f, -6f), col, $"{t.Name.ToUpperInvariant()}: {what}");
+            }
         }
     }
 

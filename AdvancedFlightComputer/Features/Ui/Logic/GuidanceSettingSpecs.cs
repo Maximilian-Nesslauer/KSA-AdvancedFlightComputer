@@ -91,6 +91,12 @@ internal static class GuidanceSettingSpecs
         "Largest angle of attack (AoA) the glide may fly to steer the impact point.");
     public static readonly SettingSpec GlideNominalAoaDeg = new("GlideNominalAoaDeg", "GLIDE PLAN AoA", "deg", E, 7.5, 0.0, 60.0, "%.1f",
         "Angle of attack that every impact prediction assumes for the glide, with the lift pointed up the trajectory. 0 plans an engine-first ballistic coast.");
+    public static readonly SettingSpec BoostbackGlideMissKm = new("BoostbackGlideMissKm", "GLIDE ONLY WITHIN", "km", E, 3.0, 0.0, 1e4, "%.1f",
+        "A booster whose predicted impact misses its site by no more than this flies no boostback: the glide's lift corrects it. A booster that is still climbing is judged again once it starts to fall, and burns then if its miss has grown past this.");
+    public static readonly SettingSpec BoosterCorrectionDvMs = new("BoosterCorrectionDvMs", "BOOSTER CORRECTION", "m/s", E, 100.0, 0.0, 1000.0, "%.0f",
+        "Reserve every returning booster keeps for small corrections, on top of its boostback and landing burn, sized into the calculated climb.");
+    public static readonly SettingSpec BoostbackLargeMissKm = new("BoostbackLargeMissKm", "LARGE BOOSTBACK FROM", "km", E, 100.0, 0.0, 1e5, "%.0f",
+        "A miss beyond this is a large boostback: it settles and turns on the lit engine's gimbal. Between the two it is a small one: no settle, a turn with the engine off, then the burn.");
     public static readonly SettingSpec BoostbackClearanceM = new("BoostbackClearanceM", "CLEARANCE AT SEPARATION", "m", E, 30.0, 0.0, 1e4, "%.1f",
         "Distance the booster coasts, engine off, away from the stage before the settling burn lights.");
     public static readonly SettingSpec BoostbackSlewDegS = new("BoostbackSlewDegS", "SLEW RATE", "deg/s", T, 30.0, 0.0, 360.0, "%.2f",
@@ -293,7 +299,7 @@ internal static class GuidanceSettingSpecs
         { MatchTargetArgPe, ArgPeFixed, OptimiseInsertion, InsertBeforeApoapsis, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll };
 
     public static readonly SettingSpec[] LandBoostbackExpert =
-        { BoostbackClearanceM, BoostbackSeparationS, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg };
+        { BoostbackClearanceM, BoostbackSeparationS, BoostbackGlideMissKm, BoostbackLargeMissKm, BoosterCorrectionDvMs, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg };
 
     /// <summary>The HANDOVER settings of a boostback glide and of entry guidance: who takes the glide and who takes the end of the burn.</summary>
     public static readonly SettingSpec[] LandHandOvers = { ThreeDofEngageTgoS, ThreeDofSixDofTimeS };
@@ -373,7 +379,7 @@ internal static class GuidanceSettingSpecs
     {
         PeKm, ApKm, IncDeg, LanDeg, ArgPeDeg, ChaseOffsetKm, MoonTransferPeKm, GLimitG, TurnStartAltKm, TurnRateDegS, ForceRollDeg,
         ConvexQMaxKpa, ConvexThrottleMinPct, ConvexQAlphaMax, ConvexHandoverAltKm,
-        BoostbackSeparationS, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg, BoostbackClearanceM,
+        BoostbackSeparationS, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg, BoostbackClearanceM, BoostbackGlideMissKm, BoostbackLargeMissKm, BoosterCorrectionDvMs,
         BoostbackSlewDegS, GlideKp, GlideKi, GlideKd,
         SiteLatDeg, SiteLonDeg, BrakingAltitudeKm, DeorbitArrivalDescentDeg, DescentRate, LandingVerticalGateM,
         DownrangeFactor, AimAltKm, GateUprangeKm, GfoldHandoffTgo, VehicleHeightM, GfoldHoverHandoffAltM,

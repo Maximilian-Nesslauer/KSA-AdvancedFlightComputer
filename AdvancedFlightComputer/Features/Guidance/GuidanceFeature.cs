@@ -58,6 +58,8 @@ internal static class GuidanceFeature
 
         SaveLoadObserver.SaveLoaded += OnSaveLoaded;
         SaveLoadObserver.SaveWritten += CraftSettings.OnSaveWritten;
+        // Every staging row, whatever fires it, hands over the targeted boosters it separates (#175).
+        AutoStage.StagingHooks.SequenceActivating += GuidanceWindow.OnSequenceActivating;
         BodySettings.LoadFile();
     }
 
@@ -90,6 +92,7 @@ internal static class GuidanceFeature
     {
         SaveLoadObserver.SaveLoaded -= OnSaveLoaded;
         SaveLoadObserver.SaveWritten -= CraftSettings.OnSaveWritten;
+        AutoStage.StagingHooks.SequenceActivating -= GuidanceWindow.OnSequenceActivating;
 
         // The feature flag is already off, so no later step retries a failed cleanup.
         GuidanceWindow.ReleaseAllVehicles();

@@ -175,6 +175,12 @@ public sealed class VehicleAutopilotState
     public double LiftoffRadius = double.NaN;
 
     /// <summary>
+    /// The roll program (GuidanceWindow.RollProgramHolds): once clear of the pad, an ascent with a forced roll rolls first and pitches after. When the roll began, sim time, NaN until it has; and whether it is over, by reaching the roll or by running out of time.
+    /// </summary>
+    public double RollProgramStart = double.NaN;
+    public bool RollProgramDone;
+
+    /// <summary>
     /// FORCE A SPECIFIC ROLL instead of holding the one the vehicle lifted off with.
     /// The angle is about the thrust axis, measured in the same plane-referenced frame
     /// RollOffset uses: 0 puts the vehicle's body Y along the target plane's normal
@@ -208,23 +214,29 @@ public sealed class VehicleAutopilotState
     public double ReserveBoosterDryKg;
 
     /// <summary>
-    /// True when the next separation drops EVERY engine now producing thrust, so the
-    /// vehicle that separates really is the booster doing the flying.
+    /// True when the targeted booster is the next to separate and it takes burning engines with it, so the reserve has a booster to stay in.
     ///
-    /// This is what keeps the reserve off a strap-on stack. While boosters burn
-    /// alongside a core, the next separation drops the boosters and the core keeps
-    /// firing - reserving propellant there would stage the whole first stage early to
-    /// leave fuel in casings that are about to be thrown away. Once the strap-ons are
-    /// gone and the next separation is the core's own, this goes true and the reserve
-    /// arms itself.
+    /// A core under strap-ons is not next: the strap-ons are, so the reserve arms once they are gone. Side boosters are, and they leave beside a core that burns on (#176); see <see cref="ReserveFlowShare"/>.
     /// </summary>
     public bool ReserveArmed;
+
+    /// <summary>The separating engines' share of the burning engines' propellant flow: one when the booster is all that burns, below one for side boosters beside a core, whose share of a shortened burn stays aboard (AscentRecovery.FlowShare).</summary>
+    public double ReserveFlowShare = 1.0;
+
+    /// <summary>For side boosters, the tanks in them that feed their own engines: what the reserve is counted in, since the vehicle's mass against the stage model's mixes in the core's propellant. Empty otherwise.</summary>
+    public readonly System.Collections.Generic.List<Tank> ReserveTanks = new();
 
     /// <summary>Why the reserve is not armed, empty when it is.</summary>
     public string ReserveNote = "";
 
-    /// <summary>Set once the reserve has fired its staging, so it fires once.</summary>
-    public bool ReserveStaged;
+    /// <summary>The root part of each booster whose reserve has fired its staging, so each fires once (#130: a heavy's side boosters, then its core).</summary>
+    public readonly HashSet<uint> ReserveStagedRoots = new();
+
+    /// <summary>The booster the armed reserve belongs to: the targeted booster next to separate, its root part's InstanceId; 0 when there is none.</summary>
+    public uint ReserveRootId;
+
+    /// <summary>The armed reserve's booster has staged on it already.</summary>
+    public bool ReserveStaged => ReserveRootId != 0 && ReserveStagedRoots.Contains(ReserveRootId);
 
     /// <summary>
     /// Sim time until which this vehicle is a booster waiting for boostback to engage.
@@ -260,6 +272,16 @@ public sealed class VehicleAutopilotState
     /// sequence index shifts as sequences are activated.
     /// </summary>
     public readonly System.Collections.Generic.Dictionary<uint, double2> StageTargets = new();
+
+    /// <summary>
+    /// The stages set to OPTIMAL RETURN (a drone ship), by the same root InstanceId as <see cref="StageTargets"/>: no boostback, a landing where the booster's coast from the plan's separation comes down, and only the landing burn kept back. A stage is either here or in StageTargets, or in neither and expendable.
+    /// </summary>
+    public readonly HashSet<uint> StageOptimalReturn = new();
+
+    /// <summary>
+    /// Each optimal-return stage's landing point, lat/lon deg: where the plan's coast comes down. Taken from each plan adopted on the ground, and FROZEN FROM LIFT-OFF, so a ship placed there before launch is where the booster is sent (BoosterReturn, OnSequenceActivating).
+    /// </summary>
+    public readonly Dictionary<uint, double2> OptimalReturnSites = new();
 
     /// <summary>Live stage objects by root id, so the 4 Hz rebuild reuses them and the
     /// 1 Hz costs written into them survive it.</summary>
@@ -1248,9 +1270,65 @@ public sealed class VehicleAutopilotState
     public double BoostbackClearanceM = 30.0;
 
     /// <summary>
+    /// How far off its site a booster's predicted impact may be, km, for it to fly no boostback at all: the glide's lift makes up a miss this size. Judged once it is clear of its stage.
+    /// </summary>
+    public double BoostbackGlideMissKm = 3.0;
+
+    /// <summary>
+    /// The miss, km, beyond which a boostback is a large one: it settles and turns on the lit engine's gimbal. Between <see cref="BoostbackGlideMissKm"/> and this it is a small one, flown without the settling burn and turned with the engine off, then burned (#197). The lit flip lays down dV of its own as it sweeps through every direction on the way round; for a small correction that is as big as the correction, which moves while the booster turns, and the short burn after it chases its own tail. A small correction leaves time to turn.
+    /// </summary>
+    public double BoostbackLargeMissKm = 100.0;
+
+    /// <summary>The reserve every returning booster keeps for small corrections, m/s, on top of its boostback and landing burn (AscentRecovery.CorrectionDv): sized into the calculated climb.</summary>
+    public double BoosterCorrectionDvMs = 100.0;
+
+    /// <summary>This boostback is a small one (BoostbackLargeMissKm): no settle, and the turn to the burn is flown with the engine off. Decided once the booster is clear.</summary>
+    public bool BoostbackSmall;
+
+    /// <summary>
     /// The stage a booster handed over at separation was dropped from, while the booster is still too close to light its engine; null otherwise. Set when the sweep adopts the booster, cleared once it is clear (see BoosterClear).
     /// </summary>
     public Vehicle BoostbackClearOf;
+
+    /// <summary>When the settling burn lit, sim time; NaN until it has. It lights only once the booster is clear AND a burn is coming (Boostback's Separation phase): one whose predicted miss is within BoostbackGlideMissKm goes straight to the glide with its engine off, keeping its propellant for the landing.</summary>
+    public double BoostbackSettleFrom = double.NaN;
+
+    /// <summary>A drone-ship booster (optimal return), handed over at separation to its frozen point. It follows the same miss rule as any booster (BoostbackGlideMissKm, BoostbackLargeMissKm); the flag only labels its status.</summary>
+    public bool BoostbackGlideOnly;
+
+    /// <summary>
+    /// The booster went into the glide while still climbing, with or without a burn, so its miss is judged again at the apex (Boostback, Glide): once its vertical speed turns negative, the miss is re-predicted and the same rules applied as at separation. A booster separated in the air drifts while it turns round, and a miss inside BoostbackGlideMissKm at separation can be well outside it by the top of the arc (2026-11-17). Once per boostback.
+    /// </summary>
+    public bool BoostbackApexCheckPending;
+
+    /// <summary>The apex recheck is the one burn of a small correction deferred at separation (Boostback, Separation): the booster was still climbing, so it glided to the top of its arc to burn once there rather than twice.</summary>
+    public bool BoostbackSmallDeferred;
+
+    /// <summary>
+    /// The booster glides with no burn while still climbing, so it flies NOSE FIRST to its apex - the attitude it separated in, the least drag it has - and turns to its glide attitude there, where the air is thin (Boostback, Glide). Turning round low down, side-on to thick air, threw a booster 7 to 10 km short and cost it its landing (2026-11-17). Every prediction of its coast models the same (DragCoastSystem.ClimbNoseFirst). Not after a boostback burn: that booster glides as before.
+    /// </summary>
+    public bool BoostbackClimbHold;
+
+    /// <summary>When a long turn to the burn last said what it waits on, sim time (Boostback, Rotation).</summary>
+    public double BoostbackWaitLogAt = double.NegativeInfinity;
+
+    // Separating a drone-ship booster on its live impact (DroneShipSeparation).
+    /// <summary>The drone-ship booster next to separate, by root InstanceId, and its own aero, swept once when its reserve arms.</summary>
+    public uint DroneShipAeroRoot;
+    public AdvancedFlightComputer.Features.Guidance.KsaAeroSweep.Result DroneShipAero;
+    /// <summary>When the live impact was last predicted, sim time; how far the ship lay beyond it along the ground track then, m, and when; and how far off the ship it was, m.</summary>
+    public double DroneShipCueAt = double.NegativeInfinity;
+    public double DroneShipLastD = double.NaN;
+    public double DroneShipLastT = double.NaN;
+    public double DroneShipMissM = double.NaN;
+    /// <summary>How fast the impact closes on the ship, m/s along the ground track, smoothed for the countdown: negative while it closes.</summary>
+    public double DroneShipRate = double.NaN;
+
+    // The countdown to the next separation (SeparationCountdown): seconds when last taken, sim time it was taken, and the drain it is measured on.
+    public double SeparationInS = double.NaN;
+    public double SeparationTakenAt = double.NegativeInfinity;
+    internal AdvancedFlightComputer.Features.Ui.Logic.DrainRate SeparationDrain = new();
+    public AdvancedFlightComputer.Guidance.Numerics.Dual[] DroneShipScratch;
 
     /// <summary>Distance to BoostbackClearOf at the split, m, and how far it has opened since, the gauge's readout.</summary>
     public double BoostbackClearFromM, BoostbackClearGapM;

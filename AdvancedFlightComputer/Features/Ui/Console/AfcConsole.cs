@@ -542,6 +542,14 @@ internal static partial class AfcConsole
         {
             LogHelper.WarnOnce("afc-failure-band:" + ex.GetType().Name, $"[AFC] AFC failure band draw failed: {ex}");
         }
+        try
+        {
+            SeparationBandWindow.Draw(Frame);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce("afc-separation-band:" + ex.GetType().Name, $"[AFC] AFC separation band draw failed: {ex}");
+        }
     }
 
     internal static void AcknowledgeFailure() => ConsoleHead.AcknowledgeFailure(Frame);

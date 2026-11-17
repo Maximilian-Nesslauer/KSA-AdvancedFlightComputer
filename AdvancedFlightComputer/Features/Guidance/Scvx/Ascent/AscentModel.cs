@@ -424,34 +424,53 @@ public sealed class AscentProblem
     public double PlaneTurnMin { get; init; }
     public double PlaneTurnMax { get; init; }
 
-    /// <summary>A booster the plan brings home, whose reserve the solve then chooses (AscentRecovery); null keeps the stage list's reserve fixed.</summary>
-    public AscentRecovery? Recovery { get; init; }
+    /// <summary>
+    /// The boosters the plan brings home, each with the reserve the solve chooses for it (AscentRecovery); empty keeps the stage list's reserves fixed.
+    ///
+    /// SEVERAL AT ONCE (#130). A heavy's side boosters and its core each keep their own reserve, from their own separations. Boosters that leave on one stage share that stage's reserve, since one throttle drains them alike: each of them is an entry with the same stage, flow share, dry mass and starting reserve, and its own site, and the shared reserve is held to the costliest of their sites.
+    /// </summary>
+    public IReadOnlyList<AscentRecovery> Recoveries { get; init; } = [];
 
-    /// <summary>This problem with <paramref name="recovery"/> as its booster, or none; the settings object is shared.</summary>
-    public AscentProblem WithRecovery(AscentRecovery? recovery) => new()
+    /// <summary>The first booster the plan brings home (<see cref="Recoveries"/>), or null; setting it makes it the only one.</summary>
+    public AscentRecovery? Recovery
+    {
+        get => Recoveries.Count > 0 ? Recoveries[0] : null;
+        init => Recoveries = value == null ? [] : [value];
+    }
+
+    /// <summary>This problem with <paramref name="recovery"/> as its only booster, or none; the settings object is shared.</summary>
+    public AscentProblem WithRecovery(AscentRecovery? recovery) => WithRecoveries(recovery == null ? [] : [recovery]);
+
+    /// <summary>This problem with <paramref name="recoveries"/> as its boosters; the settings object is shared.</summary>
+    public AscentProblem WithRecoveries(IReadOnlyList<AscentRecovery> recoveries) => new()
     {
         Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
         Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
         TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
         PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, Settings = Settings,
-        Recovery = recovery,
+        Recoveries = recoveries,
     };
 
-    /// <summary>This problem with its booster's reserve starting at <paramref name="reserveKg"/> instead (AscentProblem.Recovery): that much less burned in its stage and that much more dropped with it.</summary>
+    /// <summary>This problem with the first booster's reserve, and that of every booster leaving on its stage, starting at <paramref name="reserveKg"/> instead (AscentProblem.Recovery): that much more dropped with it, its stage burning that much over its flow share less, and a side booster's core burning its own share of that in the next stage (AscentRecovery.FlowShare).</summary>
     public AscentProblem WithInitialReserve(double reserveKg)
     {
         AscentRecovery rec = Recovery ?? throw new InvalidOperationException("no booster to keep a reserve in");
         var stages = (AscentStage[])Stages.Clone();
         AscentStage b = stages[rec.Stage];
         double d = reserveKg - rec.InitialReserveKg;
-        stages[rec.Stage] = b.With(b.PropellantMass - d, b.JettisonMass + d, b.LiquidCarriesOver);
+        stages[rec.Stage] = b.With(b.PropellantMass - d / rec.FlowShare, b.JettisonMass + d, b.LiquidCarriesOver);
+        if (rec.FlowShare < 1.0)
+        {
+            AscentStage core = stages[rec.Stage + 1];
+            stages[rec.Stage + 1] = core.With(core.PropellantMass + d * (1.0 / rec.FlowShare - 1.0), core.JettisonMass, core.LiquidCarriesOver);
+        }
         return new AscentProblem
         {
             Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = stages,
             Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
             TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
             PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, Settings = Settings,
-            Recovery = rec.WithInitialReserve(reserveKg),
+            Recoveries = Recoveries.Select(r => r.Stage == rec.Stage ? r.WithInitialReserve(reserveKg) : r).ToArray(),
         };
     }
 
@@ -461,7 +480,7 @@ public sealed class AscentProblem
         Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
         Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
         TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-        PlaneTurnMin = min, PlaneTurnMax = max, LiftoffDirection = LiftoffDirection, Settings = Settings, Recovery = Recovery,
+        PlaneTurnMin = min, PlaneTurnMax = max, LiftoffDirection = LiftoffDirection, Settings = Settings, Recoveries = Recoveries,
     };
 
     /// <summary>
@@ -512,8 +531,21 @@ public sealed class AscentProblem
             return "the structural limits must be positive";
         if (!double.IsFinite(PlaneTurnMin) || !double.IsFinite(PlaneTurnMax) || PlaneTurnMin > PlaneTurnMax)
             return "the plane-turn bounds are not valid";
-        if (Recovery != null && Recovery.Validate(this) is { Length: > 0 } recovery)
-            return recovery;
+        for (int i = 0; i < Recoveries.Count; i++)
+        {
+            AscentRecovery r = Recoveries[i];
+            if (r == null)
+                return "a recovered booster is missing";
+            if (r.Validate(this) is { Length: > 0 } recovery)
+                return recovery;
+            // Boosters leaving on one stage share its reserve, so they must agree on everything that reserve is.
+            for (int j = 0; j < i; j++)
+            {
+                AscentRecovery o = Recoveries[j];
+                if (o.Stage == r.Stage && (o.FlowShare != r.FlowShare || o.BoosterDryKg != r.BoosterDryKg || o.BoostersOnStage != r.BoostersOnStage || o.InitialReserveKg != r.InitialReserveKg))
+                    return $"the boosters leaving at stage {r.Stage + 1} disagree on the reserve they share";
+            }
+        }
         return "";
     }
 }

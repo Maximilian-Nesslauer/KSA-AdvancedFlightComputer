@@ -19,11 +19,15 @@ internal static class FailureBandWindow
     // At interface scale 1, under the place of the counter in stock Gauges.xml, for a counter that does not draw.
     private const float TopWithoutCounter = 110f;
 
-    private const ImGuiWindowFlags Flags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoSavedSettings
+    internal const ImGuiWindowFlags Flags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoSavedSettings
         | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoBackground;
+
+    /// <summary>The bottom of the band drawn this frame, NaN when none was: the separation band stands under it.</summary>
+    internal static float DrawnBottom = float.NaN;
 
     public static void Draw(ConsoleFrame f)
     {
+        DrawnBottom = float.NaN;
         Vehicle? subject = f.Subject;
         if (subject == null || f.FailureWhat.Length == 0)
             return;
@@ -48,6 +52,7 @@ internal static class FailureBandWindow
             (float centerX, float top) = Anchor(in main, scale);
             float x = Math.Clamp(centerX - size.X * 0.5f, main.Pos.X, Math.Max(main.Pos.X, main.Pos.X + main.Size.X - size.X));
             var min = new float2(x, top);
+            DrawnBottom = min.Y + size.Y;
 
             ImGui.SetNextWindowPos(min);
             ImGui.SetNextWindowSize(size);
@@ -90,7 +95,7 @@ internal static class FailureBandWindow
     }
 
     // The center of the counter and the top of the band, from the place GaugeCanvas.OnDrawUi gives the stock Altitude gauge, so a counter the pilot moved keeps its band.
-    private static (float CenterX, float Top) Anchor(in ImGuiViewportPtr main, float scale)
+    internal static (float CenterX, float Top) Anchor(in ImGuiViewportPtr main, float scale)
     {
         try
         {
