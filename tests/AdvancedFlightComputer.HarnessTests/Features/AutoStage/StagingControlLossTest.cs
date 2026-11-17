@@ -57,14 +57,23 @@ public sealed class StagingControlLossTest : AfcTest
         StagingConfig.EngineDelays.Clear();
         foreach (var engine in vehicle.Parts.Modules.Get<EngineController>())
             StagingConfig.EngineDelays[SequencedModules.DelayKey(engine)] = 1.0;
+        int? ignitionRow = null;
         foreach (Sequence row in vehicle.Parts.SequenceList.Sequences)
         {
             var modules = new List<string>();
             foreach (Part part in row.Parts)
                 foreach (ISequenced module in part.InSequence(row.Number))
+                {
                     modules.Add($"{module.GetType().Name} active={module.IsActive}");
+                    if (ignitionRow == null && module is EngineController { IsActive: false })
+                        ignitionRow = row.Number;
+                }
             t.Info($"row {row.Number}, activated={row.Activated}: {string.Join(", ", modules)}");
         }
+        if (!t.Check("the fixture has an inactive engine row", ignitionRow.HasValue))
+            return;
+        // The saved first stage is already active, so the pending ignition uses an inactive engine row.
+        vehicle.Parts.SequenceList.SetActiveSequence(ignitionRow!.Value - 1);
         StagingDetector.Arm(vehicle, true);
         StagingDetector.RequestStaging(vehicle);
         StagingDetector.Sample();
