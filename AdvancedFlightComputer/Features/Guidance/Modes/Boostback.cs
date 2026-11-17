@@ -189,7 +189,6 @@ public static partial class GuidanceWindow
     /// A booster whose ballistic impact is already on the site skips straight to the
     /// glide rather than burning a metre per second and calling it guidance.
     /// </summary>
-    private const double BoostbackMinDvMs = 5.0;
 
     /// <summary>How long a clear booster waits, engine off, for its first steering solution before it settles anyway, s: the decision between a burn and going straight to the glide needs it.</summary>
     private const double BoostbackDecideTimeoutS = 3.0;
@@ -419,13 +418,13 @@ public static partial class GuidanceWindow
                     EnterBoostbackPhase(BoostbackPhase.Glide, now);
                     break;
                 }
-                // NO BOOSTBACK, NO SETTLE. Whether a burn is coming is decided before anything lights: a booster that only needs a correction under BoostbackMinDvMs - an optimal return, or one already falling onto its site - goes straight to the glide with its engine off. Settling first, then skipping the burn, spent landing propellant on nothing, on a landing reserve that is tight by design (2026-11-17).
+                // NO BOOSTBACK, NO SETTLE. Whether a burn is coming is decided before anything lights, on the predicted MISS alone: a booster falling within BoostbackGlideMissKm of its site goes straight to the glide with its engine off. Settling first, then skipping the burn, spent landing propellant on nothing, on a landing reserve that is tight by design (2026-11-17).
                 // The decision waits, engine off, for the first steering solution, but not for ever: past BoostbackDecideTimeoutS it settles as before.
                 if (double.IsNaN(_s.BoostbackSettleFrom))
                 {
                     // Judged on the predicted MISS at the site: within BoostbackGlideMissKm the glide's lift makes it up, so there is no boostback at all.
                     double missKm = _s.SteerMissM / 1000.0;
-                    if (_s.HasSteer && (missKm <= _s.BoostbackGlideMissKm || missDv < BoostbackMinDvMs))
+                    if (_s.HasSteer && missKm <= _s.BoostbackGlideMissKm)
                     {
                         _s.BoostbackStatus = FormattableString.Invariant($"MISS {missKm:F1} km: GLIDE CORRECTS IT. NO SETTLE, NO BURN.");
                         GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, miss {missKm:F1} km ({missDv:F1} m/s): straight to the glide, engine off."));
@@ -455,12 +454,10 @@ public static partial class GuidanceWindow
                     _s.WarnBoostback("NO STEERING SOLUTION. HOLDING ATTITUDE.");
                     break;
                 }
-                if (missDv < BoostbackMinDvMs)
+                if (_s.SteerMissM / 1000.0 <= _s.BoostbackGlideMissKm)
                 {
-                    // Already on the site.
-                    // Nothing to burn, so go straight to the glide rather than lighting an engine to prove a point.
-                    // Judged on the TARGETING correction: shaping is optional, and a burn is not worth lighting for it alone.
-                    _s.BoostbackStatus = FormattableString.Invariant($"CORRECTION {missDv:F1} m/s ONLY. BURN SKIPPED.");
+                    // Within the glide's reach of the site (BoostbackGlideMissKm): nothing to burn, so go straight to the glide rather than lighting an engine to prove a point.
+                    _s.BoostbackStatus = FormattableString.Invariant($"MISS {_s.SteerMissM / 1000.0:F1} km: GLIDE CORRECTS IT. BURN SKIPPED.");
                     EnterBoostbackPhase(BoostbackPhase.Glide, now);
                     break;
                 }
@@ -519,8 +516,9 @@ public static partial class GuidanceWindow
                 // The closed-loop cutoff: the ballistic impact is already ON the site, so continuing would take it back off.
                 // Targeting only, not the commanded total - shaping would hold this number up after the miss was nulled and the burn would never end on its own.
                 // Disabled once locked, where the whole point is that nothing new is listened to.
+                // Within the glide's reach (BoostbackGlideMissKm): the glide's lift takes it from here, and every further second of burn comes out of the landing.
                 bool nulled = !_s.BoostbackLocked && _s.HasSteer
-                           && missDv < BoostbackMinDvMs;
+                           && _s.SteerMissM / 1000.0 <= _s.BoostbackGlideMissKm;
 
                 if (done || nulled || dry || overrun)
                 {
