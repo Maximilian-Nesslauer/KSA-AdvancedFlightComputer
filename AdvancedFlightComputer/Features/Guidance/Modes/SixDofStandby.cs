@@ -53,7 +53,8 @@ public static partial class GuidanceWindow
         => _s.SixDofStandby && !_s.Converging && _s.Guidance?.Published is { } plan
            && now - plan.SolveTime <= maxPlanAgeS
            && (brakingState == null || (GuidanceIdle && Ksa6DofGuidance.MatchesHandoffAttitude(
-               plan, brakingState, now, BrakingHandoffAngleRad, BrakingHandoffRateRadS)));
+               plan, brakingState, now, BrakingHandoffAngleRad, BrakingHandoffRateRadS)
+               && _s.Guidance.MeasureDrift(brakingState, now) <= SixDofRestartDriftLimit(brakingState[2])));
 
     /// <summary>The burn-time floor for restarts and node rebuilds: the configured seed, or the entry seed when this engagement started from a shorter burn (the 3-DOF hand-over). Restarting a 3 s burn on a 20 s seed would pin sigma at a minimum longer than the burn.</summary>
     private static double SixDofSeedFloor => Math.Min(_s.SixDofSigmaSeed, _s.SixDofEntrySigmaSeed);
@@ -262,7 +263,7 @@ public static partial class GuidanceWindow
                 + $"last solve {_s.Worker.LastSolveMs:F0} ms at {_s.Guidance.Nodes} nodes; {_s.Error}");
         }
         double drift = _s.Guidance.MeasureDrift(x, now);
-        double driftLimit = Math.Max(ColdRestartDriftM, 0.05 * Math.Max(x[2], 1.0));
+        double driftLimit = SixDofRestartDriftLimit(x[2]);
         if (age > SixDofStandbyStaleRestartS || drift > driftLimit)
         {
             GuidanceLog.Info(vehicle, $"Touchdown guidance standby restarting at {x[2]:F0} m: "

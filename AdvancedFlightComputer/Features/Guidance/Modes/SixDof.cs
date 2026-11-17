@@ -295,6 +295,9 @@ public static partial class GuidanceWindow
     // Taken as the larger of this and 5% of altitude, so it scales with how much room there is: 20 m matters at 100 m and is noise at 2 km.
     private const double ColdRestartDriftM = 20.0;
 
+    private static double SixDofRestartDriftLimit(double heightM)
+        => Math.Max(ColdRestartDriftM, 0.05 * Math.Max(heightM, 1.0));
+
     // Seed the cold solve from a convex 3-DOF G-FOLD solve.
     //
     // OFF, because it was MEASURED not to help (Scvx.Console --seed).
@@ -1250,12 +1253,16 @@ public static partial class GuidanceWindow
             return;
         }
 
+        bool firstBrakingCommand = false;
         if (_s.EngagePending)
         {
             _s.EngagePending = false;
             // A standby has been solving through the 3-DOF's burn, and takes over where it is.
             if (_s.SixDofStandby && _s.Guidance != null)
+            {
+                firstBrakingCommand = _s.SixDofFromBrakingBurn;
                 PromoteSixDofStandby(vehicle, now, x);
+            }
             else if (!Engage6Dof(vehicle, parent, siteCci, x, now))
                 return;
             double speed = Universe.GetSimulationSpeed();
@@ -1368,12 +1375,12 @@ public static partial class GuidanceWindow
         // When the loop is stuck, change the solve rather than the trajectory.
         // Reads the PUBLISHED plan, so it is safe while a solve is in flight - see Ksa6DofGuidance.MeasureDrift.
         double drift = _s.Guidance != null ? _s.Guidance.MeasureDrift(x, now) : 0.0;
-        double driftLimit = Math.Max(ColdRestartDriftM, 0.05 * Math.Max(x[2], 1.0));
+        double driftLimit = SixDofRestartDriftLimit(x[2]);
         bool driftedOff = _s.Guidance != null && _s.Guidance.HasPlan && drift > driftLimit;
 
         // GuidanceIdle: a cold restart calls BeginCold, which reinitialises the solver out from under anything using it.
         // While a solve is in flight the worker owns the guidance outright, so this waits - a cycle of delay on a restart that only fires after fifteen refusals is not a cost worth worrying about.
-        if (!_s.Converging && _s.Guidance != null && GuidanceIdle &&
+        if (!firstBrakingCommand && !_s.Converging && _s.Guidance != null && GuidanceIdle &&
             (driftedOff || _s.RefusalRun >= RefusalsBeforeRestart))
         {
             var xfR = PlanEndState(x);
@@ -1581,7 +1588,7 @@ public static partial class GuidanceWindow
         // Re-crossing a gate during a brief climb would rebuild twice for no benefit.
         // Same rule: StepNodeGates can call RebuildAt, which constructs a new guidance and assigns _s.Guidance.
         // Doing that while the worker holds a reference to the old one would leave a solve running on an object nothing is going to read.
-        if (_s.SixDofNodeGates && GuidanceIdle)
+        if (!firstBrakingCommand && _s.SixDofNodeGates && GuidanceIdle)
             StepNodeGates(vehicle, parent, siteCci, x, now);
 
         // THE MPC STEP: re-solve from the MEASURED state on a cadence.
@@ -1596,16 +1603,17 @@ public static partial class GuidanceWindow
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
         _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz);
 
-        if (_s.Worker != null)
+        // The first command after braking handover uses the plan the braking mode checked.
+        if (!firstBrakingCommand && now - _s.LastReplan >= cadence)
         {
-            if (now - _s.LastReplan >= cadence)
+            if (_s.Worker != null)
                 _s.Worker.TryDispatchUpdate(_s.Guidance, x, now, 5);
-        }
-        else if (now - _s.LastReplan >= cadence)
-        {
-            _s.DidSolve = true;
-            if (_s.Guidance.Update(x, now)) OnSolveSucceeded(now, x);
-            else OnSolveRefused(now, _s.Guidance.Error);
+            else
+            {
+                _s.DidSolve = true;
+                if (_s.Guidance.Update(x, now)) OnSolveSucceeded(now, x);
+                else OnSolveRefused(now, _s.Guidance.Error);
+            }
         }
 
         // Past the end of the plan the node index clamps, so Command would hold the terminal control indefinitely: a thrust of at least the minimum, which for a craft that cannot hover is a climb. Not guidance any more, so the craft flies the no-plan law until a re-solve lands.
