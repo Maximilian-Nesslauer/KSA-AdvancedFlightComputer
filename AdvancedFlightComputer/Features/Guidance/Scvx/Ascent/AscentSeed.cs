@@ -180,7 +180,7 @@ internal static class AscentSeed
         Span<double> x = stackalloc double[nx];
         c.X0.CopyTo(xb, 0);
 
-        bool kicked = AirSpeed(c, xb) > st.PitchOverSpeed;
+        bool kicked = c.PadVerticalTime == 0.0 && AirSpeed(c, xb) > st.PitchOverSpeed;
         if (kicked)
             Kick(c, xb.AsSpan(0, nx), kick);
 
@@ -198,9 +198,24 @@ internal static class AscentSeed
                 sigUsed[last] = EnergyCutoff(c, x, kicked, kick, reentry);
             }
 
-            Direction(c, xb.AsSpan(n * nx, nx), kicked, ub.AsSpan(n * nu, nu));
+            Span<double> direction = ub.AsSpan(n * nu, nu);
+            if (c.PadVerticalTime > 0.0 && n < c.VerticalDirections.Length)
+                c.VerticalDirections[n].AsSpan().CopyTo(direction);
+            else
+                Direction(c, xb.AsSpan(n * nx, nx), kicked, direction);
             double nodeThrottle = c.SeedThrottleAt(s, xb.AsSpan(n * nx, nx));
             for (int j = 0; j < nu; j++) ub[n * nu + j] *= nodeThrottle;
+            if (c.PadTurnStep > 0.0 && n >= c.VerticalDirections.Length && n <= c.Ends[0])
+            {
+                ReadOnlySpan<double> previous = ub.AsSpan((n - 1) * nu, nu);
+                double dx = direction[0] - previous[0], dy = direction[1] - previous[1], dz = direction[2] - previous[2];
+                double change = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                if (change > c.PadTurnStep)
+                    for (int j = 0; j < nu; j++)
+                        direction[j] = previous[j] + (direction[j] - previous[j]) * c.PadTurnStep / change;
+            }
+            if (c.PadTurnStep > 0.0 && n == c.Ends[0] && !FollowFirstPhaseControls(c, xb, ub, reentry))
+                return false;
             if (n == c.N - 1)
                 break;
 
@@ -213,10 +228,12 @@ internal static class AscentSeed
             }
 
             double h = sigUsed[s] * c.Dtau[n] / st.SeedSubsteps;
+            // Judge the first phase against the reentry floor when it is replayed with the limited controls.
+            double trialFloor = s == 0 && c.PadTurnStep > 0.0 ? double.NegativeInfinity : reentry;
             xb.AsSpan(n * nx, nx).CopyTo(x);
             for (int sub = 0; sub < st.SeedSubsteps; sub++)
             {
-                if (!Substep(c, x, h, s, stageTime, ref kicked, kick, reentry))
+                if (!Substep(c, x, h, s, stageTime, ref kicked, kick, trialFloor))
                     return false;
                 stageTime += h;
             }
@@ -225,6 +242,34 @@ internal static class AscentSeed
 
         foreach (double v in xb)
             if (!double.IsFinite(v)) return false;
+        return true;
+    }
+
+    private static bool FollowFirstPhaseControls(AscentCase c, double[] x, double[] u, double reentry)
+    {
+        // The kick supplies trial directions. Once they are rate limited, the seed must fly those
+        // directions, because carrying the velocity kick itself into the next phase adds impulse.
+        const int nx = AscentCase.NX, nu = AscentCase.NU;
+        c.X0.CopyTo(x, 0);
+        Span<double> f = stackalloc double[nx];
+        Span<double> nextF = stackalloc double[nx];
+        for (int k = 0; k < c.Ends[0]; k++)
+        {
+            ReadOnlySpan<double> current = x.AsSpan(k * nx, nx);
+            Span<double> next = x.AsSpan((k + 1) * nx, nx);
+            double dt = c.Dtau[k] * c.SigFixed[0];
+            c.Dyn.Eval(current, u.AsSpan(k * nu, nu), k, f);
+            for (int j = 0; j < nx; j++)
+                next[j] = current[j] + dt * f[j];
+            for (int iter = 0; iter < 4; iter++)
+            {
+                c.Dyn.Eval(next, u.AsSpan((k + 1) * nu, nu), k + 1, nextF);
+                for (int j = 0; j < nx; j++)
+                    next[j] = current[j] + 0.5 * dt * (f[j] + nextF[j]);
+            }
+            if (!(AscentCase.Norm3(next) >= reentry))
+                return false;
+        }
         return true;
     }
 
@@ -261,6 +306,29 @@ internal static class AscentSeed
     private static double Energy(ReadOnlySpan<double> x)
         => 0.5 * (x[3] * x[3] + x[4] * x[4] + x[5] * x[5]) - 1.0 / AscentCase.Norm3(x);
 
+    internal static double TimeToClearPad(AscentCase c, double heightM)
+    {
+        Span<double> x = stackalloc double[AscentCase.NX];
+        Span<double> next = stackalloc double[AscentCase.NX];
+        c.X0.AsSpan().CopyTo(x);
+        // Start from rest because the numerical lift-off velocity must not shorten pad clearance.
+        x[3] = -c.Dyn.OmegaC * x[1];
+        x[4] = c.Dyn.OmegaC * x[0];
+        x[5] = 0.0;
+        double target = AscentCase.Norm3(x) + heightM / c.Dyn.LU;
+        double step = 0.05 / c.Dyn.TU;
+        double end = c.SigFixed[0];
+        for (double t = 0.0; t < end; t += step)
+        {
+            double h = Math.Min(step, end - t);
+            Rk4(c, x, h, 0, t, false, next, vertical: true, throttle: c.ThrottleMin[0]);
+            if (AscentCase.Norm3(next) >= target)
+                return (t + h) * c.Dyn.TU;
+            next.CopyTo(x);
+        }
+        return double.PositiveInfinity;
+    }
+
     /// <summary>
     /// One RK4 sub-step of the seed under its thrust law, pitching over inside the step if the trigger speed is crossed in it: the crossing is bisected, the kick applied there, and the rest of the step flown under the new law. False if the state left the model's validity. <paramref name="t"/> is the canonical time into the stage the step starts at, which is where a solid's table is read.
     /// </summary>
@@ -270,7 +338,12 @@ internal static class AscentSeed
         AscentSettings st = c.Settings;
         Span<double> xt = stackalloc double[nx];
         Span<double> tmp = stackalloc double[nx];
-        if (kicked)
+        if (s == 0 && t < c.PadVerticalTime - 1e-12)
+        {
+            Rk4(c, x, h, s, t, false, xt, vertical: true);
+            xt.CopyTo(x);
+        }
+        else if (kicked)
         {
             Rk4(c, x, h, s, t, true, xt);
             xt.CopyTo(x);
@@ -327,7 +400,7 @@ internal static class AscentSeed
     }
 
     private static void Rk4(AscentCase c, ReadOnlySpan<double> x, double h, int stage, double t, bool kicked,
-                            Span<double> result)
+                            Span<double> result, bool vertical = false, double? throttle = null)
     {
         const int nx = AscentCase.NX;
         Span<double> k1 = stackalloc double[nx];
@@ -336,23 +409,27 @@ internal static class AscentSeed
         Span<double> k4 = stackalloc double[nx];
         Span<double> y = stackalloc double[nx];
 
-        Deriv(c, x, stage, t, kicked, k1);
+        Deriv(c, x, stage, t, kicked, k1, vertical, throttle);
         for (int i = 0; i < nx; i++) y[i] = x[i] + 0.5 * h * k1[i];
-        Deriv(c, y, stage, t + 0.5 * h, kicked, k2);
+        Deriv(c, y, stage, t + 0.5 * h, kicked, k2, vertical, throttle);
         for (int i = 0; i < nx; i++) y[i] = x[i] + 0.5 * h * k2[i];
-        Deriv(c, y, stage, t + 0.5 * h, kicked, k3);
+        Deriv(c, y, stage, t + 0.5 * h, kicked, k3, vertical, throttle);
         for (int i = 0; i < nx; i++) y[i] = x[i] + h * k3[i];
-        Deriv(c, y, stage, t + h, kicked, k4);
+        Deriv(c, y, stage, t + h, kicked, k4, vertical, throttle);
         for (int i = 0; i < nx; i++)
             result[i] = x[i] + (h / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]);
     }
 
     /// <summary>The seed's thrust law evaluated at the state it is stepped from, at the stage's seed throttle held under its acceleration limit, with its solids read off their table at canonical stage time <paramref name="t"/>.</summary>
-    private static void Deriv(AscentCase c, ReadOnlySpan<double> x, int stage, double t, bool kicked, Span<double> dx)
+    private static void Deriv(AscentCase c, ReadOnlySpan<double> x, int stage, double t, bool kicked, Span<double> dx,
+                              bool vertical, double? fixedThrottle)
     {
         Span<double> u = stackalloc double[3];
-        Direction(c, x, kicked, u);
-        double throttle = c.SeedThrottleAt(stage, x);
+        if (vertical)
+            c.PadVertical(t, u);
+        else
+            Direction(c, x, kicked, u);
+        double throttle = fixedThrottle ?? c.SeedThrottleAt(stage, x);
         for (int i = 0; i < 3; i++) u[i] *= throttle;
         c.Dyn.Eval(x, u, stage, c.Dyn.SolidBetween(stage, t * c.Dyn.TU), dx);
     }

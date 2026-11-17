@@ -447,7 +447,7 @@ public sealed class AscentProblem
         Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
         Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
         TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-        PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, Settings = Settings,
+        PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, Settings = Settings,
         Recoveries = recoveries,
     };
 
@@ -469,7 +469,7 @@ public sealed class AscentProblem
             Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = stages,
             Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
             TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-            PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, Settings = Settings,
+            PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, Settings = Settings,
             Recoveries = Recoveries.Select(r => r.Stage == rec.Stage ? r.WithInitialReserve(reserveKg) : r).ToArray(),
         };
     }
@@ -480,13 +480,18 @@ public sealed class AscentProblem
         Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
         Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
         TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-        PlaneTurnMin = min, PlaneTurnMax = max, LiftoffDirection = LiftoffDirection, Settings = Settings, Recoveries = Recoveries,
+        PlaneTurnMin = min, PlaneTurnMax = max, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, Settings = Settings, Recoveries = Recoveries,
     };
 
     /// <summary>
     /// Straight up at lift-off: the first thrust is pinned parallel to this. Null takes the lift-off air-relative velocity, as the script does.
     /// </summary>
     public double[]? LiftoffDirection { get; init; }
+
+    /// <summary>The clearance height, roll timeout and steering rate of a solid launch with a pinned first burn.</summary>
+    public sealed record RollProgram(double ClearanceM, double MaxSeconds, double MaxTurnRateDegS = 5.0);
+
+    public RollProgram? PadRoll { get; init; }
 
     public AscentSettings Settings { get; init; } = new();
 
@@ -529,6 +534,11 @@ public sealed class AscentProblem
             return "the target orbit is not above the surface";
         if (!(QMax > 0.0) || !(QAlphaMax > 0.0))
             return "the structural limits must be positive";
+        if (PadRoll is { } roll && (!Stages[0].IsPinned || Stages[0].Solid == null
+            || !double.IsFinite(roll.ClearanceM) || !(roll.ClearanceM > 0.0)
+            || !double.IsFinite(roll.MaxSeconds) || !(roll.MaxSeconds > 0.0)
+            || !double.IsFinite(roll.MaxTurnRateDegS) || !(roll.MaxTurnRateDegS > 0.0)))
+            return "the pad roll program needs a fixed solid burn, clearance height, roll timeout and turn rate";
         if (!double.IsFinite(PlaneTurnMin) || !double.IsFinite(PlaneTurnMax) || PlaneTurnMin > PlaneTurnMax)
             return "the plane-turn bounds are not valid";
         for (int i = 0; i < Recoveries.Count; i++)
