@@ -413,10 +413,7 @@ public static partial class GuidanceWindow
                         break;
                     _s.BoostbackPhaseStart = now;
                 }
-                // THE BOOSTBACK BY THE KIND OF RETURN, once clear:
-                //   - within BoostbackGlideMissKm of its point, any booster flies none: the glide's lift makes it up;
-                //   - a DRONE-SHIP booster (optimal return) beyond it flies a SMALL boostback: its point is where the plan's coast comes down, so the miss is the flight drifting off the plan - a core 26 km short rode the whole glide 28 km off with no burn (2026-11-17) - and the correction comes out of its correction reserve (AscentRecovery.CorrectionDv);
-                //   - a booster returning to a SITE flies a LARGE boostback: settle, and the lit flip.
+                // A DRONE SHIP'S BOOSTER (optimal return) follows the same miss rule as any other. Its point is where the plan's coast comes down, so it usually falls within the glide's reach and flies none; but the flight is never quite the plan, and a core that separated 26 km short of its point rode the whole glide 28 km off with no burn (2026-11-17). Beyond the glide's reach it flies a small boostback on its correction reserve (AscentRecovery.CorrectionDv).
                 // NO BOOSTBACK, NO SETTLE. Whether a burn is coming is decided before anything lights, on the predicted MISS alone: a booster falling within BoostbackGlideMissKm of its site goes straight to the glide with its engine off. Settling first, then skipping the burn, spent landing propellant on nothing, on a landing reserve that is tight by design (2026-11-17).
                 // The decision waits, engine off, for the first steering solution, but not for ever: past BoostbackDecideTimeoutS it settles as before.
                 if (double.IsNaN(_s.BoostbackSettleFrom))
@@ -432,11 +429,11 @@ public static partial class GuidanceWindow
                     }
                     if (!_s.HasSteer && now - _s.BoostbackPhaseStart < BoostbackDecideTimeoutS)
                         break;
-                    // SMALL BOOSTBACK (#197): a drone-ship booster flies no settle and turns with the engine off. A lit flip lays down dV of its own, as big as its small correction, which then moves under the booster as it turns.
-                    if (_s.HasSteer && _s.BoostbackGlideOnly)
+                    // SMALL BOOSTBACK (#197): a miss up to BoostbackLargeMissKm flies no settle and turns with the engine off. A lit flip lays down dV of its own, as big as a small correction, which then moves under the booster as it turns.
+                    if (_s.HasSteer && missKm <= _s.BoostbackLargeMissKm)
                     {
                         _s.BoostbackSmall = true;
-                        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, drone ship {missKm:F1} km off its point ({missDv:F0} m/s): small boostback, no settle, turning engine-off."));
+                        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, small boostback (miss {missKm:F1} km, {missDv:F0} m/s): no settle, turning engine-off."));
                         EnterBoostbackPhase(BoostbackPhase.Rotation, now);
                         break;
                     }
