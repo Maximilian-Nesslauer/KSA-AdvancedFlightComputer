@@ -57,13 +57,22 @@ public sealed class StagingControlLossTest : AfcTest
         StagingConfig.EngineDelays.Clear();
         foreach (var engine in vehicle.Parts.Modules.Get<EngineController>())
             StagingConfig.EngineDelays[SequencedModules.DelayKey(engine)] = 1.0;
+        foreach (Sequence row in vehicle.Parts.SequenceList.Sequences)
+        {
+            var modules = new List<string>();
+            foreach (Part part in row.Parts)
+                foreach (ISequenced module in part.InSequence(row.Number))
+                    modules.Add($"{module.GetType().Name} active={module.IsActive}");
+            t.Info($"row {row.Number}, activated={row.Activated}: {string.Join(", ", modules)}");
+        }
         StagingDetector.Arm(vehicle, true);
         StagingDetector.RequestStaging(vehicle);
         StagingDetector.Sample();
         StagingDetector.Evaluate();
         var state = StagingDetector.StateOf(vehicle);
         PendingStaging? pending = state.Pending;
-        if (!t.Check($"a real row waits for ignition, kFS {kfs}", pending?.EngineModules is { Count: > 0 }))
+        if (!t.Check($"a real row waits for ignition, kFS {kfs}", pending?.EngineModules is { Count: > 0 },
+            $"control={vehicle.IsControllable}, armed={state.Active}, phase={state.State}, requested={state.Requested}, activations={state.Activations}, active row={vehicle.Parts.SequenceList.ActiveSequence}"))
             return;
         var engines = pending!.EngineModules!.ToArray();
         int activations = state.Activations;
