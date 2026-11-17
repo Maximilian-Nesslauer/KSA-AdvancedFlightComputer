@@ -459,42 +459,14 @@ public static partial class GuidanceWindow
     /// <summary>
     /// What each booster with a stage site keeps for its way home, a row each (#130: a heavy's side boosters and its core). There is nothing to set: a stage site arms the reserve, and the calculated climb sizes it for the boostback to that site and the landing burn (RefreshReserve). Idle is normal for part of a flight, because a booster's reserve does not arm until the stages below it are gone, so the row says why (NextSeparationTakesBurningEngines).
     /// </summary>
+    /// <summary>The RESERVE row once every booster with a site has left: the last of them staged on its reserve. While any is aboard, its reserve stands under its own name (DrawStageReserve).</summary>
     private static void DrawBoosterReserve()
     {
-        var list = _s.ReturnableStages;
-        int targeted = 0;
-        foreach (GuidanceWindow.ReturnableStage st in list)
+        foreach (GuidanceWindow.ReturnableStage st in _s.ReturnableStages)
             if (st.ComesHome)
-                targeted++;
-
-        // Every targeted booster has left: the last of them staged on its reserve.
-        if (targeted == 0)
-        {
-            if (_s.ReserveStagedRoots.Count > 0)
-                GaugeRowText(UiTier.Player, "RESERVE", PageText.BoosterReserve(true, true, true, 0.0, double.NaN, double.NaN, "", out _), ConsoleStyle.TextMuted);
-            return;
-        }
-
-        int n = 0;
-        for (int i = 0; i < list.Count; i++)
-        {
-            GuidanceWindow.ReturnableStage stage = list[i];
-            if (!stage.ComesHome)
-                continue;
-            n++;
-            // Side boosters leaving together share the reserve armed for the first of them.
-            bool armed = _s.ReserveArmed && stage.IsNext;
-            bool staged = _s.ReserveStagedRoots.Contains(stage.RootId);
-            bool planned = PlannedRecovery(null, stage.RootId, out var plan);
-            double kg = armed ? _s.ReserveKg : planned ? plan.ReserveKg : 0.0;
-            string note = armed ? "" : stage.IsNext ? _s.ReserveNote : "ARMS AFTER STAGES BELOW SEPARATE";
-            string text = PageText.BoosterReserve(true, armed, staged, kg,
-                planned ? plan.BoostbackDv : double.NaN, planned ? plan.LandingDv : double.NaN, note, out bool warn);
-            if (text.Length == 0)
-                continue;
-            GaugeRowText(UiTier.Player, targeted > 1 ? FormattableString.Invariant($"RESERVE {n}") : "RESERVE", text,
-                warn ? ConsoleUi.WarnInk : staged ? ConsoleStyle.TextMuted : ConsoleStyle.TextPrimary);
-        }
+                return;
+        if (_s.ReserveStagedRoots.Count > 0)
+            GaugeRowText(UiTier.Player, "RESERVE", PageText.BoosterReserve(true, true, true, 0.0, double.NaN, double.NaN, "", out _), ConsoleStyle.TextMuted);
     }
 
     /// <summary>
@@ -508,8 +480,6 @@ public static partial class GuidanceWindow
         if (list.Count == 0)
             return;
 
-        float4 dim = ConsoleStyle.TextMuted;
-
         for (int i = 0; i < list.Count; i++)
         {
             GuidanceWindow.ReturnableStage stage = list[i];
@@ -522,7 +492,10 @@ public static partial class GuidanceWindow
             float optimalW = stage.OptimalReturn ? 0f : ConsoleWidgets.ButtonWidth(Optimal.AsSpan()) + gap;
             float clearW = stage.ComesHome ? ConsoleWidgets.ButtonWidth("X".AsSpan()) + gap : 0f;
             float buttonsW = ConsoleWidgets.ButtonWidth(pick.AsSpan()) + optimalW + clearW;
-            BeginKitRow(stage.Name.ToUpperInvariant() + SharedRowSuffix(list, i) + (stage.IsNext ? "  NEXT" : ""), controlWidth: buttonsW);
+            // GREEN WHAT COMES HOME, AMBER WHAT IS THROWN AWAY: a square and the name in the colour, the same green and amber as everywhere else in the console.
+            bool home = stage.ComesHome;
+            ConsoleUi.BeginRow(stage.Name.ToUpperInvariant() + SharedRowSuffix(list, i) + (stage.IsNext ? "  NEXT" : ""), buttonsW,
+                labelInk: home ? Palette.Good.U32 : Palette.Warn.U32, leadSwatch: home ? ColorRules.Good : ColorRules.Warn);
             ConsoleUi.RowRight(buttonsW);
             if (ConsoleWidgets.Button(pick.AsSpan(), $"AfcStageSet{stage.RootId}".AsSpan(), default))
             {
@@ -553,8 +526,28 @@ public static partial class GuidanceWindow
             }
             ConsoleUi.EndRow();
 
-            GaugeRowText(stage.ComesHome ? "SITE" : "", PageText.StageReturn(stage.HasTarget, stage.OptimalReturn, stage.TargetLatDeg, stage.TargetLonDeg, _s.Running), dim);
+            GaugeRowText(home ? "REUSED" : "EXPENDED", PageText.StageReturn(stage.HasTarget, stage.OptimalReturn, stage.TargetLatDeg, stage.TargetLonDeg),
+                home ? Palette.Good.F4 : ConsoleUi.WarnInk);
+            if (home)
+                DrawStageReserve(stage);
         }
+    }
+
+    /// <summary>The RESERVE row under a booster that comes home: what it keeps for the way back. Waiting is muted, a reserve that cannot arm is amber.</summary>
+    private static void DrawStageReserve(GuidanceWindow.ReturnableStage stage)
+    {
+        // Side boosters leaving together share the reserve armed for the first of them.
+        bool armed = _s.ReserveArmed && stage.IsNext;
+        bool staged = _s.ReserveStagedRoots.Contains(stage.RootId);
+        bool planned = PlannedRecovery(null, stage.RootId, out var plan);
+        double kg = armed ? _s.ReserveKg : planned ? plan.ReserveKg : 0.0;
+        string note = armed ? "" : stage.IsNext ? _s.ReserveNote : PageText.ReserveArmsLater;
+        string text = PageText.BoosterReserve(true, armed, staged, kg,
+            planned ? plan.BoostbackDv : double.NaN, planned ? plan.LandingDv : double.NaN, note, out bool warn);
+        if (text.Length == 0)
+            return;
+        bool waiting = text == PageText.ReserveArmsLater || text == PageText.ReserveWaitsForPlan;
+        GaugeRowText(UiTier.Player, "RESERVE", text, warn ? ConsoleUi.WarnInk : waiting || staged ? ConsoleStyle.TextMuted : ConsoleStyle.TextPrimary);
     }
 
     // Side boosters leaving on one row are usually the same parts with the same name, so each gets its place on that row: " 1", " 2". Empty for a stage that leaves alone.

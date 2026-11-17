@@ -1498,7 +1498,7 @@ internal static class Program
             Check("a verdict is one sentence " + verdict, FoldRules.Split(verdict) == (verdict, ""));
         foreach (string label in new[]
                  {
-                     PageText.LimitsLabel(true, 140.0, false, 4.0), PageText.BoostersLabel(2, 1, 4200.0), PageText.HandOversLabel(true, 45.0, true, 5.0),
+                     PageText.LimitsLabel(true, 140.0, false, 4.0), PageText.BoostersLabel(2, 1), PageText.HandOversLabel(true, 45.0, true, 5.0),
                      PageText.HoverHandOverLabel(10.0, true), PageText.HoverHandOverLabel(10.0, false), PageText.SearchLabel(864.0, 2592.0), FlightView.PlanLabel("site 28.60, -80.60"),
                  })
         {
@@ -3136,10 +3136,14 @@ internal static class Program
         Check("the LIMITS fold with a limit on", PageText.LimitsLabel(true, 140.5, true, 4.0) == "LIMITS: MAX Q 140.5 kPa, G-LIMIT 4 g");
         Check("the LIMITS fold on a body with no air", PageText.LimitsLabel(false, 140.0, true, 2.5) == "LIMITS: G-LIMIT 2.5 g");
 
-        Check("the REUSE fold with no stage", PageText.BoostersLabel(0, 0, 0.0) == "REUSE: NONE");
-        Check("the REUSE fold with stages", PageText.BoostersLabel(2, 1, 0.0) == "REUSE: 1/2 WITH SITE");
-        Check("the REUSE fold with a reserve", PageText.BoostersLabel(2, 1, 4200.0) == "REUSE: 1/2 WITH SITE, RESERVE 4.2 t"
-            && PageText.BoostersLabel(0, 0, 4200.0) == "REUSE: RESERVE 4.2 t");
+        Check("the REUSE fold with no stage", PageText.BoostersLabel(0, 0) == "REUSE: NONE");
+        Check("the REUSE fold counts what is reused and what is expended", PageText.BoostersLabel(3, 2) == "REUSE: 2 REUSED, 1 EXPENDED");
+        Check("the REUSE fold says all when they agree", PageText.BoostersLabel(3, 3) == "REUSE: ALL 3 REUSED" && PageText.BoostersLabel(2, 0) == "REUSE: ALL 2 EXPENDED"
+            && PageText.BoostersLabel(1, 1) == "REUSE: REUSED" && PageText.BoostersLabel(1, 0) == "REUSE: EXPENDED");
+        Check("a stage's row says where it goes", PageText.StageReturn(true, false, 28.6, -80.6).StartsWith("TO SITE ", StringComparison.Ordinal)
+            && PageText.StageReturn(false, true, 35.9, -72.0).StartsWith("TO DRONE SHIP AT ", StringComparison.Ordinal)
+            && PageText.StageReturn(false, true, double.NaN, double.NaN) == "TO DRONE SHIP, PLACED AT SOLVE"
+            && PageText.StageReturn(false, false, double.NaN, double.NaN) == PageText.StageExpendedHint);
         Check("the REUSE tip names no reserve to set", !PageText.BoostersTip(2).Contains("delta v", StringComparison.OrdinalIgnoreCase)
             && PageText.BoostersTip(2).Contains("sizes"));
 
@@ -3148,7 +3152,8 @@ internal static class Program
         Check("a staged reserve says so, also with no site left", PageText.BoosterReserve(false, false, true, 0.0, double.NaN, double.NaN, "", out reserveWarn).StartsWith("STAGED") && !reserveWarn);
         Check("a site with no plan waits for the calculated climb", PageText.BoosterReserve(true, true, false, 0.0, double.NaN, double.NaN, "SIZED WHEN PLAN IS SOLVED", out reserveWarn) == PageText.ReserveWaitsForPlan && !reserveWarn);
         Check("a planned reserve names its mass and both burns", PageText.BoosterReserve(true, true, false, 4200.0, 1450.0, 320.0, "", out reserveWarn) == "4.20 t: 1450 m/s BOOSTBACK + 320 m/s LANDING" && !reserveWarn);
-        Check("a reserve that does not arm says why, in amber", PageText.BoosterReserve(true, false, false, 0.0, double.NaN, double.NaN, "ARMS AFTER STAGES BELOW SEPARATE", out reserveWarn) == "NOT ARMED: ARMS AFTER STAGES BELOW SEPARATE" && reserveWarn);
+        Check("a reserve that cannot arm says why, in amber", PageText.BoosterReserve(true, false, false, 0.0, double.NaN, double.NaN, "NO TANKS FEED THE SIDE BOOSTERS' ENGINES", out reserveWarn) == "NOT ARMED: NO TANKS FEED THE SIDE BOOSTERS' ENGINES" && reserveWarn);
+        Check("a reserve further up arms in turn, no warning", PageText.BoosterReserve(true, false, false, 0.0, double.NaN, double.NaN, PageText.ReserveArmsLater, out reserveWarn) == PageText.ReserveArmsLater && !reserveWarn);
         Check("a plan that needs no reserve says so", PageText.BoosterReserve(true, true, false, 0.0, 0.0, 0.0, "", out reserveWarn).StartsWith("NONE") && !reserveWarn);
 
         Check("the window row names the node and the lead", PageText.WindowCountdown(725.0, true, 180.0) == "T-12m 05s, DESC NODE, 180 s LEAD");

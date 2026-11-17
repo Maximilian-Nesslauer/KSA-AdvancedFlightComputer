@@ -133,11 +133,11 @@ public static partial class GuidanceWindow
     private static void DrawBoostersFold(Vehicle vehicle, bool openByDefault)
     {
         int stages = _s.ReturnableStages.Count;
-        int withSite = 0;
+        int reused = 0;
         foreach (ReturnableStage stage in _s.ReturnableStages)
             if (stage.ComesHome)
-                withSite++;
-        if (!ConsoleUi.Fold(PageText.BoostersLabel(stages, withSite, _s.ReserveArmed ? _s.ReserveKg : 0.0), BoostersFoldId, openByDefault, PageText.BoostersTip(stages)))
+                reused++;
+        if (!ConsoleUi.Fold(PageText.BoostersLabel(stages, reused), BoostersFoldId, openByDefault, PageText.BoostersTip(stages)))
             return;
         ImGui.PushID(BoostersFoldId);
         try
@@ -147,11 +147,8 @@ public static partial class GuidanceWindow
                 ConsoleUi.MutedWrapped(PageText.BoostersNone);
                 return;
             }
-            DrawBoosterLanes(vehicle);
             DrawReturnableStageRows();
             DrawBoosterReserve();
-            if (stages > 0)
-                GaugeRowText("", "Stage sites apply at booster separation.", ConsoleStyle.TextMuted);
             if (ConsoleUi.LinkRight("AFTER SEPARATION: LAND > BOOSTBACK", "AfcGoBoostback",
                     "Opens LAND > BOOSTBACK. Shows and starts the boostback of a separated booster."))
                 PendingNavigation = ConsolePages.CueTarget(ConsolePage.Land, ConsolePages.EnumKey(LandWay.Boostback));
