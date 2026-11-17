@@ -255,7 +255,7 @@ AFC reads and writes its files (settings, staging delays, multi-pass plans, RCS 
 
 | Package | Purpose | Tested version |
 | --- | --- | --- |
-| [StarMap](https://github.com/StarMapLoader/StarMap) | Mod loader, required at runtime (see [Installation](#installation)) | 0.4.6 |
+| [StarMap](https://github.com/StarMapLoader/StarMap) | Mod loader, 0.5.4 or later required at runtime (see [Installation](#installation)) | 0.5.4 |
 
 ## Build dependencies
 
@@ -263,7 +263,7 @@ Required only to build the mod from source. Targets **.NET 10**.
 
 | Package | Source | Tested Version |
 | --- | --- | --- |
-| [StarMap.API](https://github.com/StarMapLoader/StarMap) | NuGet | 0.3.6 |
+| [StarMap.API](https://github.com/StarMapLoader/StarMap) | NuGet | 0.5.4 |
 | [Lib.Harmony](https://www.nuget.org/packages/Lib.Harmony) | NuGet | 2.4.2 |
 
 The native guidance solvers are built from the vendored sources with Rust and Zig, see [native-build.md](docs/guidance/native-build.md).

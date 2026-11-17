@@ -10,9 +10,9 @@
       },
       "StarMap.API": {
         "type": "Direct",
-        "requested": "[0.3.6, )",
-        "resolved": "0.3.6",
-        "contentHash": "wYcs0x7Dtxn0xI3I3mXnUFLAxHFfj+iR8nfz8CIIXRXIPjvxxsfsGLmcvxzwmQR/HiPUW5XLyiWm3ga9MFaV2Q=="
+        "requested": "[0.5.4, )",
+        "resolved": "0.5.4",
+        "contentHash": "1WJhk6EzPP+RGSmwOeW0IPwQACz4dQ/LBPIq7kcmAq2s22hNtJRSxhQ+A753hYBiLVvI2C2SZRd+hiYci94cxw=="
       },
       "advancedflightcomputer.guidance.conic": {
         "type": "Project"
