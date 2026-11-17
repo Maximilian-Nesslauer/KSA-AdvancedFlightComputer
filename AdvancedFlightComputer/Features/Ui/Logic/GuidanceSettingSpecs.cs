@@ -95,7 +95,7 @@ internal static class GuidanceSettingSpecs
         "A booster whose predicted impact misses its site by no more than this flies no boostback: the glide's lift corrects it. A booster that is still climbing is judged again once it starts to fall, and burns then if its miss has grown past this.");
     public static readonly SettingSpec BoosterCorrectionDvMs = new("BoosterCorrectionDvMs", "BOOSTER CORRECTION", "m/s", E, 100.0, 0.0, 1000.0, "%.0f",
         "Reserve every returning booster keeps for small corrections, on top of its boostback and landing burn, sized into the calculated climb.");
-    public static readonly SettingSpec BoostbackLargeMissKm = new("BoostbackLargeMissKm", "LARGE BOOSTBACK FROM", "km", E, 100.0, 0.0, 1e5, "%.0f",
+    public static readonly SettingSpec BoostbackLargeMissKm = new("BoostbackLargeMissKm", "LARGE BOOSTBACK FROM", "km", E, 20.0, 0.0, 1e5, "%.0f",
         "A miss beyond this is a large boostback: it settles and turns on the lit engine's gimbal. Between the two it is a small one: no settle, a turn with the engine off, then the burn.");
     public static readonly SettingSpec BoostbackClearanceM = new("BoostbackClearanceM", "CLEARANCE AT SEPARATION", "m", E, 30.0, 0.0, 1e4, "%.1f",
         "Distance the booster coasts, engine off, away from the stage before the settling burn lights.");
