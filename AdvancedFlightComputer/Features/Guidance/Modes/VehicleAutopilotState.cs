@@ -1295,6 +1295,9 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool BoostbackApexCheckPending;
 
+    /// <summary>When a long turn to the burn last said what it waits on, sim time (Boostback, Rotation).</summary>
+    public double BoostbackWaitLogAt = double.NegativeInfinity;
+
     // Separating a drone-ship booster on its live impact (DroneShipSeparation).
     /// <summary>The drone-ship booster next to separate, by root InstanceId, and its own aero, swept once when its reserve arms.</summary>
     public uint DroneShipAeroRoot;

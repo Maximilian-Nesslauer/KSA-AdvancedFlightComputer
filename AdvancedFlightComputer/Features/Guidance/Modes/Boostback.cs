@@ -184,6 +184,9 @@ public static partial class GuidanceWindow
     /// target only means the slew has finished issuing, not that anything turned.</summary>
     private const double BoostbackAlignDeg = 10.0;
 
+    /// <summary>How long a turn to the burn goes before it says what it waits on, and how often after, s.</summary>
+    private const double BoostbackWaitLogS = 5.0;
+
     /// <summary>
     /// Below this much correction there is nothing worth lighting an engine for, m/s.
     /// A booster whose ballistic impact is already on the site skips straight to the
@@ -253,7 +256,18 @@ public static partial class GuidanceWindow
         // Boostback owns the vehicle now.
         // Every mode drives the same flight-computer command path, and two of them writing it would fight.
         ClaimVehicle(GuidanceMode.Boostback, vehicle);
+        StartBoostbackRun(vehicle);
 
+        // Only a booster adopted at separation has a stage alongside to clear, see TryAdoptBooster. A manual engage, or one after the hand-over window, settles at once.
+        if (!(_s.HandoverPendingUntil > SimNow()))
+            _s.BoostbackClearOf = null;
+    }
+
+    /// <summary>
+    /// Every boostback starts here, in the Separation phase with nothing left over from a burn before: the commit, the hand-over at separation, and the apex recheck that sends a gliding booster back to burn. The apex once only switched the phase to Rotation and left the first burn's state in place, and the booster turned to the burn and never lit, where a manual BOOSTBACK from the same state flew it (2026-11-17).
+    /// </summary>
+    private static void StartBoostbackRun(Vehicle vehicle)
+    {
         _s.BoostbackPhase = BoostbackPhase.Separation;
         _s.BoostbackSettleFrom = double.NaN;
         _s.BoostbackSmall = false;
@@ -275,10 +289,6 @@ public static partial class GuidanceWindow
         _s.BoostbackThrottle = 0.0;
         _s.BoostbackEngineOn = false;
         ResetGlide();
-
-        // Only a booster adopted at separation has a stage alongside to clear, see TryAdoptBooster. A manual engage, or one after the hand-over window, settles at once.
-        if (!(_s.HandoverPendingUntil > SimNow()))
-            _s.BoostbackClearOf = null;
 
         // The attitude separation left us in, latched so the hold is a fixed inertial direction rather than a fresh reading of a vehicle that is drifting.
         // It is also what the rotation slews FROM, so the two phases join continuously.
@@ -464,6 +474,16 @@ public static partial class GuidanceWindow
                 }
                 _s.BoostbackStatus = _s.BoostbackSmall ? "SMALL BOOSTBACK: TURNING ENGINE-OFF, THEN BURN." : "";
 
+                // A turn that takes long says why, every few seconds: the burn waits on a plan and on both the command and the craft lining up with it.
+                if (now - _s.BoostbackPhaseStart > BoostbackWaitLogS && now - _s.BoostbackWaitLogAt >= BoostbackWaitLogS)
+                {
+                    _s.BoostbackWaitLogAt = now;
+                    double cmdOff = planDir.Length() > 0.5 ? AngleBetween(_s.CommandDir, planDir) * 180.0 / Math.PI : double.NaN;
+                    double craftOff = vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI;
+                    GuidanceLog.Debug(vehicle, FormattableString.Invariant(
+                        $"turning for {now - _s.BoostbackPhaseStart:F0} s: plan {(_s.BoostbackHasPlan ? "ready" : "none (" + (_s.BoostbackPlanError.Length > 0 ? _s.BoostbackPlanError : "solving") + ")")}, command {cmdOff:F1} deg and craft {craftOff:F1} deg off (lights within {BoostbackAlignDeg:F0}), {(_s.BoostbackSmall ? "small, engine off" : "large, engine lit")}, miss {_s.SteerMissM / 1000.0:F1} km."));
+                }
+
                 // An engine-off turn that never lines up - too little RCS to turn the booster - lights the engine at the settling throttle and turns on its gimbal, as a large boostback does. There is time for a small correction, but not for ever.
                 if (_s.BoostbackSmall && now - _s.BoostbackPhaseStart > BoostbackSmallTurnTimeoutS)
                 {
@@ -553,24 +573,12 @@ public static partial class GuidanceWindow
                     GuidanceLog.Debug(vehicle, FormattableString.Invariant($"apex: miss {apexKm:F1} km ({apexDv:F1} m/s), still within the glide's reach, gliding on."));
                     break;
                 }
-                if (apexKm <= _s.BoostbackLargeMissKm)
-                {
-                    _s.BoostbackSmall = true;
-                    _s.BoostbackStatus = FormattableString.Invariant($"APEX: MISS {apexKm:F1} km. SMALL BOOSTBACK: TURNING ENGINE-OFF, THEN BURN.");
-                    GuidanceLog.Info(vehicle, FormattableString.Invariant($"apex: miss grew to {apexKm:F1} km ({apexDv:F0} m/s) on the way up: small boostback, turning engine-off."));
-                    EnterBoostbackPhase(BoostbackPhase.Rotation, now);
-                }
-                else
-                {
-                    // A large one settles first, holding the attitude it has, then flips lit.
-                    _s.BoostbackSmall = false;
-                    _s.BoostbackHoldDir = KsaFrameBridge.ThrustAxisCci(vehicle);
-                    _s.BoostbackSettleFrom = now;
-                    _s.BoostbackStatus = FormattableString.Invariant($"APEX: MISS {apexKm:F1} km. LARGE BOOSTBACK.");
-                    GuidanceLog.Info(vehicle, FormattableString.Invariant($"apex: miss grew to {apexKm:F1} km ({apexDv:F0} m/s) on the way up: large boostback, settling."));
-                    EnterBoostbackPhase(BoostbackPhase.Separation, now);
-                }
-                break;
+                // Past the glide's reach: start the boostback again from the top, as a manual BOOSTBACK would, and let the Separation phase choose small or large on the miss it predicts now. It needs no clearance: the stage it left is long gone.
+                GuidanceLog.Info(vehicle, FormattableString.Invariant($"apex: miss grew to {apexKm:F1} km ({apexDv:F0} m/s) on the way up: boostback again."));
+                StartBoostbackRun(vehicle);
+                _s.BoostbackClearOf = null;
+                _s.BoostbackStatus = FormattableString.Invariant($"APEX: MISS {apexKm:F1} km. BOOSTBACK AGAIN.");
+                return;
             }
         }
 
