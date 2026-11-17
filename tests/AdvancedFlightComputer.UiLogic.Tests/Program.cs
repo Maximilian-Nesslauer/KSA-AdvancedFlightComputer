@@ -1113,7 +1113,9 @@ internal static class Program
         Check("Luna has its own UPFG FROM", BodyDefaults.Overrides("Luna", handover.Key) && BodyDefaults.DefaultOf(handover, "Luna") == 10.0);
         Check("a body with no table takes the default of every body", BodyDefaults.DefaultOf(handover, "Earth") == handover.Default && !BodyDefaults.Overrides("Earth", handover.Key));
         Check("no body is the default of every body", BodyDefaults.DefaultOf(handover, "") == handover.Default && BodyDefaults.DefaultOf(handover, null) == handover.Default);
-        Check("a setting Luna leaves alone keeps its default there", BodyDefaults.DefaultOf(GuidanceSettingSpecs.PeKm, "Luna") == GuidanceSettingSpecs.PeKm.Default);
+        Check("Luna has a low target orbit", BodyDefaults.DefaultOf(GuidanceSettingSpecs.PeKm, "Luna") == 30.0 && BodyDefaults.DefaultOf(GuidanceSettingSpecs.ApKm, "Luna") == 50.0);
+        Check("a setting Luna leaves alone keeps its default there", BodyDefaults.DefaultOf(GuidanceSettingSpecs.IncDeg, "Luna") == GuidanceSettingSpecs.IncDeg.Default
+            && !BodyDefaults.Overrides("Luna", GuidanceSettingSpecs.IncDeg.Key));
         Check("the spec on Luna marks the global default as changed", SettingMath.IsChanged(BodyDefaults.On(handover, "Luna"), handover.Default)
             && !SettingMath.IsChanged(BodyDefaults.On(handover, "Luna"), 10.0));
         Check("the ghost text names the body of its default", BodyDefaults.GhostText(handover, "Luna") == "LUNA DEFAULT 10.0 km", BodyDefaults.GhostText(handover, "Luna"));

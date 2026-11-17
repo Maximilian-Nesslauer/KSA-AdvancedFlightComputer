@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- On Luna, the target orbit defaults to a low one, 30 km PERIAPSIS and 50 km APOAPSIS, in place of the 200 x 420 km of the home body. Like UPFG FROM, a craft takes these when it is at Luna, and a value you changed stays.
+
 - A booster that glides with no burn while still climbing flies **nose first to its apex**, then turns to its glide attitude there, where the air is thin. This covers a miss within GLIDE ONLY WITHIN and a small correction waiting for the apex. It keeps the attitude it separated in, the least drag it has. Turning round low down, side-on to thick air, threw a booster 7 to 10 km short and cost it its landing. After a boostback burn a booster glides as before.
   - Every prediction of that coast models the same: the plan's drone-ship point and reserve for an optimal return, the return path drawn on the map and the profile, the live drone-ship separation, and the boostback's miss while it decides and while it climbs. A drone-ship point therefore lands further downrange than before.
   - **BOOSTER CORRECTION** defaults to 100 m/s, up from 50, for every booster that comes home.
