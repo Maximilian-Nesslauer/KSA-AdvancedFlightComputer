@@ -184,12 +184,23 @@ public static partial class GuidanceWindow
     /// target only means the slew has finished issuing, not that anything turned.</summary>
     private const double BoostbackAlignDeg = 10.0;
 
+    /// <summary>How long a turn to the burn goes before it says what it waits on, and how often after, s.</summary>
+    private const double BoostbackWaitLogS = 5.0;
+
     /// <summary>
     /// Below this much correction there is nothing worth lighting an engine for, m/s.
     /// A booster whose ballistic impact is already on the site skips straight to the
     /// glide rather than burning a metre per second and calling it guidance.
     /// </summary>
-    private const double BoostbackMinDvMs = 5.0;
+
+    /// <summary>How long a clear booster waits, engine off, for its first steering solution before it settles anyway, s: the decision between a burn and going straight to the glide needs it.</summary>
+    private const double BoostbackDecideTimeoutS = 3.0;
+
+    /// <summary>The correction left, m/s, at which a burn that is flying is done early: the targeting tolerance a boostback burns to. Whether to burn at all is judged on the miss instead (VehicleAutopilotState.BoostbackGlideMissKm).</summary>
+    private const double BoostbackCutoffDvMs = 5.0;
+
+    /// <summary>How long a small boostback may turn with the engine off before it lights the engine to turn on its gimbal, s (VehicleAutopilotState.BoostbackSmall).</summary>
+    private const double BoostbackSmallTurnTimeoutS = 60.0;
 
     /// <summary>
     /// Time constant for the low-pass on the TARGET's own turning rate, s.
@@ -252,8 +263,24 @@ public static partial class GuidanceWindow
         // Boostback owns the vehicle now.
         // Every mode drives the same flight-computer command path, and two of them writing it would fight.
         ClaimVehicle(GuidanceMode.Boostback, vehicle);
+        StartBoostbackRun(vehicle);
 
+        // Only a booster adopted at separation has a stage alongside to clear, see TryAdoptBooster. A manual engage, or one after the hand-over window, settles at once.
+        if (!(_s.HandoverPendingUntil > SimNow()))
+            _s.BoostbackClearOf = null;
+    }
+
+    /// <summary>
+    /// Every boostback starts here, in the Separation phase with nothing left over from a burn before: the commit, the hand-over at separation, and the apex recheck that sends a gliding booster back to burn. The apex once only switched the phase to Rotation and left the first burn's state in place, and the booster turned to the burn and never lit, where a manual BOOSTBACK from the same state flew it (2026-11-17).
+    /// </summary>
+    private static void StartBoostbackRun(Vehicle vehicle)
+    {
         _s.BoostbackPhase = BoostbackPhase.Separation;
+        _s.BoostbackSettleFrom = double.NaN;
+        _s.BoostbackSmall = false;
+        _s.BoostbackApexCheckPending = false;
+        _s.BoostbackSmallDeferred = false;
+        _s.BoostbackClimbHold = false;
         _s.BoostbackPhaseStart = SimNow();
         _s.BoostbackLastStep = SimNow();
         _s.BoostbackLocked = false;
@@ -272,10 +299,6 @@ public static partial class GuidanceWindow
         _s.BoostbackEngineOn = false;
         ResetGlide();
 
-        // Only a booster adopted at separation has a stage alongside to clear, see TryAdoptBooster. A manual engage, or one after the hand-over window, settles at once.
-        if (!(_s.HandoverPendingUntil > SimNow()))
-            _s.BoostbackClearOf = null;
-
         // The attitude separation left us in, latched so the hold is a fixed inertial direction rather than a fresh reading of a vehicle that is drifting.
         // It is also what the rotation slews FROM, so the two phases join continuously.
         _s.BoostbackHoldDir = KsaFrameBridge.ThrustAxisCci(vehicle);
@@ -284,6 +307,12 @@ public static partial class GuidanceWindow
         _s.HasCommand = _s.CommandDir.Length() > 0.5;
         _s.BoostbackStatus = "";
     }
+
+    /// <summary>
+    /// Whether the boostback's coast predictions fly the climb nose first (DragCoastSystem.ClimbNoseFirst): while the booster is still deciding at separation - the miss that decides is where it falls if it does not burn - and while it climbs nose first in the glide. Not while a burn is coming or flying, nor after one: that booster glides.
+    /// </summary>
+    internal static bool BoostbackCoastsNoseFirst()
+        => BoostbackLive && (_s.BoostbackPhase == BoostbackPhase.Separation || (_s.BoostbackPhase == BoostbackPhase.Glide && _s.BoostbackClimbHold));
 
     /// <summary>ABORT: stop steering, cut the engine, leave the vehicle where it is.</summary>
     private static void AbortBoostback()
@@ -336,6 +365,8 @@ public static partial class GuidanceWindow
 
         double3 r = orbit.StateVectors.PositionCci;
         double altAsl = r.Length() - parent.MeanRadius;
+        // Vertical speed: the radial part of the velocity, the same in the inertial and the turning frame.
+        double vUp = double3.Dot(orbit.StateVectors.VelocityCci, double3.Normalize(r));
 
         // Neither impulsive figure is flown.
         // The plan below provides the burn direction and duration.
@@ -404,14 +435,53 @@ public static partial class GuidanceWindow
         switch (_s.BoostbackPhase)
         {
             case BoostbackPhase.Separation:
-                // Engine off until clear of the stage it left; the settling burn's clock starts from there.
+                // Engine off until clear of the stage it left.
                 if (_s.BoostbackClearOf != null)
                 {
                     if (!BoosterClear(vehicle, now))
                         break;
                     _s.BoostbackPhaseStart = now;
                 }
-                if (now - _s.BoostbackPhaseStart >= Math.Max(_s.BoostbackSeparationS, 0.0))
+                // A DRONE SHIP'S BOOSTER (optimal return) follows the same miss rule as any other. Its point is where the plan's coast comes down, so it usually falls within the glide's reach and flies none; but the flight is never quite the plan, and a core that separated 26 km short of its point rode the whole glide 28 km off with no burn (2026-11-17). Beyond the glide's reach it flies a small boostback on its correction reserve (AscentRecovery.CorrectionDv).
+                // NO BOOSTBACK, NO SETTLE. Whether a burn is coming is decided before anything lights, on the predicted MISS alone: a booster falling within BoostbackGlideMissKm of its site goes straight to the glide with its engine off. Settling first, then skipping the burn, spent landing propellant on nothing, on a landing reserve that is tight by design (2026-11-17).
+                // The decision waits, engine off, for the first steering solution, but not for ever: past BoostbackDecideTimeoutS it settles as before.
+                if (double.IsNaN(_s.BoostbackSettleFrom))
+                {
+                    // Judged on the predicted MISS at the site: within BoostbackGlideMissKm the glide's lift makes it up, so there is no boostback at all.
+                    double missKm = _s.SteerMissM / 1000.0;
+                    if (_s.HasSteer && missKm <= _s.BoostbackGlideMissKm)
+                    {
+                        _s.BoostbackStatus = FormattableString.Invariant($"{(_s.BoostbackGlideOnly ? "DRONE SHIP: " : "")}MISS {missKm:F1} km: GLIDE CORRECTS IT. NO SETTLE, NO BURN.");
+                        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, miss {missKm:F1} km ({missDv:F1} m/s): straight to the glide, engine off{(vUp > 0.0 ? ", judged again at the apex" : "")}."));
+                        EnterBoostbackPhase(BoostbackPhase.Glide, now);
+                        _s.BoostbackApexCheckPending = vUp > 0.0;
+                        _s.BoostbackClimbHold = vUp > 0.0;
+                        break;
+                    }
+                    if (!_s.HasSteer && now - _s.BoostbackPhaseStart < BoostbackDecideTimeoutS)
+                        break;
+                    // SMALL BOOSTBACK (#197): a miss up to BoostbackLargeMissKm flies no settle and turns with the engine off. A lit flip lays down dV of its own, as big as a small correction, which then moves under the booster as it turns.
+                    // A SMALL CORRECTION WAITS FOR THE APEX while the booster still climbs: separated in the air, it drifts while it turns round, so a burn now is followed by a second at the apex recheck. Gliding up and burning once at the top does it in one. A booster already falling has no apex to wait for, and a large miss burns at once.
+                    if (_s.HasSteer && missKm <= _s.BoostbackLargeMissKm && vUp > 0.0)
+                    {
+                        _s.BoostbackStatus = FormattableString.Invariant($"MISS {missKm:F1} km: SMALL CORRECTION AT THE APEX.");
+                        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, small correction (miss {missKm:F1} km, {missDv:F0} m/s) while climbing: no burn now, it burns once at the apex."));
+                        EnterBoostbackPhase(BoostbackPhase.Glide, now);
+                        _s.BoostbackApexCheckPending = true;
+                        _s.BoostbackSmallDeferred = true;
+                        _s.BoostbackClimbHold = true;
+                        break;
+                    }
+                    if (_s.HasSteer && missKm <= _s.BoostbackLargeMissKm)
+                    {
+                        _s.BoostbackSmall = true;
+                        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, small boostback (miss {missKm:F1} km, {missDv:F0} m/s): no settle, turning engine-off."));
+                        EnterBoostbackPhase(BoostbackPhase.Rotation, now);
+                        break;
+                    }
+                    _s.BoostbackSettleFrom = now;
+                }
+                if (now - _s.BoostbackSettleFrom >= Math.Max(_s.BoostbackSeparationS, 0.0))
                     EnterBoostbackPhase(BoostbackPhase.Rotation, now);
                 break;
 
@@ -422,16 +492,33 @@ public static partial class GuidanceWindow
                     _s.WarnBoostback("NO STEERING SOLUTION. HOLDING ATTITUDE.");
                     break;
                 }
-                if (missDv < BoostbackMinDvMs)
+                if (_s.SteerMissM / 1000.0 <= _s.BoostbackGlideMissKm)
                 {
-                    // Already on the site.
-                    // Nothing to burn, so go straight to the glide rather than lighting an engine to prove a point.
-                    // Judged on the TARGETING correction: shaping is optional, and a burn is not worth lighting for it alone.
-                    _s.BoostbackStatus = FormattableString.Invariant($"CORRECTION {missDv:F1} m/s ONLY. BURN SKIPPED.");
+                    // Within the glide's reach of the site (BoostbackGlideMissKm): nothing to burn, so go straight to the glide rather than lighting an engine to prove a point.
+                    _s.BoostbackStatus = FormattableString.Invariant($"MISS {_s.SteerMissM / 1000.0:F1} km: GLIDE CORRECTS IT. BURN SKIPPED.");
                     EnterBoostbackPhase(BoostbackPhase.Glide, now);
+                    _s.BoostbackApexCheckPending = vUp > 0.0;
+                    _s.BoostbackClimbHold = vUp > 0.0;
                     break;
                 }
-                _s.BoostbackStatus = "";
+                _s.BoostbackStatus = _s.BoostbackSmall ? "SMALL BOOSTBACK: TURNING ENGINE-OFF, THEN BURN." : "";
+
+                // A turn that takes long says why, every few seconds: the burn waits on a plan and on both the command and the craft lining up with it.
+                if (now - _s.BoostbackPhaseStart > BoostbackWaitLogS && now - _s.BoostbackWaitLogAt >= BoostbackWaitLogS)
+                {
+                    _s.BoostbackWaitLogAt = now;
+                    double cmdOff = planDir.Length() > 0.5 ? AngleBetween(_s.CommandDir, planDir) * 180.0 / Math.PI : double.NaN;
+                    double craftOff = vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI;
+                    GuidanceLog.Debug(vehicle, FormattableString.Invariant(
+                        $"turning for {now - _s.BoostbackPhaseStart:F0} s: plan {(_s.BoostbackHasPlan ? "ready" : "none (" + (_s.BoostbackPlanError.Length > 0 ? _s.BoostbackPlanError : "solving") + ")")}, command {cmdOff:F1} deg and craft {craftOff:F1} deg off (lights within {BoostbackAlignDeg:F0}), {(_s.BoostbackSmall ? "small, engine off" : "large, engine lit")}, miss {_s.SteerMissM / 1000.0:F1} km."));
+                }
+
+                // An engine-off turn that never lines up - too little RCS to turn the booster - lights the engine at the settling throttle and turns on its gimbal, as a large boostback does. There is time for a small correction, but not for ever.
+                if (_s.BoostbackSmall && now - _s.BoostbackPhaseStart > BoostbackSmallTurnTimeoutS)
+                {
+                    _s.BoostbackSmall = false;
+                    GuidanceLog.Info(vehicle, FormattableString.Invariant($"small boostback: no line-up after {BoostbackSmallTurnTimeoutS:F0} s engine-off, turning on the lit engine."));
+                }
 
                 if (!_s.BoostbackHasPlan)
                 {
@@ -479,8 +566,9 @@ public static partial class GuidanceWindow
                 // The closed-loop cutoff: the ballistic impact is already ON the site, so continuing would take it back off.
                 // Targeting only, not the commanded total - shaping would hold this number up after the miss was nulled and the burn would never end on its own.
                 // Disabled once locked, where the whole point is that nothing new is listened to.
+                // ONCE BURNING, AIM TO HIT: the burn runs until the correction is nulled to BoostbackCutoffDvMs, not merely until the miss is within the glide's reach. The glide-only distance (BoostbackGlideMissKm) only decides whether to burn at all.
                 bool nulled = !_s.BoostbackLocked && _s.HasSteer
-                           && missDv < BoostbackMinDvMs;
+                           && missDv < BoostbackCutoffDvMs;
 
                 if (done || nulled || dry || overrun)
                 {
@@ -489,8 +577,37 @@ public static partial class GuidanceWindow
                     else
                         _s.BoostbackStatus = FormattableString.Invariant($"CUTOFF: MISS {_s.SteerMissM / 1000.0:F1} km");
                     EnterBoostbackPhase(BoostbackPhase.Glide, now);
+                    // Judged again at the apex too, whatever ended the burn: a 0.24 s burn at 38 km cut off 0.3 km from the site, and turning round in the air moved the impact 10 km short (2026-11-17). A booster that ran dry has nothing to burn or land with either way.
+                    _s.BoostbackApexCheckPending = vUp > 0.0;
                 }
                 break;
+            }
+
+            case BoostbackPhase.Glide:
+            {
+                // THE APEX RECHECK. A booster that went to the glide while still climbing, with or without a burn, is judged again once it starts to fall: separated in the air, it drifts while it turns round, and a miss inside BoostbackGlideMissKm at separation grew past it by the top of the arc (2026-11-17). The miss is predicted afresh and the separation's rules applied again: still within BoostbackGlideMissKm, glide on; up to BoostbackLargeMissKm, a small boostback (engine-off turn, then burn); beyond, a large one (settle, lit flip). Once only: a booster sent back to burn here is falling when that burn ends, so it is not judged again.
+                if (!_s.BoostbackApexCheckPending || vUp >= 0.0)
+                    break;
+                _s.BoostbackApexCheckPending = false;
+                UpdateSteering(vehicle, orbit, parent, intervalMs: 0);
+                if (!_s.HasSteer)
+                {
+                    GuidanceLog.Debug(vehicle, "apex: no steering solution to judge the miss, gliding on.");
+                    break;
+                }
+                double apexKm = _s.SteerMissM / 1000.0;
+                double apexDv = _s.SteerDv.Length();
+                if (apexKm <= _s.BoostbackGlideMissKm)
+                {
+                    GuidanceLog.Debug(vehicle, FormattableString.Invariant($"apex: miss {apexKm:F1} km ({apexDv:F1} m/s), within the glide's reach{(_s.BoostbackSmallDeferred ? ", so the deferred correction needs no burn" : "")}, gliding on."));
+                    break;
+                }
+                // Past the glide's reach: start the boostback again from the top, as a manual BOOSTBACK would, and let the Separation phase choose small or large on the miss it predicts now. It needs no clearance: the stage it left is long gone.
+                GuidanceLog.Info(vehicle, FormattableString.Invariant($"apex: miss {apexKm:F1} km ({apexDv:F0} m/s){(_s.BoostbackSmallDeferred ? ", the small correction deferred from separation" : ", grew on the way up")}: boostback now."));
+                StartBoostbackRun(vehicle);
+                _s.BoostbackClearOf = null;
+                _s.BoostbackStatus = FormattableString.Invariant($"APEX: MISS {apexKm:F1} km. BOOSTBACK AGAIN.");
+                return;
             }
         }
 
@@ -519,6 +636,19 @@ public static partial class GuidanceWindow
                 break;
 
             case BoostbackPhase.Glide:
+                // NOSE FIRST TO THE APEX (BoostbackClimbHold): along the airflow, engine off, until the booster starts to fall; then the glide, from a fresh start, turned to where the air is thin.
+                if (_s.BoostbackClimbHold)
+                {
+                    if (vUp > 0.0)
+                    {
+                        double3 vAir = orbit.StateVectors.VelocityCci - double3.Cross(new double3(0, 0, parent.GetAngularVelocity()), r);
+                        want = vAir.Length() > 1.0 ? double3.Normalize(vAir) : _s.CommandDir;
+                        break;
+                    }
+                    _s.BoostbackClimbHold = false;
+                    ResetGlide();
+                    GuidanceLog.Debug(vehicle, FormattableString.Invariant($"apex at {altAsl / 1000.0:F1} km: turning from nose first to the glide."));
+                }
                 want = GlideDirection(vehicle, orbit, parent, now, dt);
                 // Close enough to impact for the air to be worth planning in: the 3-DOF glide-and-burn landing takes the craft from here (Modes/ThreeDof.cs). It flies the PID glide itself until its first plan, from the same glide state, so the hand-over does not move the command.
                 if (_s.ThreeDofFromGlide && double.IsFinite(_s.GlideTgo) && _s.GlideTgo <= _s.ThreeDofEngageTgoS)
@@ -780,8 +910,8 @@ public static partial class GuidanceWindow
         switch (_s.BoostbackPhase)
         {
             case BoostbackPhase.Separation:
-                // Still alongside the stage it left: coasting, see TryAdoptBooster.
-                if (_s.BoostbackClearOf != null)
+                // Still alongside the stage it left, or not yet decided whether a burn is coming: coasting, see TryAdoptBooster and the Separation transition.
+                if (_s.BoostbackClearOf != null || double.IsNaN(_s.BoostbackSettleFrom))
                 {
                     _s.BoostbackThrottle = 0.0;
                     _s.BoostbackEngineOn = false;
@@ -792,6 +922,13 @@ public static partial class GuidanceWindow
                 break;
 
             case BoostbackPhase.Rotation:
+                // A small boostback turns with the engine off (VehicleAutopilotState.BoostbackSmall, #197): its correction is too small to spend a lit flip on.
+                if (_s.BoostbackSmall)
+                {
+                    _s.BoostbackThrottle = 0.0;
+                    _s.BoostbackEngineOn = false;
+                    break;
+                }
                 // LIT THROUGH THE TURN, AND THAT IS THE POINT.
                 // A booster's RCS is sized for attitude hold, not for throwing a half-empty first stage through 180 degrees; the gimbals are what turn it, and a gimbal produces torque in proportion to the thrust it is deflecting.
                 // Shut the engine down for the flip and the only authority left is the one that cannot do it.
@@ -859,8 +996,8 @@ public static partial class GuidanceWindow
             return false;
 
         GuidanceLog.Debug(vehicle, gone
-            ? $"the stage it separated from is gone after {waited:F1} s, settling."
-            : $"{_s.BoostbackClearGapM:F0} m clear of '{stage.Id}' after {waited:F1} s{(timedOut ? " (waited the limit)" : "")}, settling.");
+            ? $"the stage it separated from is gone after {waited:F1} s."
+            : $"{_s.BoostbackClearGapM:F0} m clear of '{stage.Id}' after {waited:F1} s{(timedOut ? " (waited the limit)" : "")}.");
         _s.BoostbackClearOf = null;
         return true;
     }

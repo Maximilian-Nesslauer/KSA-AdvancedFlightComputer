@@ -376,12 +376,14 @@ internal static class StagingDetector
             return;
 
         // Last gate, after the dwell, because it walks the jettisoned parts' tanks.
-        state.SpentJettisonSince = double.NaN;
+        // A crossfeed hold restarts the dwell rather than clearing it: the gate is looked at again after each dwell, because the core drains the tanks it holds for, but the drop is not re-armed in between, which flipped the reported verdict every 0.27 s (#174).
         if (JettisonAnalysis.CarriesOffUsablePropellant(vehicle, jettison!, out string? carried))
         {
+            state.SpentJettisonSince = now;
             ReportSpentJettison(vehicle, state, StagingState.SpentDropBlocker.CarriesPropellant, in survey, measured: true, carried);
             return;
         }
+        state.SpentJettisonSince = double.NaN;
 
         if (DebugConfig.AutoStage)
         {

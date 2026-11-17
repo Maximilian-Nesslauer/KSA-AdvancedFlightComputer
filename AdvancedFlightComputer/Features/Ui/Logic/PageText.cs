@@ -455,16 +455,41 @@ internal static class PageText
         return hasAir ? string.Create(Inv, $"LIMITS: MAX Q {maxQKpa:0.#} kPa, {g}") : "LIMITS: " + g;
     }
 
-    public static string BoostersLabel(int stages, int withSite, double reserveKg)
+    /// <summary>The REUSE fold's label: how many stages come home and how many are thrown away, in plain counts.</summary>
+    public static string BoostersLabel(int stages, int reused)
     {
-        string reserve = reserveKg > 0.0 ? "RESERVE " + Fmt.Tons(reserveKg) : "";
         if (stages <= 0)
-            return reserve.Length > 0 ? "BOOSTERS: " + Fmt.Sentence(reserve) : "BOOSTERS: NONE";
-        string sites = string.Create(Inv, $"{withSite}/{stages} WITH SITE");
-        return "BOOSTERS: " + sites + (reserve.Length > 0 ? ", " + reserve : "");
+            return "REUSE: NONE";
+        reused = Math.Clamp(reused, 0, stages);
+        int expended = stages - reused;
+        if (expended == 0)
+            return stages == 1 ? "REUSE: REUSED" : string.Create(Inv, $"REUSE: ALL {stages} REUSED");
+        if (reused == 0)
+            return stages == 1 ? "REUSE: EXPENDED" : string.Create(Inv, $"REUSE: ALL {stages} EXPENDED");
+        return string.Create(Inv, $"REUSE: {reused} REUSED, {expended} EXPENDED");
     }
 
     public const string BoostersNone = "No stage can fly home: no separating part carries a command pod.";
+
+    /// <summary>
+    /// Where a returnable stage goes, under its name in BOOSTERS: its site; for an optimal return the drone ship's point once a plan has found it, frozen from lift-off; or EXPENDABLE.
+    /// </summary>
+    /// <summary>The row under a stage's name in REUSE: where it goes (green, under REUSED), or how to bring it home (amber, under EXPENDED).</summary>
+    public static string StageReturn(bool site, bool optimal, double latDeg, double lonDeg)
+    {
+        if (site)
+            return "TO SITE " + Fmt.LatLon(latDeg, lonDeg);
+        if (!optimal)
+            return StageExpendedHint;
+        if (!double.IsFinite(latDeg) || !double.IsFinite(lonDeg))
+            return "TO DRONE SHIP, PLACED AT SOLVE";
+        return "TO DRONE SHIP AT " + Fmt.LatLon(latDeg, lonDeg);
+    }
+
+    public const string StageExpendedHint = "PICK SITE OR OPTIMAL RETURN TO REUSE";
+
+    /// <summary>The reserve of a booster that is not next to separate: nothing wrong, it arms in turn.</summary>
+    public const string ReserveArmsLater = "ARMS AFTER STAGES BELOW SEPARATE";
 
     /// <summary>
     /// The RESERVE row of BOOSTERS: what the booster with a stage site keeps for its way home. The calculated climb sizes it, so there is nothing to set. Empty when no stage has a site and nothing was staged. <paramref name="warn"/> marks a reserve that does not arm.
@@ -478,6 +503,9 @@ internal static class PageText
             return "";
         if (!armed)
         {
+            // A booster further up arms in turn, which is no warning; anything else that keeps a reserve from arming is.
+            if (note == ReserveArmsLater)
+                return ReserveArmsLater;
             warn = true;
             return "NOT ARMED: " + (note.Length > 0 ? note : "WAITING FOR STAGE MODEL");
         }
@@ -1122,9 +1150,12 @@ internal static class PageText
             + " It burns at the planned time. AFC adds the next pass when this one ends.";
 
     /// <summary><paramref name="marginMs"/> is the delta-v on board less what guidance still needs, NaN while no solve says that.</summary>
-    public static HeadValue[] AscentNumbers(bool bound, double apKm, double apGoalKm, double peKm, double peGoalKm, double marginMs = double.NaN)
+    public static HeadValue[] AscentNumbers(bool bound, double apKm, double apGoalKm, double peKm, double peGoalKm, double marginMs = double.NaN, double separationS = double.NaN)
     {
-        var values = new List<HeadValue>(3);
+        var values = new List<HeadValue>(4);
+        // The next separation first, where the eye lands: when a stage will come off (StagingCountdown).
+        if (double.IsFinite(separationS))
+            values.Add(StagingCountdown.Head(separationS));
         if (bound)
             values.Add(new HeadValue(string.Create(Inv, $"AP {apKm:F0} km, TARGET {apGoalKm:F0}"), 1, string.Create(Inv, $"AP {apKm:F0} km")));
         bool peLow = peKm < 0.0;

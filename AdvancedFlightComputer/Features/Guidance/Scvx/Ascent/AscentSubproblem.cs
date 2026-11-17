@@ -39,8 +39,8 @@ internal sealed class AscentSubproblem
 
     // Variable layout.
     private readonly int _oU, _oW, _oSig, _oTerm, _oSq, _oSqa, _oSpro, _oSg, _oPhi, _oPhiAbs, _oDR, _oSRec, _nVar;
-    /// <summary>A booster is brought home (AscentCase.RecStage): its reserve change and the recovery slack are variables.</summary>
-    private readonly bool _recovery;
+    /// <summary>Boosters are brought home (AscentCase.Reserves, AscentCase.Needs): each reserve's change, and each booster's recovery slack, are variables.</summary>
+    private readonly int _nR, _nNeed;
     /// <summary>The plane turn is a variable: its bounds are not equal.</summary>
     private readonly bool _turnFree;
     private readonly int _nA;
@@ -64,9 +64,10 @@ internal sealed class AscentSubproblem
         _oPhiAbs = _oPhi + 1;
         _turnFree = c.PlaneTurnMin < c.PlaneTurnMax;
         _oDR = _turnFree ? _oPhiAbs + 1 : _oPhi;
-        _recovery = c.RecStage >= 0;
-        _oSRec = _oDR + 1;
-        _nVar = _recovery ? _oSRec + 1 : _oDR;
+        _nR = c.Reserves.Length;
+        _nNeed = c.Needs.Length;
+        _oSRec = _oDR + _nR;
+        _nVar = _oSRec + _nNeed;
     }
 
     public int VariableCount => _nVar;
@@ -82,8 +83,8 @@ internal sealed class AscentSubproblem
     private int ISg(int g) => _oSg + g;
     private int IPhi => _oPhi;
     private int IPhiAbs => _oPhiAbs;
-    private int IDR => _oDR;
-    private int ISRec => _oSRec;
+    private int IDR(int r) => _oDR + r;
+    private int ISRec(int j) => _oSRec + j;
 
     /// <summary>A growable block of rows: triplets and a right-hand side.</summary>
     private sealed class Rows
@@ -107,13 +108,14 @@ internal sealed class AscentSubproblem
 
     public sealed record Solved(bool Ok, string Status, double[] X, double[] U, double[] Wv,
                                 double[] Sigma, double[] STerm, double[] Sq, double[] Sqa, double[] Spro, double[] Sg,
-                                int SolverIterations, double SolveMs, double Phi = 0.0, double DR = 0.0, double SRec = 0.0);
+                                int SolverIterations, double SolveMs, double Phi = 0.0, double[]? DR = null, double[]? SRec = null);
 
-    /// <param name="drBar">The reference's reserve change, canonical (AscentCase.R0C), when a booster is brought home.</param>
-    /// <param name="need">The booster's need at the reference's separation, which the recovery row linearises; not Ok leaves the row out for this iteration, holding the reserve where it is.</param>
+    /// <param name="drBar">The reference's change of each reserve, canonical (AscentCase.Reserve.R0C), when boosters are brought home; null for none.</param>
+    /// <param name="needs">Each booster's need at the reference's separation, which its recovery row linearises; one not Ok leaves its row out for this iteration, holding its reserve where the others put it.</param>
     public Solved Solve(Linearization lin, double[] xbar, double[] ubar, double[] sigBar, double phiBar, double tr,
-                        double drBar = 0.0, BoostbackOracle.Need need = default)
+                        double[]? drBar = null, BoostbackOracle.Need[]? needs = null)
     {
+        drBar ??= new double[_nR];
         AscentCase c = _c;
         AscentSettings st = c.Settings;
         int n = c.N;
@@ -180,9 +182,11 @@ internal sealed class AscentSubproblem
                 for (int r = 0; r < NX; r++)
                 {
                     int row = eq.NewRow(r == AscentDynamics.IM ? -c.DryC[s] : 0.0);
-                    // The booster leaves with its reserve: the drop at its separation is its dry mass and the reserve, which moves with dR.
-                    if (r == AscentDynamics.IM && _recovery && s == c.RecStage)
-                        eq.Add(row, IDR, 1.0);
+                    // The boosters leave with their reserve: the drop at their separation is their dry mass and the reserve, which moves with dR.
+                    if (r == AscentDynamics.IM)
+                        for (int v = 0; v < _nR; v++)
+                            if (s == c.Reserves[v].Stage)
+                                eq.Add(row, IDR(v), 1.0);
                     eq.Add(row, IX(k + 1, r), 1.0);
                     eq.Add(row, IX(k, r), -1.0);
                 }
@@ -200,9 +204,15 @@ internal sealed class AscentSubproblem
                 rows.Add(row, IX(c.Ends[s], 6), sign);
                 rows.Add(row, IX(c.Starts[s], 6), -sign);
             }
-            // The booster's load burns its propellant less what it keeps back: dR more kept is dR less burned.
-            if (_recovery && last == c.RecStage)
-                rows.Add(row, IDR, -sign);
+            // The booster's load burns its propellant less what it keeps back: dR more kept is dR less burned, over the booster's share of the stage's flow (AscentRecovery.FlowShare). With side boosters that ends the stage dR / share sooner, and the core's part of it, dR (1 / share - 1), is burned in the next stage instead.
+            for (int v = 0; v < _nR; v++)
+            {
+                AscentCase.Reserve rsv = c.Reserves[v];
+                if (last == rsv.Stage)
+                    rows.Add(row, IDR(v), -sign / rsv.Share);
+                if (rsv.Share < 1.0 && first == rsv.Stage + 1)
+                    rows.Add(row, IDR(v), sign * (1.0 / rsv.Share - 1.0));
+            }
         }
 
         // ---- a pinned burn time: a solid's burn, or a liquid held at full thrust, sets it.
@@ -429,22 +439,30 @@ internal sealed class AscentSubproblem
             ineq.Add(dn, IPhiAbs, -1.0);
         }
 
-        // ---- the booster's reserve: its change from the stage list's, boxed and bounded; and what the booster needs from where it separates, linearised in the separation state and time:
+        // ---- each reserve: its change from the stage list's, boxed and bounded; and what each booster needs from where it separates, linearised in the separation state and time:
         //   R0 + dR + s >= need_bar + g_r.(r - r_bar) + g_v.(v - v_bar) + g_t (t - t_bar),  t = sum of the burns to separation.
-        if (_recovery)
+        // Boosters sharing a reserve (side boosters leaving together, with their own sites) each hold it to their own need.
+        for (int v = 0; v < _nR; v++)
         {
+            AscentCase.Reserve rsv = c.Reserves[v];
             double w = tr * st.RecoveryTrust;
-            ineq.Add(ineq.NewRow(drBar + w), IDR, 1.0);
-            ineq.Add(ineq.NewRow(-drBar + w), IDR, -1.0);
-            ineq.Add(ineq.NewRow(c.RMaxC), IDR, 1.0);
-            ineq.Add(ineq.NewRow(-c.RMinC), IDR, -1.0);
-            ineq.Add(ineq.NewRow(0.0), ISRec, -1.0);
+            ineq.Add(ineq.NewRow(drBar[v] + w), IDR(v), 1.0);
+            ineq.Add(ineq.NewRow(-drBar[v] + w), IDR(v), -1.0);
+            ineq.Add(ineq.NewRow(rsv.RMaxC), IDR(v), 1.0);
+            ineq.Add(ineq.NewRow(-rsv.RMinC), IDR(v), -1.0);
+        }
+        for (int j = 0; j < _nNeed; j++)
+        {
+            ineq.Add(ineq.NewRow(0.0), ISRec(j), -1.0);
+            BoostbackOracle.Need need = needs != null && j < needs.Length ? needs[j] : default;
+            int v = c.Needs[j].Reserve;
+            AscentCase.Reserve rsv = c.Reserves[v];
             if (need.Ok)
             {
                 AscentDynamics d = c.Dyn;
-                int ks = c.Ends[c.RecStage];
+                int ks = c.Ends[rsv.Stage];
                 double needC = need.RequiredKg / d.MU;
-                double rhs = c.R0C - needC;
+                double rhs = rsv.R0C - needC;
                 int row = ineq.NewRow(0.0);
                 for (int i = 0; i < 3; i++)
                 {
@@ -454,13 +472,13 @@ internal sealed class AscentSubproblem
                     rhs += gr * xbar[ks * NX + i] + gv * xbar[ks * NX + 3 + i];
                 }
                 double gt = need.GradTime * d.TU / d.MU;
-                for (int s = 0; s <= c.RecStage; s++)
+                for (int s = 0; s <= rsv.Stage; s++)
                 {
                     ineq.Add(row, ISig(s), gt);
                     rhs += gt * sigBar[s];
                 }
-                ineq.Add(row, IDR, -1.0);
-                ineq.Add(row, ISRec, -1.0);
+                ineq.Add(row, IDR(v), -1.0);
+                ineq.Add(row, ISRec(j), -1.0);
                 ineq.Rhs[row] = rhs;
             }
         }
@@ -478,8 +496,8 @@ internal sealed class AscentSubproblem
             cvec[ISg(g)] = st.RhoPath;
         if (_turnFree)
             cvec[IPhiAbs] = st.PlaneTurnPrice;
-        if (_recovery)
-            cvec[ISRec] = st.RhoRecovery;
+        for (int j = 0; j < _nNeed; j++)
+            cvec[ISRec(j)] = st.RhoRecovery;
 
         var p = new SparseCcs(_nVar, _nVar);
         double wdt = st.SmoothingWeight;
@@ -533,7 +551,7 @@ internal sealed class AscentSubproblem
             x[..(n * NX)], x[_oU..(_oU + n * NU)], x[_oW..(_oW + c.Coll.Length * NX)],
             x[_oSig..(_oSig + c.S)], x[_oTerm..(_oTerm + 5)], x[_oSq..(_oSq + _nA)], x[_oSqa..(_oSqa + _nA)], x[_oSpro..(_oSpro + _nA)],
             x[_oSg..(_oSg + limited.Length)], res.Iterations, info.TotalMs, _turnFree ? x[_oPhi] : c.PlaneTurn0,
-            _recovery ? x[_oDR] : 0.0, _recovery ? x[_oSRec] : 0.0);
+            x[_oDR..(_oDR + _nR)], x[_oSRec..(_oSRec + _nNeed)]);
     }
 
     /// <summary>

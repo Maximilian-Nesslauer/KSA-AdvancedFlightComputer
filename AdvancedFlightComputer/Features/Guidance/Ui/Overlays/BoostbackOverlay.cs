@@ -124,6 +124,7 @@ public static partial class GuidanceWindow
             AreaOverMass = aero.ReferenceArea / mass,
             // The planned glide: engine first, at the nominal angle, lifting up the trajectory. See GlideNominalAlpha.
             Alpha = GlideNominalAlpha(aero),
+            ClimbNoseFirst = BoostbackCoastsNoseFirst(),
             Table = aero.Table,
             LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,
@@ -149,7 +150,7 @@ public static partial class GuidanceWindow
         if (p.Hit && parent is Celestial celestial)
         {
             double3 scoutCcf = GroundCcf(parent, in p);
-            double h = celestial.GetTerrainHeightFromDirCcf(scoutCcf.NormalizeOrZero());
+            double h = KsaSurfaceHeight.At(celestial, scoutCcf.NormalizeOrZero());
             if (double.IsFinite(h))
             {
                 // Low-passed, not used raw. The sample point moves every recompute, and over rough ground the height under it can change by hundreds of metres - which a shallow descent turns into kilometres of lateral impact movement. See the header.
@@ -226,6 +227,7 @@ public static partial class GuidanceWindow
             MeanRadius = parent.MeanRadius,
             AreaOverMass = aero.ReferenceArea / mass,
             Alpha = GlideNominalAlpha(aero),
+            ClimbNoseFirst = BoostbackCoastsNoseFirst(),
             Table = aero.Table,
             LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,

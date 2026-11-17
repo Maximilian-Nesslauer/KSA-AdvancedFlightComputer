@@ -72,8 +72,8 @@ public static partial class GuidanceWindow
 
     internal static void DrawLaunchPage(Vehicle vehicle, float innerW, bool foldsOpen)
     {
-        DrawLaunchLimits(vehicle, foldsOpen);
         DrawLaunchBoosters(vehicle, foldsOpen);
+        DrawLaunchLimits(vehicle, foldsOpen);
         DrawLaunchHow(vehicle, innerW, foldsOpen);
     }
 
@@ -82,15 +82,17 @@ public static partial class GuidanceWindow
         IParentBody parent = vehicle.Orbit?.Parent;
         if (parent == null)
             return;
-        ConsoleUi.Gap();
         if (CurrentAscentMethodUi().Id == AscentMethod.CatsUpfg)
             DrawLimitsFold(parent, foldsOpen);
     }
 
+    /// <summary>REUSE, the first fold under the picture: the returnable stages and their sites, above LIMITS.</summary>
     internal static void DrawLaunchBoosters(Vehicle vehicle, bool foldsOpen)
     {
-        if (vehicle.Orbit?.Parent != null)
-            DrawBoostersFold(vehicle, foldsOpen);
+        if (vehicle.Orbit?.Parent == null)
+            return;
+        ConsoleUi.Gap();
+        DrawBoostersFold(vehicle, foldsOpen);
     }
 
     internal static void DrawLaunchHow(Vehicle vehicle, float innerW, bool foldsOpen)
@@ -126,30 +128,27 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// BOOSTERS: the stages of this craft that can fly themselves home, each with its SITE, before launch. A site asks the calculated climb for a reserve, which it sizes for the boostback to that site and the landing, and the RESERVE row shows what the booster keeps. Its rows draw while the craft has a returnable stage, and also after a reserve was staged, so the RESERVE row stays readable. With none of these the fold says why. After separation the boostback is on LAND > BOOSTBACK.
+    /// REUSE (the BOOSTERS fold): the stages of this craft that can fly themselves home, each with its SITE, before launch. A site asks the calculated climb for a reserve, which it sizes for the boostback to that site and the landing, and the RESERVE row shows what the booster keeps. Its rows draw while the craft has a returnable stage, and also after a reserve was staged, so the RESERVE row stays readable. With none of these the fold says why. After separation the boostback is on LAND > BOOSTBACK.
     /// </summary>
     private static void DrawBoostersFold(Vehicle vehicle, bool openByDefault)
     {
         int stages = _s.ReturnableStages.Count;
-        int withSite = 0;
+        int reused = 0;
         foreach (ReturnableStage stage in _s.ReturnableStages)
-            if (stage.HasTarget)
-                withSite++;
-        if (!ConsoleUi.Fold(PageText.BoostersLabel(stages, withSite, _s.ReserveArmed ? _s.ReserveKg : 0.0), BoostersFoldId, openByDefault, PageText.BoostersTip(stages)))
+            if (stage.ComesHome)
+                reused++;
+        if (!ConsoleUi.Fold(PageText.BoostersLabel(stages, reused), BoostersFoldId, openByDefault, PageText.BoostersTip(stages)))
             return;
         ImGui.PushID(BoostersFoldId);
         try
         {
-            if (stages == 0 && !_s.ReserveStaged)
+            if (stages == 0 && _s.ReserveStagedRoots.Count == 0)
             {
                 ConsoleUi.MutedWrapped(PageText.BoostersNone);
                 return;
             }
-            DrawBoosterLanes(vehicle);
             DrawReturnableStageRows();
             DrawBoosterReserve();
-            if (stages > 0)
-                GaugeRowText("", "Stage sites apply at booster separation.", ConsoleStyle.TextMuted);
             if (ConsoleUi.LinkRight("AFTER SEPARATION: LAND > BOOSTBACK", "AfcGoBoostback",
                     "Opens LAND > BOOSTBACK. Shows and starts the boostback of a separated booster."))
                 PendingNavigation = ConsolePages.CueTarget(ConsolePage.Land, ConsolePages.EnumKey(LandWay.Boostback));

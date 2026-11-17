@@ -162,11 +162,38 @@ public static class KsaAeroSweep
         }
 
         // Extents along the ASSEMBLY axes. x is the long axis for any sane rocket - the one the thrust axis lies along.
-        //  Read through Vehicle's own accessor rather than off Props.BoundingBoxAsmb directly: that field is a BepuPhysics.Box, and touching it would drag a BepuPhysics reference into the mod for three floats. This is the same three floats, and it is what the staleness check reads too, so the two cannot disagree about which box the table was built from.
+        //  Read through Vehicle's own accessor: the same box Props carries, and what the staleness check reads too, so the two cannot disagree about which box the table was built from.
         float3 half = vehicle.BoundingBoxHalfExtentsAsmb;
-        double dx = half.X * 2.0;
-        double dy = half.Y * 2.0;
-        double dz = half.Z * 2.0;
+        return TryBuildFrom(vehicle, vehicle.Props, new double3(half.X * 2.0, half.Y * 2.0, half.Z * 2.0), vehicle.TotalMass,
+                            parent, simTime, out result, out error);
+    }
+
+    /// <summary>
+    /// The sweep of a booster still attached to <paramref name="vehicle"/>: the subtree rooted at <paramref name="root"/>, as the vehicle it becomes when it separates (KsaBoosterGeometry). Its own properties go to the game's force function, so its table is what that vehicle would measure after the split, under whichever aero model is in.
+    /// </summary>
+    public static bool TryBuildBooster(Vehicle vehicle, Part root, IParentBody parent, double simTime,
+                                       out Result result, out string error)
+        => TryBuildBooster(vehicle, root, KsaBoosterGeometry.Subtree(root), parent, simTime, out result, out error);
+
+    /// <summary>The same for the parts in <paramref name="parts"/>: the booster's subtree short of what separates before it or beside it (GuidanceWindow.PartsLeavingWith).</summary>
+    internal static bool TryBuildBooster(Vehicle vehicle, Part root, System.Collections.Generic.HashSet<Part> parts, IParentBody parent, double simTime,
+                                         out Result result, out string error)
+    {
+        result = null;
+        if (!KsaBoosterGeometry.TryProperties(vehicle, root, parts, out VehicleProperties props, out double3 extents, out error))
+            return false;
+        return TryBuildFrom(vehicle, props, extents, props.TotalMass, parent, simTime, out result, out error);
+    }
+
+    /// <summary>The sweep of one set of vehicle properties, flown through <paramref name="vehicle"/>'s own physics state: <paramref name="extents"/> is the box those properties were built on, along the assembly axes.</summary>
+    private static bool TryBuildFrom(Vehicle vehicle, VehicleProperties props, double3 extents, double mass, IParentBody parent, double simTime,
+                                     out Result result, out string error)
+    {
+        result = null;
+        error = "";
+        double dx = extents.X;
+        double dy = extents.Y;
+        double dz = extents.Z;
         double refArea = Math.PI / 4.0 * dy * dz;
 
         if (!(refArea > 0.0) || !double.IsFinite(refArea))
@@ -180,7 +207,7 @@ public static class KsaAeroSweep
             ReferenceArea = refArea,
             BoxExtents = new double3(dx, dy, dz),
             SampledExtents = new double3(dx, dy, dz),
-            Mass = vehicle.TotalMass,
+            Mass = mass,
             SampledAt = simTime,
         };
         BuildAtmosphere(parent, res);
@@ -220,7 +247,7 @@ public static class KsaAeroSweep
         double seaTemperature = physical.ComputeTemperatureAtAltitude(0.0);
         AtmosphericConditions sea = physical.ComputeConditionsAtAltitude(0.0);
         double speedOfSound = physical.Mixture.ComputeSpeedOfSound(seaTemperature);
-        if (!ForceProbe.TryCreate(vehicle, parts, sea.Density, sea.Pressure, seaTemperature, speedOfSound, out ForceProbe probe, out error))
+        if (!ForceProbe.TryCreate(vehicle, props, parts, sea.Density, sea.Pressure, seaTemperature, speedOfSound, out ForceProbe probe, out error))
             return false;
 
         // Every direction the grid uses, in body axes, with the force the game applies at a crawl in that direction. Subtracting it removes everything that does not depend on airspeed - buoyancy - and leaves the aerodynamics.
@@ -368,13 +395,13 @@ public static class KsaAeroSweep
         /// <summary>The airspeed at zero physics velocity - the bubble's own motion against the turning air - in physics axes. Airspeed is this plus the physics velocity.</summary>
         private double3 _frameAirPhys;
 
-        public static bool TryCreate(Vehicle vehicle, PartTree parts, double density, double pressure, double temperature, double speedOfSound, out ForceProbe probe, out string error)
+        public static bool TryCreate(Vehicle vehicle, VehicleProperties props, PartTree parts, double density, double pressure, double temperature, double speedOfSound, out ForceProbe probe, out string error)
         {
             probe = new ForceProbe
             {
                 _origin = vehicle.BubbleOrigin,
                 _kinematic = vehicle.KinematicStates,
-                _props = vehicle.Props,
+                _props = props,
                 _environment = vehicle.PhysicsEnvironment,
                 _parts = parts,
             };

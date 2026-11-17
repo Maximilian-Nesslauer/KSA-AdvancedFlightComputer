@@ -55,6 +55,7 @@ public sealed class GuidanceBoosterHandoverTest : AfcTest
             harmony.UnpatchAll(harmony.Id);
             ambient.SetValue(null, previousAmbient);
             Records.Clear();
+            _siteLat.Clear();
             foreach (KeyValuePair<Vehicle, VehicleAutopilotState> entry in VehicleAutopilotState.Snapshot())
                 VehicleAutopilotState.Remove(entry.Key);
         }
@@ -127,6 +128,16 @@ public sealed class GuidanceBoosterHandoverTest : AfcTest
                     withState++;
             }
             t.Check("an adopted vehicle has guidance state of its own", withState == adopted);
+
+            // Each craft flies to the site set for its own root, not the first root's (#130).
+            int ownSite = 0;
+            foreach (Vehicle child in children)
+            {
+                if (VehicleAutopilotState.TryGet(child, out VehicleAutopilotState childState)
+                    && childState.SiteLatDeg == ArmedSiteLat(child))
+                    ownSite++;
+            }
+            t.Check("each adopted vehicle is sent to its own root's site", ownSite == adopted, $"{ownSite} of {adopted}");
 
             if (children.Count < 2)
                 t.Skip("the save separates one vehicle, so two records from one sequence are untested.");
@@ -226,11 +237,49 @@ public sealed class GuidanceBoosterHandoverTest : AfcTest
         return false;
     }
 
-    // Arming reads the landing target from the current vehicle state.
+    // The site each separated root was given, by root id: every root gets one of its own, as a player setting each booster's site would.
+    private static readonly Dictionary<uint, double> _siteLat = new();
+
+    // Arming reads each root's own landing target from the vehicle's state, and only a root with one is handed over, so every root of the row is given a distinct site first. The hand-over is armed the way AutoStage and the staging key arm it, as the row fires.
     private static void Arm(FieldInfo ambient, Vehicle vehicle)
     {
-        ambient.SetValue(null, VehicleAutopilotState.For(vehicle));
-        Method("ArmBoosterHandover").Invoke(null, [vehicle, vehicle.Parts.SequenceList, _now]);
+        VehicleAutopilotState state = VehicleAutopilotState.For(vehicle);
+        ambient.SetValue(null, state);
+        Sequence? next = NextRow(vehicle);
+        if (next == null)
+            return;
+        var roots = new List<Part>();
+        typeof(GuidanceWindow).GetMethod("SequenceRoots", PrivateStatic)!.Invoke(null, [next, roots]);
+        foreach (Part root in roots)
+        {
+            double lat = 10.0 + _siteLat.Count;
+            _siteLat[root.InstanceId] = lat;
+            state.StageTargets[root.InstanceId] = new Brutal.Numerics.double2(lat, 20.0);
+        }
+        Method("OnSequenceActivating").Invoke(null, [vehicle, next]);
+    }
+
+    private static Sequence? NextRow(Vehicle vehicle)
+    {
+        ReadOnlySpan<Sequence> sequences = vehicle.Parts.SequenceList.Sequences;
+        for (int i = 0; i < sequences.Length; i++)
+        {
+            if (!sequences[i].Activated && !sequences[i].Parts.IsEmpty)
+                return sequences[i];
+        }
+        return null;
+    }
+
+    // The site this separated vehicle was armed with, or NaN when none of its parts is a root that was given one.
+    private static double ArmedSiteLat(Vehicle child)
+    {
+        ReadOnlySpan<Part> parts = child.Parts.Parts;
+        for (int i = 0; i < parts.Length; i++)
+        {
+            if (_siteLat.TryGetValue(parts[i].InstanceId, out double lat))
+                return lat;
+        }
+        return double.NaN;
     }
 
     // A design spawned from the Vehicles folder has its ignition row next, and that row separates nothing. Rows like that are fired until the next one drops something, so the case does not depend on how a save orders its rows. Returns the records the separation added.

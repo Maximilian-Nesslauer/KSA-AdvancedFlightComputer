@@ -87,7 +87,10 @@ public sealed class AscentSolution
     public bool Usable => Converged || StallUsable;
     public bool StallUsable { get; init; }
 
-    /// <summary>With a booster brought home (AscentProblem.Recovery): the reserve the plan keeps in it, kg; what it needs from the plan's separation, kg; that need's boostback impulse and landing burn, m/s; and when it separates, s from lift-off. NaN without one.</summary>
+    /// <summary>Each booster brought home (AscentProblem.Recoveries), in the problem's order: the reserve its stage keeps, what it needs from there, its boostback and landing burns and when it separates. Empty without one.</summary>
+    public AscentRecoveryResult[] Recoveries { get; init; } = [];
+
+    /// <summary>With a booster brought home (AscentProblem.Recovery, the first of <see cref="Recoveries"/>): the reserve the plan keeps in it, kg; what it needs from the plan's separation, kg; that need's boostback impulse and landing burn, m/s; and when it separates, s from lift-off. NaN without one.</summary>
     public double RecoveryReserveKg { get; init; } = double.NaN;
     public double RecoveryRequiredKg { get; init; } = double.NaN;
     public double BoostbackDv { get; init; } = double.NaN;
@@ -127,7 +130,7 @@ public sealed class AscentSolution
             Iterations = Iterations, Accepted = Accepted, SolveSeconds = SolveSeconds, SeedSeconds = SeedSeconds, Trace = Trace,
             GatesMet = GatesMet, RemainingGainKg = RemainingGainKg, StallUsable = StallUsable, PlaneTurn = PlaneTurn + angle,
             RecoveryReserveKg = RecoveryReserveKg, RecoveryRequiredKg = RecoveryRequiredKg, BoostbackDv = BoostbackDv,
-            LandingDv = LandingDv, SeparationTime = SeparationTime,
+            LandingDv = LandingDv, SeparationTime = SeparationTime, Recoveries = Recoveries,
         };
     }
     public double FinalMass => Mass[Nodes - 1];
@@ -160,9 +163,10 @@ public static class AscentScvx
 
         // A BOOSTER BROUGHT HOME STARTS FROM THE PLAN WITH ITS RESERVE AS SET. SCvx is local, and the reserve and the separation feed each other - a booster that keeps more separates slower and needs less - so the plan it reaches depends on where it starts. From a gravity-turn seed far short of the need, the slack's price mends it in the most local way, bending the climb to cheapen the boostback: on the 2stage_new stack that reached 7.84 t to orbit where a fixed 7.06 t reserve that comes home reaches 8.01 t. Solved first with the reserve held where it was set - an efficient climb for that reserve - and freed from there, the solve only trades the reserve against that climb.
         AscentSolution? warm = null;
-        if (problem.Recovery != null && st.RecoveryWarmStart)
+        // One booster only: the held plans and the hold at the need are a single reserve's.
+        if (problem.Recoveries.Count == 1 && st.RecoveryWarmStart)
         {
-            onPhase?.Invoke($"booster reserve: planning first with it held at {problem.Recovery.InitialReserveKg / 1000.0:F2} t");
+            onPhase?.Invoke($"booster reserve: planning first with it held at {problem.Recoveries[0].InitialReserveKg / 1000.0:F2} t");
             AscentSolution held = Solve(problem.WithRecovery(null), onIteration, onPhase, cancel);
             if (held.Status == AscentStatus.Cancelled)
                 return Failed(problem, "cancelled", AscentStatus.Cancelled);
@@ -172,9 +176,9 @@ public static class AscentScvx
             if (warm != null && st.RecoveryHoldAtNeed)
             {
                 int ks = c.Ends[c.RecStage];
-                BoostbackOracle.Need need = c.Oracle!.Evaluate(warm.Position.AsSpan(ks * 3, 3), warm.Velocity.AsSpan(ks * 3, 3), warm.Time[ks], null, gradient: false);
-                double kept = problem.Recovery.InitialReserveKg;
-                double most = (c.RMaxC + c.R0C) * c.Dyn.MU;
+                BoostbackOracle.Need need = c.Needs[0].Oracle.Evaluate(warm.Position.AsSpan(ks * 3, 3), warm.Velocity.AsSpan(ks * 3, 3), warm.Time[ks], null, gradient: false);
+                double kept = problem.Recovery!.InitialReserveKg;
+                double most = (c.Reserves[0].RMaxC + c.Reserves[0].R0C) * c.Dyn.MU;
                 if (need.Ok && need.RequiredKg > kept + 0.02 * need.RequiredKg + 50.0)
                 {
                     double again = Math.Min(need.RequiredKg, most);
@@ -226,12 +230,18 @@ public static class AscentScvx
         double[] xbar = seed.X, ubar = seed.U, sigBar = (double[])seed.Sigma.Clone();
         double phiBar = warm != null ? Math.Clamp(warm.PlaneTurn, c.PlaneTurnMin, c.PlaneTurnMax) : c.PlaneTurn0;
         // A plan given to start from carries its own reserve in its masses, so the reference starts at that reserve. A plan from the reserve held where it was set carries no change.
-        double drBar = fromStart && c.RecStage >= 0 && double.IsFinite(start!.RecoveryReserveKg)
-            ? Math.Clamp(start.RecoveryReserveKg / c.Dyn.MU - c.R0C, c.RMinC, c.RMaxC)
-            : 0.0;
+        double[] drBar = new double[c.Reserves.Length];
+        if (fromStart)
+            for (int v = 0; v < drBar.Length; v++)
+            {
+                AscentCase.Reserve rsv = c.Reserves[v];
+                double kept = StartReserveKg(start!, c, v);
+                if (double.IsFinite(kept))
+                    drBar[v] = Math.Clamp(kept / c.Dyn.MU - rsv.R0C, rsv.RMinC, rsv.RMaxC);
+            }
         Merit refMerit = TrueCost(c, xbar, ubar, sigBar, phiBar, drBar, null);
-        // The booster's need at the reference, with its slopes: what the recovery row linearises. Recomputed only when the reference moves.
-        BoostbackOracle.Need needRef = default;
+        // Each booster's need at the reference, with its slopes: what its recovery row linearises. Recomputed only when the reference moves.
+        BoostbackOracle.Need[] needRef = [];
         bool needStale = true;
         onPhase?.Invoke($"seed: kick {seed.KickDeg:F3} deg after {seed.Evaluations} flights{(seed.Note.Length > 0 ? " (" + seed.Note + ")" : "")}, "
                       + $"merit {refMerit.J:E3}, defect {refMerit.DefectNorm:E2}, path {refMerit.PathViolation:E2}, insertion {refMerit.TerminalViolation:E2}");
@@ -256,11 +266,9 @@ public static class AscentScvx
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
             lin.Fill(c, xbar, ubar);
-            if (c.RecStage >= 0 && needStale)
+            if (c.Needs.Length > 0 && needStale)
             {
-                double[] rs = new double[3], vs = new double[3];
-                c.Separation(xbar, sigBar, rs, vs, out double ts);
-                needRef = c.Oracle!.Evaluate(rs, vs, ts, refMerit.Need.Ok ? refMerit.Need.Impulse : null, gradient: true);
+                needRef = c.EvaluateNeeds(xbar, sigBar, refMerit.Needs, gradient: true);
                 needStale = false;
             }
             var act = new List<int>();
@@ -309,10 +317,11 @@ public static class AscentScvx
                 + st.RhoTerminal * SumSquares(sol.STerm)
                 + st.RhoPath * (sol.Sq.Sum() + sol.Sqa.Sum() + sol.Spro.Sum() + sol.Sg.Sum())
                 + TurnCost(st, sol.Phi)
-                + st.RhoRecovery * sol.SRec;
-            Merit cand = TrueCost(c, sol.X, sol.U, sol.Sigma, sol.Phi, sol.DR, refMerit.Need.Ok ? refMerit.Need.Impulse : null);
+                + st.RhoRecovery * (sol.SRec?.Sum() ?? 0.0);
+            double[] drSol = sol.DR ?? new double[c.Reserves.Length];
+            Merit cand = TrueCost(c, sol.X, sol.U, sol.Sigma, sol.Phi, drSol, refMerit.Needs);
             double pred = refMerit.J - jLin;
-            double actual = refMerit.J - cand.J;
+            double actual = refMerit.J - cand.J;
             lastPred = pred;
 
             double dX = MaxScaledDiff(sol.X, xbar, c.XScale);
@@ -320,7 +329,9 @@ public static class AscentScvx
             double dS = 0.0;
             for (int s = 0; s < c.S; s++) dS = Math.Max(dS, Math.Abs(sol.Sigma[s] - sigBar[s]) / c.SigScale);
             double dP = Math.Abs(sol.Phi - phiBar) / st.PlaneTurnTrust;
-            double dRr = c.RecStage >= 0 ? Math.Abs(sol.DR - drBar) / st.RecoveryTrust : 0.0;
+            double dRr = 0.0;
+            for (int v = 0; v < drBar.Length; v++)
+                dRr = Math.Max(dRr, Math.Abs(drSol[v] - drBar[v]) / st.RecoveryTrust);
             double used = Math.Max(Math.Max(Math.Max(dX, dP), dRr), Math.Max(dU, dS));
 
             double rho;
@@ -347,7 +358,7 @@ public static class AscentScvx
                 ubar = sol.U;
                 sigBar = sol.Sigma;
                 phiBar = sol.Phi;
-                drBar = sol.DR;
+                drBar = drSol;
                 needStale = true;
                 refMerit = cand;
                 accepted++;
@@ -384,7 +395,7 @@ public static class AscentScvx
             message = $"no convergence in {st.MaxIterations} iterations";
 
         bool gates = GatesMet(st, refMerit);
-        return Build(c, xbar, ubar, sigBar, phiBar, drBar, refMerit.Need, status, message, seed, it, accepted,
+        return Build(c, xbar, ubar, sigBar, phiBar, drBar, refMerit.Needs, status, message, seed, it, accepted,
             total.Elapsed.TotalSeconds, seedSeconds, trace, gates,
             status == AscentStatus.Stalled && StallAcceptable(st, refMerit, lastPred),
             lastPred * c.Dyn.MU);
@@ -406,9 +417,9 @@ public static class AscentScvx
 
     // ------------------------------------------------------------------ merit
 
-    /// <summary>The merit and the reference's gates; with a booster brought home, how short its reserve falls of its need (canonical) and that need.</summary>
+    /// <summary>The merit and the reference's gates; with boosters brought home, how short the shortest-kept of them falls of its need (canonical), and each one's need.</summary>
     private readonly record struct Merit(double J, double DefectNorm, double PathViolation, double TerminalViolation,
-                                         double RecoveryShort = 0.0, BoostbackOracle.Need Need = default);
+                                         double RecoveryShort = 0.0, BoostbackOracle.Need[]? Needs = null);
 
     /// <summary>
     /// J = fuel + smoothing + virtual-control penalty + insertion penalty + path penalty, with the TRUE nonlinear dynamics and constraints, each term of the same form and weight as its linearised counterpart in the subproblem.
@@ -442,17 +453,26 @@ public static class AscentScvx
         return new AscentSeed.Result(true, x, u, sig, w.KickDeg, 0.0, 0, w.SeedNote, w.SeedLeastMaxQ);
     }
 
-    private static double SepTime(AscentCase c, double[] sig)
+    private static double SepTime(AscentCase c, int stage, double[] sig)
     {
         double t = 0.0;
-        for (int s = 0; s <= c.RecStage; s++) t += sig[s] * c.Dyn.TU;
+        for (int s = 0; s <= stage; s++) t += sig[s] * c.Dyn.TU;
         return t;
+    }
+
+    /// <summary>The reserve a plan given to start from kept for reserve <paramref name="v"/>, kg, or NaN: its first booster's of that stage.</summary>
+    private static double StartReserveKg(AscentSolution start, AscentCase c, int v)
+    {
+        foreach (AscentRecoveryResult r in start.Recoveries)
+            if (r.Stage == c.Reserves[v].Stage)
+                return r.ReserveKg;
+        return v == 0 && start.Recoveries.Length == 0 ? start.RecoveryReserveKg : double.NaN;
     }
 
     /// <summary>The plane turn's tie-break price, as the subproblem's objective has it (AscentSettings.PlaneTurnPrice).</summary>
     private static double TurnCost(AscentSettings st, double phi) => st.PlaneTurnPrice * Math.Abs(phi);
 
-    private static Merit TrueCost(AscentCase c, double[] x, double[] u, double[] sig, double phi, double dr, double[]? impulse)
+    private static Merit TrueCost(AscentCase c, double[] x, double[] u, double[] sig, double phi, double[] dr, BoostbackOracle.Need[]? impulses)
     {
         AscentSettings st = c.Settings;
         int n = c.N;
@@ -507,18 +527,21 @@ public static class AscentScvx
 
         double j0 = (1.0 - x[(n - 1) * NX + 6]) + Smoothing(c, u)
             + st.RhoVirtualControl * defect + st.RhoTerminal * term + st.RhoPath * path + TurnCost(st, phi);
-        // The booster's shortfall: the true need at this plan's separation, against what it keeps. A booster that cannot land at all is short the whole stack.
-        double shortC = 0.0;
-        BoostbackOracle.Need need = default;
-        if (c.RecStage >= 0)
+        // Each booster's shortfall: the true need at this plan's separation, against what its stage keeps. A booster that cannot land at all is short the whole stack. The gate takes the worst of them.
+        double shortWorst = 0.0;
+        BoostbackOracle.Need[]? needs = null;
+        if (c.Needs.Length > 0)
         {
-            double[] rs = new double[3], vs = new double[3];
-            c.Separation(x, sig, rs, vs, out double ts);
-            need = c.Oracle!.Evaluate(rs, vs, ts, impulse, gradient: false);
-            shortC = need.Ok ? Math.Max(0.0, need.RequiredKg / c.Dyn.MU - (c.R0C + dr)) : 1.0;
-            j0 += st.RhoRecovery * shortC;
+            needs = c.EvaluateNeeds(x, sig, impulses, gradient: false);
+            for (int j = 0; j < needs.Length; j++)
+            {
+                int v = c.Needs[j].Reserve;
+                double shortC = needs[j].Ok ? Math.Max(0.0, needs[j].RequiredKg / c.Dyn.MU - (c.Reserves[v].R0C + dr[v])) : 1.0;
+                j0 += st.RhoRecovery * shortC;
+                shortWorst = Math.Max(shortWorst, shortC);
+            }
         }
-        return new Merit(j0, worst, pathWorst, termWorst, shortC, need);
+        return new Merit(j0, worst, pathWorst, termWorst, shortWorst, needs);
     }
 
     /// <summary>The throttle vector's component along the air-relative velocity: |u| cos(alpha).</summary>
@@ -590,12 +613,22 @@ public static class AscentScvx
     // --------------------------------------------------------------- results
 
     private static AscentSolution Build(AscentCase c, double[] x, double[] u, double[] sig, double phi,
-                                        double dr, BoostbackOracle.Need need, AscentStatus status, string message, AscentSeed.Result seed,
+                                        double[] dr, BoostbackOracle.Need[]? needs, AscentStatus status, string message, AscentSeed.Result seed,
                                         int iterations, int accepted, double seconds, double seedSeconds,
                                         List<AscentIteration> trace, bool gatesMet, bool stallUsable, double remainingGainKg)
     {
         int n = c.N;
         AscentDynamics d = c.Dyn;
+        var recoveries = new AscentRecoveryResult[c.Needs.Length];
+        for (int j = 0; j < recoveries.Length; j++)
+        {
+            int v = c.Needs[j].Reserve;
+            AscentCase.Reserve rsv = c.Reserves[v];
+            BoostbackOracle.Need need = needs != null && j < needs.Length ? needs[j] : default;
+            recoveries[j] = new AscentRecoveryResult(rsv.Stage, (rsv.R0C + dr[v]) * d.MU,
+                need.Ok ? need.RequiredKg : double.NaN, need.Ok ? need.BoostbackDv : double.NaN,
+                c.Needs[j].Oracle.LandingDv, SepTime(c, rsv.Stage, sig));
+        }
         var time = new double[n];
         for (int k = 0; k < n - 1; k++)
             time[k + 1] = time[k] + (c.CollRow[k] >= 0 ? sig[c.NodeStage[k]] * c.Dtau[k] * d.TU : 0.0);
@@ -692,11 +725,12 @@ public static class AscentScvx
             SeedSeconds = seedSeconds,
             Trace = trace,
             PlaneTurn = phi,
-            RecoveryReserveKg = c.RecStage >= 0 ? (c.R0C + dr) * c.Dyn.MU : double.NaN,
-            RecoveryRequiredKg = c.RecStage >= 0 && need.Ok ? need.RequiredKg : double.NaN,
-            BoostbackDv = c.RecStage >= 0 && need.Ok ? need.BoostbackDv : double.NaN,
-            LandingDv = c.Oracle?.LandingDv ?? double.NaN,
-            SeparationTime = c.RecStage >= 0 ? SepTime(c, sig) : double.NaN,
+            Recoveries = recoveries,
+            RecoveryReserveKg = recoveries.Length > 0 ? recoveries[0].ReserveKg : double.NaN,
+            RecoveryRequiredKg = recoveries.Length > 0 ? recoveries[0].RequiredKg : double.NaN,
+            BoostbackDv = recoveries.Length > 0 ? recoveries[0].BoostbackDv : double.NaN,
+            LandingDv = recoveries.Length > 0 ? recoveries[0].LandingDv : double.NaN,
+            SeparationTime = recoveries.Length > 0 ? recoveries[0].SeparationTime : double.NaN,
             GatesMet = gatesMet,
             StallUsable = stallUsable,
             RemainingGainKg = remainingGainKg,

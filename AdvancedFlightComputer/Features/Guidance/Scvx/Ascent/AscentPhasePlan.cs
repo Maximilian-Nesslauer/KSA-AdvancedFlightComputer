@@ -237,11 +237,18 @@ public static class AscentPhasePlan
             return -1;
         int end = 0;
         while (end < stages.Count - 1 && stages[end].LiquidCarriesOver) end++;
-        if (end >= stages.Count - 1)
-            return -1;
-        AscentStage s = stages[end];
-        double solid = s.Solid?.Propellant(0.0, s.FixedBurnTime) ?? 0.0;
-        return s.HasLiquid && !s.IsPinned && s.Solid == null && s.PropellantMass - solid > 0.0 ? end : -1;
+        return CanKeepReserve(stages, end) ? end : -1;
+    }
+
+    /// <summary>
+    /// True when a booster that separates at the end of stage <paramref name="stage"/> can keep a reserve there: a lower stage that ends its own liquid load, burning liquid alone on a free burn time. A stage whose liquid carries on into the next does not end a load, so nothing it keeps back leaves with the booster.
+    /// </summary>
+    public static bool CanKeepReserve(IReadOnlyList<AscentStage> stages, int stage)
+    {
+        if (stage < 0 || stage >= stages.Count - 1)
+            return false;
+        AscentStage s = stages[stage];
+        return s.HasLiquid && !s.IsPinned && s.Solid == null && !s.LiquidCarriesOver && s.PropellantMass > 0.0;
     }
 
     /// <summary>

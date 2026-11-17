@@ -12,6 +12,7 @@ using HarmonyLib;
 using KSA;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AscentRecoveryResult = AdvancedFlightComputer.Guidance.Scvx.Ascent.AscentRecoveryResult;
 
 // Shared plumbing used by every flow: the per-vehicle step-and-apply entry point (ApplyAutopilot, called from the Vehicle.PrepareWorker Harmony prefix for each craft in turn), the commanded attitude, auto-staging, the UPFG vehicle builder, the warp-confirmation prompt, and small math helpers.
 //
@@ -133,6 +134,10 @@ public static partial class GuidanceWindow
 
         // The reserve's own cue fires while the stage could still burn, because the propellant left in it is spoken for. UPFG plans stage boundaries but never commands one.
         bool reserveDone = ShouldStageForReserve(vehicle);
+        // A drone-ship booster separates where its live impact reaches its ship, if that comes before its reserve (DroneShipSeparation).
+        bool shipDone = !reserveDone && ShouldStageForDroneShip(vehicle);
+        reserveDone |= shipDone;
+        UpdateSeparationCountdown(vehicle, thrustOn);
 
         _s.StagingActive = !thrustOn || reserveDone;
         if (!_s.StagingActive || now - _s.LastSequenceTime < SequenceCooldown)
@@ -141,15 +146,17 @@ public static partial class GuidanceWindow
         // A staging still in flight refuses the request, and the cue asks again after the cooldown. Only a queued request records the reserve as staged, otherwise a booster jettison still in flight would cost the reserve its only staging. A queued request can still stage nothing when the machine holds a row that would separate the control module, and the reserve then stays held with that row.
         _s.LastSequenceTime = now;
         StagingDetector.StagingRequest request = StagingDetector.RequestStaging(vehicle);
-        GuidanceLog.Debug(vehicle, $"staging requested for {(reserveDone ? "the booster reserve" : "no thrust")}: {request}.");
+        GuidanceLog.Debug(vehicle, $"staging requested for {(shipDone ? "the drone ship" : reserveDone ? "the booster reserve" : "no thrust")}: {request}.");
         if (request != StagingDetector.StagingRequest.Queued)
             return;
 
-        // Everything the booster needs to be recognised and flown, recorded before the split, because afterwards the parts belong to a vehicle we have no handle on. The split happens when the machine takes the request, on a later step.
+        // Each reserve belongs to one separation: every targeted booster on the row it stages is done with. The boosters themselves are handed over when the row fires (OnSequenceActivating), as any separation's are.
         if (reserveDone)
         {
-            ArmBoosterHandover(vehicle, sequenceList, now);
-            GuidanceLog.Debug(vehicle, $"booster hand-over armed for {_handovers.Count} record(s), site lat {_s.SiteLatDeg:F3} lon {_s.SiteLonDeg:F3}.");
+            _s.ReserveStagedRoots.Add(_s.ReserveRootId);
+            foreach (ReturnableStage stage in _s.ReturnableStages)
+                if (stage.IsNext && stage.ComesHome)
+                    _s.ReserveStagedRoots.Add(stage.RootId);
         }
     }
 
@@ -187,6 +194,18 @@ public static partial class GuidanceWindow
             && vehicle.Orbit.StateVectors.PositionCci.Length() - body.MeanRadius < TraceMinAltitude)
             return false;
 
+        // SIDE BOOSTERS: counted in their own engines' tanks. The vehicle's mass against the stage model's burnout mixes in the core's propellant, which burns on, and would stage them with a third of their reserve on the heavy (#176).
+        if (_s.ReserveFlowShare < 1.0)
+        {
+            if (_s.ReserveTanks.Count == 0)
+                return false;
+            ReadOnlySpan<MoleState> moles = vehicle.Parts.Moles.States;
+            double inBoosters = 0.0;
+            foreach (Tank tank in _s.ReserveTanks)
+                inBoosters += tank.ComputeSubstanceMass(moles);
+            return inBoosters <= _s.ReserveKg;
+        }
+
         UpfgVehicle model = _s.StageModel;
         if (model == null || model.Stages.Count < 2)
             return false;
@@ -195,13 +214,16 @@ public static partial class GuidanceWindow
         return remaining <= _s.ReserveKg;
     }
 
-    // Keep pending handovers outside vehicle state because the detached vehicles do not exist yet. Each sequence has one landing target, so boosters in the same sequence share a site.
+    // Keep pending handovers outside vehicle state because the detached vehicles do not exist yet. Each separated root has its own landing target, so two boosters leaving on one sequence go to their own sites (#130).
     private sealed class BoosterHandover
     {
         internal uint RootId;
         internal double SiteLatDeg;
         internal double SiteLonDeg;
         internal double ExpiresAt;
+
+        // An optimal return: flies no boostback, only the glide onto its drone ship's point.
+        internal bool GlideOnly;
 
         // The stack the booster is being dropped from, which it must clear before it lights, see TryAdoptBooster.
         internal Vehicle From;
@@ -216,68 +238,63 @@ public static partial class GuidanceWindow
     private const double HandoverWindowS = 30.0;
 
     /// <summary>
-    /// Record what the imminent separation is about to throw overboard, so the vehicle
-    /// it becomes can be recognised and handed the landing site.
+    /// Record what a staging row is about to throw overboard, so each craft it becomes can be recognised and handed its own landing site.
+    ///
+    /// ANY SEPARATION, not only the reserve cue's (#175). AutoStage raises this as a row fires, whatever fired it: the ascent's reserve cue, a burnout, the spent drop that sheds side boosters, or the player's staging key. Before, only the reserve cue armed a hand-over, so a booster dropped any other way came away with nothing to fly it home.
+    ///
+    /// ONLY A ROOT WITH A TARGET. A stage site (LAUNCH > BOOSTERS) is what asks for a booster to come home, and each root is sent to its own (#130): two side boosters leaving on one row go to their own pads. A root with no site of its own is not handed over at all, where it once followed the targeted booster beside it to the same pad.
     /// </summary>
-    private static void ArmBoosterHandover(Vehicle vehicle, SequenceList sequenceList,
-                                           double now)
+    internal static void OnSequenceActivating(Vehicle vehicle, Sequence sequence)
     {
+        if (!VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState s) || (s.StageTargets.Count == 0 && s.StageOptimalReturn.Count == 0))
+            return;
+
+        double now = SimNow();
         DropExpiredHandovers(now);
-        _s.ReserveStaged = true;
-
-        Sequence next = null;
-        ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
-        for (int i = 0; i < sequences.Length; i++)
+        SequenceRoots(sequence, _handoverRoots);
+        int armed = 0;
+        for (int i = 0; i < _handoverRoots.Count; i++)
         {
-            if (!sequences[i].Activated && !sequences[i].Parts.IsEmpty)
+            Part root = _handoverRoots[i];
+            // Nested separations have overlapping subtrees but distinct roots. Matching the root keeps the inner vehicle from claiming the outer vehicle's record.
+            if (AlreadyArmed(root.InstanceId, vehicle))
+                continue;
+            // A site set by the player, or an optimal return's drone-ship point, frozen from the plan at lift-off. An optimal return with no plan behind it has nowhere known to go, and is not handed over.
+            bool glideOnly = false;
+            if (!s.StageTargets.TryGetValue(root.InstanceId, out double2 site)
+                && !(glideOnly = s.StageOptimalReturn.Contains(root.InstanceId) && s.OptimalReturnSites.TryGetValue(root.InstanceId, out site)))
             {
-                next = sequences[i];
-                break;
+                if (s.StageOptimalReturn.Contains(root.InstanceId))
+                    GuidanceLog.Info(vehicle, $"'{root.DisplayName}' is set to optimal return but no plan found its landing point: not handed over.");
+                continue;
             }
-        }
-        if (next == null)
-            return;
-
-        int firstArmed = _handovers.Count;
-        Part detached = null;
-        ReadOnlySpan<Part> parts = next.Parts;
-        for (int i = 0; i < parts.Length; i++)
-        {
-            Span<Decoupler> decouplers = parts[i].SubtreeModules.Get<Decoupler>();
-            for (int j = 0; j < decouplers.Length; j++)
+            _handovers.Add(new BoosterHandover
             {
-                Part root = DetachedRoot(decouplers[j]);
-                if (root == null || AlreadyArmed(root.InstanceId, firstArmed))
-                    continue;
-                detached ??= root;
-
-                // Nested separations have overlapping subtrees but distinct roots. Matching the root keeps the inner vehicle from claiming the outer vehicle's record.
-                _handovers.Add(new BoosterHandover
-                {
-                    RootId = root.InstanceId,
-                    ExpiresAt = now + HandoverWindowS,
-                    From = vehicle,
-                });
-            }
+                RootId = root.InstanceId,
+                SiteLatDeg = site.X,
+                SiteLonDeg = site.Y,
+                ExpiresAt = now + HandoverWindowS,
+                From = vehicle,
+                GlideOnly = glideOnly,
+            });
+            armed++;
+            GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                $"booster hand-over armed for '{root.DisplayName}' on sequence {sequence.Number}, site lat {site.X:F3} lon {site.Y:F3}."));
         }
-
-        if (detached == null || _handovers.Count == firstArmed)
-            return;
-
-        // Use the first detached root, as RefreshReturnableStages does, to find the stage's target. HashSet order can select a different root and cause a silent fallback to the vehicle's site.
-        ResolveStageTarget(detached.InstanceId, out double siteLatDeg, out double siteLonDeg);
-        for (int i = firstArmed; i < _handovers.Count; i++)
-        {
-            _handovers[i].SiteLatDeg = siteLatDeg;
-            _handovers[i].SiteLonDeg = siteLonDeg;
-        }
+        _handoverRoots.Clear();
+        if (armed == 0)
+            GuidanceLog.Debug(vehicle, $"sequence {sequence.Number} fires with no targeted booster to hand over.");
     }
 
-    private static bool AlreadyArmed(uint rootId, int firstArmed)
+    // The roots one firing row separates, filled and consumed inside OnSequenceActivating.
+    private static readonly List<Part> _handoverRoots = new List<Part>();
+
+    // The player's staging key and AutoStage can both announce one row, so a root already recorded from this stack is not recorded twice.
+    private static bool AlreadyArmed(uint rootId, Vehicle from)
     {
-        for (int i = firstArmed; i < _handovers.Count; i++)
+        for (int i = 0; i < _handovers.Count; i++)
         {
-            if (_handovers[i].RootId == rootId)
+            if (_handovers[i].RootId == rootId && ReferenceEquals(_handovers[i].From, from))
                 return true;
         }
         return false;
@@ -331,6 +348,7 @@ public static partial class GuidanceWindow
         _s = VehicleAutopilotState.For(vehicle);
         _s.SiteLatDeg = mine.SiteLatDeg;
         _s.SiteLonDeg = mine.SiteLonDeg;
+        _s.BoostbackGlideOnly = mine.GlideOnly;
         GuidanceLog.Info(vehicle, $"adopted as a separated booster, boostback engages within {HandoverWindowS:F0} s.");
 
         // ENGINE OFF ON THIS FRAME, and the settling burn held until the two are clear. A split vehicle inherits the stack's control inputs, so a booster dropped under the reserve comes away still burning - and from below the stage it let go of, that thrust drives it straight back into it, whose engine is usually held for a few seconds yet. KSA breaks the parts that hit: the first flights lost the booster's interstage, which took this vehicle and its boostback with it and left the rest of the booster as a new craft nothing was flying. The engage below can take seconds to stick, so the cut cannot wait for it. Written before any claim, but the inputs are the ascent's, inherited, not the player's.
@@ -576,15 +594,9 @@ public static partial class GuidanceWindow
     private static readonly HashSet<EngineController> _pendingIgnition = new HashSet<EngineController>();
 
     /// <summary>
-    /// True when the next separation drops every engine currently producing thrust.
+    /// True when the next separation takes burning engines with it, so a reserve kept back stays in what leaves. <paramref name="flowShare"/> is their share of the burning engines' propellant flow: one when everything burning leaves, as a core's or an in-line booster's separation does.
     ///
-    /// THIS IS THE GUARD THAT KEEPS THE RESERVE OFF A STRAP-ON STACK. "The next thing
-    /// that separates" is not the same as "the booster": while solids burn beside a
-    /// core, the next separation is the casings, and reserving against that would end
-    /// the whole first stage early to leave propellant in something about to be thrown
-    /// away. Requiring the separation to take ALL the live engines with it says the
-    /// thing that leaves is the thing doing the flying, which is what a boostback needs
-    /// to be true. Once the strap-ons are gone it becomes true on its own.
+    /// SIDE BOOSTERS LEAVE BESIDE A CORE THAT BURNS ON (#176), so the share is below one, and the reserve is counted in their own tanks (<see cref="CollectReserveTanks"/>). This once refused any separation that left an engine burning. The guard it kept, a core's reserve armed against its strap-ons' separation, is now RefreshReserve's: the targeted booster has to be the next to separate, and casings with no pod are never a target.
     ///
     /// ON THE PAD THE NEXT SEQUENCE IS USUALLY THE IGNITION, which separates nothing.
     /// Stopping there left the reserve unarmed until the engines were lit, and the
@@ -595,9 +607,10 @@ public static partial class GuidanceWindow
     /// nothing are passed over to the first that does, and the engines they will light
     /// count as burning, as they will be when that separation comes.
     /// </summary>
-    private static bool NextSeparationDropsAllEngines(Vehicle vehicle, out string why)
+    private static bool NextSeparationTakesBurningEngines(Vehicle vehicle, out double flowShare, out string why)
     {
         why = "";
+        flowShare = 1.0;
         PartTree tree = vehicle?.Parts;
         SequenceList sequenceList = tree?.SequenceList;
         if (tree == null || sequenceList == null)
@@ -650,21 +663,72 @@ public static partial class GuidanceWindow
             return false;
         }
 
-        bool anyLit = false;
+        // By engine part, as the stage model and the plan's flow share count them (KsaVehicleAdapter.PartDesignPerformance).
+        _litLeaving.Clear();
+        _litStaying.Clear();
         foreach (var engine in engineStates.ModulesAndStates)
         {
             if ((!engine.Module.IsActive || !engine.State.IsPropellantAvailable) && !_pendingIgnition.Contains(engine.Module))
                 continue;
-            anyLit = true;
-            if (!_separationDrops.Contains(engine.Module.Parent.FullPart))
+            Part part = engine.Module.Parent;
+            if (_separationDrops.Contains(part.FullPart))
+                _litLeaving.Add(part);
+            else
+                _litStaying.Add(part);
+        }
+        if (_litLeaving.Count == 0)
+        {
+            why = _litStaying.Count == 0 ? "NO ENGINE BURNING" : "NEXT SEPARATION TAKES NO BURNING ENGINE";
+            return false;
+        }
+        if (_litStaying.Count > 0)
+        {
+            double leaving = 0.0, staying = 0.0;
+            foreach (Part part in _litLeaving)
+                leaving += KsaVehicleAdapter.PartDesignPerformance(tree, part, 0.0).massFlow;
+            foreach (Part part in _litStaying)
+                staying += KsaVehicleAdapter.PartDesignPerformance(tree, part, 0.0).massFlow;
+            if (!(leaving > 0.0))
             {
-                why = "NEXT SEPARATION LEAVES ENGINE BURNING: NOT A BOOSTER";
+                why = "NO FLOW FOR THE SEPARATING ENGINES";
                 return false;
             }
+            flowShare = leaving / (leaving + staying);
         }
-        if (!anyLit)
-            why = "NO ENGINE BURNING";
-        return anyLit;
+        return true;
+    }
+
+    // Scratch for the separation walk: the burning engine parts that leave with it and that stay.
+    private static readonly HashSet<Part> _litLeaving = new HashSet<Part>();
+    private static readonly HashSet<Part> _litStaying = new HashSet<Part>();
+    private static readonly HashSet<RocketCore> _leavingCores = new HashSet<RocketCore>();
+
+    /// <summary>The tanks in what the next separation drops (<see cref="_separationDrops"/>, as NextSeparationTakesBurningEngines left it) that feed the engines dropped with them: the side boosters' own propellant, which their reserve is counted in. A pod's tank that only RCS draws on is not one.</summary>
+    private static void CollectReserveTanks(Vehicle vehicle, List<Tank> into)
+    {
+        into.Clear();
+        _leavingCores.Clear();
+        foreach (Part part in _separationDrops)
+            foreach (EngineController engine in part.SubtreeModules.Get<EngineController>())
+                if (engine.Cores != null)
+                    foreach (RocketCore core in engine.Cores)
+                        _leavingCores.Add(core);
+        foreach (Part part in _separationDrops)
+        {
+            Span<Tank> tanks = part.SubtreeModules.Get<Tank>();
+            for (int i = 0; i < tanks.Length; i++)
+            {
+                foreach ((ResourceManager manager, int _) in tanks[i].AvailableConsumers)
+                {
+                    if (manager.Consumer is PlumbedCore core && _leavingCores.Contains(core))
+                    {
+                        into.Add(tanks[i]);
+                        break;
+                    }
+                }
+            }
+        }
+        _leavingCores.Clear();
     }
 
     /// <summary>
@@ -673,23 +737,46 @@ public static partial class GuidanceWindow
     /// NOT ONLY THE NEXT ONE. A core under strap-on boosters with no command pod is not the next thing to separate on the pad - the strap-ons are - but it is the booster coming home, and the plan has to size its reserve before lift-off. It arms once the strap-ons are gone and it is next (RefreshReserve).
     /// </summary>
     internal static ReturnableStage BoostbackTarget()
-        => _s.ReturnableStages.Find(st => st.HasTarget);
+        => _s.ReturnableStages.Find(st => st.ComesHome);
 
-    /// <summary>The booster and site a plan was asked to bring home to, as the plan records it (AscentPlan.RecoverySite): a target moved or cleared since makes that plan's reserve stale.</summary>
+    /// <summary>The first targeted stage that is next to separate, else null: the booster whose reserve can arm now (RefreshReserve). Side boosters leaving together share one reserve, so the first of them stands for the row.</summary>
+    internal static ReturnableStage NextTargetedBooster()
+        => _s.ReturnableStages.Find(st => st.ComesHome && st.IsNext);
+
+    /// <summary>One booster and its site, as a plan records it (AscentPlan.RecoverySite). An optimal return has no site going in: the plan finds it.</summary>
     internal static string RecoverySiteKey(ReturnableStage booster)
-        => booster == null ? "" : FormattableString.Invariant($"{booster.RootId}:{booster.TargetLatDeg:F6}:{booster.TargetLonDeg:F6}");
+        => booster == null ? ""
+         : booster.HasTarget ? FormattableString.Invariant($"{booster.RootId}:{booster.TargetLatDeg:F6}:{booster.TargetLonDeg:F6}")
+         : booster.OptimalReturn ? FormattableString.Invariant($"{booster.RootId}:OPTIMAL")
+         : "";
 
-    /// <summary>The reserve a usable convex plan for this vehicle sized for its booster, for the target that booster has now, kg (AscentSolution.RecoveryReserveKg); NaN when there is none, or the gravity turn flies instead.</summary>
-    private static double PlannedBoosterReserveKg(Vehicle vehicle)
+    /// <summary>Every targeted booster and its site, in staging order, as a plan records them (AscentPlan.RecoverySite): a target set, moved or cleared since makes that plan's reserves stale.</summary>
+    internal static string RecoverySitesKey()
     {
-        AscentPlan p = _s.AscentPlan;
-        if (!_s.FlyConvexAscent || _s.BackupAscent || p == null || !p.Usable || p.VehicleId != vehicle.Id)
-            return double.NaN;
-        // Once flying, the target cannot move the plan - the climb is committed - but before then a plan for another site is not this booster's.
-        if (!_s.Running && p.RecoverySite != RecoverySiteKey(BoostbackTarget()))
-            return double.NaN;
-        return p.Solution.RecoveryReserveKg;
+        var keys = new List<string>();
+        foreach (ReturnableStage stage in _s.ReturnableStages)
+            if (stage.ComesHome)
+                keys.Add(RecoverySiteKey(stage));
+        return string.Join(";", keys);
     }
+
+    /// <summary>The plan's entry for a booster: a usable convex plan for this vehicle, for the targets the boosters have now, that brings the booster rooted at <paramref name="rootId"/> home. False when there is none, or the gravity turn flies instead.</summary>
+    internal static bool PlannedRecovery(Vehicle vehicle, uint rootId, out AscentRecoveryResult result)
+    {
+        result = default;
+        AscentPlan p = _s.AscentPlan;
+        // With no vehicle given (a page drawing the controlled craft's state), the plan is taken as this state's own.
+        if (!_s.FlyConvexAscent || _s.BackupAscent || p == null || !p.Usable || (vehicle != null && p.VehicleId != vehicle.Id))
+            return false;
+        // Once flying, the targets cannot move the plan - the climb is committed, and a booster that has left takes its target with it - but before then a plan for other sites is not these boosters'.
+        if (!_s.Running && p.RecoverySite != RecoverySitesKey())
+            return false;
+        return p.TryGetRecovery(rootId, out result);
+    }
+
+    /// <summary>The reserve the convex plan sized for the booster rooted at <paramref name="rootId"/>, kg (AscentRecoveryResult.ReserveKg); NaN when there is none.</summary>
+    private static double PlannedBoosterReserveKg(Vehicle vehicle, uint rootId)
+        => PlannedRecovery(vehicle, rootId, out AscentRecoveryResult r) ? r.ReserveKg : double.NaN;
 
     /// <summary>
     /// Decide whether the booster reserve is armed, and how much it keeps. Runs with the stage model, on
@@ -703,25 +790,29 @@ public static partial class GuidanceWindow
         _s.ReserveKg = 0.0;
         _s.ReserveBoosterDryKg = 0.0;
         _s.ReserveArmed = false;
+        _s.ReserveFlowShare = 1.0;
+        _s.ReserveTanks.Clear();
+        _s.ReserveRootId = 0;
 
-        ReturnableStage booster = BoostbackTarget();
-        if (booster == null)
+        if (BoostbackTarget() == null)
         {
             _s.ReserveNote = "";
             return;
         }
 
-        // ONCE ONLY, and this is not just belt-and-braces. After the booster is gone the next separation is a perfectly good one - an upper stage over a payload, say - and re-arming there would reserve propellant in a stage that is never coming back. The reserve belongs to the first separation of an ascent.
+        // Something else separates first - strap-ons round a core - so the next staging is no targeted booster's. Not a refusal: it arms when they are gone. A heavy arms its side boosters' reserve first, then its core's once they are gone (#130).
+        ReturnableStage booster = NextTargetedBooster();
+        if (booster == null)
+        {
+            _s.ReserveNote = "ARMS AFTER STAGES BELOW SEPARATE";
+            return;
+        }
+        _s.ReserveRootId = booster.RootId;
+
+        // ONCE PER BOOSTER, and this is not just belt-and-braces. A booster staged on its reserve can sit in the list until the split lands, and re-arming on it would stage the row after it - an upper stage over a payload, say - early.
         if (_s.ReserveStaged)
         {
             _s.ReserveNote = "ALREADY STAGED";
-            return;
-        }
-
-        // Something else separates first - strap-ons round a core - so the next staging is not this booster's. Not a refusal: it arms when they are gone.
-        if (!booster.IsNext)
-        {
-            _s.ReserveNote = "ARMS AFTER STAGES BELOW SEPARATE";
             return;
         }
 
@@ -731,20 +822,31 @@ public static partial class GuidanceWindow
             _s.ReserveNote = "NO SEPARATION IN STAGE MODEL FOR A RESERVE";
             return;
         }
-        if (!NextSeparationDropsAllEngines(vehicle, out string why))
+        if (!NextSeparationTakesBurningEngines(vehicle, out double flowShare, out string why))
         {
             _s.ReserveNote = why;
             return;
         }
+        if (flowShare < 1.0)
+        {
+            CollectReserveTanks(vehicle, _s.ReserveTanks);
+            if (_s.ReserveTanks.Count == 0)
+            {
+                _s.ReserveNote = "NO TANKS FEED THE SIDE BOOSTERS' ENGINES";
+                return;
+            }
+        }
+        _s.ReserveFlowShare = flowShare;
 
         // The convex plan sized it for the booster it brings home: stage it there, so the booster leaves where the plan separates it.
-        double planned = PlannedBoosterReserveKg(vehicle);
+        double planned = PlannedBoosterReserveKg(vehicle, booster.RootId);
         double kg = double.IsFinite(planned) ? planned : 0.0;
 
         _s.ReserveKg = kg;
         _s.ReserveBoosterDryKg = boosterDry;
         _s.ReserveArmed = true;
         _s.ReserveNote = double.IsFinite(planned) ? "" : "SIZED WHEN PLAN IS SOLVED";
+        PrepareDroneShipAero(vehicle, booster);
     }
 
     /// <summary>
@@ -760,7 +862,7 @@ public static partial class GuidanceWindow
     /// stage table and the landing flows read the same cache and should see the vehicle
     /// as it is.
     /// </summary>
-    private static void ApplyAscentReserve(UpfgVehicle live, double reserveKg)
+    private static void ApplyAscentReserve(UpfgVehicle live, double reserveKg, double flowShare)
     {
         if (live == null || live.Stages.Count == 0 || !(reserveKg > 0.0))
             return;
@@ -768,8 +870,13 @@ public static partial class GuidanceWindow
         UpfgStage s0 = live.Stages[0];
 
         // burnTimes goes NEGATIVE if MassDry passes MassTotal, and a negative burn time propagates into tgo without complaint. Once the live mass is already inside the reserve there is nothing left to plan on this stage anyway - the staging cue is about to fire - so the floor here is a guard, not a policy.
+        // SIDE BOOSTERS end the stage reserve / share sooner, where share is their part of its flow; the core's part of that stays aboard and starts the next stage heavier (#176).
+        double share = flowShare > 0.0 && flowShare <= 1.0 ? flowShare : 1.0;
         double floor = s0.MassTotal - 0.02 * (s0.MassTotal - s0.MassDry);
-        s0.MassDry = Math.Min(s0.MassDry + reserveKg, floor);
+        double before = s0.MassDry;
+        s0.MassDry = Math.Min(s0.MassDry + reserveKg / share, floor);
+        if (share < 1.0 && live.Stages.Count > 1)
+            live.Stages[1].MassTotal += (s0.MassDry - before) * (1.0 - share);
     }
 
     // The thrust acceleration limit every plan honours, in g, which is the lower of the player's g-limit when it is on and the structural limit stock holds the throttle to (KsaEnginePerf.StructuralAccelerationLimit).
@@ -1709,8 +1816,9 @@ public static partial class GuidanceWindow
         if (_s.Running)
         {
             double altM = r.Length() - parent.MeanRadius;
-            // And never while the ascent is still clearing the pad (PadHold): ForceRollMinAltM is above the mean radius, which a pad on high ground already is.
-            fc.RollMode = _s.ForceRoll && altM >= ForceRollMinAltM && !PadHold(r)
+            // An ascent engaged on the pad rolls as soon as it is clear of it (PadHold), while it still climbs straight up: the roll program (RollProgramHolds) holds the pitch-over until the roll is done. ForceRollMinAltM, above the mean radius, only gates an ascent engaged in flight, which has no pad to clear; on a pad near sea level it came 150 m after the pitch-over had begun.
+            bool clear = double.IsFinite(_s.LiftoffRadius) ? !PadHold(r) : altM >= ForceRollMinAltM;
+            fc.RollMode = _s.ForceRoll && clear
                 ? FlightComputerRollMode.Up
                 : FlightComputerRollMode.Decoupled;
         }
