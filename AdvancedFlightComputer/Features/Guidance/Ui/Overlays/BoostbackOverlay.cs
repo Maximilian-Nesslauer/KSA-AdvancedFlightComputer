@@ -124,6 +124,7 @@ public static partial class GuidanceWindow
             AreaOverMass = aero.ReferenceArea / mass,
             // The planned glide: engine first, at the nominal angle, lifting up the trajectory. See GlideNominalAlpha.
             Alpha = GlideNominalAlpha(aero),
+            ClimbNoseFirst = BoostbackCoastsNoseFirst(),
             Table = aero.Table,
             LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,
@@ -226,6 +227,7 @@ public static partial class GuidanceWindow
             MeanRadius = parent.MeanRadius,
             AreaOverMass = aero.ReferenceArea / mass,
             Alpha = GlideNominalAlpha(aero),
+            ClimbNoseFirst = BoostbackCoastsNoseFirst(),
             Table = aero.Table,
             LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,

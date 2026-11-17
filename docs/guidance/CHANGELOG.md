@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- A booster that glides with no burn while still climbing flies **nose first to its apex**, then turns to its glide attitude there, where the air is thin. This covers a miss within GLIDE ONLY WITHIN and a small correction waiting for the apex. It keeps the attitude it separated in, the least drag it has. Turning round low down, side-on to thick air, threw a booster 7 to 10 km short and cost it its landing. After a boostback burn a booster glides as before.
+  - Every prediction of that coast models the same: the plan's drone-ship point and reserve for an optimal return, the return path drawn on the map and the profile, the live drone-ship separation, and the boostback's miss while it decides and while it climbs. A drone-ship point therefore lands further downrange than before.
+  - **BOOSTER CORRECTION** defaults to 100 m/s, up from 50, for every booster that comes home.
+
 - An ascent with a forced roll **rolls first, then pitches**. Once clear of the pad (50 m above lift-off) it flies the roll while it still climbs straight up, and starts the pitch-over when the roll is within 3 deg, or after 10 s. Before, the roll waited for 200 m above sea level while the pitch-over started at 50 m above the pad, so from a pad near sea level the vehicle pitched first and rolled into the turn. The 200 m rule now applies only to an ascent engaged in flight.
 
 - A booster still climbing at separation with a **small correction** (a miss between GLIDE ONLY WITHIN and LARGE BOOSTBACK FROM) flies **no burn at separation**: it glides to the top of its arc and burns once there, at the apex recheck, rather than burning now and again at the apex. A booster already falling burns at once, and a large miss still burns at separation. When the apex recheck sends a booster back to burn, it now starts the boostback again from the top, as a manual BOOSTBACK does: before, it turned to the burn and never lit.

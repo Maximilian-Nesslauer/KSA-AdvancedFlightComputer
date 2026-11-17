@@ -273,6 +273,7 @@ public static partial class GuidanceWindow
         _s.BoostbackSmall = false;
         _s.BoostbackApexCheckPending = false;
         _s.BoostbackSmallDeferred = false;
+        _s.BoostbackClimbHold = false;
         _s.BoostbackPhaseStart = SimNow();
         _s.BoostbackLastStep = SimNow();
         _s.BoostbackLocked = false;
@@ -299,6 +300,12 @@ public static partial class GuidanceWindow
         _s.HasCommand = _s.CommandDir.Length() > 0.5;
         _s.BoostbackStatus = "";
     }
+
+    /// <summary>
+    /// Whether the boostback's coast predictions fly the climb nose first (DragCoastSystem.ClimbNoseFirst): while the booster is still deciding at separation - the miss that decides is where it falls if it does not burn - and while it climbs nose first in the glide. Not while a burn is coming or flying, nor after one: that booster glides.
+    /// </summary>
+    internal static bool BoostbackCoastsNoseFirst()
+        => BoostbackLive && (_s.BoostbackPhase == BoostbackPhase.Separation || (_s.BoostbackPhase == BoostbackPhase.Glide && _s.BoostbackClimbHold));
 
     /// <summary>ABORT: stop steering, cut the engine, leave the vehicle where it is.</summary>
     private static void AbortBoostback()
@@ -440,6 +447,7 @@ public static partial class GuidanceWindow
                         GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, miss {missKm:F1} km ({missDv:F1} m/s): straight to the glide, engine off{(vUp > 0.0 ? ", judged again at the apex" : "")}."));
                         EnterBoostbackPhase(BoostbackPhase.Glide, now);
                         _s.BoostbackApexCheckPending = vUp > 0.0;
+                        _s.BoostbackClimbHold = vUp > 0.0;
                         break;
                     }
                     if (!_s.HasSteer && now - _s.BoostbackPhaseStart < BoostbackDecideTimeoutS)
@@ -453,6 +461,7 @@ public static partial class GuidanceWindow
                         EnterBoostbackPhase(BoostbackPhase.Glide, now);
                         _s.BoostbackApexCheckPending = true;
                         _s.BoostbackSmallDeferred = true;
+                        _s.BoostbackClimbHold = true;
                         break;
                     }
                     if (_s.HasSteer && missKm <= _s.BoostbackLargeMissKm)
@@ -481,6 +490,7 @@ public static partial class GuidanceWindow
                     _s.BoostbackStatus = FormattableString.Invariant($"MISS {_s.SteerMissM / 1000.0:F1} km: GLIDE CORRECTS IT. BURN SKIPPED.");
                     EnterBoostbackPhase(BoostbackPhase.Glide, now);
                     _s.BoostbackApexCheckPending = vUp > 0.0;
+                    _s.BoostbackClimbHold = vUp > 0.0;
                     break;
                 }
                 _s.BoostbackStatus = _s.BoostbackSmall ? "SMALL BOOSTBACK: TURNING ENGINE-OFF, THEN BURN." : "";
@@ -618,6 +628,19 @@ public static partial class GuidanceWindow
                 break;
 
             case BoostbackPhase.Glide:
+                // NOSE FIRST TO THE APEX (BoostbackClimbHold): along the airflow, engine off, until the booster starts to fall; then the glide, from a fresh start, turned to where the air is thin.
+                if (_s.BoostbackClimbHold)
+                {
+                    if (vUp > 0.0)
+                    {
+                        double3 vAir = orbit.StateVectors.VelocityCci - double3.Cross(new double3(0, 0, parent.GetAngularVelocity()), r);
+                        want = vAir.Length() > 1.0 ? double3.Normalize(vAir) : _s.CommandDir;
+                        break;
+                    }
+                    _s.BoostbackClimbHold = false;
+                    ResetGlide();
+                    GuidanceLog.Debug(vehicle, FormattableString.Invariant($"apex at {altAsl / 1000.0:F1} km: turning from nose first to the glide."));
+                }
                 want = GlideDirection(vehicle, orbit, parent, now, dt);
                 // Close enough to impact for the air to be worth planning in: the 3-DOF glide-and-burn landing takes the craft from here (Modes/ThreeDof.cs). It flies the PID glide itself until its first plan, from the same glide state, so the hand-over does not move the command.
                 if (_s.ThreeDofFromGlide && double.IsFinite(_s.GlideTgo) && _s.GlideTgo <= _s.ThreeDofEngageTgoS)

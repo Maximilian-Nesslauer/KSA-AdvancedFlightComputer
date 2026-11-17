@@ -1280,7 +1280,7 @@ public sealed class VehicleAutopilotState
     public double BoostbackLargeMissKm = 100.0;
 
     /// <summary>The reserve every returning booster keeps for small corrections, m/s, on top of its boostback and landing burn (AscentRecovery.CorrectionDv): sized into the calculated climb.</summary>
-    public double BoosterCorrectionDvMs = 50.0;
+    public double BoosterCorrectionDvMs = 100.0;
 
     /// <summary>This boostback is a small one (BoostbackLargeMissKm): no settle, and the turn to the burn is flown with the engine off. Decided once the booster is clear.</summary>
     public bool BoostbackSmall;
@@ -1303,6 +1303,11 @@ public sealed class VehicleAutopilotState
 
     /// <summary>The apex recheck is the one burn of a small correction deferred at separation (Boostback, Separation): the booster was still climbing, so it glided to the top of its arc to burn once there rather than twice.</summary>
     public bool BoostbackSmallDeferred;
+
+    /// <summary>
+    /// The booster glides with no burn while still climbing, so it flies NOSE FIRST to its apex - the attitude it separated in, the least drag it has - and turns to its glide attitude there, where the air is thin (Boostback, Glide). Turning round low down, side-on to thick air, threw a booster 7 to 10 km short and cost it its landing (2026-11-17). Every prediction of its coast models the same (DragCoastSystem.ClimbNoseFirst). Not after a boostback burn: that booster glides as before.
+    /// </summary>
+    public bool BoostbackClimbHold;
 
     /// <summary>When a long turn to the burn last said what it waits on, sim time (Boostback, Rotation).</summary>
     public double BoostbackWaitLogAt = double.NegativeInfinity;

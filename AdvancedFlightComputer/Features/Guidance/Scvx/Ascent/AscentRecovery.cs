@@ -166,6 +166,8 @@ public sealed class BoostbackOracle
             MeanRadius = bodyRadius,
             AreaOverMass = r.ReferenceArea / coastMass,
             Alpha = r.Alpha,
+            // An optimal return flies no boostback, so it climbs nose first to its apex and glides from there, as the booster flies it.
+            ClimbNoseFirst = r.OptimalReturn,
             Table = r.Drag,
             LiftTable = r.Lift,
             Atmosphere = r.Air,

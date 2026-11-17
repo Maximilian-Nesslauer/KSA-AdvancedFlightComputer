@@ -94,6 +94,8 @@ public static partial class GuidanceWindow
             MeanRadius = parent.MeanRadius,
             AreaOverMass = aero.ReferenceArea / mass,
             Alpha = GlideNominalAlpha(aero),
+            // It separates to fly no boostback: nose first to its apex, then the glide.
+            ClimbNoseFirst = true,
             Table = aero.Table,
             LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,
