@@ -1265,15 +1265,13 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double BoostbackGlideMissKm = 5.0;
 
-    /// <summary>
-    /// The miss, km, beyond which a boostback is a large one: it settles and turns on the lit engine's gimbal. Between <see cref="BoostbackGlideMissKm"/> and this it is a small one, flown without the settling burn and turned with the engine off, then burned (#197). The lit flip lays down dV of its own as it sweeps through every direction on the way round; for a small correction that is as big as the correction, which moves while the booster turns, and the short burn after it chases its own tail. A small correction leaves time to turn.
-    /// </summary>
-    public double BoostbackLargeMissKm = 100.0;
 
     /// <summary>The reserve every returning booster keeps for small corrections, m/s, on top of its boostback and landing burn (AscentRecovery.CorrectionDv): sized into the calculated climb.</summary>
     public double BoosterCorrectionDvMs = 50.0;
 
-    /// <summary>This boostback is a small one (BoostbackLargeMissKm): no settle, and the turn to the burn is flown with the engine off. Decided once the booster is clear.</summary>
+    /// <summary>
+    /// This boostback is a small one: a drone-ship booster beyond the glide's reach (BoostbackGlideMissKm). No settle, and the turn to the burn is flown with the engine off (#197). Its correction is small by construction - its point is where the plan's coast comes down - and a lit flip lays down dV of its own as big as that correction, which then moves while it turns. A booster returning to a site always flies a large boostback.
+    /// </summary>
     public bool BoostbackSmall;
 
     /// <summary>
@@ -1284,7 +1282,7 @@ public sealed class VehicleAutopilotState
     /// <summary>When the settling burn lit, sim time; NaN until it has. It lights only once the booster is clear AND a burn is coming (Boostback's Separation phase): one whose predicted miss is within BoostbackGlideMissKm goes straight to the glide with its engine off, keeping its propellant for the landing.</summary>
     public double BoostbackSettleFrom = double.NaN;
 
-    /// <summary>A drone-ship booster (optimal return), handed over at separation to its frozen point. It follows the same miss rule as any booster (BoostbackGlideMissKm, BoostbackLargeMissKm); the flag only labels its status.</summary>
+    /// <summary>A drone-ship booster (optimal return), handed over at separation to its frozen point. Within BoostbackGlideMissKm it flies no boostback; beyond it, a small one (BoostbackSmall). A booster returning to a site flies a large one.</summary>
     public bool BoostbackGlideOnly;
 
     /// <summary>Distance to BoostbackClearOf at the split, m, and how far it has opened since, the gauge's readout.</summary>
