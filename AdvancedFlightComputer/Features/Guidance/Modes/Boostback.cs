@@ -224,16 +224,23 @@ public static partial class GuidanceWindow
     /// The BOOSTBACK verb on LAND > BOOSTBACK: start the machine at separation, from whatever
     /// attitude and state the vehicle is in right now.
     ///
-    /// The aero sweep is FORCED here rather than left to the staleness check. The
-    /// check compares bounding boxes, and a booster that has just separated has a new
-    /// one - but this is pressed within seconds of that separation, sometimes on the
-    /// frame the part tree is still settling, and a table fitted to the stack that
-    /// included the upper stage would give the prediction several times the drag area
-    /// the booster actually has.
+    /// The aero sweep is FORCED here rather than left to the staleness check, because
+    /// this is pressed within seconds of the separation, sometimes on the frame the part
+    /// tree is still settling, and a table fitted to the stack that included the upper
+    /// stage would give the prediction several times the drag area the booster actually
+    /// has. While the game rebuilds the aero mesh the sweep refuses, and so does this, so
+    /// the old stack's table never flies the booster; the hand-over tries again.
+    /// Runs in the PrepareWorker prefix only, because the sweep writes the aero flow
+    /// buffers that the vehicle's worker also writes.
     /// </summary>
     private static void ExecuteBoostback(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
         ResampleBoostbackAero(vehicle, parent);
+        if (_s.AeroError == KsaAeroSweep.RebuildingError)
+        {
+            _s.WarnBoostback("AERO MESH REBUILDING. BOOSTBACK WAITS FOR IT.");
+            return;
+        }
         if (_s.Aero?.Table == null)
         {
             _s.WarnBoostback(_s.AeroError.Length > 0
@@ -965,7 +972,7 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void EnsureBoostbackAero(Vehicle vehicle, IParentBody parent)
     {
-        if (_s.AeroStale(LiveBoxExtents(vehicle), KsaAeroSweep.LiveMeshHash(vehicle)))
+        if (_s.AeroStale(LiveBoxExtents(vehicle), KsaAeroSweep.LiveMeshHash(vehicle), parent))
             ResampleBoostbackAero(vehicle, parent);
     }
 

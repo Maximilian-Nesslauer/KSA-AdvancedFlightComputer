@@ -987,7 +987,7 @@ public static partial class GuidanceWindow
         bool landingActive = _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done;
         // LaunchArmed counts as flying because a vehicle waiting for its launch window must update the window and fire the commit. A booster adopted at separation also counts as flying until boostback engages.
         bool handingOver = _s.HandoverPendingUntil > SimNow();
-        bool flying = sixDof || _s.Running || landingActive || BoostbackLive || ThreeDofLive || _s.ThreeDofEngagePending
+        bool flying = sixDof || _s.Running || landingActive || BoostbackLive || ThreeDofLive || _s.ThreeDofEngagePending || _s.BoostbackEngagePending
                    || _s.WasEngaged || _s.LandingCutPending || _s.LaunchArmed || handingOver || _s.MoonChain != MoonChainStage.Idle;
 
         // A craft that loses control stops all guidance, ahead of the takeover test. Vehicle.UpdateControl runs in Universe.ApplyVehicleSolvers, before this prefix in the same frame, and its ReleaseFlightComputer has already put Attitude and Burn to Manual, which the takeover test would read as a takeover that leaves the engine burning. The player cannot cut that engine, because ControlsLockout blocks the engine keys of a craft out of control, so guidance cuts it. A reboot of the avionics stops guidance too.
@@ -1083,6 +1083,13 @@ public static partial class GuidanceWindow
         {
             _s.ThreeDofEngagePending = false;
             Engage3Dof(vehicle, SimNow());
+        }
+
+        // The console's BOOSTBACK commit engages here, because the aero sweep it forces writes the aero flow buffers that the vehicle's worker also writes. It waits while the game rebuilds the aero mesh, because the sweep refuses then.
+        if (_s.BoostbackEngagePending && !KsaAeroSweep.MeshRebuilding(vehicle))
+        {
+            _s.BoostbackEngagePending = false;
+            ExecuteBoostback(vehicle, orbit, parent);
         }
 
         sixDof = _s.Active || _s.EngagePending;

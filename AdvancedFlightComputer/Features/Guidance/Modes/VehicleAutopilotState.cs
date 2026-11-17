@@ -956,11 +956,13 @@ public sealed class VehicleAutopilotState
     /// The game rebuilds the aero mesh when the hash of its source changes, so a live
     /// mesh hash other than the one the sweep measured means a stale table. While a
     /// rebuild runs there is no live hash, and the bounding box the sweep was taken from
-    /// against the live one still catches a staging without hooking anything.
+    /// against the live one still catches a staging without hooking anything. A table
+    /// taken over another body is stale too, because its atmosphere is that body's.
     /// </summary>
-    public bool AeroStale(double3 liveExtents, ulong liveMeshHash)
+    public bool AeroStale(double3 liveExtents, ulong liveMeshHash, IParentBody parent)
     {
         if (Aero == null) return true;
+        if (!ReferenceEquals(Aero.Parent, parent)) return true;
         if (liveMeshHash != 0 && Aero.MeshHash != 0 && liveMeshHash != Aero.MeshHash) return true;
         double3 was = Aero.SampledExtents;
         double tol = 1e-3;
@@ -1310,7 +1312,7 @@ public sealed class VehicleAutopilotState
 
     // Boostback glide: a PID on the coast impact point, steering the angle of attack. See Guidance/BoostbackGlide.cs.
     //
-    // The PID asks for the impact to move back towards the site at (Kp miss + Ki integral + Kd rate) / tgo; the impact Jacobian turns that into lift, and the measured lift curve turns the lift into an angle. The defaults are the ones flat-earth closed-loop runs through KSAero's aero settled on.
+    // The PID asks for the impact to move back towards the site at (Kp miss + Ki integral + Kd rate) / tgo; the impact Jacobian turns that into lift, and the measured lift curve turns the lift into an angle. The defaults are the ones flat-earth closed-loop runs through a lifting aero model settled on.
 
     /// <summary>Proportional gain, dimensionless: Kp * miss / tgo^2 is the lateral acceleration asked for. 3 is the textbook zero-effort-miss law; 5 holds up better when the attitude lags the command.</summary>
     public double GlideKp = 15.0;
@@ -1366,6 +1368,9 @@ public sealed class VehicleAutopilotState
 
     /// <summary>The page's Engage, consumed by the next step (draw-time writes do not reach the sim), and the sim time of the last step.</summary>
     public bool ThreeDofEngagePending;
+
+    /// <summary>The console's BOOSTBACK commit, taken by the next guidance step, because the aero sweep it forces must run where no worker steps the vehicle.</summary>
+    public bool BoostbackEngagePending;
     public double ThreeDofLastStep;
     public double ThreeDofLogTime = double.NaN;
 

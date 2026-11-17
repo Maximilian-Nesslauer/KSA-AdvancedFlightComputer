@@ -556,7 +556,7 @@ public static partial class GuidanceWindow
     /// <summary>
     /// The vehicle's CURRENT angle of attack, retrograde-first, in degrees.
     ///  Airspeed is surface-relative because KSA's atmosphere co-rotates rigidly with the body - the game subtracts omega x r itself before computing drag, and a readout that used inertial velocity would disagree with the sim by a full equatorial rotation speed near the ground.
-    ///  Measured in KSA's OWN body frame, where +x is the nose, rather than the solver's model frame where the thrust axis is +z. That is deliberate: the surrogate was sampled against AerodynamicCdABody, which is indexed in these axes, so reading it back the same way is what makes the two comparable.
+    ///  Measured in KSA's OWN body frame, where +x is the nose, rather than the solver's model frame where the thrust axis is +z. That is deliberate: the surrogate was sampled in these axes (KsaAeroSweep), so reading it back the same way is what makes the two comparable.
     /// </summary>
     private static bool TryLiveAlpha(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                      out double alphaDeg)

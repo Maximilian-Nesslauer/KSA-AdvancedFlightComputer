@@ -132,6 +132,9 @@ public static class KsaAeroSweep
         /// <summary>Wall time the sweep took, ms.</summary>
         public double SweepMillis;
 
+        /// <summary>The body the sweep was taken over. The atmosphere, and on an airless body the zero tables, belong to it.</summary>
+        public IParentBody Parent;
+
         public int MachCount => MachGrid.Length;
         public int AlphaCount => AlphaGridDeg.Length;
 
@@ -197,11 +200,12 @@ public static class KsaAeroSweep
             res.LiftTable = new double[nm * na];
             res.Table = new AeroTable(machGrid, alphaDeg, res.CdTable);
             res.Lift = new AeroTable(machGrid, alphaDeg, res.LiftTable);
+            res.Parent = parent;
             result = res;
             return true;
         }
 
-        // PartTree.AwaitAerodynamics blocks while a mesh build runs, which would stall the main thread. The game flies the old mesh until the build ends, and the caller keeps its old table until then too.
+        // PartTree.RefreshAerodynamics takes the mesh away when a build starts, and PartTree.AwaitAerodynamics blocks until the build ends. The vehicle's own step waits for the new mesh on its worker, and the sweep refuses instead of stalling the main thread, so the caller keeps its old table until then.
         PartTree parts = vehicle.Parts;
         if (parts != null && parts.IsRebuildingAerodynamics)
         {
@@ -211,7 +215,6 @@ public static class KsaAeroSweep
         if (parts != null && parts.HasAerodynamicsBuildFailed)
             LogHelper.WarnOnce("afc-aero-build-failed:" + vehicle.Id,
                 $"[AFC] The game could not build the aero mesh of '{vehicle.Id}'. The aero sweep measures the drag the game applies without it.");
-        res.MeshHash = parts?.Aerodynamics?.Source?.Hash ?? 0UL;
 
         // The air the probe flies through: sea level of this body's own atmosphere. The game reads the Mach number from the speed of sound it is given and the gas properties from the temperature, so both come from the same sea level temperature. The Mach axis is airspeed over the sea level speed of sound, the same scaling the solvers use.
         double seaTemperature = physical.ComputeTemperatureAtAltitude(0.0);
@@ -265,6 +268,9 @@ public static class KsaAeroSweep
             }
         }
         res.SweepMillis = clock.Elapsed.TotalMilliseconds;
+        // Read after the probe, because its first PartTree.AwaitAerodynamics publishes a mesh whose build has ended but was not taken yet.
+        res.MeshHash = LiveMeshHash(vehicle);
+        res.Parent = parent;
         DefaultCategory.Log.Info(FormattableString.Invariant(
             $"[AFC] Aero sweep of '{vehicle.Id}' over {(parent as Astronomical)?.Id}: {na * RollSamples} directions, {na * RollSamples * (nm + 1)} samples, {res.SweepMillis:F0} ms."));
 
