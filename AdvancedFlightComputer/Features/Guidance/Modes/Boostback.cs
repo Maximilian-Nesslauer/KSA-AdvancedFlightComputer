@@ -407,6 +407,14 @@ public static partial class GuidanceWindow
                         break;
                     _s.BoostbackPhaseStart = now;
                 }
+                // A DRONE SHIP'S BOOSTER FLIES NO BOOSTBACK AT ALL (optimal return): its point is where its coast from the plan's separation comes down, its reserve is the landing burn alone, and the glide's lift takes it the rest of the way. No settle, no flip, no correction burn, whatever the miss reads.
+                if (_s.BoostbackGlideOnly)
+                {
+                    _s.BoostbackStatus = "DRONE SHIP: NO BOOSTBACK, AERO STEERS IT IN.";
+                    GuidanceLog.Debug(vehicle, $"clear, optimal return: straight to the glide, engine off (correction {missDv:F1} m/s left to the glide).");
+                    EnterBoostbackPhase(BoostbackPhase.Glide, now);
+                    break;
+                }
                 // NO BOOSTBACK, NO SETTLE. Whether a burn is coming is decided before anything lights: a booster that only needs a correction under BoostbackMinDvMs - an optimal return, or one already falling onto its site - goes straight to the glide with its engine off. Settling first, then skipping the burn, spent landing propellant on nothing, on a landing reserve that is tight by design (2026-11-17).
                 // The decision waits, engine off, for the first steering solution, but not for ever: past BoostbackDecideTimeoutS it settles as before.
                 if (double.IsNaN(_s.BoostbackSettleFrom))

@@ -218,6 +218,9 @@ public static partial class GuidanceWindow
         internal double SiteLonDeg;
         internal double ExpiresAt;
 
+        // An optimal return: flies no boostback, only the glide onto its drone ship's point.
+        internal bool GlideOnly;
+
         // The stack the booster is being dropped from, which it must clear before it lights, see TryAdoptBooster.
         internal Vehicle From;
     }
@@ -253,8 +256,9 @@ public static partial class GuidanceWindow
             if (AlreadyArmed(root.InstanceId, vehicle))
                 continue;
             // A site set by the player, or an optimal return's drone-ship point, frozen from the plan at lift-off. An optimal return with no plan behind it has nowhere known to go, and is not handed over.
+            bool glideOnly = false;
             if (!s.StageTargets.TryGetValue(root.InstanceId, out double2 site)
-                && !(s.StageOptimalReturn.Contains(root.InstanceId) && s.OptimalReturnSites.TryGetValue(root.InstanceId, out site)))
+                && !(glideOnly = s.StageOptimalReturn.Contains(root.InstanceId) && s.OptimalReturnSites.TryGetValue(root.InstanceId, out site)))
             {
                 if (s.StageOptimalReturn.Contains(root.InstanceId))
                     GuidanceLog.Info(vehicle, $"'{root.DisplayName}' is set to optimal return but no plan found its landing point: not handed over.");
@@ -267,6 +271,7 @@ public static partial class GuidanceWindow
                 SiteLonDeg = site.Y,
                 ExpiresAt = now + HandoverWindowS,
                 From = vehicle,
+                GlideOnly = glideOnly,
             });
             armed++;
             GuidanceLog.Info(vehicle, FormattableString.Invariant(
@@ -336,6 +341,7 @@ public static partial class GuidanceWindow
         _s = VehicleAutopilotState.For(vehicle);
         _s.SiteLatDeg = mine.SiteLatDeg;
         _s.SiteLonDeg = mine.SiteLonDeg;
+        _s.BoostbackGlideOnly = mine.GlideOnly;
         GuidanceLog.Info(vehicle, $"adopted as a separated booster, boostback engages within {HandoverWindowS:F0} s.");
 
         // ENGINE OFF ON THIS FRAME, and the settling burn held until the two are clear. A split vehicle inherits the stack's control inputs, so a booster dropped under the reserve comes away still burning - and from below the stage it let go of, that thrust drives it straight back into it, whose engine is usually held for a few seconds yet. KSA breaks the parts that hit: the first flights lost the booster's interstage, which took this vehicle and its boostback with it and left the rest of the booster as a new craft nothing was flying. The engage below can take seconds to stick, so the cut cannot wait for it. Written before any claim, but the inputs are the ascent's, inherited, not the player's.
