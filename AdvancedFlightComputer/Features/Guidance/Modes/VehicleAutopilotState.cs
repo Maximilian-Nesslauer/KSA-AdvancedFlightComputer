@@ -1261,6 +1261,14 @@ public sealed class VehicleAutopilotState
     public double BoostbackClearanceM = 30.0;
 
     /// <summary>
+    /// A boostback smaller than this, m/s, is flown without the settling burn and turned with the engine off, then burned (#197). The lit flip lays down dV of its own as it sweeps through every direction on the way round; for a small correction that is as big as the correction, which moves while the booster turns, and the short burn after it chases its own tail. A small correction leaves time to turn. 0 settles and flips every burn lit, as before.
+    /// </summary>
+    public double BoostbackSmallDvMs = 150.0;
+
+    /// <summary>This boostback is a small one (BoostbackSmallDvMs): no settle, and the turn to the burn is flown with the engine off. Decided once the booster is clear.</summary>
+    public bool BoostbackSmall;
+
+    /// <summary>
     /// The stage a booster handed over at separation was dropped from, while the booster is still too close to light its engine; null otherwise. Set when the sweep adopts the booster, cleared once it is clear (see BoosterClear).
     /// </summary>
     public Vehicle BoostbackClearOf;

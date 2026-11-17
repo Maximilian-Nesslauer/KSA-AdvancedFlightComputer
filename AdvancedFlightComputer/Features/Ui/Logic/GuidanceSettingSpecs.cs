@@ -91,6 +91,8 @@ internal static class GuidanceSettingSpecs
         "Largest angle of attack (AoA) the glide may fly to steer the impact point.");
     public static readonly SettingSpec GlideNominalAoaDeg = new("GlideNominalAoaDeg", "GLIDE PLAN AoA", "deg", E, 7.5, 0.0, 60.0, "%.1f",
         "Angle of attack that every impact prediction assumes for the glide, with the lift pointed up the trajectory. 0 plans an engine-first ballistic coast.");
+    public static readonly SettingSpec BoostbackSmallDvMs = new("BoostbackSmallDvMs", "SMALL BOOSTBACK", "m/s", E, 150.0, 0.0, 5000.0, "%.0f",
+        "Boostbacks smaller than this skip the settling burn and turn with the engine off, then burn. Larger ones settle and turn on the lit engine's gimbal. 0 settles every burn.");
     public static readonly SettingSpec BoostbackClearanceM = new("BoostbackClearanceM", "CLEARANCE AT SEPARATION", "m", E, 30.0, 0.0, 1e4, "%.1f",
         "Distance the booster coasts, engine off, away from the stage before the settling burn lights.");
     public static readonly SettingSpec BoostbackSlewDegS = new("BoostbackSlewDegS", "SLEW RATE", "deg/s", T, 30.0, 0.0, 360.0, "%.2f",
@@ -293,7 +295,7 @@ internal static class GuidanceSettingSpecs
         { MatchTargetArgPe, ArgPeFixed, OptimiseInsertion, InsertBeforeApoapsis, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll };
 
     public static readonly SettingSpec[] LandBoostbackExpert =
-        { BoostbackClearanceM, BoostbackSeparationS, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg };
+        { BoostbackClearanceM, BoostbackSeparationS, BoostbackSmallDvMs, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg };
 
     /// <summary>The HANDOVER settings of a boostback glide and of entry guidance: who takes the glide and who takes the end of the burn.</summary>
     public static readonly SettingSpec[] LandHandOvers = { ThreeDofEngageTgoS, ThreeDofSixDofTimeS };
@@ -373,7 +375,7 @@ internal static class GuidanceSettingSpecs
     {
         PeKm, ApKm, IncDeg, LanDeg, ArgPeDeg, ChaseOffsetKm, MoonTransferPeKm, GLimitG, TurnStartAltKm, TurnRateDegS, ForceRollDeg,
         ConvexQMaxKpa, ConvexThrottleMinPct, ConvexQAlphaMax, ConvexHandoverAltKm,
-        BoostbackSeparationS, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg, BoostbackClearanceM,
+        BoostbackSeparationS, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg, BoostbackClearanceM, BoostbackSmallDvMs,
         BoostbackSlewDegS, GlideKp, GlideKi, GlideKd,
         SiteLatDeg, SiteLonDeg, BrakingAltitudeKm, DeorbitArrivalDescentDeg, DescentRate, LandingVerticalGateM,
         DownrangeFactor, AimAltKm, GateUprangeKm, GfoldHandoffTgo, VehicleHeightM, GfoldHoverHandoffAltM,

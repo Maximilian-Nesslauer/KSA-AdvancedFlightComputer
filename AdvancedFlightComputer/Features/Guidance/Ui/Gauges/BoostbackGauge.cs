@@ -55,6 +55,7 @@ public static partial class GuidanceWindow
             return;
         GaugeRow(Specs.BoostbackClearanceM, ref _s.BoostbackClearanceM);
         GaugeRow(Specs.BoostbackSeparationS, ref _s.BoostbackSeparationS);
+        GaugeRow(Specs.BoostbackSmallDvMs, ref _s.BoostbackSmallDvMs);
         GaugeRow(Specs.BoostbackPitchDeg, ref _s.BoostbackPitchDeg);
         GuidanceRegion.End();
     }

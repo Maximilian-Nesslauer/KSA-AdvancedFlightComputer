@@ -194,6 +194,9 @@ public static partial class GuidanceWindow
     /// <summary>How long a clear booster waits, engine off, for its first steering solution before it settles anyway, s: the decision between a burn and going straight to the glide needs it.</summary>
     private const double BoostbackDecideTimeoutS = 3.0;
 
+    /// <summary>How long a small boostback may turn with the engine off before it lights the engine to turn on its gimbal, s (VehicleAutopilotState.BoostbackSmall).</summary>
+    private const double BoostbackSmallTurnTimeoutS = 60.0;
+
     /// <summary>
     /// Time constant for the low-pass on the TARGET's own turning rate, s.
     ///
@@ -251,6 +254,7 @@ public static partial class GuidanceWindow
 
         _s.BoostbackPhase = BoostbackPhase.Separation;
         _s.BoostbackSettleFrom = double.NaN;
+        _s.BoostbackSmall = false;
         _s.BoostbackPhaseStart = SimNow();
         _s.BoostbackLastStep = SimNow();
         _s.BoostbackLocked = false;
@@ -428,6 +432,14 @@ public static partial class GuidanceWindow
                     }
                     if (!_s.HasSteer && now - _s.BoostbackPhaseStart < BoostbackDecideTimeoutS)
                         break;
+                    // SMALL BOOSTBACK (#197): no settle, and the turn with the engine off. A lit flip lays down dV of its own, as big as a small correction, which then moves under the booster as it turns.
+                    if (_s.HasSteer && missDv < _s.BoostbackSmallDvMs)
+                    {
+                        _s.BoostbackSmall = true;
+                        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, small boostback ({missDv:F0} m/s, under {_s.BoostbackSmallDvMs:F0}): no settle, turning engine-off."));
+                        EnterBoostbackPhase(BoostbackPhase.Rotation, now);
+                        break;
+                    }
                     _s.BoostbackSettleFrom = now;
                 }
                 if (now - _s.BoostbackSettleFrom >= Math.Max(_s.BoostbackSeparationS, 0.0))
@@ -450,7 +462,14 @@ public static partial class GuidanceWindow
                     EnterBoostbackPhase(BoostbackPhase.Glide, now);
                     break;
                 }
-                _s.BoostbackStatus = "";
+                _s.BoostbackStatus = _s.BoostbackSmall ? "SMALL BOOSTBACK: TURNING ENGINE-OFF, THEN BURN." : "";
+
+                // An engine-off turn that never lines up - too little RCS to turn the booster - lights the engine at the settling throttle and turns on its gimbal, as a large boostback does. There is time for a small correction, but not for ever.
+                if (_s.BoostbackSmall && now - _s.BoostbackPhaseStart > BoostbackSmallTurnTimeoutS)
+                {
+                    _s.BoostbackSmall = false;
+                    GuidanceLog.Info(vehicle, FormattableString.Invariant($"small boostback: no line-up after {BoostbackSmallTurnTimeoutS:F0} s engine-off, turning on the lit engine."));
+                }
 
                 if (!_s.BoostbackHasPlan)
                 {
@@ -811,6 +830,13 @@ public static partial class GuidanceWindow
                 break;
 
             case BoostbackPhase.Rotation:
+                // A small boostback turns with the engine off (VehicleAutopilotState.BoostbackSmall, #197): its correction is too small to spend a lit flip on.
+                if (_s.BoostbackSmall)
+                {
+                    _s.BoostbackThrottle = 0.0;
+                    _s.BoostbackEngineOn = false;
+                    break;
+                }
                 // LIT THROUGH THE TURN, AND THAT IS THE POINT.
                 // A booster's RCS is sized for attitude hold, not for throwing a half-empty first stage through 180 degrees; the gimbals are what turn it, and a gimbal produces torque in proportion to the thrust it is deflecting.
                 // Shut the engine down for the flip and the only authority left is the one that cannot do it.
