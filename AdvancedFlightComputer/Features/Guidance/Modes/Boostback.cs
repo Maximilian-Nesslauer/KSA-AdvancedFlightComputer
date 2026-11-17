@@ -488,8 +488,10 @@ public static partial class GuidanceWindow
                     if (!_s.HasSteer && now - _s.BoostbackPhaseStart < BoostbackDecideTimeoutS)
                         break;
                     // SMALL BOOSTBACK (#197): a miss up to BoostbackLargeMissKm flies no settle and turns with the engine off. A lit flip lays down dV of its own, as big as a small correction, which then moves under the booster as it turns.
-                    // A SMALL CORRECTION WAITS FOR THE APEX while the booster still climbs: separated in the air, it drifts while it turns round, so a burn now is followed by a second at the apex recheck. Gliding up and burning once at the top does it in one. A booster already falling has no apex to wait for, and a large miss burns at once.
-                    if (_s.HasSteer && missKm <= _s.BoostbackLargeMissKm && vUp > 0.0)
+                    // Waiting for the apex avoids a second correction if there is still time to turn, burn and land.
+                    bool smallMiss = _s.HasSteer && missKm <= _s.BoostbackLargeMissKm;
+                    double gravity = parent.Mu / r.LengthSquared();
+                    if (smallMiss && vUp > 0.0 && CanCoastBeforeSmallBoostback(vehicle, vUp / gravity))
                     {
                         _s.BoostbackStatus = FormattableString.Invariant($"MISS {missKm:F1} km: SMALL CORRECTION AT THE APEX.");
                         GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, small correction (miss {missKm:F1} km, {missDv:F0} m/s) while climbing: no burn now, it burns once at the apex."));
@@ -499,13 +501,15 @@ public static partial class GuidanceWindow
                         _s.BoostbackClimbHold = true;
                         break;
                     }
-                    if (_s.HasSteer && missKm <= _s.BoostbackLargeMissKm)
+                    if (smallMiss && CanCoastBeforeSmallBoostback(vehicle, 0.0))
                     {
                         _s.BoostbackSmall = true;
                         GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, small boostback (miss {missKm:F1} km, {missDv:F0} m/s): no settle, turning engine-off."));
                         EnterBoostbackPhase(BoostbackPhase.Rotation, now);
                         break;
                     }
+                    if (smallMiss)
+                        GuidanceLog.Info(vehicle, "Small boostback: using a powered turn to keep time for the burn and descent.");
                     _s.BoostbackSettleFrom = now;
                 }
                 if (now - _s.BoostbackSettleFrom >= Math.Max(_s.BoostbackSeparationS, 0.0))
@@ -541,10 +545,12 @@ public static partial class GuidanceWindow
                 }
 
                 // An engine-off turn that never lines up - too little RCS to turn the booster - lights the engine at the settling throttle and turns on its gimbal, as a large boostback does. There is time for a small correction, but not for ever.
-                if (_s.BoostbackSmall && now - _s.BoostbackPhaseStart > BoostbackSmallTurnTimeoutS)
+                if (_s.BoostbackSmall && (now - _s.BoostbackPhaseStart > BoostbackSmallTurnTimeoutS
+                    || !CanCoastBeforeSmallBoostback(vehicle, 0.0)))
                 {
                     _s.BoostbackSmall = false;
-                    GuidanceLog.Info(vehicle, FormattableString.Invariant($"small boostback: no line-up after {BoostbackSmallTurnTimeoutS:F0} s engine-off, turning on the lit engine."));
+                    GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                        $"Small boostback: engine-off turn ended after {now - _s.BoostbackPhaseStart:F1} s. Turning on the lit engine."));
                 }
 
                 if (!_s.BoostbackHasPlan)
@@ -722,6 +728,26 @@ public static partial class GuidanceWindow
         _s.HasCommand = _s.CommandDir.Length() > 0.5;
 
         ApplyBoostbackActuation(vehicle, now);
+    }
+
+    private static bool CanCoastBeforeSmallBoostback(Vehicle vehicle, double waitS)
+        => HasSmallBoostbackCoastTime(_s.HasImpact ? _s.Impact.TimeOfFlight.V : double.NaN,
+            waitS, vehicle.FlightComputer.ConservativeFlipTime, _s.BoostbackSlewDegS, _s.BoostbackTgo,
+            _s.ThreeDofFromGlide ? _s.ThreeDofEngageTgoS : 0.0);
+
+    internal static bool HasSmallBoostbackCoastTime(double impactS, double waitS, double rcsFlipS,
+        double slewDegS, double burnS, double descentLeadS)
+    {
+        if (!double.IsFinite(rcsFlipS))
+            return false;
+        if (!double.IsFinite(impactS))
+            return true;
+
+        // Give both the slew command and the RCS turn time to finish before the burn and the descent handover.
+        double slewS = slewDegS > 0.0 ? 180.0 / slewDegS : 0.0;
+        double requiredS = Math.Max(0.0, waitS) + Math.Max(slewS, rcsFlipS)
+            + Math.Max(0.0, burnS) + Math.Max(0.0, descentLeadS);
+        return impactS > requiredS;
     }
 
     // ------------------------------------------------------------------ the plan
