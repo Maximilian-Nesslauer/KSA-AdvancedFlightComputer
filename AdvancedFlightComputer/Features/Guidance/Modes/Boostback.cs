@@ -191,6 +191,9 @@ public static partial class GuidanceWindow
     /// </summary>
     private const double BoostbackMinDvMs = 5.0;
 
+    /// <summary>How long a clear booster waits, engine off, for its first steering solution before it settles anyway, s: the decision between a burn and going straight to the glide needs it.</summary>
+    private const double BoostbackDecideTimeoutS = 3.0;
+
     /// <summary>
     /// Time constant for the low-pass on the TARGET's own turning rate, s.
     ///
@@ -247,6 +250,7 @@ public static partial class GuidanceWindow
         ClaimVehicle(GuidanceMode.Boostback, vehicle);
 
         _s.BoostbackPhase = BoostbackPhase.Separation;
+        _s.BoostbackSettleFrom = double.NaN;
         _s.BoostbackPhaseStart = SimNow();
         _s.BoostbackLastStep = SimNow();
         _s.BoostbackLocked = false;
@@ -396,14 +400,29 @@ public static partial class GuidanceWindow
         switch (_s.BoostbackPhase)
         {
             case BoostbackPhase.Separation:
-                // Engine off until clear of the stage it left; the settling burn's clock starts from there.
+                // Engine off until clear of the stage it left.
                 if (_s.BoostbackClearOf != null)
                 {
                     if (!BoosterClear(vehicle, now))
                         break;
                     _s.BoostbackPhaseStart = now;
                 }
-                if (now - _s.BoostbackPhaseStart >= Math.Max(_s.BoostbackSeparationS, 0.0))
+                // NO BOOSTBACK, NO SETTLE. Whether a burn is coming is decided before anything lights: a booster that only needs a correction under BoostbackMinDvMs - an optimal return, or one already falling onto its site - goes straight to the glide with its engine off. Settling first, then skipping the burn, spent landing propellant on nothing, on a landing reserve that is tight by design (2026-11-17).
+                // The decision waits, engine off, for the first steering solution, but not for ever: past BoostbackDecideTimeoutS it settles as before.
+                if (double.IsNaN(_s.BoostbackSettleFrom))
+                {
+                    if (_s.HasSteer && missDv < BoostbackMinDvMs)
+                    {
+                        _s.BoostbackStatus = FormattableString.Invariant($"CORRECTION {missDv:F1} m/s ONLY. NO SETTLE, NO BURN.");
+                        GuidanceLog.Debug(vehicle, $"clear, correction {missDv:F1} m/s only: straight to the glide, engine off.");
+                        EnterBoostbackPhase(BoostbackPhase.Glide, now);
+                        break;
+                    }
+                    if (!_s.HasSteer && now - _s.BoostbackPhaseStart < BoostbackDecideTimeoutS)
+                        break;
+                    _s.BoostbackSettleFrom = now;
+                }
+                if (now - _s.BoostbackSettleFrom >= Math.Max(_s.BoostbackSeparationS, 0.0))
                     EnterBoostbackPhase(BoostbackPhase.Rotation, now);
                 break;
 
@@ -772,8 +791,8 @@ public static partial class GuidanceWindow
         switch (_s.BoostbackPhase)
         {
             case BoostbackPhase.Separation:
-                // Still alongside the stage it left: coasting, see TryAdoptBooster.
-                if (_s.BoostbackClearOf != null)
+                // Still alongside the stage it left, or not yet decided whether a burn is coming: coasting, see TryAdoptBooster and the Separation transition.
+                if (_s.BoostbackClearOf != null || double.IsNaN(_s.BoostbackSettleFrom))
                 {
                     _s.BoostbackThrottle = 0.0;
                     _s.BoostbackEngineOn = false;
@@ -851,8 +870,8 @@ public static partial class GuidanceWindow
             return false;
 
         GuidanceLog.Debug(vehicle, gone
-            ? $"the stage it separated from is gone after {waited:F1} s, settling."
-            : $"{_s.BoostbackClearGapM:F0} m clear of '{stage.Id}' after {waited:F1} s{(timedOut ? " (waited the limit)" : "")}, settling.");
+            ? $"the stage it separated from is gone after {waited:F1} s."
+            : $"{_s.BoostbackClearGapM:F0} m clear of '{stage.Id}' after {waited:F1} s{(timedOut ? " (waited the limit)" : "")}.");
         _s.BoostbackClearOf = null;
         return true;
     }

@@ -1265,6 +1265,9 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public Vehicle BoostbackClearOf;
 
+    /// <summary>When the settling burn lit, sim time; NaN until it has. It lights only once the booster is clear AND a burn is coming (Boostback's Separation phase): one that only needs a correction under BoostbackMinDvMs goes straight to the glide with its engine off, keeping its propellant for the landing.</summary>
+    public double BoostbackSettleFrom = double.NaN;
+
     /// <summary>Distance to BoostbackClearOf at the split, m, and how far it has opened since, the gauge's readout.</summary>
     public double BoostbackClearFromM, BoostbackClearGapM;
 
