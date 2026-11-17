@@ -168,9 +168,8 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
 
         _standbyReady = true;
         GuidanceWindow.ApplyAutopilot(craft);
-        t.Check("6-DOF: the handoff ends the burn",
-            state.LandingPhase == GuidanceWindow.LandingPhase.Idle, state.LandingStatus);
-        t.Check("6-DOF: the engage is still queued when the step ends", state.EngagePending);
+        t.Check("6-DOF: the pending handoff leaves the braking burn in control",
+            state.LandingPhase == GuidanceWindow.LandingPhase.Burn && state.EngagePending, state.LandingStatus);
         t.Check("6-DOF: the standby is kept for the engage to promote", state.SixDofStandby);
         t.Check("6-DOF: the handoff keeps the craft",
             state.ControlAcquired && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance);
@@ -182,8 +181,17 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         t.Check("6-DOF: AutoStage stays armed through the handoff",
             StagingDetector.IsArmed(craft) && state.ArmedStaging);
 
+        _standbyReady = false;
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("6-DOF: a plan that no longer matches leaves the burn flying",
+            state.LandingPhase == GuidanceWindow.LandingPhase.Burn && !state.EngagePending && _sixDofSteps == 0);
+        t.Check("6-DOF: refusing a pending handoff keeps the braking engine lit", Inputs(craft).EngineOn);
+        _standbyReady = true;
+        GuidanceWindow.ApplyAutopilot(craft);
         GuidanceWindow.ApplyAutopilot(craft);
         t.Check("6-DOF: the next step dispatches the queued engage", _sixDofSteps == 1, $"{_sixDofSteps} dispatches");
+        t.Check("6-DOF: the accepted handoff ends the braking mode",
+            state.LandingPhase == GuidanceWindow.LandingPhase.Idle, state.LandingStatus);
         t.Check("6-DOF: the engaged descent keeps the craft",
             state.Active && state.ControlAcquired
             && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance);

@@ -1226,6 +1226,7 @@ public static partial class GuidanceWindow
 
         StepPendingBoostback(vehicle, orbit, parent);
 
+        CheckPendingBrakingHandover(vehicle, parent);
         sixDof = _s.Active || _s.EngagePending;
         // Active, not EngagePending: a setup that Engage6Dof rejects never writes control, and must not leave the craft owned. A coast owns nothing either, see StepLandingCoast.
         if (_s.Active || (_s.Engage && (_s.Running || LandingCommands(_s.LandingPhase) || BoostbackLive || ThreeDofLive)))
