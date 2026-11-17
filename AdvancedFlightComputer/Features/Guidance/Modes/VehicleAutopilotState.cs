@@ -1402,12 +1402,12 @@ public sealed class VehicleAutopilotState
     public double GlideKd = 0.0;
 
     /// <summary>Largest angle of attack the glide commands, degrees off engine-first into the wind.</summary>
-    public double GlideMaxAoaDeg = 2.5;
+    public double GlideMaxAoaDeg = 1.0;
 
     /// <summary>
     /// The angle of attack the boostback plans the glide at, degrees: every impact prediction - the burn's shot, its cutoff correction, the overlay and the glide PID's own - assumes the vehicle glides at this angle with its lift pointed up the trajectory, which stretches the range so the burn can stop short and save propellant. The PID flies it as its nominal and trims about it. It sits below the maximum so the PID keeps room to trim, and both are small because the aero moment of KSA 5901 can turn a booster at a larger angle of attack. 0 plans the engine-first ballistic coast.
     /// </summary>
-    public double GlideNominalAoaDeg = 1.0;
+    public double GlideNominalAoaDeg = 0.0;
 
     /// <summary>Miss of the coast impact point from the site, m: along the ground track (positive long) and across it (positive left).</summary>
     public double GlideMissDownM, GlideMissCrossM;
