@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- On Luna, the target orbit defaults to a low one, 30 km PERIAPSIS and 50 km APOAPSIS, in place of the 200 x 420 km of the home body. Like UPFG FROM, a craft takes these when it is at Luna, and a value you changed stays.
+
 - A landing deploys the landing legs on the clock of the plan that flies it, when the time to the touchdown is the time the legs take to open plus a buffer (#169). Before, the legs came down at a height over the ground, 1000 m by default. On a fast landing burn that is only a few seconds, so the legs were still opening at the touchdown. The stock leg takes 5 s to open, so with the default buffer of 1 s it now deploys 6 s before the touchdown.
   - The time to the touchdown is the one of the plan that flies the landing: touchdown guidance, entry guidance, the G-FOLD descent (at the gate of the vertical approach, which comes before the touchdown), touchdown guidance on standby, or the predicted impact of a boostback glide. Without a plan it is the fall time of the legs to the ground at the descent rate, with gravity, which is never longer than the height divided by the descent rate.
   - The **LEGS** fold shows **DEPLOY TIME** (the longest deploy animation of the legs), **BUFFER** in place of **LEGS DOWN AT**, and **DEPLOYS AT**, the time to go that results. The fold title, the legs note, **THIS LANDING** and the log line give the time to go, and the last two also the height of the legs at the deploy.

@@ -21,8 +21,14 @@ internal static class BodyDefaults
 
     private static readonly Dictionary<string, Dictionary<string, double>> BuiltInDoubles = new(StringComparer.Ordinal)
     {
-        // No air to climb through: the solved climb has nothing to shape past the pitch-over, so UPFG takes it low.
-        ["Luna"] = new(StringComparer.Ordinal) { [GuidanceSettingSpecs.ConvexHandoverAltKm.Key] = 10.0 },
+        ["Luna"] = new(StringComparer.Ordinal)
+        {
+            // No air to climb through: the solved climb has nothing to shape past the pitch-over, so UPFG takes it low.
+            [GuidanceSettingSpecs.ConvexHandoverAltKm.Key] = 10.0,
+            // A low lunar orbit, not the 200 x 420 km of the home body.
+            [GuidanceSettingSpecs.PeKm.Key] = 30.0,
+            [GuidanceSettingSpecs.ApKm.Key] = 50.0,
+        },
     };
 
     private static readonly Dictionary<string, Dictionary<string, bool>> BuiltInBools = new(StringComparer.Ordinal);
