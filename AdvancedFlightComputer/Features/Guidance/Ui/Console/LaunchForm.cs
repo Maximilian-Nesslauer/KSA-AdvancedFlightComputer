@@ -133,7 +133,7 @@ public static partial class GuidanceWindow
         int stages = _s.ReturnableStages.Count;
         int withSite = 0;
         foreach (ReturnableStage stage in _s.ReturnableStages)
-            if (stage.HasTarget)
+            if (stage.ComesHome)
                 withSite++;
         if (!ConsoleUi.Fold(PageText.BoostersLabel(stages, withSite, _s.ReserveArmed ? _s.ReserveKg : 0.0), BoostersFoldId, openByDefault, PageText.BoostersTip(stages)))
             return;

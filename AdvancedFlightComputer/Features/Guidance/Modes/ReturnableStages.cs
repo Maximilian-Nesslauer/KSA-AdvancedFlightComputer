@@ -60,8 +60,21 @@ public static partial class GuidanceWindow
         /// below is actually about rather than hypothetical.</summary>
         public bool IsNext;
 
+        /// <summary>A landing site set by the player (VehicleAutopilotState.StageTargets), at <see cref="TargetLatDeg"/>, <see cref="TargetLonDeg"/>.</summary>
         public bool HasTarget;
         public double TargetLatDeg, TargetLonDeg;
+
+        /// <summary>Set to optimal return (a drone ship, VehicleAutopilotState.StageOptimalReturn): it comes home with no site set, to where its coast from the plan's separation lands.</summary>
+        public bool OptimalReturn;
+
+        /// <summary>It is brought home, to a site or by an optimal return: the plan keeps a reserve for it and it is handed over at separation. Otherwise it is expendable.</summary>
+        public bool ComesHome => HasTarget || OptimalReturn;
+
+        /// <summary>How it comes home, as the plan's return paths have it.</summary>
+        public AdvancedFlightComputer.Guidance.Scvx.Ascent.BoosterReturnMode Mode
+            => HasTarget ? AdvancedFlightComputer.Guidance.Scvx.Ascent.BoosterReturnMode.Site
+             : OptimalReturn ? AdvancedFlightComputer.Guidance.Scvx.Ascent.BoosterReturnMode.OptimalReturn
+             : AdvancedFlightComputer.Guidance.Scvx.Ascent.BoosterReturnMode.Expendable;
 
         /// <summary>Impulse to put the ballistic impact on this stage's site from the
         /// current state, m/s. NaN when it has no target or nothing landed.</summary>
@@ -141,11 +154,20 @@ public static partial class GuidanceWindow
                 // Every craft the first separating row drops is next, and none of a later row's: a dumb interstage coming off first does not make the booster behind it next.
                 stage.IsNext = first;
                 stage.HasTarget = false;
+                stage.OptimalReturn = false;
                 if (_s.StageTargets.TryGetValue(stage.RootId, out double2 site))
                 {
                     stage.HasTarget = true;
                     stage.TargetLatDeg = site.X;
                     stage.TargetLonDeg = site.Y;
+                }
+                else if (_s.StageOptimalReturn.Contains(stage.RootId))
+                {
+                    stage.OptimalReturn = true;
+                    // The drone ship's point once a plan has found it; NaN until then.
+                    bool known = _s.OptimalReturnSites.TryGetValue(stage.RootId, out double2 ship);
+                    stage.TargetLatDeg = known ? ship.X : double.NaN;
+                    stage.TargetLonDeg = known ? ship.Y : double.NaN;
                 }
                 list.Add(stage);
             }

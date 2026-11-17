@@ -151,7 +151,7 @@ public static partial class GuidanceWindow
         {
             _s.ReserveStagedRoots.Add(_s.ReserveRootId);
             foreach (ReturnableStage stage in _s.ReturnableStages)
-                if (stage.IsNext && stage.HasTarget)
+                if (stage.IsNext && stage.ComesHome)
                     _s.ReserveStagedRoots.Add(stage.RootId);
         }
     }
@@ -239,7 +239,7 @@ public static partial class GuidanceWindow
     /// </summary>
     internal static void OnSequenceActivating(Vehicle vehicle, Sequence sequence)
     {
-        if (!VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState s) || s.StageTargets.Count == 0)
+        if (!VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState s) || (s.StageTargets.Count == 0 && s.StageOptimalReturn.Count == 0))
             return;
 
         double now = SimNow();
@@ -250,8 +250,16 @@ public static partial class GuidanceWindow
         {
             Part root = _handoverRoots[i];
             // Nested separations have overlapping subtrees but distinct roots. Matching the root keeps the inner vehicle from claiming the outer vehicle's record.
-            if (!s.StageTargets.TryGetValue(root.InstanceId, out double2 site) || AlreadyArmed(root.InstanceId, vehicle))
+            if (AlreadyArmed(root.InstanceId, vehicle))
                 continue;
+            // A site set by the player, or an optimal return's drone-ship point, frozen from the plan at lift-off. An optimal return with no plan behind it has nowhere known to go, and is not handed over.
+            if (!s.StageTargets.TryGetValue(root.InstanceId, out double2 site)
+                && !(s.StageOptimalReturn.Contains(root.InstanceId) && s.OptimalReturnSites.TryGetValue(root.InstanceId, out site)))
+            {
+                if (s.StageOptimalReturn.Contains(root.InstanceId))
+                    GuidanceLog.Info(vehicle, $"'{root.DisplayName}' is set to optimal return but no plan found its landing point: not handed over.");
+                continue;
+            }
             _handovers.Add(new BoosterHandover
             {
                 RootId = root.InstanceId,
@@ -716,22 +724,25 @@ public static partial class GuidanceWindow
     /// NOT ONLY THE NEXT ONE. A core under strap-on boosters with no command pod is not the next thing to separate on the pad - the strap-ons are - but it is the booster coming home, and the plan has to size its reserve before lift-off. It arms once the strap-ons are gone and it is next (RefreshReserve).
     /// </summary>
     internal static ReturnableStage BoostbackTarget()
-        => _s.ReturnableStages.Find(st => st.HasTarget);
+        => _s.ReturnableStages.Find(st => st.ComesHome);
 
     /// <summary>The first targeted stage that is next to separate, else null: the booster whose reserve can arm now (RefreshReserve). Side boosters leaving together share one reserve, so the first of them stands for the row.</summary>
     internal static ReturnableStage NextTargetedBooster()
-        => _s.ReturnableStages.Find(st => st.HasTarget && st.IsNext);
+        => _s.ReturnableStages.Find(st => st.ComesHome && st.IsNext);
 
-    /// <summary>One booster and its site, as a plan records it (AscentPlan.RecoverySite).</summary>
+    /// <summary>One booster and its site, as a plan records it (AscentPlan.RecoverySite). An optimal return has no site going in: the plan finds it.</summary>
     internal static string RecoverySiteKey(ReturnableStage booster)
-        => booster == null ? "" : FormattableString.Invariant($"{booster.RootId}:{booster.TargetLatDeg:F6}:{booster.TargetLonDeg:F6}");
+        => booster == null ? ""
+         : booster.HasTarget ? FormattableString.Invariant($"{booster.RootId}:{booster.TargetLatDeg:F6}:{booster.TargetLonDeg:F6}")
+         : booster.OptimalReturn ? FormattableString.Invariant($"{booster.RootId}:OPTIMAL")
+         : "";
 
     /// <summary>Every targeted booster and its site, in staging order, as a plan records them (AscentPlan.RecoverySite): a target set, moved or cleared since makes that plan's reserves stale.</summary>
     internal static string RecoverySitesKey()
     {
         var keys = new List<string>();
         foreach (ReturnableStage stage in _s.ReturnableStages)
-            if (stage.HasTarget)
+            if (stage.ComesHome)
                 keys.Add(RecoverySiteKey(stage));
         return string.Join(";", keys);
     }

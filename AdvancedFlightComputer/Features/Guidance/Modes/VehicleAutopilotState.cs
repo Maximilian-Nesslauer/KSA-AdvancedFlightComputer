@@ -267,6 +267,16 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public readonly System.Collections.Generic.Dictionary<uint, double2> StageTargets = new();
 
+    /// <summary>
+    /// The stages set to OPTIMAL RETURN (a drone ship), by the same root InstanceId as <see cref="StageTargets"/>: no boostback, a landing where the booster's coast from the plan's separation comes down, and only the landing burn kept back. A stage is either here or in StageTargets, or in neither and expendable.
+    /// </summary>
+    public readonly HashSet<uint> StageOptimalReturn = new();
+
+    /// <summary>
+    /// Each optimal-return stage's landing point, lat/lon deg: where the plan's coast comes down. Taken from each plan adopted on the ground, and FROZEN FROM LIFT-OFF, so a ship placed there before launch is where the booster is sent (BoosterReturn, OnSequenceActivating).
+    /// </summary>
+    public readonly Dictionary<uint, double2> OptimalReturnSites = new();
+
     /// <summary>Live stage objects by root id, so the 4 Hz rebuild reuses them and the
     /// 1 Hz costs written into them survive it.</summary>
     public readonly System.Collections.Generic.Dictionary<uint, GuidanceWindow.ReturnableStage>

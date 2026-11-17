@@ -92,6 +92,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --ascent-glimit a thrust acceleration limit that binds, one that does not, and which stages take it
           --ascent-aoa    drag that grows with the angle of attack, as KSA's does, on 2stage_new
           --ascent-recovery the booster reserve chosen by the solve, held to what the booster needs to come home
+          --ascent-booster-return each booster's way down from the plan, and the optimal return (a drone ship)
           --ascent-side-boosters a reserve kept in side boosters beside a core on one throttle, the core's share carried on
           --ascent-qceiling the relaxed max q a planner retries at stays under the break-up dynamic pressure
           --3dof          the 3-DOF glide-and-burn loop against 3dof.py's result
@@ -211,6 +212,11 @@ if (args.Contains("--ascent-replay"))
 if (args.Contains("--ascent-recovery"))
 {
     return AscentRecoveryCheck.Run(verbose);
+}
+
+if (args.Contains("--ascent-booster-return"))
+{
+    return AscentBoosterReturnCheck.Run(verbose);
 }
 
 if (args.Contains("--ascent-side-boosters"))

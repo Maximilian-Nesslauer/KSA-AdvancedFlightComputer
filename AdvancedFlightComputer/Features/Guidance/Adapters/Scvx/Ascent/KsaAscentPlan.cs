@@ -348,6 +348,53 @@ public sealed class AscentPlanSeries
 }
 
 /// <summary>
+/// One returnable stage's way down from a plan (BoosterReturn), with what the pictures need: which booster, how it comes home, and its path's altitude and downrange from the pad, km, on the same footing as AscentPlanSeries.
+/// </summary>
+public sealed class BoosterTrackView
+{
+    public uint RootId { get; init; }
+    public string Name { get; init; } = "";
+    public BoosterReturnTrack Track { get; init; }
+    public double[] AltitudeKm { get; init; } = [];
+    public double[] DownrangeKm { get; init; } = [];
+    public BoosterReturnMode Mode => Track.Mode;
+
+    /// <summary>The track, its points turned about the spin axis by <paramref name="turn"/> (radians) into the frame the plan is published in, with altitude and downrange from <paramref name="pad"/>, the unit direction of the pad at lift-off.</summary>
+    public static BoosterTrackView From(uint rootId, string name, BoosterReturnTrack track, double turn, double3 pad, double bodyRadius)
+    {
+        if (!track.Ok)
+            return new BoosterTrackView { RootId = rootId, Name = name, Track = track };
+        double c = Math.Cos(turn), s = Math.Sin(turn);
+        double[] g = (double[])track.Ground.Clone();
+        for (int i = 0; i + 2 < g.Length; i += 3)
+        {
+            double x = g[i], y = g[i + 1];
+            g[i] = c * x - s * y;
+            g[i + 1] = s * x + c * y;
+        }
+        double[] impact = [c * track.Impact[0] - s * track.Impact[1], s * track.Impact[0] + c * track.Impact[1], track.Impact[2]];
+        int n = track.Points;
+        var alt = new double[n];
+        var down = new double[n];
+        for (int k = 0; k < n; k++)
+        {
+            var p = new double3(g[k * 3], g[k * 3 + 1], g[k * 3 + 2]);
+            double rl = p.Length();
+            alt[k] = (rl - bodyRadius) / 1000.0;
+            down[k] = bodyRadius * Math.Acos(Math.Clamp(double3.Dot(p / rl, pad), -1.0, 1.0)) / 1000.0;
+        }
+        return new BoosterTrackView
+        {
+            RootId = rootId,
+            Name = name,
+            Track = track with { Ground = g, Impact = impact },
+            AltitudeKm = alt,
+            DownrangeKm = down,
+        };
+    }
+}
+
+/// <summary>
 /// A finished ascent plan and what it was planned for. Immutable once built: the worker publishes it, the flight reads it, and a recalculation replaces it whole rather than editing it under a vehicle that may be flying it.
 /// </summary>
 public sealed class AscentPlan
@@ -376,6 +423,9 @@ public sealed class AscentPlan
     public bool OptimisedTiming { get; init; }
     /// <summary>The boosters and landing targets it sized reserves for, GuidanceWindow.RecoverySitesKey; empty with no target. A target set, moved or cleared since asks for a new plan.</summary>
     public string RecoverySite { get; init; } = "";
+    /// <summary>Each returnable stage's way down from this plan's separation, in staging order: to its site, to its drone ship's point, or its fall when it is expendable. For the LAUNCH profile and the map, and the optimal returns' landing points.</summary>
+    public BoosterTrackView[] BoosterTracks { get; init; } = [];
+
     /// <summary>The root part of each booster the plan brings home, in the order of the problem's recoveries: entry j of <see cref="AscentSolution.Recoveries"/> is the booster rooted at entry j here. A stack planned on fewer stages solves only a head of them.</summary>
     public uint[] RecoveryRoots { get; init; } = [];
 

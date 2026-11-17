@@ -464,7 +464,7 @@ public static partial class GuidanceWindow
         var list = _s.ReturnableStages;
         int targeted = 0;
         foreach (GuidanceWindow.ReturnableStage st in list)
-            if (st.HasTarget)
+            if (st.ComesHome)
                 targeted++;
 
         // Every targeted booster has left: the last of them staged on its reserve.
@@ -479,7 +479,7 @@ public static partial class GuidanceWindow
         for (int i = 0; i < list.Count; i++)
         {
             GuidanceWindow.ReturnableStage stage = list[i];
-            if (!stage.HasTarget)
+            if (!stage.ComesHome)
                 continue;
             n++;
             // Side boosters leaving together share the reserve armed for the first of them.
@@ -514,11 +514,14 @@ public static partial class GuidanceWindow
         {
             GuidanceWindow.ReturnableStage stage = list[i];
 
-            // The name row carries the set button, because the button is about the stage rather than about any one of its numbers.
+            // The name row carries the buttons, because they are about the stage rather than about any one of its numbers: a site to pick, OPTIMAL RETURN (a drone ship where its coast comes down), and X to make it expendable again.
             bool arming = _retargetStageId == stage.RootId;
             string pick = arming ? "CLICK SITE" : "PICK SITE";
-            float clearW = stage.HasTarget ? ConsoleWidgets.ButtonWidth("X".AsSpan()) + ImGui.GetStyle().ItemSpacing.X : 0f;
-            float buttonsW = ConsoleWidgets.ButtonWidth(pick.AsSpan()) + clearW;
+            const string Optimal = "OPTIMAL RETURN";
+            float gap = ImGui.GetStyle().ItemSpacing.X;
+            float optimalW = stage.OptimalReturn ? 0f : ConsoleWidgets.ButtonWidth(Optimal.AsSpan()) + gap;
+            float clearW = stage.ComesHome ? ConsoleWidgets.ButtonWidth("X".AsSpan()) + gap : 0f;
+            float buttonsW = ConsoleWidgets.ButtonWidth(pick.AsSpan()) + optimalW + clearW;
             BeginKitRow(stage.Name.ToUpperInvariant() + SharedRowSuffix(list, i) + (stage.IsNext ? "  NEXT" : ""), controlWidth: buttonsW);
             ConsoleUi.RowRight(buttonsW);
             if (ConsoleWidgets.Button(pick.AsSpan(), $"AfcStageSet{stage.RootId}".AsSpan(), default))
@@ -527,18 +530,30 @@ public static partial class GuidanceWindow
                 _retargetStageId = arming ? 0u : stage.RootId;
                 _retargetArmed = !arming;
             }
-            if (stage.HasTarget)
+            if (!stage.OptimalReturn)
+            {
+                ImGui.SameLine();
+                if (ConsoleWidgets.Button(Optimal.AsSpan(), $"AfcStageOptimal{stage.RootId}".AsSpan(), default))
+                {
+                    _s.StageTargets.Remove(stage.RootId);
+                    _s.StageOptimalReturn.Add(stage.RootId);
+                    _s.StageModelDirty = true;
+                }
+            }
+            if (stage.ComesHome)
             {
                 ImGui.SameLine();
                 if (ConsoleWidgets.Button("X".AsSpan(), $"AfcStageClear{stage.RootId}".AsSpan(), default))
                 {
                     _s.StageTargets.Remove(stage.RootId);
+                    _s.StageOptimalReturn.Remove(stage.RootId);
+                    _s.OptimalReturnSites.Remove(stage.RootId);
                     _s.StageModelDirty = true;
                 }
             }
             ConsoleUi.EndRow();
 
-            GaugeRowText(stage.HasTarget ? "SITE" : "", stage.HasTarget ? Fmt.Sentence(Fmt.LatLon(stage.TargetLatDeg, stage.TargetLonDeg)) : "NO SITE", dim);
+            GaugeRowText(stage.ComesHome ? "SITE" : "", PageText.StageReturn(stage.HasTarget, stage.OptimalReturn, stage.TargetLatDeg, stage.TargetLonDeg, _s.Running), dim);
         }
     }
 

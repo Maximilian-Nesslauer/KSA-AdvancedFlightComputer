@@ -24,6 +24,10 @@ public sealed class AscentRecovery
     /// SIDE BOOSTERS (#176). Below one, the booster leaves beside a core whose liquid burns on into the next stage, and the one throttle drives both. A reserve R kept in the booster ends the stage R / share of propellant sooner, and the core's part of that, R (1 / share - 1), is still aboard. It is burned in the next stage, not jettisoned with the booster.
     /// </summary>
     public double FlowShare { get; init; } = 1.0;
+    /// <summary>
+    /// OPTIMAL RETURN (a drone ship): the booster flies no boostback and lands wherever its coast from separation comes down, so it needs only the landing burn. <see cref="SiteCci"/> then only gives the surface radius the coast ends at; the landing point is where that coast lands, worked out from the plan (BoosterReturn), not set beforehand.
+    /// </summary>
+    public bool OptimalReturn { get; init; }
     /// <summary>The booster's engines' exhaust velocity, m/s.</summary>
     public required double ExhaustVelocity { get; init; }
     /// <summary>The landing site at lift-off, in the problem's inertial frame, m. Fixed to the ground: at separation it has turned with the body.</summary>
@@ -53,7 +57,7 @@ public sealed class AscentRecovery
     /// <summary>The same booster, its reserve starting at <paramref name="initialReserveKg"/>.</summary>
     public AscentRecovery WithInitialReserve(double initialReserveKg) => new()
     {
-        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, FlowShare = FlowShare, ExhaustVelocity = ExhaustVelocity, BurnDelayS = BurnDelayS,
+        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, FlowShare = FlowShare, OptimalReturn = OptimalReturn, ExhaustVelocity = ExhaustVelocity, BurnDelayS = BurnDelayS,
         SiteCci = SiteCci, ReferenceArea = ReferenceArea, Drag = Drag, Lift = Lift, Alpha = Alpha, Air = Air,
         LandingFactor = LandingFactor, BoostbackMargin = BoostbackMargin,
     };
@@ -113,11 +117,14 @@ public sealed class BoostbackOracle
     /// <summary>Why the last boostback solve failed, for the log: the coast's status, or where the iteration stopped.</summary>
     public string LastFailure { get; private set; } = "";
 
-    public BoostbackOracle(AscentProblem p, AscentRecovery r)
+    public BoostbackOracle(AscentProblem p, AscentRecovery r) : this(p.Mu, p.BodyRadius, p.Omega, r) { }
+
+    /// <summary>The same, from the body alone: gravitational parameter, m^3/s^2, mean radius, m, and spin rate, rad/s.</summary>
+    public BoostbackOracle(double mu, double bodyRadius, double omega, AscentRecovery r)
     {
         _r = r;
-        _omega = p.Omega;
-        double g = p.Mu / (p.BodyRadius * p.BodyRadius);
+        _omega = omega;
+        double g = mu / (bodyRadius * bodyRadius);
         double cd = r.Drag.Cd(0.3, 0.0);
         TerminalVelocity = cd > 0.0 && r.Air.SeaLevelDensity > 0.0
             ? Math.Sqrt(2.0 * r.BoosterDryKg * g / (r.Air.SeaLevelDensity * cd * r.ReferenceArea))
@@ -127,9 +134,9 @@ public sealed class BoostbackOracle
         double coastMass = r.BoosterDryKg * Math.Exp(LandingDv / r.ExhaustVelocity);
         _sys = new DragCoastSystem
         {
-            Mu = p.Mu,
-            OmegaZ = p.Omega,
-            MeanRadius = p.BodyRadius,
+            Mu = mu,
+            OmegaZ = omega,
+            MeanRadius = bodyRadius,
             AreaOverMass = r.ReferenceArea / coastMass,
             Alpha = r.Alpha,
             Table = r.Drag,
@@ -278,6 +285,73 @@ public sealed class BoostbackOracle
         return missM <= MissToleranceM;
     }
 
+    /// <summary>
+    /// The booster's flight from separation to the ground, with <paramref name="impulse"/> (m/s, or null for none) fired after the coast to the burn (BurnDelayS), as the boostback flies it. <paramref name="ground"/> gets the path as points fixed to the ground, x y z per point in the problem's frame at lift-off, from separation to impact; <paramref name="times"/> each point's time from lift-off. <paramref name="impact"/> is where it lands, in the same frame. False, with the reason in <see cref="LastFailure"/>, if the coast never reaches the ground.
+    ///
+    /// FIXED TO THE GROUND, not inertial: each point is turned back by the angle the body has turned since lift-off, so the path ends on the ground point it lands on, which is what a landing site, and a ship placed there, are.
+    /// </summary>
+    public bool Path(ReadOnlySpan<double> r, ReadOnlySpan<double> v, double tSep, double[]? impulse, List<double> ground, List<double> times, out double[] impact)
+    {
+        impact = [];
+        ground.Clear();
+        times.Clear();
+        void Add(double x, double y, double z, double t)
+        {
+            double a = -_omega * t, c = Math.Cos(a), s = Math.Sin(a);
+            ground.Add(c * x - s * y);
+            ground.Add(s * x + c * y);
+            ground.Add(z);
+            times.Add(t);
+        }
+
+        double[] rr = r.ToArray(), vv = v.ToArray();
+        Add(rr[0], rr[1], rr[2], tSep);
+        double delay = Math.Max(_r.BurnDelayS, 0.0);
+        if (delay > 0.0)
+        {
+            Span<Dual> s0 = stackalloc Dual[ImpactPredictor.N];
+            Span<Dual> s1 = stackalloc Dual[ImpactPredictor.N];
+            for (int i = 0; i < 3; i++)
+            {
+                s0[i] = rr[i];
+                s0[3 + i] = vv[i];
+            }
+            Rk4.Integrate(in _sys, 0.0, s0, delay, 1.0, s1, _scratch.AsSpan(0, Rk4.IntegrateScratch(ImpactPredictor.N)));
+            for (int i = 0; i < 3; i++)
+            {
+                rr[i] = s1[i].V;
+                vv[i] = s1[3 + i].V;
+            }
+        }
+        double tBurn = tSep + delay;
+
+        Span<Dual> x0 = stackalloc Dual[ImpactPredictor.N];
+        for (int i = 0; i < 3; i++)
+        {
+            x0[i] = rr[i];
+            x0[3 + i] = vv[i] + (impulse != null ? impulse[i] : 0.0);
+        }
+        ImpactOptions opt = _opt;
+        opt.PathStride = 4;
+        var path = new double[ImpactPredictor.PathStrideDoubles * 2000];
+        ImpactPrediction pred = ImpactPredictor.Predict(in _sys, x0, in opt, _scratch, path);
+        if (!pred.Hit)
+        {
+            LastFailure = $"the coast from separation ends {pred.Status}";
+            return false;
+        }
+        for (int k = 0; k < pred.PathPoints; k++)
+        {
+            int o = k * ImpactPredictor.PathStrideDoubles;
+            Add(path[o], path[o + 1], path[o + 2], tBurn + path[o + 3]);
+        }
+        double tHit = tBurn + pred.TimeOfFlight.V;
+        Add(pred.Rx.V, pred.Ry.V, pred.Rz.V, tHit);
+        int n = ground.Count;
+        impact = [ground[n - 3], ground[n - 2], ground[n - 1]];
+        return true;
+    }
+
     /// <summary>The unit direction J maps to nothing: the cross product of the two of its rows that are furthest from parallel. J's rows are the impact's three ground coordinates, held to the surface, so they span a plane.</summary>
     private static bool NullDirection(double[] g, out double nx, out double ny, out double nz)
     {
@@ -307,6 +381,10 @@ public sealed class BoostbackOracle
     /// </summary>
     public Need Evaluate(ReadOnlySpan<double> r, ReadOnlySpan<double> v, double tSep, double[]? guess, bool gradient)
     {
+        // An optimal return flies no boostback: its need is the landing burn wherever it separates, so it has no slope.
+        if (_r.OptimalReturn)
+            return new Need(true, 0.0, RequiredKg(0.0), new double[3], new double[3], new double[3], 0.0);
+
         double[] dv = guess != null ? (double[])guess.Clone() : new double[3];
         if (!Boostback(r, v, tSep, dv, out double mag, out _))
         {

@@ -467,6 +467,20 @@ internal static class PageText
     public const string BoostersNone = "No stage can fly home: no separating part carries a command pod.";
 
     /// <summary>
+    /// Where a returnable stage goes, under its name in BOOSTERS: its site; for an optimal return the drone ship's point once a plan has found it, frozen from lift-off; or EXPENDABLE.
+    /// </summary>
+    public static string StageReturn(bool site, bool optimal, double latDeg, double lonDeg, bool flying)
+    {
+        if (site)
+            return Fmt.Sentence(Fmt.LatLon(latDeg, lonDeg));
+        if (!optimal)
+            return "EXPENDABLE";
+        if (!double.IsFinite(latDeg) || !double.IsFinite(lonDeg))
+            return "OPTIMAL RETURN: POINT FOUND WHEN PLAN IS SOLVED";
+        return "OPTIMAL RETURN TO " + Fmt.LatLon(latDeg, lonDeg) + (flying ? ", FROZEN" : ", FROM PLAN");
+    }
+
+    /// <summary>
     /// The RESERVE row of BOOSTERS: what the booster with a stage site keeps for its way home. The calculated climb sizes it, so there is nothing to set. Empty when no stage has a site and nothing was staged. <paramref name="warn"/> marks a reserve that does not arm.
     /// </summary>
     public static string BoosterReserve(bool hasSite, bool armed, bool staged, double reserveKg, double boostbackDvMs, double landingDvMs, string note, out bool warn)

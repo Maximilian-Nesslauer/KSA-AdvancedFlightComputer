@@ -168,6 +168,9 @@ public static partial class GuidanceWindow
         if (_retargetStageId != 0)
         {
             _s.StageTargets[_retargetStageId] = new double2(latDeg, lonDeg);
+            // A site picked is the booster's way home: no longer an optimal return.
+            _s.StageOptimalReturn.Remove(_retargetStageId);
+            _s.OptimalReturnSites.Remove(_retargetStageId);
             _s.LandingStatus = FormattableString.Invariant($"STAGE TARGET SET: LAT {latDeg:F3}, LON {lonDeg:F3}");
             _retargetStageId = 0;
             _s.StageModelDirty = true;   // so the list picks the new target up at once

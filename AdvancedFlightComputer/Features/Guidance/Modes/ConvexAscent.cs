@@ -88,6 +88,9 @@ public static partial class GuidanceWindow
                 _s.AscentPlan = plan;
                 // The booster reserve is the plan's: re-read it now rather than at the next 4 Hz tick, so a launch straight from the commit stages on it from the start.
                 _s.StageModelDirty = true;
+                // The drone ships' points come from the plans made on the ground, and are frozen from lift-off on, so a ship placed before launch is where its booster goes.
+                if (!_s.Running && plan.Usable)
+                    AdoptOptimalReturnSites(plan, parent);
                 AscentSolution sol = plan.Solution;
                 // A chosen LAN is the target now: the LAUNCH page shows it, UPFG flies it after the hand-over, and the plan's own target check compares against it.
                 if (plan.Usable && plan.LanChosen)
@@ -466,46 +469,61 @@ public static partial class GuidanceWindow
         // THE STAGE THAT DROPS EACH BOOSTER, not the first liquid load whatever is targeted: on a heavy the first load ends with the side boosters, and a core-only target was sized there, with the side boosters' dry mass and the core's site (#130).
         // SEVERAL AT ONCE (#130): a heavy's side boosters and its core each keep their own reserve. Side boosters leaving together share their stage's, held to each one's own site.
         // In stage order, so a stack planned on fewer stages drops a tail of them and the plan's roots still line up with its solution (AscentPlan.RecoveryRoots).
+        // OPTIMAL RETURN (a drone ship): no site going in. The booster flies no boostback, so it keeps only its landing burn, and it lands where its coast from the plan's separation comes down (BoosterReturn). Its site here only gives the surface the coast ends at.
+        // EVERY BOOSTER GETS A RETURN PATH for the pictures (AscentPlan.BoosterTracks): to its site, to its drone ship's point, or, expendable, its fall.
         var planned = new List<(AscentRecovery Recovery, uint RootId)>();
+        var tracks = new List<(AscentRecovery Recovery, uint RootId, string Name, BoosterReturnMode Mode)>();
         var recoveryNotes = new List<string>();
         string recoverySite = RecoverySitesKey();
+        double3 padDir = double3.Normalize(new double3(r0[0], r0[1], r0[2]));
         foreach (ReturnableStage booster in _s.ReturnableStages)
         {
-            if (!booster.HasTarget)
-                continue;
             int boosterStage = BoosterPlanStage(vehicle, booster, model, stageParts, allStages, out double flowShare, out string note);
-            if (boosterStage >= 0 && !AscentPhasePlan.CanKeepReserve(allStages, boosterStage))
-                note = "NO BOOSTER RESERVE: SEPARATING STAGE HAS NO LIQUID LOAD OF ITS OWN";
-            else if (boosterStage >= 0 && (aero.Table == null || aero.Atmosphere == null))
-                note = "NO BOOSTER RESERVE: NO AIR FOR RETURN";
-            else if (boosterStage >= 0)
+            if (boosterStage < 0 || aero.Table == null || aero.Atmosphere == null)
             {
-                double latDeg = booster.TargetLatDeg;
-                double lonDeg = booster.TargetLonDeg;
-                double3 site = (SiteDirCcfAt(latDeg, lonDeg) * bodyRadius).Transform(parent.GetCcf2Cci());
+                if (booster.ComesHome)
+                    recoveryNotes.Add(boosterStage < 0 ? note : "NO BOOSTER RESERVE: NO AIR FOR RETURN");
+                continue;
+            }
+            double3 site = padDir * bodyRadius;
+            if (booster.HasTarget)
+            {
+                site = (SiteDirCcfAt(booster.TargetLatDeg, booster.TargetLonDeg) * bodyRadius).Transform(parent.GetCcf2Cci());
                 double turn = omega * (launchAt - now);
                 double cs = Math.Cos(turn), sn = Math.Sin(turn);
                 site = new double3(cs * site.X - sn * site.Y, sn * site.X + cs * site.Y, site.Z);
-                // Built with no reserve, so the drop at the stage's end is the dry mass of every booster leaving there.
-                AscentStage b = allStages[boosterStage];
-                double boosterDryKg = b.JettisonMass;
-                planned.Add((new AscentRecovery
-                {
-                    Stage = boosterStage,
-                    InitialReserveKg = 0.0,
-                    BoosterDryKg = boosterDryKg,
-                    FlowShare = flowShare,
-                    ExhaustVelocity = b.Thrust / b.MassFlow,
-                    SiteCci = [site.X, site.Y, site.Z],
-                    ReferenceArea = aero.ReferenceArea,
-                    Drag = aero.Table,
-                    Lift = aero.Lift,
-                    Alpha = GlideNominalAlpha(aero),
-                    Air = aero.Atmosphere,
-                }, booster.RootId));
-                note = FormattableString.Invariant($"BOOSTER RESERVE FROM PLAN: '{booster.Name}' ({boosterDryKg / 1000.0:F2} t dry, stage {boosterStage + 1}{(flowShare < 1.0 ? $", side boosters drawing {flowShare:P0} of its flow" : "")}) HOME TO lat {latDeg:F3} lon {lonDeg:F3}");
             }
-            recoveryNotes.Add(note);
+            // Built with no reserve, so the drop at the stage's end is the dry mass of every booster leaving there.
+            AscentStage b = allStages[boosterStage];
+            double boosterDryKg = b.JettisonMass;
+            var rec = new AscentRecovery
+            {
+                Stage = boosterStage,
+                InitialReserveKg = 0.0,
+                BoosterDryKg = boosterDryKg,
+                FlowShare = flowShare,
+                OptimalReturn = booster.OptimalReturn,
+                ExhaustVelocity = b.HasLiquid ? b.Thrust / b.MassFlow : b.ExhaustVelocity,
+                SiteCci = [site.X, site.Y, site.Z],
+                ReferenceArea = aero.ReferenceArea,
+                Drag = aero.Table,
+                Lift = aero.Lift,
+                Alpha = GlideNominalAlpha(aero),
+                Air = aero.Atmosphere,
+                // An expendable booster falls empty.
+                LandingFactor = booster.ComesHome ? 1.3 : 0.0,
+            };
+            tracks.Add((rec, booster.RootId, booster.Name, booster.Mode));
+            if (!booster.ComesHome)
+                continue;
+            if (!AscentPhasePlan.CanKeepReserve(allStages, boosterStage))
+            {
+                recoveryNotes.Add("NO BOOSTER RESERVE: SEPARATING STAGE HAS NO LIQUID LOAD OF ITS OWN");
+                continue;
+            }
+            planned.Add((rec, booster.RootId));
+            recoveryNotes.Add(FormattableString.Invariant($"BOOSTER RESERVE FROM PLAN: '{booster.Name}' ({boosterDryKg / 1000.0:F2} t dry, stage {boosterStage + 1}{(flowShare < 1.0 ? $", side boosters drawing {flowShare:P0} of its flow" : "")}) ")
+                + (booster.HasTarget ? FormattableString.Invariant($"HOME TO lat {booster.TargetLatDeg:F3} lon {booster.TargetLonDeg:F3}") : "OPTIMAL RETURN, LANDING BURN ONLY"));
         }
         planned.Sort((x, y) => x.Recovery.Stage.CompareTo(y.Recovery.Stage));
         AscentRecovery[] recoveries = planned.Select(r => r.Recovery).ToArray();
@@ -568,9 +586,32 @@ public static partial class GuidanceWindow
             AscentSolution sol = freeTime ? solved.RotatedAboutSpin(-solved.PlaneTurn) : solved;
             double lanPlanned = freeLan && solved.Nodes > 0 ? lanDeg + UpfgTarget.RadToDeg(solved.PlaneTurn) : lanDeg;
             lanPlanned = (lanPlanned % 360.0 + 360.0) % 360.0;
+
+            // Each booster's way down from this plan's separation, in the problem's frame as solved, turned with the plan into the frame it is published in. Worked out here, on the worker, from what was captured: nothing in it touches the game.
+            var boosterTracks = new List<BoosterTrackView>();
+            if (solved.Nodes > 0)
+            {
+                double3 pad = double3.Normalize(new double3(sol.Position[0], sol.Position[1], sol.Position[2]));
+                double trackTurn = freeTime ? -solved.PlaneTurn : 0.0;
+                foreach ((AscentRecovery rec, uint rootId, string name, BoosterReturnMode mode) in tracks)
+                {
+                    BoosterReturnTrack track;
+                    try
+                    {
+                        track = BoosterReturn.Compute(mu, bodyRadius, omega, rec, mode, solved);
+                    }
+                    catch (Exception e)
+                    {
+                        track = new BoosterReturnTrack(mode, false, "threw: " + e.Message, [], [], [], double.NaN, double.NaN);
+                    }
+                    boosterTracks.Add(BoosterTrackView.From(rootId, name, track, trackTurn, pad, bodyRadius));
+                }
+            }
+
             return new AscentPlan
             {
             Solution = sol,
+            BoosterTracks = boosterTracks.ToArray(),
             Profile = sol.Nodes > 0 ? ConvexAscentProfile.FromSolution(sol, omega, bodyRadius) : null,
             Series = AscentPlanSeries.Build(sol, omega, bodyRadius, qUsed, qAlphaMax),
             VehicleId = vehicleId,
@@ -790,6 +831,24 @@ public static partial class GuidanceWindow
                     return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Each optimal-return booster's landing point from <paramref name="plan"/>, as lat/lon on the ground (VehicleAutopilotState.OptimalReturnSites): where its coast from the plan's separation comes down. The plan's frame is inertial at its lift-off (AscentPlan.SolvedAt); the point is fixed to the ground there, so turning it on by the body's spin since gives where that ground is now.
+    /// </summary>
+    private static void AdoptOptimalReturnSites(AscentPlan plan, IParentBody parent)
+    {
+        foreach (BoosterTrackView t in plan.BoosterTracks)
+        {
+            if (t.Mode != BoosterReturnMode.OptimalReturn || !t.Track.Ok || !_s.StageOptimalReturn.Contains(t.RootId))
+                continue;
+            double3 g = new double3(t.Track.Impact[0], t.Track.Impact[1], t.Track.Impact[2]);
+            double3 ccf = double3.Normalize(RotZ(g, plan.Omega * (SimNow() - plan.SolvedAt)).Transform(parent.GetCci2Ccf()));
+            double lat = Math.Asin(Math.Clamp(ccf.Z, -1.0, 1.0)) * 180.0 / Math.PI;
+            double lon = Math.Atan2(ccf.Y, ccf.X) * 180.0 / Math.PI;
+            _s.OptimalReturnSites[t.RootId] = new double2(lat, lon);
+        }
+        _s.StageModelDirty = true;
     }
 
     /// <summary>The plan status's booster part: one booster's reserve and burns, or each stage's reserve when several boosters come home (#130). Empty with none.</summary>

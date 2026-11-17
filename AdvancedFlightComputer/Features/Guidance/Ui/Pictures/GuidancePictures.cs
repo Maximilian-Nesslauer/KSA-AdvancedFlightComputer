@@ -23,6 +23,7 @@ public static partial class GuidanceWindow
     private static readonly Labels _pictureLabels = new();
     private static readonly PointBuffer _picturePoints = new();
     private static readonly PointBuffer _pictureFlown = new();
+    private static readonly PointBuffer _pictureTrack = new();
 
     #region LAUNCH
 
@@ -44,7 +45,7 @@ public static partial class GuidanceWindow
         return SketchMath.TrackIsClimb((_s.Trace[start].Length() - radius) / 1000.0, (_s.Trace[(_s.TraceHead - 1 + cap) % cap].Length() - radius) / 1000.0, airTopKm);
     }
 
-    private static readonly string[] LaunchLegendNames = { "Q-ALPHA", "FLOWN" };
+    private static readonly string[] LaunchLegendNames = { "Q-ALPHA", "FLOWN", "RETURN", "EXPENDABLE" };
     private const string FlownKeySample = "SEQ 0, NOW 0";
     private static readonly string[] _launchLegendNames = new string[16];
 
@@ -246,6 +247,13 @@ public static partial class GuidanceWindow
                     planTop = Math.Max(planTop, series.AltitudeKm[i]);
             }
         }
+        // Each booster's way down from the plan's separation (AscentPlan.BoosterTracks), on the same ground-fixed downrange: a return to the pad folds back towards zero, a drone ship lies on out downrange.
+        BoosterTrackView[] boosterTracks = series != null ? _s.AscentPlan?.BoosterTracks ?? Array.Empty<BoosterTrackView>() : Array.Empty<BoosterTrackView>();
+        foreach (BoosterTrackView t in boosterTracks)
+            if (t.Track.Ok)
+                foreach (double d in t.DownrangeKm)
+                    if (double.IsFinite(d))
+                        maxDown = Math.Max(maxDown, d);
         double topKm = SketchMath.ProfileTopKm(planTop, flownTop, Math.Min(_s.PeKm, _s.ApKm), atmoKm);
 
         // No decision needs the distance, so it stands small in the head lane and the plot takes the room of a big number. While the ascent flies the head holds the numbers, and the card of those numbers the velocity to go.
@@ -307,6 +315,25 @@ public static partial class GuidanceWindow
                 }
             }
 
+            foreach (BoosterTrackView t in boosterTracks)
+            {
+                int tn = t.Track.Ok ? Math.Min(t.DownrangeKm.Length, t.AltitudeKm.Length) : 0;
+                if (tn < 2)
+                    continue;
+                float2[] tp = _pictureTrack.Get(tn);
+                for (int i = 0; i < tn; i++)
+                    tp[i] = v.ToScreen(t.DownrangeKm[i], Math.Max(t.AltitudeKm[i], 0.0));
+                bool expendable = t.Mode == BoosterReturnMode.Expendable;
+                Rgb hue = expendable ? Palette.Dim : t.Mode == BoosterReturnMode.OptimalReturn ? Palette.Target : Palette.Good;
+                ImColor8 ink = hue.A(expendable ? 0.5f : old ? OldPlanAlpha : 1f);
+                dl.AddPolyline(tp.AsSpan(0, tn), ink, ImDrawFlags.None, (expendable ? 1f : 1.5f) * s);
+                if (expendable)
+                    Glyphs.Ring(dl, tp[tn - 1], 3.5f * s, ink, 1f * s);
+                else
+                    Glyphs.Dot(dl, tp[tn - 1], 3.5f * s, ink);
+                labels.Mark(tp[tn - 1], 3.5f * s);
+            }
+
             if (flownCount > 1)
             {
                 float2[] flown = _pictureFlown.Get(flownCount);
@@ -355,6 +382,18 @@ public static partial class GuidanceWindow
             _launchSwatches[entries++] = new Picture.Swatch("PLAN", Palette.Plan, Alpha: old ? OldPlanAlpha : 1f);
         if (flownCount > 1)
             _launchSwatches[entries++] = new Picture.Swatch("FLOWN", Palette.Flown);
+        foreach (BoosterTrackView t in boosterTracks)
+            if (t.Track.Ok && t.Mode != BoosterReturnMode.Expendable)
+            {
+                _launchSwatches[entries++] = new Picture.Swatch("RETURN", Palette.Good, Alpha: old ? OldPlanAlpha : 1f);
+                break;
+            }
+        foreach (BoosterTrackView t in boosterTracks)
+            if (t.Track.Ok && t.Mode == BoosterReturnMode.Expendable)
+            {
+                _launchSwatches[entries++] = new Picture.Swatch("EXPENDABLE", Palette.Dim, Alpha: 0.5f);
+                break;
+            }
         if (!targetNamed)
             _launchSwatches[entries++] = new Picture.Swatch("ORBIT", Palette.Target, SwatchKind.Filled);
         if (!handoverNamed)

@@ -78,6 +78,7 @@ public static class AscentProblemFile
         public double BoosterDryKg { get; set; }
         // Missing in an older dump, which reads as a booster that is all its stage burns.
         public double FlowShare { get; set; } = 1.0;
+        public bool OptimalReturn { get; set; }
         public double ExhaustVelocity { get; set; }
         public double[] SiteCci { get; set; } = [];
         public double ReferenceArea { get; set; }
@@ -170,6 +171,7 @@ public static class AscentProblemFile
                 InitialReserveKg = rec.InitialReserveKg,
                 BoosterDryKg = rec.BoosterDryKg,
                 FlowShare = rec.FlowShare,
+                OptimalReturn = rec.OptimalReturn,
                 ExhaustVelocity = rec.ExhaustVelocity,
                 SiteCci = rec.SiteCci,
                 ReferenceArea = rec.ReferenceArea,
@@ -217,6 +219,7 @@ public static class AscentProblemFile
                 InitialReserveKg = r.InitialReserveKg,
                 BoosterDryKg = r.BoosterDryKg,
                 FlowShare = r.FlowShare,
+                OptimalReturn = r.OptimalReturn,
                 ExhaustVelocity = r.ExhaustVelocity,
                 SiteCci = r.SiteCci,
                 ReferenceArea = r.ReferenceArea,
