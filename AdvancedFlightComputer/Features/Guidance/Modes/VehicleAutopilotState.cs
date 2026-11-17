@@ -175,6 +175,12 @@ public sealed class VehicleAutopilotState
     public double LiftoffRadius = double.NaN;
 
     /// <summary>
+    /// The roll program (GuidanceWindow.RollProgramHolds): once clear of the pad, an ascent with a forced roll rolls first and pitches after. When the roll began, sim time, NaN until it has; and whether it is over, by reaching the roll or by running out of time.
+    /// </summary>
+    public double RollProgramStart = double.NaN;
+    public bool RollProgramDone;
+
+    /// <summary>
     /// FORCE A SPECIFIC ROLL instead of holding the one the vehicle lifted off with.
     /// The angle is about the thrust axis, measured in the same plane-referenced frame
     /// RollOffset uses: 0 puts the vehicle's body Y along the target plane's normal
@@ -1294,6 +1300,9 @@ public sealed class VehicleAutopilotState
     /// The booster went into the glide while still climbing, with or without a burn, so its miss is judged again at the apex (Boostback, Glide): once its vertical speed turns negative, the miss is re-predicted and the same rules applied as at separation. A booster separated in the air drifts while it turns round, and a miss inside BoostbackGlideMissKm at separation can be well outside it by the top of the arc (2026-11-17). Once per boostback.
     /// </summary>
     public bool BoostbackApexCheckPending;
+
+    /// <summary>The apex recheck is the one burn of a small correction deferred at separation (Boostback, Separation): the booster was still climbing, so it glided to the top of its arc to burn once there rather than twice.</summary>
+    public bool BoostbackSmallDeferred;
 
     /// <summary>When a long turn to the burn last said what it waits on, sim time (Boostback, Rotation).</summary>
     public double BoostbackWaitLogAt = double.NegativeInfinity;

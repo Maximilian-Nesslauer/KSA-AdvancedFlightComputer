@@ -405,6 +405,8 @@ public static partial class GuidanceWindow
             double3 surface = v0 - double3.Cross(new double3(0, 0, parent.GetAngularVelocity()), r0);
             _s.LiftoffRadius = surface.Length() < PadHoldMaxSpeedMs ? r0.Length() : double.NaN;
         }
+        _s.RollProgramStart = double.NaN;
+        _s.RollProgramDone = false;
         _s.CutoffDone = false;
         _s.TerminalLaw = null;
         _s.ReserveStagedRoots.Clear();   // a fresh ascent gets its reserve stagings back
@@ -684,6 +686,57 @@ public static partial class GuidanceWindow
     internal static bool PadHold(double3 r)
         => double.IsFinite(_s.LiftoffRadius) && r.Length() - _s.LiftoffRadius < PadClearM;
 
+    /// <summary>How close the roll has to come to the forced roll before the pitch-over may start, deg.</summary>
+    private const double RollProgramDoneDeg = 3.0;
+
+    /// <summary>The longest the roll program holds the vehicle vertical, s: a vehicle that cannot roll still pitches over.</summary>
+    private const double RollProgramMaxS = 10.0;
+
+    /// <summary>
+    /// THE ROLL PROGRAM: roll first, then pitch. Once an ascent engaged on the pad has cleared it (PadHold), a forced roll (ForceRoll) is flown while the command stays straight up, and the pitch-over waits until the roll is within RollProgramDoneDeg of its target, or RollProgramMaxS has passed. True while it holds.
+    ///
+    /// WHY. The roll and the pitch-over were let go on two separate tests - the roll at ForceRollMinAltM above the mean radius, the pitch 50 m above the pad - so on a pad near sea level the vehicle started pitching over and rolled only some way into the turn, and even with one test the two would have run together (2026-11-17). Rolling while vertical turns the vehicle about its long axis alone, which is the cheapest roll it will ever have, and it starts the pitch-over already facing its azimuth.
+    ///
+    /// Nothing to wait for without a forced roll (the vehicle keeps the roll it lifted off with), or for an ascent engaged in flight, which has no pad hold.
+    /// </summary>
+    private static bool RollProgramHolds(Vehicle vehicle, double3 r)
+    {
+        if (_s.RollProgramDone || !_s.ForceRoll || !double.IsFinite(_s.LiftoffRadius) || PadHold(r))
+            return false;
+        double now = SimNow();
+        if (double.IsNaN(_s.RollProgramStart))
+        {
+            _s.RollProgramStart = now;
+            GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear of the pad: roll program to {_s.ForceRollDeg:F0} deg before the pitch-over."));
+        }
+        double errorDeg = RollErrorDeg(vehicle);
+        double held = now - _s.RollProgramStart;
+        bool rolled = double.IsFinite(errorDeg) && errorDeg <= RollProgramDoneDeg;
+        if (!rolled && held < RollProgramMaxS)
+            return true;
+        _s.RollProgramDone = true;
+        GuidanceLog.Debug(vehicle, rolled
+            ? FormattableString.Invariant($"roll program done in {held:F1} s ({errorDeg:F1} deg off): pitching over.")
+            : FormattableString.Invariant($"roll program out of time after {held:F0} s, {errorDeg:F1} deg off the roll: pitching over anyway."));
+        return false;
+    }
+
+    /// <summary>How far the vehicle's roll is from the roll the ascent commands, deg: its body Y against the roll reference, both taken across the thrust axis. NaN where either has no direction across it.</summary>
+    private static double RollErrorDeg(Vehicle vehicle)
+    {
+        double3 x = KsaFrameBridge.ThrustAxisCci(vehicle);
+        if (!(x.Length() > 0.5) || !(_s.CommandDir.Length() > 0.5))
+            return double.NaN;
+        x = double3.Normalize(x);
+        double3 want = AscentRollRef(vehicle, _s.CommandDir);
+        double3 have = new double3(0, 1, 0).Transform(KsaFrameBridge.BodyToCci(vehicle));
+        want -= double3.Dot(want, x) * x;
+        have -= double3.Dot(have, x) * x;
+        if (!(want.Length() > 1e-6) || !(have.Length() > 1e-6))
+            return double.NaN;
+        return AngleBetween(want, have) * 180.0 / Math.PI;
+    }
+
     // Ascent phase state machine. Transitions cascade naturally over successive frames, so initializing mid-flight fast-forwards to the right phase. stepDt is the sim time since the previous step, for the command slew limit.
     private static void UpdatePhase(Vehicle vehicle, double3 r, double3 v, IParentBody parent,
                                     double bodyRadius, double stepDt)
@@ -803,8 +856,8 @@ public static partial class GuidanceWindow
                 break;
         }
 
-        // Off the pad: straight up until the tower is cleared, whatever the phase wants (PadHold). The phase's own command above still runs, so a solved profile's clock keeps pace with the climb, and the slew takes the command onto it once the hold lets go.
-        if (PadHold(r) && want.Length() > 0.5)
+        // Off the pad: straight up until the tower is cleared, whatever the phase wants (PadHold), and then until the roll program has rolled the vehicle (RollProgramHolds): roll, then pitch. The phase's own command above still runs, so a solved profile's clock keeps pace with the climb, and the slew takes the command onto it once the hold lets go.
+        if ((PadHold(r) || RollProgramHolds(vehicle, r)) && want.Length() > 0.5)
         {
             want = up;
             wantRate = default;

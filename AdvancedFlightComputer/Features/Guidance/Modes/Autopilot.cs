@@ -1741,8 +1741,9 @@ public static partial class GuidanceWindow
         if (_s.Running)
         {
             double altM = r.Length() - parent.MeanRadius;
-            // And never while the ascent is still clearing the pad (PadHold): ForceRollMinAltM is above the mean radius, which a pad on high ground already is.
-            fc.RollMode = _s.ForceRoll && altM >= ForceRollMinAltM && !PadHold(r)
+            // An ascent engaged on the pad rolls as soon as it is clear of it (PadHold), while it still climbs straight up: the roll program (RollProgramHolds) holds the pitch-over until the roll is done. ForceRollMinAltM, above the mean radius, only gates an ascent engaged in flight, which has no pad to clear; on a pad near sea level it came 150 m after the pitch-over had begun.
+            bool clear = double.IsFinite(_s.LiftoffRadius) ? !PadHold(r) : altM >= ForceRollMinAltM;
+            fc.RollMode = _s.ForceRoll && clear
                 ? FlightComputerRollMode.Up
                 : FlightComputerRollMode.Decoupled;
         }
