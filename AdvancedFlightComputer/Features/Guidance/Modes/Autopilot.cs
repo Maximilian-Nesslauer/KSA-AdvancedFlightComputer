@@ -137,6 +137,7 @@ public static partial class GuidanceWindow
         // A drone-ship booster separates where its live impact reaches its ship, if that comes before its reserve (DroneShipSeparation).
         bool shipDone = !reserveDone && ShouldStageForDroneShip(vehicle);
         reserveDone |= shipDone;
+        UpdateSeparationCountdown(vehicle, thrustOn);
 
         _s.StagingActive = !thrustOn || reserveDone;
         if (!_s.StagingActive || now - _s.LastSequenceTime < SequenceCooldown)

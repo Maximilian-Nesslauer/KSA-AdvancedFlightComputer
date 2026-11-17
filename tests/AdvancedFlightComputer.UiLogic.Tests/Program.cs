@@ -17,6 +17,7 @@ internal static class Program
         SettingMathRules();
         BodyDefaultRules();
         AscentHandoverRules();
+        StagingCountdownRules();
         SpecKeysAreUnique();
         TierArraysHoldOneTier();
         EveryValueHasAHome();
@@ -1080,6 +1081,30 @@ internal static class Program
             && !BodyDefaults.Overrides("Mars", GuidanceSettingSpecs.PeKm.Key) && BodyDefaults.DefaultOf(GuidanceSettingSpecs.TurnStartAltKm, "Luna") == 0.2);
         BodyDefaults.Reset();
         Check("a reset puts back the built-in table alone", !BodyDefaults.Overrides("Luna", GuidanceSettingSpecs.TurnStartAltKm.Key) && BodyDefaults.DefaultOf(handover, "Luna") == 10.0);
+    }
+
+    private static void StagingCountdownRules()
+    {
+        Check("a margin at a steady drain counts down to separation, the decoupler delay on top", StagingCountdown.Seconds(1000.0, 100.0, 0.5) == 10.5);
+        Check("a margin already used up separates now", StagingCountdown.Seconds(-50.0, 100.0) == 0.0);
+        Check("no drain, no countdown", double.IsNaN(StagingCountdown.Seconds(1000.0, 0.0)) && double.IsNaN(StagingCountdown.Seconds(1000.0, double.NaN)));
+        Check("the soonest cue wins, an unknown one is skipped", StagingCountdown.Soonest(12.0, 8.0) == 8.0 && StagingCountdown.Soonest(double.NaN, 8.0) == 8.0 && StagingCountdown.Soonest(12.0, double.NaN) == 12.0);
+        Check("a countdown runs down between updates and stops at zero", StagingCountdown.Now(10.0, 100.0, 103.0) == 7.0 && StagingCountdown.Now(2.0, 100.0, 105.0) == 0.0);
+
+        var drain = new DrainRate();
+        Check("one sample gives no rate", double.IsNaN(drain.Update(0.0, 10000.0, 1)));
+        Check("a sample too soon after gives none yet", double.IsNaN(drain.Update(0.2, 9980.0, 1)));
+        Check("a span of 1 s at 100 kg/s reads 100 kg/s", Math.Abs(drain.Update(1.0, 9900.0, 1) - 100.0) < 1e-9);
+        Check("a throttle-down is followed, smoothed", Math.Abs(drain.Update(2.0, 9850.0, 1) - 75.0) < 1e-9);
+        Check("another cue starts again", double.IsNaN(drain.Update(3.0, 9800.0, 2)));
+        drain.Update(4.0, 9700.0, 2);
+        Check("a rising mass starts again (a new stage model)", double.IsNaN(drain.Update(5.0, 12000.0, 2)));
+        drain.Update(6.0, 11900.0, 2);
+        Check("a gap in the samples starts again", double.IsNaN(drain.Update(20.0, 11000.0, 2)));
+
+        HeadValue[] withSep = PageText.AscentNumbers(true, 120.0, 200.0, -10.0, 200.0, double.NaN, 42.0);
+        Check("the ascent head leads with the separation countdown", withSep.Length > 0 && withSep[0].Text == "SEPARATION T-42 s" && withSep[0].ShortText == "SEP T-42 s");
+        Check("no separation coming, no value", !Array.Exists(PageText.AscentNumbers(true, 120.0, 200.0, -10.0, 200.0), v => v.Text.StartsWith("SEP", StringComparison.Ordinal)));
     }
 
     private static void AscentHandoverRules()

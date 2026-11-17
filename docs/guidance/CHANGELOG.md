@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- During an ascent that AFC flies, the head of the console counts down to the next separation: **SEPARATION T-** (**SEP T-** when the head is narrow), first among the ascent numbers. It counts to the parts coming off, decoupler delay included, from whichever comes first: the booster reserve, the burnout of the burning stage, or a drone-ship booster reaching its ship. Each is the propellant left before its cue over the rate it is burning now, so throttle and the g-limit are in it. It shows while AutoStage is armed and a stage will separate, and not on the last stage.
+
 - The **BOOSTERS** fold on LAUNCH is now **REUSE**, and it is the first fold under the picture, above **LIMITS**.
 
 - An ascent from the Moon hands over to UPFG (#167). The solved climb waited for UPFG FROM, 80 km, and a lunar orbit is reached far below that, so it never handed over.

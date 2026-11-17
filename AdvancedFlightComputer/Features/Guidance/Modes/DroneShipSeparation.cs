@@ -34,6 +34,7 @@ public static partial class GuidanceWindow
         _s.DroneShipAeroRoot = booster.RootId;
         _s.DroneShipAero = null;
         _s.DroneShipLastD = double.NaN;
+        _s.DroneShipRate = double.NaN;
 
         Part root = null;
         ReadOnlySpan<Part> parts = vehicle.Parts.Parts;
@@ -108,6 +109,7 @@ public static partial class GuidanceWindow
         {
             // Still climbing too fast to come down inside the horizon, or not yet arcing over: nothing to compare.
             _s.DroneShipLastD = double.NaN;
+            _s.DroneShipRate = double.NaN;
             return false;
         }
 
@@ -126,6 +128,9 @@ public static partial class GuidanceWindow
         double rate = double.IsFinite(_s.DroneShipLastD) && now > _s.DroneShipLastT ? (d - _s.DroneShipLastD) / (now - _s.DroneShipLastT) : 0.0;
         _s.DroneShipLastD = d;
         _s.DroneShipLastT = now;
+        // Smoothed for the countdown (SeparationCountdown); the cue's own lead keeps the raw rate.
+        if (rate != 0.0)
+            _s.DroneShipRate = double.IsFinite(_s.DroneShipRate) ? _s.DroneShipRate + 0.3 * (rate - _s.DroneShipRate) : rate;
         _s.DroneShipMissM = (site - hit).Length();
 
         bool reached = d <= 0.0 || (rate < 0.0 && d + rate * DroneShipCueLeadS <= 0.0);

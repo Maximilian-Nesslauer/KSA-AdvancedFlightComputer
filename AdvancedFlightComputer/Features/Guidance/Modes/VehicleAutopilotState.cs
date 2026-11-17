@@ -1296,6 +1296,13 @@ public sealed class VehicleAutopilotState
     public double DroneShipLastD = double.NaN;
     public double DroneShipLastT = double.NaN;
     public double DroneShipMissM = double.NaN;
+    /// <summary>How fast the impact closes on the ship, m/s along the ground track, smoothed for the countdown: negative while it closes.</summary>
+    public double DroneShipRate = double.NaN;
+
+    // The countdown to the next separation (SeparationCountdown): seconds when last taken, sim time it was taken, and the drain it is measured on.
+    public double SeparationInS = double.NaN;
+    public double SeparationTakenAt = double.NegativeInfinity;
+    internal AdvancedFlightComputer.Features.Ui.Logic.DrainRate SeparationDrain = new();
     public AdvancedFlightComputer.Guidance.Numerics.Dual[] DroneShipScratch;
 
     /// <summary>Distance to BoostbackClearOf at the split, m, and how far it has opened since, the gauge's readout.</summary>

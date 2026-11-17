@@ -291,7 +291,7 @@ public static partial class GuidanceWindow
     private static HeadValue[] AscentNumbers(Vehicle vehicle)
     {
         Orbit orbit = vehicle?.Orbit;
-        return orbit == null ? [] : PageText.AscentNumbers(orbit.IsBound(), orbit.ApoapsisAltitude / 1000.0, Math.Max(_s.PeKm, _s.ApKm), orbit.PeriapsisAltitude / 1000.0, Math.Min(_s.PeKm, _s.ApKm), AscentMarginMs());
+        return orbit == null ? [] : PageText.AscentNumbers(orbit.IsBound(), orbit.ApoapsisAltitude / 1000.0, Math.Max(_s.PeKm, _s.ApKm), orbit.PeriapsisAltitude / 1000.0, Math.Min(_s.PeKm, _s.ApKm), AscentMarginMs(), SeparationSecondsNow());
     }
 
     // The delta-v on board less what the last solve of UPFG still asks for, NaN before a solve. It is an estimate, because the velocity to go assumes the stage model it reads.

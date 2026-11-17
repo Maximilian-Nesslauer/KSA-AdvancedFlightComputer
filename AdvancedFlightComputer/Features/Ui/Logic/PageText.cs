@@ -1138,9 +1138,12 @@ internal static class PageText
             + " It burns at the planned time. AFC adds the next pass when this one ends.";
 
     /// <summary><paramref name="marginMs"/> is the delta-v on board less what guidance still needs, NaN while no solve says that.</summary>
-    public static HeadValue[] AscentNumbers(bool bound, double apKm, double apGoalKm, double peKm, double peGoalKm, double marginMs = double.NaN)
+    public static HeadValue[] AscentNumbers(bool bound, double apKm, double apGoalKm, double peKm, double peGoalKm, double marginMs = double.NaN, double separationS = double.NaN)
     {
-        var values = new List<HeadValue>(3);
+        var values = new List<HeadValue>(4);
+        // The next separation first, where the eye lands: when a stage will come off (StagingCountdown).
+        if (double.IsFinite(separationS))
+            values.Add(StagingCountdown.Head(separationS));
         if (bound)
             values.Add(new HeadValue(string.Create(Inv, $"AP {apKm:F0} km, TARGET {apGoalKm:F0}"), 1, string.Create(Inv, $"AP {apKm:F0} km")));
         bool peLow = peKm < 0.0;
