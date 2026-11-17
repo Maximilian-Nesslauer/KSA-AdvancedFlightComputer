@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- A booster glides at a smaller angle of attack: **GLIDE MAX AoA** defaults to 1 deg, down from 15, and **GLIDE PLAN AoA** to 0, down from 7.5, so the boostback plans an engine-first ballistic coast. On KSA 2026.11.16.5901 the air pushes a booster with a turning moment, and at a larger angle of attack it can turn the booster further than its controls hold. **GLIDE MAX AoA** also limits entry guidance. A value you set stays.
+- A booster glides at a smaller angle of attack: **GLIDE MAX AoA** defaults to 1 deg, down from 15, and **GLIDE PLAN AoA** to 0, down from 7.5, so the boostback plans an engine-first ballistic coast. On KSA 2026.11.16.5901 the air pushes a booster with a turning moment, and at a larger angle of attack it can turn the booster further than its controls hold. **GLIDE MAX AoA** also limits entry guidance. Values that differ from the current defaults stay.
 
 - AFC works on KSA 2026.11.16.5901. The game moved the throttle, the burn timers and the propellant state from the rocket core to the rocket, and AFC now reads them there.
 
