@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The **BOOSTERS** fold on LAUNCH is now **REUSE**, and it is the first fold under the picture, above **LIMITS**.
+
 - An ascent from the Moon hands over to UPFG (#167). The solved climb waited for UPFG FROM, 80 km, and a lunar orbit is reached far below that, so it never handed over.
   - No ascent waits to hand over above 75 % of the target periapsis, on any body. The solved climb hands over at UPFG FROM or there, whichever is lower, and the gravity turn's 50 km failsafe is held to the same limit. A 30 km orbit hands over at 22.5 km. The row under UPFG FROM says when this applies.
   - Guidance settings have per-body defaults. Each craft takes the defaults of the body whose sphere of influence it is in. When it moves to another body, a value still at the old body's default takes the new one, and a value you changed stays. The setting's tooltip names the body when the default is that body's own.

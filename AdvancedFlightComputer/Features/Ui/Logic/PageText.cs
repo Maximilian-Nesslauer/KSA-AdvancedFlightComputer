@@ -459,9 +459,9 @@ internal static class PageText
     {
         string reserve = reserveKg > 0.0 ? "RESERVE " + Fmt.Tons(reserveKg) : "";
         if (stages <= 0)
-            return reserve.Length > 0 ? "BOOSTERS: " + Fmt.Sentence(reserve) : "BOOSTERS: NONE";
+            return reserve.Length > 0 ? "REUSE: " + Fmt.Sentence(reserve) : "REUSE: NONE";
         string sites = string.Create(Inv, $"{withSite}/{stages} WITH SITE");
-        return "BOOSTERS: " + sites + (reserve.Length > 0 ? ", " + reserve : "");
+        return "REUSE: " + sites + (reserve.Length > 0 ? ", " + reserve : "");
     }
 
     public const string BoostersNone = "No stage can fly home: no separating part carries a command pod.";

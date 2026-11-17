@@ -613,8 +613,8 @@ public static partial class GuidanceWindow
         else if (onPad || HasImpactPath)
             Picture.EmptyState(onPad ? (NoStageHome ? PageText.BoostbackNoStage : PageText.BoostbackNotYet) : PageText.NoSiteToDraw);
 
-        if (!BoostbackLive && !NoStageHome && Picture.LegendLine("", default, default, "AfcBoostbackLegend", default, "STAGE SITES: LAUNCH > BOOSTERS",
-                "Opens LAUNCH with the BOOSTERS fold open. The fold sets the site of each returnable stage.") == 0)
+        if (!BoostbackLive && !NoStageHome && Picture.LegendLine("", default, default, "AfcBoostbackLegend", default, "STAGE SITES: LAUNCH > REUSE",
+                "Opens LAUNCH with the REUSE fold open. The fold sets the site of each returnable stage.") == 0)
         {
             ConsoleUi.OpenFold(BoostersFoldId);
             CraftActivity activity = ReadMode(vehicle).Activity;

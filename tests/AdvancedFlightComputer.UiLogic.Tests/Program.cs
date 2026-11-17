@@ -3046,11 +3046,11 @@ internal static class Program
         Check("the LIMITS fold with a limit on", PageText.LimitsLabel(true, 140.5, true, 4.0) == "LIMITS: MAX Q 140.5 kPa, G-LIMIT 4 g");
         Check("the LIMITS fold on a body with no air", PageText.LimitsLabel(false, 140.0, true, 2.5) == "LIMITS: G-LIMIT 2.5 g");
 
-        Check("the BOOSTERS fold with no stage", PageText.BoostersLabel(0, 0, 0.0) == "BOOSTERS: NONE");
-        Check("the BOOSTERS fold with stages", PageText.BoostersLabel(2, 1, 0.0) == "BOOSTERS: 1/2 WITH SITE");
-        Check("the BOOSTERS fold with a reserve", PageText.BoostersLabel(2, 1, 4200.0) == "BOOSTERS: 1/2 WITH SITE, RESERVE 4.2 t"
-            && PageText.BoostersLabel(0, 0, 4200.0) == "BOOSTERS: RESERVE 4.2 t");
-        Check("the BOOSTERS tip names no reserve to set", !PageText.BoostersTip(2).Contains("delta v", StringComparison.OrdinalIgnoreCase)
+        Check("the REUSE fold with no stage", PageText.BoostersLabel(0, 0, 0.0) == "REUSE: NONE");
+        Check("the REUSE fold with stages", PageText.BoostersLabel(2, 1, 0.0) == "REUSE: 1/2 WITH SITE");
+        Check("the REUSE fold with a reserve", PageText.BoostersLabel(2, 1, 4200.0) == "REUSE: 1/2 WITH SITE, RESERVE 4.2 t"
+            && PageText.BoostersLabel(0, 0, 4200.0) == "REUSE: RESERVE 4.2 t");
+        Check("the REUSE tip names no reserve to set", !PageText.BoostersTip(2).Contains("delta v", StringComparison.OrdinalIgnoreCase)
             && PageText.BoostersTip(2).Contains("sizes"));
 
         bool reserveWarn;
