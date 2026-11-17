@@ -371,7 +371,8 @@ public static partial class GuidanceWindow
             else
             {
                 StepSixDofStandby(vehicle, parent, siteCci, x, now, seed);
-                if (SixDofStandbyReady(now, BrakingStandbyMaxPlanAgeS))
+                // The plan can already be braking a turn that the vehicle has yet to make.
+                if (SixDofStandbyReady(now, BrakingStandbyMaxPlanAgeS, x))
                 {
                     HandBrakingBurnToTouchdown(vehicle, "HANDOVER: TOUCHDOWN");
                     return;

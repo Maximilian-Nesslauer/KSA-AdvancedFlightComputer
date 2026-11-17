@@ -858,6 +858,41 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public double PlanDriftM { get; private set; }
 
+    internal static bool MatchesHandoffAttitude(Ksa6DofPlan plan, double[] state, double now,
+                                                double maxAngleRad, double maxRateRadS)
+    {
+        double elapsed = now - plan.SolveTime;
+        if (!(elapsed >= 0.0 && elapsed < plan.Sigma) || plan.Nodes < 2)
+            return false;
+
+        double node = elapsed * (plan.Nodes - 1) / plan.Sigma;
+        int k = Math.Min((int)node, plan.Nodes - 2);
+        double f = node - k;
+        int a = k * NX;
+        int b = a + NX;
+        Span<double> target = stackalloc double[4];
+        Slerp(plan.X.AsSpan(a + IQ, 4), plan.X.AsSpan(b + IQ, 4), f, target);
+
+        double dot = 0.0;
+        double stateNorm2 = 0.0;
+        for (int i = 0; i < 4; i++)
+        {
+            dot += target[i] * state[IQ + i];
+            stateNorm2 += state[IQ + i] * state[IQ + i];
+        }
+        if (!(Math.Abs(dot) >= Math.Sqrt(stateNorm2) * Math.Cos(maxAngleRad / 2.0)) || !(stateNorm2 > 0.0))
+            return false;
+
+        // Model angular velocities are expressed in body axes.
+        double rateError2 = 0.0;
+        for (int i = Dynamics6Dof.IW; i < Dynamics6Dof.IM; i++)
+        {
+            double error = (1.0 - f) * plan.X[a + i] + f * plan.X[b + i] - state[i];
+            rateError2 += error * error;
+        }
+        return rateError2 <= maxRateRadS * maxRateRadS;
+    }
+
     /// <summary>Distance from the vehicle to the plan's prediction for right now.</summary>
     public double MeasureDrift(double[] x0, double simNow)
     {

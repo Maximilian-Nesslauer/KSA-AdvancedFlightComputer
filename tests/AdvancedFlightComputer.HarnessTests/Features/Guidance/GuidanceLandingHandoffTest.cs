@@ -3,6 +3,7 @@ using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
@@ -44,6 +45,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
 
     protected override void Execute(TestContext t)
     {
+        CheckStandbyAttitude(t);
         if (!TestWorld.RequireHome(t, out IParentBody home))
             return;
         IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(RcsTestVehicles.Candidates);
@@ -115,6 +117,33 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             ambient.SetValue(null, previousAmbient);
             TestSupport.DespawnNewVehicles(t.System, preexisting);
         }
+    }
+
+    private static void CheckStandbyAttitude(TestContext t)
+    {
+        int stride = Dynamics6Dof.NX;
+        int q = Dynamics6Dof.IQ;
+        int w = Dynamics6Dof.IW;
+        var nodes = new double[2 * stride];
+        nodes[q] = 1.0;
+        nodes[stride + q] = -Math.Cos(Math.PI / 18.0);
+        nodes[stride + q + 1] = -Math.Sin(Math.PI / 18.0);
+        nodes[stride + w] = 0.2;
+        var plan = new Ksa6DofPlan(nodes, [], 2.0, 10.0, 2);
+        var live = new double[stride];
+        live[q] = Math.Cos(Math.PI / 36.0);
+        live[q + 1] = Math.Sin(Math.PI / 36.0);
+        live[w] = 0.1;
+        bool CanTake(double time) => Ksa6DofGuidance.MatchesHandoffAttitude(
+            plan, live, time, Math.PI / 36.0, Math.PI / 60.0);
+        t.Check("a standby plan can take a craft matching its time-indexed turn", CanTake(11.0));
+        live[w] = 0.0;
+        t.Check("a standby plan waits for a craft that has not started the planned turn", !CanTake(11.0));
+        live[w] = 0.1;
+        live[q] = 1.0;
+        live[q + 1] = 0.0;
+        t.Check("matching rate alone cannot hand over to a plan already turned away", !CanTake(11.0));
+        t.Check("a plan that reached its end cannot take the burn", !CanTake(12.0));
     }
 
     // Inside the handoff time the burn keeps the craft while touchdown guidance plans on standby. With

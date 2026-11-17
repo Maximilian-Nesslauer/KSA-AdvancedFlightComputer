@@ -44,10 +44,16 @@ public static partial class GuidanceWindow
     /// <summary>The time one subproblem may take for the guidance that starts as the standby under the braking burn, ms; see Ksa6DofGuidance.LongBudgetMs.</summary>
     private const double BrakingStandbyBudgetMs = 1000.0;
 
+    private const double BrakingHandoffAngleRad = 5.0 * Math.PI / 180.0;
+    private const double BrakingHandoffRateRadS = 3.0 * Math.PI / 180.0;
+
     /// <summary>True when the standby has a converged plan fresh enough to be handed the burn.</summary>
-    private static bool SixDofStandbyReady(double now, double maxPlanAgeS = SixDofStandbyMaxPlanAgeS)
+    private static bool SixDofStandbyReady(double now, double maxPlanAgeS = SixDofStandbyMaxPlanAgeS,
+                                          double[] brakingState = null)
         => _s.SixDofStandby && !_s.Converging && _s.Guidance?.Published is { } plan
-           && now - plan.SolveTime <= maxPlanAgeS;
+           && now - plan.SolveTime <= maxPlanAgeS
+           && (brakingState == null || Ksa6DofGuidance.MatchesHandoffAttitude(
+               plan, brakingState, now, BrakingHandoffAngleRad, BrakingHandoffRateRadS));
 
     /// <summary>The burn-time floor for restarts and node rebuilds: the configured seed, or the entry seed when this engagement started from a shorter burn (the 3-DOF hand-over). Restarting a 3 s burn on a 20 s seed would pin sigma at a minimum longer than the burn.</summary>
     private static double SixDofSeedFloor => Math.Min(_s.SixDofSigmaSeed, _s.SixDofEntrySigmaSeed);

@@ -1271,7 +1271,8 @@ public static partial class GuidanceWindow
         // Collect before a restart or node rebuild can change the source guidance.
         Ksa6DofSolveResult coldResult = null;
         if (_s.Worker != null && _s.Worker.TryCollect(out Ksa6DofSolveResult result)
-            && result.Matches(_s.Converging ? Ksa6DofJob.StepCold : Ksa6DofJob.Update, _s.Guidance))
+            && (result.Matches(_s.Converging ? Ksa6DofJob.StepCold : Ksa6DofJob.Update, _s.Guidance)
+                || (!_s.Converging && result.Matches(Ksa6DofJob.Track, _s.Guidance))))
         {
             if (result.Faulted)
             {
@@ -1289,7 +1290,7 @@ public static partial class GuidanceWindow
             {
                 coldResult = result;
             }
-            else if (result.Job == Ksa6DofJob.Update && !_s.Converging)
+            else if (!_s.Converging)
             {
                 _s.DidSolve = true;
                 if (result.Ok) OnSolveSucceeded(now, x);
