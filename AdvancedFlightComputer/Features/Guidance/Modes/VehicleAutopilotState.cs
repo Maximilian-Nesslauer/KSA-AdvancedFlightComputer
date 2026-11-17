@@ -963,7 +963,7 @@ public sealed class VehicleAutopilotState
     {
         if (Aero == null) return true;
         if (!ReferenceEquals(Aero.Parent, parent)) return true;
-        if (liveMeshHash != 0 && Aero.MeshHash != 0 && liveMeshHash != Aero.MeshHash) return true;
+        if (liveMeshHash != 0 && liveMeshHash != Aero.MeshHash) return true;
         double3 was = Aero.SampledExtents;
         double tol = 1e-3;
         return System.Math.Abs(was.X - liveExtents.X) > tol

@@ -101,6 +101,8 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void ExecuteAscent(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         bool window = HasLaunchTarget && !double.IsNaN(_s.LaunchTargetTime);
         _s.ConvexLaunchFailure = "";
         _s.BackupAscent = false;
@@ -116,6 +118,8 @@ public static partial class GuidanceWindow
     /// <summary>The commit itself: arm for the window, or start now.</summary>
     private static void LaunchAscent(Vehicle vehicle, Orbit orbit, IParentBody parent, bool atWindow)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         if (atWindow && HasLaunchTarget && !double.IsNaN(_s.LaunchTargetTime))
         {
             // ARMING TAKES THE VEHICLE TOO. It is a commit - the craft is now waiting to launch and will fire itself at the window - so leaving another mode running underneath it would have that mode flying right up to the moment StepLaunchWindow claimed it out from under itself.
@@ -133,6 +137,8 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void LaunchNowAscent(Vehicle vehicle, Orbit orbit, IParentBody parent, in ChasePlan plan)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         if (_s.Running)
             return;
         // The gravity turn cannot fly the plane change of a lift-off off the window, so it is refused before the armed countdown and its warp are dropped.
@@ -180,13 +186,7 @@ public static partial class GuidanceWindow
             GuidanceLog.Info(vehicle, $"ascent {(status.Length > 0 ? "ended: " + status : "stopped by the player")}"
                 + $" (phase {PhaseName(_s.Phase)}, tgo {_s.Upfg.Tgo:F1} s, vgo {_s.Upfg.VgoMag:F0} m/s).");
         // A launch still waiting on its plan goes too, and its calculation with it; a plan calculated only to look at is left to finish.
-        if (_s.ConvexLaunchPending)
-        {
-            GuidanceLog.Info(vehicle, "launch cancelled while its convex plan was calculating.");
-            _s.AscentPlanJob?.Cancel();
-            _s.AscentPlanRequested = false;
-        }
-        _s.ConvexLaunchPending = false;
+        CancelPendingLaunch();
         _s.ConvexLaunchFailure = "";
         _s.BackupAscent = false;
         // The shutdown for this path comes from the release itself, so record the intent. Nothing here queues a one-shot cut that a later takeover could preserve on its own.
@@ -333,6 +333,8 @@ public static partial class GuidanceWindow
 
     private static void StartGuidance(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         OrderApsides();
 
         // A target orbit wholly inside the atmosphere has nowhere the insertion floor allows (see UpfgTarget.InsideFloor): refused here rather than flown to a cutoff in the air.

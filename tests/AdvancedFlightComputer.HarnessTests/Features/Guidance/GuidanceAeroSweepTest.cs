@@ -72,6 +72,13 @@ public sealed class GuidanceAeroSweepTest : AfcTest
             $"{aero.MeshHash:X} against {KsaAeroSweep.LiveMeshHash(vehicle):X}");
         t.Check("the sweep stays inside its time bound", aero.SweepMillis < MaxSweepMs,
             FormattableString.Invariant($"{aero.SweepMillis:F0} ms, bound {MaxSweepMs:F0} ms"));
+        var state = new VehicleAutopilotState { Aero = aero };
+        ulong hash = aero.MeshHash;
+        t.Check("the current mesh keeps the table", !state.AeroStale(aero.SampledExtents, hash, home));
+        aero.MeshHash = 0;
+        t.Check("a published mesh invalidates a table with no hash", state.AeroStale(aero.SampledExtents, hash, home));
+        t.Check("an unavailable live hash keeps the geometry fallback", !state.AeroStale(aero.SampledExtents, 0, home));
+        aero.MeshHash = hash;
     }
 
     private static void CheckAirless(TestContext t, Vehicle vehicle, IParentBody moon)

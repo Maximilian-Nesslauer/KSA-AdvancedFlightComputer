@@ -77,6 +77,8 @@ public static partial class GuidanceWindow
 
     private static void StepAscentPlannerCore(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
+        if (_s.ConvexLaunchPending && !ControlAvailable(vehicle))
+            return;
         AscentPlanJob job = _s.AscentPlanJob;
         if (job != null && job.IsDone)
         {
@@ -221,6 +223,8 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void RequestConvexLaunch(Vehicle vehicle, bool atWindow, string why)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         ClaimVehicle(GuidanceMode.Ascent, vehicle);
         _s.ConvexLaunchPending = true;
         _s.ConvexLaunchAtWindow = atWindow;
@@ -237,6 +241,8 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void ContinueConvexLaunch(Vehicle vehicle, Orbit orbit, IParentBody parent, AscentPlan plan, string failure)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         _s.ConvexLaunchPending = false;
         if (plan == null || !plan.Usable)
         {
@@ -277,11 +283,23 @@ public static partial class GuidanceWindow
     /// <summary>The backup the failure offers: the vertical rise and deg/s gravity turn, flown to the same target, now or at the window as the commit asked.</summary>
     private static void LaunchBackupAscent(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         _s.ConvexLaunchFailure = "";
         _s.ConvexBackupChosen = false;
         _s.BackupAscent = true;
         GuidanceLog.Info(vehicle, "launching in the backup deg/s gravity turn, by the player's choice.");
         LaunchAscent(vehicle, orbit, parent, _s.ConvexLaunchAtWindow);
+    }
+
+    private static void CancelPendingLaunch()
+    {
+        if (!_s.ConvexLaunchPending)
+            return;
+        _s.AscentPlanJob?.Cancel();
+        _s.AscentPlanJob = null;
+        _s.AscentPlanRequested = false;
+        _s.ConvexLaunchPending = false;
     }
 
     private static double Max(double[] v)

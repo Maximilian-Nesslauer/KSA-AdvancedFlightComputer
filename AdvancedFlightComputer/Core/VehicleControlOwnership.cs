@@ -18,6 +18,9 @@ internal enum ControlClaimant
 /// </summary>
 internal static class VehicleControlOwnership
 {
+    internal static bool KfsOwns(Vehicle vehicle)
+        => KSA.Kfs.KfsPrototype.Enabled && vehicle.KfsHost?.Computer.UnderKfsControl == true;
+
     private static readonly ConditionalWeakTable<Vehicle, Claim> _claims = new();
 
     private sealed class Claim

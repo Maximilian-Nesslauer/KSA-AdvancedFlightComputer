@@ -325,6 +325,9 @@ public static partial class GuidanceWindow
         // Consume only this match so other boosters can still claim their records.
         _handovers.Remove(mine);
 
+        if (VehicleControlOwnership.KfsOwns(vehicle))
+            return false;
+
         _s = VehicleAutopilotState.For(vehicle);
         _s.SiteLatDeg = mine.SiteLatDeg;
         _s.SiteLonDeg = mine.SiteLonDeg;
@@ -971,6 +974,13 @@ public static partial class GuidanceWindow
         // Ahead of the returns below, so a craft whose planning ends releases its hold also when it is not in focus and flies nothing.
         StepRealSpeedHold(vehicle, focused);
 
+        if ((!vehicle.IsControllable || VehicleControlOwnership.KfsOwns(vehicle))
+            && (HoldsReleasableState(_s) || _s.MoonChain != MoonChainStage.Idle))
+        {
+            StopForControlLoss(vehicle);
+            return;
+        }
+
         if (_s.FcResetPending)
         {
             RetryRelease(vehicle);
@@ -989,13 +999,6 @@ public static partial class GuidanceWindow
         bool handingOver = _s.HandoverPendingUntil > SimNow();
         bool flying = sixDof || _s.Running || landingActive || BoostbackLive || ThreeDofLive || _s.ThreeDofEngagePending || _s.BoostbackEngagePending
                    || _s.WasEngaged || _s.LandingCutPending || _s.LaunchArmed || handingOver || _s.MoonChain != MoonChainStage.Idle;
-
-        // A craft that loses control stops all guidance, ahead of the takeover test. Vehicle.UpdateControl runs in Universe.ApplyVehicleSolvers, before this prefix in the same frame, and its ReleaseFlightComputer has already put Attitude and Burn to Manual, which the takeover test would read as a takeover that leaves the engine burning. The player cannot cut that engine, because ControlsLockout blocks the engine keys of a craft out of control, so guidance cuts it. A reboot of the avionics stops guidance too.
-        if (!vehicle.IsControllable && (HoldsReleasableState(_s) || _s.MoonChain != MoonChainStage.Idle))
-        {
-            StopForControlLoss(vehicle);
-            return;
-        }
 
         // Check ownership per actuator before mode steps can overwrite a changed command. The attitude is compared by value. The engine belongs to whoever arms stock Auto, because Vehicle.PrepareWorker then clears EngineOn on every step after this prefix and stock's own burn logic never writes Auto by itself. Keep cleanup ahead of the idle return so unfocused vehicles can release control too.
         bool attitudeTaken = _s.ControlAcquired
@@ -1450,11 +1453,8 @@ public static partial class GuidanceWindow
     // Takes the shared claim for guidance, or says who holds the craft. With acquire, the flight computer settings guidance writes are taken as well.
     private static bool TryTakeCraft(Vehicle vehicle, bool acquire)
     {
-        if (!vehicle.IsControllable)
-        {
-            _s.WarnStatus(ControlLostReason(vehicle, "GUIDANCE REFUSED"));
+        if (!ControlAvailable(vehicle))
             return false;
-        }
         if (!VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.Guidance, out ControlClaimant holder))
         {
             _s.WarnStatus($"GUIDANCE HELD BY {VehicleControlOwnership.Describe(holder)}.");
@@ -1482,15 +1482,26 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void StopForControlLoss(Vehicle vehicle)
     {
-        string reason = ControlLostReason(vehicle, _s.ControlAcquired ? "GUIDANCE STOPPED" : "GUIDANCE REFUSED");
+        bool kfs = vehicle.IsControllable && VehicleControlOwnership.KfsOwns(vehicle);
+        string reason = kfs ? "GUIDANCE STOPPED: KFS CONTROLS THE VEHICLE."
+            : ControlLostReason(vehicle, _s.ControlAcquired ? "GUIDANCE STOPPED" : "GUIDANCE REFUSED");
         GuidanceLog.Info(vehicle, "control lost: " + reason);
         if (_s.MoonChain != MoonChainStage.Idle)
-            StopMoonChain(vehicle, "CONTROL LOST", disarm: true);
+            StopMoonChain(vehicle, kfs ? "KFS CONTROLS THE VEHICLE" : "CONTROL LOST", disarm: !kfs);
         _s.TakeoverStop = true;
         _s.TakeoverReason = reason;
-        _s.ReleaseWithoutEngineCut = false;
-        _s.ShutdownRequested = true;
+        _s.ReleaseWithoutEngineCut = kfs;
+        _s.ShutdownRequested = !kfs;
         HandBackVehicle(vehicle);
+        _s.WarnStatus(reason);
+    }
+
+    private static bool ControlAvailable(Vehicle vehicle)
+    {
+        if (vehicle.IsControllable && !VehicleControlOwnership.KfsOwns(vehicle))
+            return true;
+        StopForControlLoss(vehicle);
+        return false;
     }
 
     /// <summary>The status line for a craft out of control, with the game's own reason (Vehicle.NoControlTooltip).</summary>
@@ -1509,7 +1520,8 @@ public static partial class GuidanceWindow
     internal static bool HoldsReleasableState(VehicleAutopilotState s)
         => s.ControlAcquired || s.DeorbitNodeClaimed || s.FcResetPending || s.Worker != null
             || s.Active || s.EngagePending || s.Converging || s.Running
-            || s.LaunchArmed || s.LandingCutPending
+            || s.LaunchArmed || s.ConvexLaunchPending || s.LandingCutPending
+            || s.ThreeDofEngagePending || s.BoostbackEngagePending
             || s.HasCommand || s.Guidance != null
             || s.HandoverPendingUntil != double.NegativeInfinity
             || ReferenceEquals(SixDofLog.Owner, s)
@@ -1536,6 +1548,21 @@ public static partial class GuidanceWindow
         }
 
         bool coastWaits = keepWaitingCoast && LandingWaits(_s.LandingPhase);
+        // kFS can own actuator allocation without changing the C# attitude fields first.
+        // Drop saved settings so cleanup cannot overwrite its command or restore stock Auto.
+        if (vehicle.IsControllable && VehicleControlOwnership.KfsOwns(vehicle))
+        {
+            _s.AttitudeOwnership.Forget();
+            _s.RcsHeldOff = false;
+            _s.ForcedBurnManual = false;
+            _s.DeorbitThrottleHeld = false;
+            _s.ReleaseWithoutEngineCut = true;
+            _s.ShutdownRequested = false;
+            _s.LandingCutPending = false;
+        }
+        CancelPendingLaunch();
+        _s.ThreeDofEngagePending = false;
+        _s.BoostbackEngagePending = false;
         _s.Running = false;
         if (!coastWaits)
         {
@@ -1593,7 +1620,7 @@ public static partial class GuidanceWindow
 
         // Stock Auto comes back last, once nothing of guidance still commands the craft, and only with a cut. A no-cut release leaves the engine as the flight left it, and a restored Auto would have Vehicle.PrepareWorker switch it off on the same step.
         if (failure.Length == 0 && _s.ControlAcquired)
-            Attempt(() => RestoreBurnMode(vehicle, giveBack: cutEngine));
+            Attempt(() => RestoreBurnMode(vehicle, giveBack: cutEngine && vehicle.IsControllable));
 
         if (failure.Length > 0)
         {

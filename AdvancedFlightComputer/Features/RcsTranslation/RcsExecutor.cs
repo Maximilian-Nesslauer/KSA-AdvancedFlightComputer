@@ -71,7 +71,7 @@ internal static partial class RcsExecutor
     private static bool ResolvesToRcs(Vehicle vehicle)
     {
         FlightComputer fc = vehicle.FlightComputer;
-        if (fc.Burn == null || !vehicle.IsControllable)
+        if (fc.Burn == null || !vehicle.IsControllable || VehicleControlOwnership.KfsOwns(vehicle))
             return false;
         // An interstellar burn runs for a fixed duration or down to a stop speed and has its brake planned again by stock, none of which the RCS executor models.
         Burn? first = fc.BurnPlan.FindFirstExecutableBurn();
@@ -195,6 +195,8 @@ internal static partial class RcsExecutor
 
     public static void Activate(Vehicle vehicle)
     {
+        if (!vehicle.IsControllable || VehicleControlOwnership.KfsOwns(vehicle))
+            return;
         if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? pending) && pending.CleanupPending)
             return;
 
@@ -429,6 +431,18 @@ internal static partial class RcsExecutor
         FlightComputer fc = vehicle.FlightComputer;
         RcsCommandChannel.Clear(fc.BurnPlan);
 
+        // Drop saved commands before cleanup so a reboot cannot restore them and a kFS owner's attitude stays untouched.
+        if (!vehicle.IsControllable || VehicleControlOwnership.KfsOwns(vehicle))
+        {
+            exec.AlignCommanded = false;
+            exec.ForcedAttitudeAuto = false;
+            exec.CommandedAttitude = null;
+            exec.AttitudeYielded = true;
+            exec.ForcedBurnManual = false;
+            if (VehicleControlOwnership.KfsOwns(vehicle))
+                exec.ForcedRcsOn = false;
+        }
+
         // Cancellation can bypass the step check, so check for a takeover before restoring attitude.
         // Without a snapshot after loading, cleanup uses the persisted ownership flags.
         if (!exec.AttitudeYielded
@@ -604,6 +618,13 @@ internal static partial class RcsExecutor
     {
         FlightComputer fc = vehicle.FlightComputer;
         bool hasExec = RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? exec);
+        if (!vehicle.IsControllable || VehicleControlOwnership.KfsOwns(vehicle))
+        {
+            RcsCommandChannel.Clear(fc.BurnPlan);
+            if (hasExec && (exec!.IsActive || exec.CleanupPending))
+                Cancel(vehicle, exec, vehicle.IsControllable ? "kFS controls the vehicle" : "vehicle out of control");
+            return;
+        }
         if (hasExec && exec!.Faulted)
         {
             if (exec.CancelRequestReason != null)
