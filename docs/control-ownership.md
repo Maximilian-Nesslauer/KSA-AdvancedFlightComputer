@@ -4,6 +4,8 @@
 It is internal to AFC and provides no shared ownership protocol for other mods.
 Conflicting writes from another mod are outside this arbitration.
 
+When the kFS prototype is enabled and the vehicle computer owns control, Guidance and the RCS executor cancel pending commands and release their claims without restoring saved actuator settings over the kFS commands. A loss of vehicle control also cancels pending execution. Guidance cuts an engine it acquired, while a fresh refused launch leaves the player's engine command as it was. Control returning does not restart a cancelled request.
+
 RCS control and the guidance driver are active in the current build.
 Planning features also edit burn plans; this page focuses on control, release and staging.
 
