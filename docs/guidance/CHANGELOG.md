@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- **LARGE BOOSTBACK FROM** defaults to 20 km, down from 100 km. A return to the launch site misses by tens of km at separation, and under 100 km it counted as a small correction: a booster still climbing waited for the apex and burned there, 887 m/s in one flight, about 70 s later than it should have. A miss over 20 km now burns at separation.
+- **LARGE BOOSTBACK FROM** defaults to 20 km, down from 100 km. A return to the launch site misses by tens of km at separation, and under 100 km it counted as a small correction: a booster still climbing waited for the apex and burned there, 887 m/s in one flight, about 70 s later than it should have. A miss over 20 km now starts the settling and powered-turn sequence after separation clearance, instead of waiting for the apex.
 
 - A booster glides at a smaller angle of attack: **GLIDE MAX AoA** defaults to 7.5 deg, down from 15, and **GLIDE PLAN AoA** to 0, down from 7.5, so the boostback plans an engine-first ballistic coast and the glide steers within 7.5 deg of it. On KSA 2026.11.16.5901 the air pushes a booster with a turning moment, so a booster has to be aerodynamically balanced to glide: one whose centre of pressure sits ahead of its centre of mass can turn further than its controls hold, at any angle these settings allow. **GLIDE MAX AoA** also limits entry guidance. Values that differ from the current defaults stay.
 
