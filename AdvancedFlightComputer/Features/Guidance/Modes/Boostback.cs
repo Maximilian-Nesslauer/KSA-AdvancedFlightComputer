@@ -200,8 +200,8 @@ public static partial class GuidanceWindow
     /// <summary>The correction left, m/s, at which a burn that is flying is done early: the targeting tolerance a boostback burns to. Whether to burn at all is judged on the miss instead (VehicleAutopilotState.BoostbackGlideMissKm).</summary>
     private const double BoostbackCutoffDvMs = 5.0;
 
-    /// <summary>How long a small boostback may turn with the engine off before it lights the engine to turn on its gimbal, s (VehicleAutopilotState.BoostbackSmall).</summary>
-    private const double BoostbackSmallTurnTimeoutS = 60.0;
+    /// <summary>Maximum time in the rotation phase before proceeding to descent, s.</summary>
+    private const double BoostbackTurnTimeoutS = 60.0;
 
     /// <summary>
     /// Time constant for the low-pass on the TARGET's own turning rate, s.
@@ -518,7 +518,7 @@ public static partial class GuidanceWindow
 
             case BoostbackPhase.Rotation:
             {
-                bool turnTimedOut = now - _s.BoostbackPhaseStart > BoostbackSmallTurnTimeoutS;
+                bool turnTimedOut = now - _s.BoostbackPhaseStart > BoostbackTurnTimeoutS;
                 bool descentDue = _s.HasImpact && _s.Impact.TimeOfFlight.V <= BoostbackDescentLead();
                 if (!_s.HasSteer)
                 {
@@ -567,6 +567,7 @@ public static partial class GuidanceWindow
                 // The command reaching the target only says the slew has finished issuing; the flight computer is still some way behind it, and lighting the engine there points the thrust at the last of the turn instead of at the target.
                 if (cmdErr <= BoostbackAlignDeg && craftErr <= BoostbackAlignDeg)
                 {
+                    _s.BoostbackPlanTime = now;
                     EnterBoostbackPhase(BoostbackPhase.Boostback, now);
 
                     // A FRESH PLAN AT THE INSTANT THE ENGINE LIGHTS, off the interval.
@@ -583,10 +584,9 @@ public static partial class GuidanceWindow
                     break;
                 }
 
-                if (!canPowerTurn && (descentDue || turnTimedOut))
-                    SkipBoostbackForDescent(vehicle, now, "INSUFFICIENT TURN AUTHORITY");
-                else if (_s.BoostbackSmall && canPowerTurn
-                    && (turnTimedOut || !CanCoastBeforeSmallBoostback(vehicle, 0.0)))
+                if (descentDue || turnTimedOut)
+                    SkipBoostbackForDescent(vehicle, now, "TURN NOT COMPLETE");
+                else if (_s.BoostbackSmall && canPowerTurn && !CanCoastBeforeSmallBoostback(vehicle, 0.0))
                 {
                     _s.BoostbackSmall = false;
                     GuidanceLog.Info(vehicle, FormattableString.Invariant(
@@ -888,10 +888,8 @@ public static partial class GuidanceWindow
             };
         if (warm)
         {
-            // THE SEED HAS TO MOVE WITH THE CLOCK.
-            // The stored duration was measured from the moment that plan was SOLVED, so handing it over unchanged seeds the inner Newton a whole re-plan interval too long - every single time, in the one direction.
-            // Measured on --shoot: 1701 shots against 1584 with the seed advanced, for the same answer.
-            double elapsed = Math.Max(now - _s.BoostbackPlanTime, 0.0);
+            // Advance the seed by the time already flown on this burn plan.
+            double elapsed = BoostbackPlanElapsed(now);
             guess.Duration = Math.Max(guess.Duration - elapsed, 0.1);
             guess.PitchDeg += guess.PitchRateDegS * elapsed;
             guess.YawDeg += guess.YawRateDegS * elapsed;
@@ -943,15 +941,15 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// Where the plan says to point right now: the steering law evaluated at the time
-    /// elapsed since the solve. Zero when there is no plan.
+    /// The first direction while turning, then the steering law evaluated at the
+    /// elapsed burn time. Zero when there is no plan.
     /// </summary>
     private static double3 BoostbackPlanDirection(double now)
     {
         if (!_s.BoostbackHasPlan)
             return default;
         BoostbackShooter.SteeringAt(in _s.BoostbackPlanFrame, in _s.BoostbackPlan,
-                                    Math.Max(now - _s.BoostbackPlanTime, 0.0),
+                                    BoostbackPlanElapsed(now),
                                     out double dx, out double dy, out double dz);
         return new double3(dx, dy, dz);
     }
@@ -959,8 +957,11 @@ public static partial class GuidanceWindow
     /// <summary>Seconds of burn the plan has left; NaN when there is no plan.</summary>
     private static double BoostbackPlanTgo(double now)
         => _s.BoostbackHasPlan
-            ? Math.Max(_s.BoostbackPlan.Duration - (now - _s.BoostbackPlanTime), 0.0)
+            ? Math.Max(_s.BoostbackPlan.Duration - BoostbackPlanElapsed(now), 0.0)
             : double.NaN;
+
+    private static double BoostbackPlanElapsed(double now)
+        => _s.BoostbackPhase == BoostbackPhase.Boostback ? Math.Max(now - _s.BoostbackPlanTime, 0.0) : 0.0;
 
     /// <summary>
     /// The dV the plan has left to impart, m/s - the rocket equation over its remaining
