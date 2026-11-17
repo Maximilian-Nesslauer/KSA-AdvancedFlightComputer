@@ -29,6 +29,7 @@ internal static class CourseCorrector
     // An early correction is the cheapest, but a burn of a few cm/s is lost in what the turn to the burn attitude itself adds to the orbit, so the earliest place whose burn is at least LeastDvMs is taken, and the last place when none is.
     private const double FirstCorrectionS = 1800.0;
     private static readonly double[] CorrectionShares = { 0.25, 0.5, 0.75 };
+    private static readonly double[] LateCorrectionShares = { 0.875, 0.9375, 0.96875 };
     private const double LeastDvMs = 1.0;
 
     /// <summary>Whether a periapsis radius at <paramref name="moonBody"/> is close enough to the requested altitude above its mean radius. False for NaN, which stands for no encounter.</summary>
@@ -52,9 +53,21 @@ internal static class CourseCorrector
         plan = default;
         var leads = new List<double> { FirstCorrectionS };
         if (MoonInjectionPlanner.SphereEntryTime(vehicle, moonBody) is UniverseTime entry)
+        {
+            double timeToEntry = entry.Seconds() - now;
             foreach (double share in CorrectionShares)
-                if (share * (entry.Seconds() - now) > leads[^1])
-                    leads.Add(share * (entry.Seconds() - now));
+                if (share * timeToEntry > leads[^1])
+                    leads.Add(share * timeToEntry);
+
+            // A final trim may still be smaller than the engine can repeat at three quarters of the coast.
+            // Nearer the moon it needs more delta-v for the same change to the approach.
+            foreach (double share in LateCorrectionShares)
+            {
+                double lead = share * timeToEntry;
+                if (lead > leads[^1] && timeToEntry - lead >= FirstCorrectionS)
+                    leads.Add(lead);
+            }
+        }
         string refusal = "";
         bool found = false;
         foreach (double lead in leads)

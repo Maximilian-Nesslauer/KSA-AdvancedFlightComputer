@@ -46,6 +46,7 @@ public sealed class FlybyCourseTest : AfcTest
                 Vehicle onCourse = MoonTestWorld.Spawn(t, home, save, "FlybyCourseOnCourse", corrected, spawned);
                 driver.Step(1e-3, 2);
                 CheckOnCourse(t, onCourse, moon, driver, rp);
+                CheckSmallTrim(t, onCourse, moon, moonBody);
             }
             CheckPlayerStops(t, withBurn, moon, driver, rp);
             CheckNotFollowed(t, atMoon, withBurn, moon, rp);
@@ -57,6 +58,27 @@ public sealed class FlybyCourseTest : AfcTest
             FlybyCourse.Reset();
             MoonTestWorld.Despawn(spawned);
         }
+    }
+
+    private static void CheckSmallTrim(TestContext t, Vehicle vehicle, Celestial moon, IParentBody moonBody)
+    {
+        double now = Universe.GetElapsedSeconds();
+        double altitude = MoonInjectionPlanner.PredictedPeriapsisRadius(vehicle, moonBody) - moonBody.MeanRadius + 10_100.0;
+        if (!t.Check("small trim: the encounter has a time", MoonInjectionPlanner.SphereEntryTime(vehicle, moonBody) is not null))
+            return;
+        double entry = MoonInjectionPlanner.SphereEntryTime(vehicle, moonBody)!.Value.Seconds();
+        double early = now + 0.75 * (entry - now);
+        bool earlyPlanned = MoonInjectionPlanner.TryPlanCorrection(vehicle, moon, altitude, new UniverseTime(early), out var small, out string why);
+        if (!t.Check("small trim: the early plan is below one m/s", earlyPlanned && small.DvVlf.Length() < 1.0,
+                earlyPlanned ? $"{small.DvVlf.Length():F3} m/s" : why))
+            return;
+
+        string refusal = CourseCorrector.TryPlan(vehicle, moon, moonBody, altitude, now, out var late);
+        t.Check("small trim: the later plan is easier to execute and leaves time before the sphere",
+            refusal.Length == 0 && late.BurnTime.Seconds() > early && late.DvVlf.Length() > small.DvVlf.Length()
+            && entry - late.BurnTime.Seconds() >= 1800.0
+            && CourseCorrector.OnCourse(late.PredictedPeriapsisRadius, moonBody, altitude),
+            refusal.Length == 0 ? $"{late.DvVlf.Length():F3} m/s; {entry - late.BurnTime.Seconds():F0} s before entry" : refusal);
     }
 
     private static void CheckTolerance(TestContext t, IParentBody moonBody)
