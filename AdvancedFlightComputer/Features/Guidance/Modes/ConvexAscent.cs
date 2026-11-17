@@ -530,6 +530,8 @@ public static partial class GuidanceWindow
                 ExhaustVelocity = b.HasLiquid ? b.Thrust / b.MassFlow : b.ExhaustVelocity,
                 LandingExhaustVelocity = landingVe,
                 LandingAccel = double.IsFinite(landingAccel) && landingAccel > 0.0 ? landingAccel : double.NaN,
+                // Small corrections on top: a returning booster only.
+                CorrectionDv = booster.ComesHome ? Math.Max(_s.BoosterCorrectionDvMs, 0.0) : 0.0,
                 SiteCci = [site.X, site.Y, site.Z],
                 ReferenceArea = boosterAero.ReferenceArea,
                 Drag = boosterAero.Table,
@@ -548,7 +550,7 @@ public static partial class GuidanceWindow
                 continue;
             }
             planned.Add((rec, booster.RootId));
-            recoveryNotes.Add(FormattableString.Invariant($"BOOSTER RESERVE FROM PLAN: '{booster.Name}' ({boosterDryKg / 1000.0:F2} t dry, stage {boosterStage + 1}{(flowShare < 1.0 ? $", side boosters drawing {flowShare:P0} of its flow" : "")}, landing burn at Isp {rec.LandingVe / 9.80665:F0} s and {rec.LandingAccel / 9.80665:F1} g) ")
+            recoveryNotes.Add(FormattableString.Invariant($"BOOSTER RESERVE FROM PLAN: '{booster.Name}' ({boosterDryKg / 1000.0:F2} t dry, stage {boosterStage + 1}{(flowShare < 1.0 ? $", side boosters drawing {flowShare:P0} of its flow" : "")}, landing burn at Isp {rec.LandingVe / 9.80665:F0} s and {rec.LandingAccel / 9.80665:F1} g, {rec.CorrectionDv:F0} m/s for corrections) ")
                 + (booster.HasTarget ? FormattableString.Invariant($"HOME TO lat {booster.TargetLatDeg:F3} lon {booster.TargetLonDeg:F3}") : "OPTIMAL RETURN, LANDING BURN ONLY"));
         }
         planned.Sort((x, y) => x.Recovery.Stage.CompareTo(y.Recovery.Stage));

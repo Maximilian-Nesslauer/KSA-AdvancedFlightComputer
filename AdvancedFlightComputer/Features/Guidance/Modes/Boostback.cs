@@ -423,20 +423,22 @@ public static partial class GuidanceWindow
                 // The decision waits, engine off, for the first steering solution, but not for ever: past BoostbackDecideTimeoutS it settles as before.
                 if (double.IsNaN(_s.BoostbackSettleFrom))
                 {
-                    if (_s.HasSteer && missDv < BoostbackMinDvMs)
+                    // Judged on the predicted MISS at the site: within BoostbackGlideMissKm the glide's lift makes it up, so there is no boostback at all.
+                    double missKm = _s.SteerMissM / 1000.0;
+                    if (_s.HasSteer && (missKm <= _s.BoostbackGlideMissKm || missDv < BoostbackMinDvMs))
                     {
-                        _s.BoostbackStatus = FormattableString.Invariant($"CORRECTION {missDv:F1} m/s ONLY. NO SETTLE, NO BURN.");
-                        GuidanceLog.Debug(vehicle, $"clear, correction {missDv:F1} m/s only: straight to the glide, engine off.");
+                        _s.BoostbackStatus = FormattableString.Invariant($"MISS {missKm:F1} km: GLIDE CORRECTS IT. NO SETTLE, NO BURN.");
+                        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, miss {missKm:F1} km ({missDv:F1} m/s): straight to the glide, engine off."));
                         EnterBoostbackPhase(BoostbackPhase.Glide, now);
                         break;
                     }
                     if (!_s.HasSteer && now - _s.BoostbackPhaseStart < BoostbackDecideTimeoutS)
                         break;
-                    // SMALL BOOSTBACK (#197): no settle, and the turn with the engine off. A lit flip lays down dV of its own, as big as a small correction, which then moves under the booster as it turns.
-                    if (_s.HasSteer && missDv < _s.BoostbackSmallDvMs)
+                    // SMALL BOOSTBACK (#197): a miss up to BoostbackLargeMissKm flies no settle and turns with the engine off. A lit flip lays down dV of its own, as big as a small correction, which then moves under the booster as it turns.
+                    if (_s.HasSteer && missKm <= _s.BoostbackLargeMissKm)
                     {
                         _s.BoostbackSmall = true;
-                        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, small boostback ({missDv:F0} m/s, under {_s.BoostbackSmallDvMs:F0}): no settle, turning engine-off."));
+                        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, small boostback (miss {missKm:F1} km, {missDv:F0} m/s): no settle, turning engine-off."));
                         EnterBoostbackPhase(BoostbackPhase.Rotation, now);
                         break;
                     }

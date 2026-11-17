@@ -1261,11 +1261,19 @@ public sealed class VehicleAutopilotState
     public double BoostbackClearanceM = 30.0;
 
     /// <summary>
-    /// A boostback smaller than this, m/s, is flown without the settling burn and turned with the engine off, then burned (#197). The lit flip lays down dV of its own as it sweeps through every direction on the way round; for a small correction that is as big as the correction, which moves while the booster turns, and the short burn after it chases its own tail. A small correction leaves time to turn. 0 settles and flips every burn lit, as before.
+    /// How far off its site a booster's predicted impact may be, km, for it to fly no boostback at all: the glide's lift makes up a miss this size. Judged once it is clear of its stage.
     /// </summary>
-    public double BoostbackSmallDvMs = 150.0;
+    public double BoostbackGlideMissKm = 5.0;
 
-    /// <summary>This boostback is a small one (BoostbackSmallDvMs): no settle, and the turn to the burn is flown with the engine off. Decided once the booster is clear.</summary>
+    /// <summary>
+    /// The miss, km, beyond which a boostback is a large one: it settles and turns on the lit engine's gimbal. Between <see cref="BoostbackGlideMissKm"/> and this it is a small one, flown without the settling burn and turned with the engine off, then burned (#197). The lit flip lays down dV of its own as it sweeps through every direction on the way round; for a small correction that is as big as the correction, which moves while the booster turns, and the short burn after it chases its own tail. A small correction leaves time to turn.
+    /// </summary>
+    public double BoostbackLargeMissKm = 100.0;
+
+    /// <summary>The reserve every returning booster keeps for small corrections, m/s, on top of its boostback and landing burn (AscentRecovery.CorrectionDv): sized into the calculated climb.</summary>
+    public double BoosterCorrectionDvMs = 50.0;
+
+    /// <summary>This boostback is a small one (BoostbackLargeMissKm): no settle, and the turn to the burn is flown with the engine off. Decided once the booster is clear.</summary>
     public bool BoostbackSmall;
 
     /// <summary>

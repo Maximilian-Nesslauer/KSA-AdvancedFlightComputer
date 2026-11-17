@@ -61,6 +61,10 @@ public sealed class AscentRecovery
     public double LandingAccel { get; init; } = double.NaN;
     /// <summary>The landing burn over what braking from terminal velocity at <see cref="LandingAccel"/> costs: ignition timing, the plan's last metres, steering.</summary>
     public double LandingMargin { get; init; } = 1.1;
+    /// <summary>
+    /// A fixed allowance for small corrections, m/s, kept on top of the boostback and the landing burn and priced at the vacuum exhaust velocity like the boostback: a small boostback after a glide-only miss, the trim the plan's impulse leaves, a separation that is not quite the plan's. Zero for none.
+    /// </summary>
+    public double CorrectionDv { get; init; }
     /// <summary>The boostback, as a multiple of its impulse: a real burn is finite, flipped into and flown through gravity and drag, where the impulse is none of these.</summary>
     /// <summary>
     /// What a real boostback burn costs over the impulse, as a factor on its dv. Not small, and longer the burn the more it is: from boosters_controlled's planned separation (3.3 km/s at 241 km) the booster's own planner needed 5080 m/s for a 4383 m/s impulse, 16 % more, which at 1.15 left 0.2 t of the 0.32 t the landing needs (2026-11-05).
@@ -74,7 +78,7 @@ public sealed class AscentRecovery
     /// <summary>The same booster, its reserve starting at <paramref name="initialReserveKg"/>.</summary>
     public AscentRecovery WithInitialReserve(double initialReserveKg) => new()
     {
-        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, FlowShare = FlowShare, OptimalReturn = OptimalReturn, ExhaustVelocity = ExhaustVelocity, LandingExhaustVelocity = LandingExhaustVelocity, LandingAccel = LandingAccel, LandingMargin = LandingMargin, BurnDelayS = BurnDelayS,
+        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, FlowShare = FlowShare, OptimalReturn = OptimalReturn, ExhaustVelocity = ExhaustVelocity, LandingExhaustVelocity = LandingExhaustVelocity, LandingAccel = LandingAccel, LandingMargin = LandingMargin, CorrectionDv = CorrectionDv, BurnDelayS = BurnDelayS,
         SiteCci = SiteCci, ReferenceArea = ReferenceArea, Drag = Drag, Lift = Lift, Alpha = Alpha, Air = Air,
         LandingFactor = LandingFactor, BoostbackMargin = BoostbackMargin,
     };
@@ -182,12 +186,12 @@ public sealed class BoostbackOracle
 
     /// <summary>The propellant the booster needs for a boostback of <paramref name="boostbackDv"/>, kg: the boostback high up at the vacuum exhaust velocity, then the landing burn at the sea-level one (AscentRecovery.LandingExhaustVelocity).</summary>
     public double RequiredKg(double boostbackDv)
-        => _r.BoosterDryKg * (Math.Exp(_r.BoostbackMargin * boostbackDv / _r.ExhaustVelocity + LandingDv / _r.LandingVe) - 1.0);
+        => _r.BoosterDryKg * (Math.Exp((_r.BoostbackMargin * boostbackDv + _r.CorrectionDv) / _r.ExhaustVelocity + LandingDv / _r.LandingVe) - 1.0);
 
     /// <summary>d(RequiredKg)/d(boostback dv), kg per m/s.</summary>
     public double RequiredKgSlope(double boostbackDv)
         => _r.BoosterDryKg * _r.BoostbackMargin / _r.ExhaustVelocity
-           * Math.Exp(_r.BoostbackMargin * boostbackDv / _r.ExhaustVelocity + LandingDv / _r.LandingVe);
+           * Math.Exp((_r.BoostbackMargin * boostbackDv + _r.CorrectionDv) / _r.ExhaustVelocity + LandingDv / _r.LandingVe);
 
     /// <summary>
     /// The smallest impulse at separation, state (<paramref name="r"/>, <paramref name="v"/>) in SI at <paramref name="tSep"/> s after lift-off, that lands the booster on the site; <paramref name="dv"/> carries the starting guess in and the impulse out. False if the coast never lands or the correction cannot be solved.

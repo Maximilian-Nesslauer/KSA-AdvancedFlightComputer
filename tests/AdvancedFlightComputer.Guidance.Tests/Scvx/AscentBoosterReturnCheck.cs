@@ -136,6 +136,19 @@ internal static class AscentBoosterReturnCheck
         AscentProblem limBack = AscentProblemFile.FromJson(AscentProblemFile.ToJson(optP.WithRecovery(limited)));
         Check("landing at 3 g: the problem file keeps it", limBack.Recovery?.LandingAccel == limited.LandingAccel && limBack.Recovery?.LandingMargin == limited.LandingMargin);
 
+        // ---- a correction allowance on top: priced at the vacuum exhaust velocity with the boostback, the landing at its own.
+        var corrected = new AscentRecovery
+        {
+            Stage = 0, InitialReserveKg = 0.0, BoosterDryKg = optRec.BoosterDryKg, OptimalReturn = true, CorrectionDv = 50.0,
+            ExhaustVelocity = optRec.ExhaustVelocity, LandingExhaustVelocity = optRec.ExhaustVelocity * 342.0 / 436.0, LandingAccel = 3.0 * g0,
+            SiteCci = optRec.SiteCci, ReferenceArea = optRec.ReferenceArea, Drag = optRec.Drag, Air = optRec.Air,
+        };
+        var corrOracle = new BoostbackOracle(optP, corrected);
+        double wantCorr = corrected.BoosterDryKg * (Math.Exp(50.0 / corrected.ExhaustVelocity + corrOracle.LandingDv / corrected.LandingExhaustVelocity) - 1.0);
+        Check("correction: 50 m/s kept on top of the landing", Math.Abs(corrOracle.RequiredKg(0.0) - wantCorr) < 1e-6, $"{corrOracle.RequiredKg(0.0):F1} against {wantCorr:F1} kg");
+        AscentProblem corrBack = AscentProblemFile.FromJson(AscentProblemFile.ToJson(optP.WithRecovery(corrected)));
+        Check("correction: the problem file keeps it", corrBack.Recovery?.CorrectionDv == 50.0);
+
         // ---- expendable.
         AscentProblem bare = optP.WithRecovery(null);
         AscentSolution exp = AscentScvx.Solve(bare);
