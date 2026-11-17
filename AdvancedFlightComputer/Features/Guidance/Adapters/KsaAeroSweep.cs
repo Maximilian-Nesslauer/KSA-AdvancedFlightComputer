@@ -300,11 +300,11 @@ public static class KsaAeroSweep
             {
                 double phi = 2.0 * Math.PI * k / RollSamples;
                 var u = new double3(-ca, sa * Math.Cos(phi), sa * Math.Sin(phi));
-                flow.Prepare(u);
                 double3 tilt = sa > 1e-9
                     ? new double3(-sa, -ca * Math.Cos(phi), -ca * Math.Sin(phi))
                     : double3.Zero;
                 double3 baseline = probe.ForceBody(BaselineSpeed * u);
+                flow.Prepare(u);
                 for (int i = 0; i < nm; i++)
                 {
                     double3 force = probe.ForceBody(speeds[i] * u) - baseline;
@@ -495,8 +495,7 @@ public static class KsaAeroSweep
 
             // The game's own definition of airspeed, asked at zero physics velocity, gives the frame's share; every probe velocity is set relative to it.
             probe._kinematic.VelocityPhys = double3.Zero;
-            float3 frameAir = PhysicsStates.ComputeAirVelocityBody(in probe._origin, in probe._kinematic, in probe._environment);
-            probe._frameAirPhys = double3.Unpack(in frameAir).Transform(probe._kinematic.Body2Phys);
+            probe._frameAirPhys = PhysicsStates.ComputeSurfaceVelocityBub(in probe._origin, in probe._kinematic);
 
             // Check the airspeed lands where it was put, against the same game function. A frame this gets wrong would measure the drag of the wrong direction.
             var check = new double3(-100.0, 30.0, 10.0);
