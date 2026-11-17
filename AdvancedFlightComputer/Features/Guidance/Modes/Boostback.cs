@@ -413,14 +413,7 @@ public static partial class GuidanceWindow
                         break;
                     _s.BoostbackPhaseStart = now;
                 }
-                // A DRONE SHIP'S BOOSTER FLIES NO BOOSTBACK AT ALL (optimal return): its point is where its coast from the plan's separation comes down, its reserve is the landing burn alone, and the glide's lift takes it the rest of the way. No settle, no flip, no correction burn, whatever the miss reads.
-                if (_s.BoostbackGlideOnly)
-                {
-                    _s.BoostbackStatus = "DRONE SHIP: NO BOOSTBACK, AERO STEERS IT IN.";
-                    GuidanceLog.Debug(vehicle, $"clear, optimal return: straight to the glide, engine off (correction {missDv:F1} m/s left to the glide).");
-                    EnterBoostbackPhase(BoostbackPhase.Glide, now);
-                    break;
-                }
+                // A DRONE SHIP'S BOOSTER (optimal return) follows the same miss rule as any other. Its point is where the plan's coast comes down, so it usually falls within the glide's reach and flies none; but the flight is never quite the plan, and a core that separated 26 km short of its point rode the whole glide 28 km off with no burn (2026-11-17). Beyond the glide's reach it flies a small boostback on its correction reserve (AscentRecovery.CorrectionDv).
                 // NO BOOSTBACK, NO SETTLE. Whether a burn is coming is decided before anything lights, on the predicted MISS alone: a booster falling within BoostbackGlideMissKm of its site goes straight to the glide with its engine off. Settling first, then skipping the burn, spent landing propellant on nothing, on a landing reserve that is tight by design (2026-11-17).
                 // The decision waits, engine off, for the first steering solution, but not for ever: past BoostbackDecideTimeoutS it settles as before.
                 if (double.IsNaN(_s.BoostbackSettleFrom))
@@ -429,7 +422,7 @@ public static partial class GuidanceWindow
                     double missKm = _s.SteerMissM / 1000.0;
                     if (_s.HasSteer && missKm <= _s.BoostbackGlideMissKm)
                     {
-                        _s.BoostbackStatus = FormattableString.Invariant($"MISS {missKm:F1} km: GLIDE CORRECTS IT. NO SETTLE, NO BURN.");
+                        _s.BoostbackStatus = FormattableString.Invariant($"{(_s.BoostbackGlideOnly ? "DRONE SHIP: " : "")}MISS {missKm:F1} km: GLIDE CORRECTS IT. NO SETTLE, NO BURN.");
                         GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, miss {missKm:F1} km ({missDv:F1} m/s): straight to the glide, engine off."));
                         EnterBoostbackPhase(BoostbackPhase.Glide, now);
                         break;

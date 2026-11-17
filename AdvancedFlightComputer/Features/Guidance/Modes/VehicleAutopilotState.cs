@@ -1284,7 +1284,7 @@ public sealed class VehicleAutopilotState
     /// <summary>When the settling burn lit, sim time; NaN until it has. It lights only once the booster is clear AND a burn is coming (Boostback's Separation phase): one whose predicted miss is within BoostbackGlideMissKm goes straight to the glide with its engine off, keeping its propellant for the landing.</summary>
     public double BoostbackSettleFrom = double.NaN;
 
-    /// <summary>A drone-ship booster (optimal return), handed over at separation: no settle and no boostback at all. Once clear it goes straight to the glide, engine off, and the glide's lift takes it onto its point, keeping every kilogram for the landing burn the reserve was sized for.</summary>
+    /// <summary>A drone-ship booster (optimal return), handed over at separation to its frozen point. It follows the same miss rule as any booster (BoostbackGlideMissKm, BoostbackLargeMissKm); the flag only labels its status.</summary>
     public bool BoostbackGlideOnly;
 
     /// <summary>Distance to BoostbackClearOf at the split, m, and how far it has opened since, the gauge's readout.</summary>
