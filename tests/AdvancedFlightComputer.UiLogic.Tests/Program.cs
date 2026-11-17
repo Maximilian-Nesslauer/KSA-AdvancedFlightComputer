@@ -17,6 +17,7 @@ internal static class Program
         SettingMathRules();
         BodyDefaultRules();
         AscentHandoverRules();
+        StagingCountdownRules();
         SpecKeysAreUnique();
         TierArraysHoldOneTier();
         EveryValueHasAHome();
@@ -1118,7 +1119,9 @@ internal static class Program
         Check("Luna has its own UPFG FROM", BodyDefaults.Overrides("Luna", handover.Key) && BodyDefaults.DefaultOf(handover, "Luna") == 10.0);
         Check("a body with no table takes the default of every body", BodyDefaults.DefaultOf(handover, "Earth") == handover.Default && !BodyDefaults.Overrides("Earth", handover.Key));
         Check("no body is the default of every body", BodyDefaults.DefaultOf(handover, "") == handover.Default && BodyDefaults.DefaultOf(handover, null) == handover.Default);
-        Check("a setting Luna leaves alone keeps its default there", BodyDefaults.DefaultOf(GuidanceSettingSpecs.PeKm, "Luna") == GuidanceSettingSpecs.PeKm.Default);
+        Check("Luna has a low target orbit", BodyDefaults.DefaultOf(GuidanceSettingSpecs.PeKm, "Luna") == 30.0 && BodyDefaults.DefaultOf(GuidanceSettingSpecs.ApKm, "Luna") == 50.0);
+        Check("a setting Luna leaves alone keeps its default there", BodyDefaults.DefaultOf(GuidanceSettingSpecs.IncDeg, "Luna") == GuidanceSettingSpecs.IncDeg.Default
+            && !BodyDefaults.Overrides("Luna", GuidanceSettingSpecs.IncDeg.Key));
         Check("the spec on Luna marks the global default as changed", SettingMath.IsChanged(BodyDefaults.On(handover, "Luna"), handover.Default)
             && !SettingMath.IsChanged(BodyDefaults.On(handover, "Luna"), 10.0));
         Check("the ghost text names the body of its default", BodyDefaults.GhostText(handover, "Luna") == "LUNA DEFAULT 10.0 km", BodyDefaults.GhostText(handover, "Luna"));
@@ -1147,6 +1150,34 @@ internal static class Program
             && !BodyDefaults.Overrides("Mars", GuidanceSettingSpecs.PeKm.Key) && BodyDefaults.DefaultOf(GuidanceSettingSpecs.TurnStartAltKm, "Luna") == 0.2);
         BodyDefaults.Reset();
         Check("a reset puts back the built-in table alone", !BodyDefaults.Overrides("Luna", GuidanceSettingSpecs.TurnStartAltKm.Key) && BodyDefaults.DefaultOf(handover, "Luna") == 10.0);
+    }
+
+    private static void StagingCountdownRules()
+    {
+        Check("a margin at a steady drain counts down to separation, the decoupler delay on top", StagingCountdown.Seconds(1000.0, 100.0, 0.5) == 10.5);
+        Check("a margin already used up separates now", StagingCountdown.Seconds(-50.0, 100.0) == 0.0);
+        Check("no drain, no countdown", double.IsNaN(StagingCountdown.Seconds(1000.0, 0.0)) && double.IsNaN(StagingCountdown.Seconds(1000.0, double.NaN)));
+        Check("the soonest cue wins, an unknown one is skipped", StagingCountdown.Soonest(12.0, 8.0) == 8.0 && StagingCountdown.Soonest(double.NaN, 8.0) == 8.0 && StagingCountdown.Soonest(12.0, double.NaN) == 12.0);
+        Check("a countdown runs down between updates and stops at zero", StagingCountdown.Now(10.0, 100.0, 103.0) == 7.0 && StagingCountdown.Now(2.0, 100.0, 105.0) == 0.0);
+
+        var drain = new DrainRate();
+        Check("one sample gives no rate", double.IsNaN(drain.Update(0.0, 10000.0, 1)));
+        Check("a sample too soon after gives none yet", double.IsNaN(drain.Update(0.2, 9980.0, 1)));
+        Check("a span of 1 s at 100 kg/s reads 100 kg/s", Math.Abs(drain.Update(1.0, 9900.0, 1) - 100.0) < 1e-9);
+        Check("a throttle-down is followed, smoothed", Math.Abs(drain.Update(2.0, 9850.0, 1) - 75.0) < 1e-9);
+        Check("another cue starts again", double.IsNaN(drain.Update(3.0, 9800.0, 2)));
+        drain.Update(4.0, 9700.0, 2);
+        Check("a rising mass starts again (a new stage model)", double.IsNaN(drain.Update(5.0, 12000.0, 2)));
+        drain.Update(6.0, 11900.0, 2);
+        Check("a gap in the samples starts again", double.IsNaN(drain.Update(20.0, 11000.0, 2)));
+
+        Check("the green band shows in the last 10 s only", StagingCountdown.BandShows(10.0) && StagingCountdown.BandShows(0.0) && !StagingCountdown.BandShows(10.5) && !StagingCountdown.BandShows(double.NaN));
+        Check("the green band pulses in the last 3 s", StagingCountdown.BandPulses(2.5) && !StagingCountdown.BandPulses(5.0));
+        Check("the band rounds up, so it never reads T-0 before the parts come off", StagingCountdown.BandText(4.2) == "SEPARATION T-5 s" && StagingCountdown.BandText(0.3) == "SEPARATION T-1 s");
+
+        HeadValue[] withSep = PageText.AscentNumbers(true, 120.0, 200.0, -10.0, 200.0, double.NaN, 42.0);
+        Check("the ascent head leads with the separation countdown", withSep.Length > 0 && withSep[0].Text == "SEPARATION T-42 s" && withSep[0].ShortText == "SEP T-42 s");
+        Check("no separation coming, no value", !Array.Exists(PageText.AscentNumbers(true, 120.0, 200.0, -10.0, 200.0), v => v.Text.StartsWith("SEP", StringComparison.Ordinal)));
     }
 
     private static void AscentHandoverRules()
@@ -1475,7 +1506,7 @@ internal static class Program
             Check("a verdict is one sentence " + verdict, FoldRules.Split(verdict) == (verdict, ""));
         foreach (string label in new[]
                  {
-                     PageText.LimitsLabel(true, 140.0, false, 4.0), PageText.BoostersLabel(2, 1, 4200.0), PageText.HandOversLabel(true, 45.0, true, 5.0),
+                     PageText.LimitsLabel(true, 140.0, false, 4.0), PageText.BoostersLabel(2, 1), PageText.HandOversLabel(true, 45.0, true, 5.0),
                      PageText.HoverHandOverLabel(10.0, true), PageText.HoverHandOverLabel(10.0, false), PageText.SearchLabel(864.0, 2592.0), FlightView.PlanLabel("site 28.60, -80.60"),
                  })
         {
@@ -3113,11 +3144,15 @@ internal static class Program
         Check("the LIMITS fold with a limit on", PageText.LimitsLabel(true, 140.5, true, 4.0) == "LIMITS: MAX Q 140.5 kPa, G-LIMIT 4 g");
         Check("the LIMITS fold on a body with no air", PageText.LimitsLabel(false, 140.0, true, 2.5) == "LIMITS: G-LIMIT 2.5 g");
 
-        Check("the BOOSTERS fold with no stage", PageText.BoostersLabel(0, 0, 0.0) == "BOOSTERS: NONE");
-        Check("the BOOSTERS fold with stages", PageText.BoostersLabel(2, 1, 0.0) == "BOOSTERS: 1/2 WITH SITE");
-        Check("the BOOSTERS fold with a reserve", PageText.BoostersLabel(2, 1, 4200.0) == "BOOSTERS: 1/2 WITH SITE, RESERVE 4.2 t"
-            && PageText.BoostersLabel(0, 0, 4200.0) == "BOOSTERS: RESERVE 4.2 t");
-        Check("the BOOSTERS tip names no reserve to set", !PageText.BoostersTip(2).Contains("delta v", StringComparison.OrdinalIgnoreCase)
+        Check("the REUSE fold with no stage", PageText.BoostersLabel(0, 0) == "REUSE: NONE");
+        Check("the REUSE fold counts what is reused and what is expended", PageText.BoostersLabel(3, 2) == "REUSE: 2 REUSED, 1 EXPENDED");
+        Check("the REUSE fold says all when they agree", PageText.BoostersLabel(3, 3) == "REUSE: ALL 3 REUSED" && PageText.BoostersLabel(2, 0) == "REUSE: ALL 2 EXPENDED"
+            && PageText.BoostersLabel(1, 1) == "REUSE: REUSED" && PageText.BoostersLabel(1, 0) == "REUSE: EXPENDED");
+        Check("a stage's row says where it goes", PageText.StageReturn(true, false, 28.6, -80.6).StartsWith("TO SITE ", StringComparison.Ordinal)
+            && PageText.StageReturn(false, true, 35.9, -72.0).StartsWith("TO DRONE SHIP AT ", StringComparison.Ordinal)
+            && PageText.StageReturn(false, true, double.NaN, double.NaN) == "TO DRONE SHIP, PLACED AT SOLVE"
+            && PageText.StageReturn(false, false, double.NaN, double.NaN) == PageText.StageExpendedHint);
+        Check("the REUSE tip names no reserve to set", !PageText.BoostersTip(2).Contains("delta v", StringComparison.OrdinalIgnoreCase)
             && PageText.BoostersTip(2).Contains("sizes"));
 
         bool reserveWarn;
@@ -3125,7 +3160,8 @@ internal static class Program
         Check("a staged reserve says so, also with no site left", PageText.BoosterReserve(false, false, true, 0.0, double.NaN, double.NaN, "", out reserveWarn).StartsWith("STAGED") && !reserveWarn);
         Check("a site with no plan waits for the calculated climb", PageText.BoosterReserve(true, true, false, 0.0, double.NaN, double.NaN, "SIZED WHEN PLAN IS SOLVED", out reserveWarn) == PageText.ReserveWaitsForPlan && !reserveWarn);
         Check("a planned reserve names its mass and both burns", PageText.BoosterReserve(true, true, false, 4200.0, 1450.0, 320.0, "", out reserveWarn) == "4.20 t: 1450 m/s BOOSTBACK + 320 m/s LANDING" && !reserveWarn);
-        Check("a reserve that does not arm says why, in amber", PageText.BoosterReserve(true, false, false, 0.0, double.NaN, double.NaN, "ARMS AFTER STAGES BELOW SEPARATE", out reserveWarn) == "NOT ARMED: ARMS AFTER STAGES BELOW SEPARATE" && reserveWarn);
+        Check("a reserve that cannot arm says why, in amber", PageText.BoosterReserve(true, false, false, 0.0, double.NaN, double.NaN, "NO TANKS FEED THE SIDE BOOSTERS' ENGINES", out reserveWarn) == "NOT ARMED: NO TANKS FEED THE SIDE BOOSTERS' ENGINES" && reserveWarn);
+        Check("a reserve further up arms in turn, no warning", PageText.BoosterReserve(true, false, false, 0.0, double.NaN, double.NaN, PageText.ReserveArmsLater, out reserveWarn) == PageText.ReserveArmsLater && !reserveWarn);
         Check("a plan that needs no reserve says so", PageText.BoosterReserve(true, true, false, 0.0, 0.0, 0.0, "", out reserveWarn).StartsWith("NONE") && !reserveWarn);
 
         Check("the window row names the node and the lead", PageText.WindowCountdown(725.0, true, 180.0) == "T-12m 05s, DESC NODE, 180 s LEAD");

@@ -107,7 +107,7 @@ public static partial class GuidanceWindow
         double3 ccf = double3.Normalize(origin + dir * t - center).Transform(ecl2ccf);
 
         // Refine once to the terrain height there: the visible surface sits at MeanRadius + terrain, so the mean sphere reads slightly off (worse at grazing angles) - this pulls the hit onto the surface actually under the cursor.
-        double terrain = body.GetTerrainHeightFromDirCcf(ccf);
+        double terrain = KsaSurfaceHeight.At(body, ccf);
         if (double.IsFinite(terrain) &&
             IntersectSphere(origin, dir, center, parent.MeanRadius + terrain, out double t2))
         {
@@ -168,6 +168,9 @@ public static partial class GuidanceWindow
         if (_retargetStageId != 0)
         {
             _s.StageTargets[_retargetStageId] = new double2(latDeg, lonDeg);
+            // A site picked is the booster's way home: no longer an optimal return.
+            _s.StageOptimalReturn.Remove(_retargetStageId);
+            _s.OptimalReturnSites.Remove(_retargetStageId);
             _s.LandingStatus = FormattableString.Invariant($"STAGE TARGET SET: LAT {latDeg:F3}, LON {lonDeg:F3}");
             _retargetStageId = 0;
             _s.StageModelDirty = true;   // so the list picks the new target up at once

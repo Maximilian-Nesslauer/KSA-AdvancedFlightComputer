@@ -15,8 +15,8 @@ namespace AdvancedFlightComputer.HarnessTests;
 // The booster reserve on the pad, before anything has lit.
 //
 // The convex ascent is planned on the pad, before EXECUTE launches, and keeps the reserve out of the first
-// liquid load only if the reserve is armed by then. The reserve arms when the next staging row drops every
-// burning engine (NextSeparationDropsAllEngines), and on the pad the next row is usually the ignition, which
+// liquid load only if the reserve is armed by then. The reserve arms when the next staging row takes
+// burning engines with it (NextSeparationTakesBurningEngines), and on the pad the next row is usually the ignition, which
 // drops nothing: so it stayed unarmed until the engines lit, the plan was solved for the whole first stage, and
 // the reserve then staged the booster early in the climb, leaving the vehicle below the plan all the way to the
 // hand-over (2stage_controlled, 2026-11-04: 30 deg planned pitch at 80 km against UPFG's 51).

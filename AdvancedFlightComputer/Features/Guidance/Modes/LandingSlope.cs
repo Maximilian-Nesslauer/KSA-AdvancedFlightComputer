@@ -201,7 +201,7 @@ public static partial class GuidanceWindow
     internal static double SlopeAround(Celestial body, double3 up, double reachM, int rings, int perRing)
     {
         GroundFrame(up, out double3 east, out double3 north);
-        double radius = body.MeanRadius + body.GetTerrainHeightFromDirCcf(up);
+        double radius = body.MeanRadius + KsaSurfaceHeight.At(body, up);
         var samples = new SiteSlope.GroundSample[rings * perRing + 1];
         int n = 0;
         samples[n++] = new SiteSlope.GroundSample(0.0, 0.0, radius - body.MeanRadius);
@@ -212,7 +212,7 @@ public static partial class GuidanceWindow
             {
                 double a = i * 2.0 * Math.PI / perRing;
                 double e = r * Math.Cos(a), no = r * Math.Sin(a);
-                samples[n++] = new SiteSlope.GroundSample(e, no, body.GetTerrainHeightFromDirCcf(double3.Normalize(up * radius + east * e + north * no)));
+                samples[n++] = new SiteSlope.GroundSample(e, no, KsaSurfaceHeight.At(body, double3.Normalize(up * radius + east * e + north * no)));
             }
         }
         return SiteSlope.SlopeRad(samples, out _, out _);
@@ -312,7 +312,7 @@ public static partial class GuidanceWindow
         SiteSlope.FlatSearch search = _s.FlatSearch;
         double3 up = SiteDirCcf(_s.FlatSearchLat, _s.FlatSearchLon);
         GroundFrame(up, out double3 east, out double3 north);
-        double radius = body.MeanRadius + body.GetTerrainHeightFromDirCcf(up);
+        double radius = body.MeanRadius + KsaSurfaceHeight.At(body, up);
         double reach = _s.FlatSearchReachM;
         double SlopeAt(double e, double n)
             => SlopeAround(body, double3.Normalize(up * radius + east * e + north * n), reach, 2, SearchRingPoints);

@@ -65,7 +65,9 @@ public static class AscentProblemFile
         public double QAlphaMax { get; set; }
         public double? PlaneTurnMin { get; set; }
         public double? PlaneTurnMax { get; set; }
+        // The first booster, for a reader older than Recoveries; a dump from before them has only this.
         public RecoveryDto? Recovery { get; set; }
+        public RecoveryDto[]? Recoveries { get; set; }
     }
 
     /// <summary>AscentRecovery. Its drag is the problem's own table and its air the problem's; only the lift is its own, sampled on the same grid.</summary>
@@ -74,6 +76,15 @@ public static class AscentProblemFile
         public int Stage { get; set; }
         public double InitialReserveKg { get; set; }
         public double BoosterDryKg { get; set; }
+        public int BoostersOnStage { get; set; } = 1;
+        // Missing in an older dump, which reads as a booster that is all its stage burns.
+        public double FlowShare { get; set; } = 1.0;
+        public bool OptimalReturn { get; set; }
+        // Null, and missing in an older dump: the vacuum exhaust velocity is taken (JSON has no NaN).
+        public double? LandingExhaustVelocity { get; set; }
+        public double? LandingAccel { get; set; }
+        public double LandingMargin { get; set; } = 1.1;
+        public double CorrectionDv { get; set; }
         public double ExhaustVelocity { get; set; }
         public double[] SiteCci { get; set; } = [];
         public double ReferenceArea { get; set; }
@@ -152,12 +163,26 @@ public static class AscentProblemFile
                 dto.CdTable = MachSamples.SelectMany(m => dto.CdAlphaDeg.Select(a => table.Cd(m, a * Math.PI / 180.0))).ToArray();
             }
         }
-        if (p.Recovery is AscentRecovery rec)
-            dto.Recovery = new RecoveryDto
-            {
+        if (p.Recoveries.Count > 0)
+        {
+            dto.Recoveries = p.Recoveries.Select(ToDto).ToArray();
+            dto.Recovery = dto.Recoveries[0];
+        }
+        return JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static RecoveryDto ToDto(AscentRecovery rec) => new()
+    {
                 Stage = rec.Stage,
                 InitialReserveKg = rec.InitialReserveKg,
                 BoosterDryKg = rec.BoosterDryKg,
+                BoostersOnStage = rec.BoostersOnStage,
+                FlowShare = rec.FlowShare,
+                OptimalReturn = rec.OptimalReturn,
+                LandingExhaustVelocity = double.IsFinite(rec.LandingExhaustVelocity) ? rec.LandingExhaustVelocity : null,
+                LandingAccel = double.IsFinite(rec.LandingAccel) ? rec.LandingAccel : null,
+                LandingMargin = rec.LandingMargin,
+                CorrectionDv = rec.CorrectionDv,
                 ExhaustVelocity = rec.ExhaustVelocity,
                 SiteCci = rec.SiteCci,
                 ReferenceArea = rec.ReferenceArea,
@@ -167,9 +192,7 @@ public static class AscentProblemFile
                 LiftTable = rec.Lift is { } lift
                     ? MachSamples.SelectMany(m => AeroTable.DefaultAlphaBreakpointsDeg.Select(a => lift.Cd(m, a * Math.PI / 180.0))).ToArray()
                     : null,
-            };
-        return JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true });
-    }
+    };
 
     public static AscentProblem FromJson(string json)
     {
@@ -198,13 +221,21 @@ public static class AscentProblemFile
             }
             air = new KsaAscentAtmosphere(atm, table);
         }
-        AscentRecovery? recovery = null;
-        if (dto.Recovery is RecoveryDto r && air is KsaAscentAtmosphere ka && ka.Table is { } drag)
-            recovery = new AscentRecovery
+        var recoveries = new List<AscentRecovery>();
+        if (air is KsaAscentAtmosphere ka && ka.Table is { } drag)
+            foreach (RecoveryDto r in dto.Recoveries ?? (dto.Recovery is { } one ? [one] : []))
+                recoveries.Add(new AscentRecovery
             {
                 Stage = r.Stage,
                 InitialReserveKg = r.InitialReserveKg,
                 BoosterDryKg = r.BoosterDryKg,
+                BoostersOnStage = Math.Max(r.BoostersOnStage, 1),
+                FlowShare = r.FlowShare,
+                OptimalReturn = r.OptimalReturn,
+                LandingExhaustVelocity = r.LandingExhaustVelocity ?? double.NaN,
+                LandingAccel = r.LandingAccel ?? double.NaN,
+                LandingMargin = r.LandingMargin,
+                CorrectionDv = r.CorrectionDv,
                 ExhaustVelocity = r.ExhaustVelocity,
                 SiteCci = r.SiteCci,
                 ReferenceArea = r.ReferenceArea,
@@ -215,7 +246,7 @@ public static class AscentProblemFile
                 Air = ka.Atmosphere,
                 LandingFactor = r.LandingFactor,
                 BoostbackMargin = r.BoostbackMargin,
-            };
+            });
         return new AscentProblem
         {
             Mu = dto.Mu,
@@ -243,7 +274,7 @@ public static class AscentProblemFile
             QAlphaMax = dto.QAlphaMax,
             PlaneTurnMin = dto.PlaneTurnMin ?? 0.0,
             PlaneTurnMax = dto.PlaneTurnMax ?? 0.0,
-            Recovery = recovery,
+            Recoveries = recoveries,
         };
     }
 }

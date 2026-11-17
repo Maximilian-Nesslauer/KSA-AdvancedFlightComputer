@@ -70,6 +70,13 @@ public struct DragCoastSystem : IOdeSystem
     /// way, at a nominal angle that stretches the range so the burn can stop short.</summary>
     public double Alpha;
 
+    /// <summary>
+    /// NOSE FIRST WHILE CLIMBING. True: while the coast still rises (r . v > 0) the vehicle flies nose into the airflow - alpha 180 deg in the retrograde-first convention, no lift - and only once it falls does <see cref="Alpha"/> apply. That is what a booster that does not burn on the way up flies: it holds the attitude it separated in, the lowest drag it has, and turns to its glide at the top of its arc where the air is thin (GuidanceWindow, Boostback). False: <see cref="Alpha"/> the whole coast.
+    ///
+    /// The switch is on the sign of the vertical speed, so a lifting glide that rose again would read as climbing again; the glide's lift is far too small to lift a falling booster back up.
+    /// </summary>
+    public bool ClimbNoseFirst;
+
     /// <summary>Drag coefficient table. Null for a drag-free (Keplerian) coast.</summary>
     public AeroTable Table;
 
@@ -116,7 +123,10 @@ public struct DragCoastSystem : IOdeSystem
             return;
 
         Dual mach = speed / Atmosphere.SpeedOfSound;
-        Dual cd = Table.Cd(mach, new Dual(Alpha));
+        // Climbing nose first (ClimbNoseFirst): alpha 180 and no lift until the coast turns down.
+        bool noseFirst = ClimbNoseFirst && (rx.V * vx.V + ry.V * vy.V + rz.V * vz.V) > 0.0;
+        double alpha = noseFirst ? Math.PI : Alpha;
+        Dual cd = Table.Cd(mach, new Dual(alpha));
 
         // a = -(1/2) rho |v| Cd (A/m) * v_air   -- one power of speed is in the vector
         Dual k = 0.5 * rho * speed * cd * AreaOverMass;
@@ -124,13 +134,13 @@ public struct DragCoastSystem : IOdeSystem
         dx[4] -= k * ay;
         dx[5] -= k * az;
 
-        if (LiftTable == null || Alpha == 0.0)
+        if (LiftTable == null || alpha == 0.0 || noseFirst)
             return;
 
         // LIFT AT THE HELD ANGLE, POINTED UP THE TRAJECTORY: perpendicular to the airflow, in the plane of the airflow and the local vertical - the direction that stretches the range. Its size is |C_L|, because the vehicle chooses which side to tilt its engine end so the lift points up, whichever way its airframe lifts. Mach is held inside the lift table's grid, where an extrapolated lift curve has been seen to change sign.
         Dual liftMach = mach.V < LiftTable.MachMin ? new Dual(LiftTable.MachMin)
                       : mach.V > LiftTable.MachMax ? new Dual(LiftTable.MachMax) : mach;
-        Dual cl = LiftTable.Cd(liftMach, new Dual(Alpha));
+        Dual cl = LiftTable.Cd(liftMach, new Dual(alpha));
         if (cl.V < 0.0)
             cl = -cl;
         Dual ux = rx / rlen, uy = ry / rlen, uz = rz / rlen;

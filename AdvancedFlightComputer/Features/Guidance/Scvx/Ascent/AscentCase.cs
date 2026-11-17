@@ -49,11 +49,22 @@ internal sealed class AscentCase
     /// </summary>
     public readonly (int First, int Last, double PropC, bool Exact)[] Loads;
 
-    /// <summary>The stage whose burn-out separates a booster the plan brings home (AscentProblem.Recovery), -1 for none; and its need, as the oracle prices it.</summary>
-    public readonly int RecStage = -1;
-    public readonly BoostbackOracle? Oracle;
-    /// <summary>The reserve the stage list already holds back, canonical; the solve's variable is the change from it, between <see cref="RMinC"/> and <see cref="RMaxC"/>: none at all, to the same 98 % of the stage's liquid load UPFG's reserve stops at.</summary>
-    public readonly double R0C, RMinC, RMaxC;
+    /// <summary>
+    /// One booster reserve the solve chooses: the boosters leaving at the end of <see cref="Stage"/> keep it (AscentProblem.Recoveries).
+    /// R0C is the reserve the stage list already holds back, canonical; the solve's variable is the change from it, between RMinC and RMaxC: none at all, to the same 98 % of the boosters' liquid load UPFG's reserve stops at. Share is the boosters' share of the stage's propellant flow (AscentRecovery.FlowShare): one, or below one for side boosters beside a core that burns on.
+    /// </summary>
+    public readonly record struct Reserve(int Stage, double R0C, double RMinC, double RMaxC, double Share);
+
+    /// <summary>One booster brought home: the reserve it keeps (an index into <see cref="Reserves"/>), and its need from where that reserve's stage ends, as the oracle prices it for its own site.</summary>
+    public readonly record struct Need(int Reserve, BoostbackOracle Oracle);
+
+    /// <summary>The reserves, one per stage that boosters leave from, in stage order; empty when no booster is brought home.</summary>
+    public readonly Reserve[] Reserves = [];
+    /// <summary>The boosters brought home, one per entry of AscentProblem.Recoveries and in its order.</summary>
+    public readonly Need[] Needs = [];
+
+    /// <summary>The first reserve's stage, -1 for none: the single-booster view the warm start uses.</summary>
+    public int RecStage => Reserves.Length > 0 ? Reserves[0].Stage : -1;
     /// <summary>Each node's solids, at its fixed second of its stage.</summary>
     public readonly SolidPoint[] NodeSolid;
     public readonly double SigScale;
@@ -209,13 +220,28 @@ internal sealed class AscentCase
         }
         Loads = loads.ToArray();
 
-        if (p.Recovery is AscentRecovery rec)
+        if (p.Recoveries.Count > 0)
         {
-            RecStage = rec.Stage;
-            Oracle = new BoostbackOracle(p, rec);
-            R0C = rec.InitialReserveKg / mu;
-            RMinC = -R0C;
-            RMaxC = Math.Max(0.0, 0.98 * (PropC[RecStage] + R0C) - R0C);
+            // One reserve per stage the boosters leave from, in stage order; the problem has checked that boosters sharing a stage agree on it.
+            var reserves = new List<Reserve>();
+            foreach (AscentRecovery rec in p.Recoveries.OrderBy(r => r.Stage))
+            {
+                if (reserves.Count > 0 && reserves[^1].Stage == rec.Stage)
+                    continue;
+                int s = rec.Stage;
+                double r0 = rec.InitialReserveKg / mu;
+                // The boosters' own load is their share of the stage's, with what they already keep added back.
+                double rMax = Math.Max(0.0, 0.98 * (rec.FlowShare * PropC[s] + r0) - r0);
+                reserves.Add(new Reserve(s, r0, -r0, rMax, rec.FlowShare));
+                // A side booster's core burns its share of the reserve in the next stage, so that stage may run longer than its load as built.
+                if (rec.FlowShare < 1.0 && !p.Stages[s + 1].IsPinned && PropC[s + 1] > 0.0)
+                {
+                    double extra = (rMax + r0) * (1.0 / rec.FlowShare - 1.0);
+                    SigMax[s + 1] *= (PropC[s + 1] + extra) / PropC[s + 1];
+                }
+            }
+            Reserves = reserves.ToArray();
+            Needs = p.Recoveries.Select(rec => new Need(reserves.FindIndex(r => r.Stage == rec.Stage), new BoostbackOracle(p, rec))).ToArray();
         }
 
         NodeSolid = new SolidPoint[N];
@@ -344,18 +370,32 @@ internal sealed class AscentCase
         res[4] = nh[0] * vx + nh[1] * vy + nh[2] * vz;
     }
 
-    /// <summary>The booster's separation, SI, from a trajectory: position and velocity at its stage's last node, and the time since lift-off, the burns up to it.</summary>
-    public void Separation(double[] x, double[] sig, double[] r, double[] v, out double t)
+    /// <summary>A booster's separation, SI, from a trajectory: position and velocity at the last node of <paramref name="stage"/>, and the time since lift-off, the burns up to it.</summary>
+    public void Separation(int stage, double[] x, double[] sig, double[] r, double[] v, out double t)
     {
-        int o = Ends[RecStage] * NX;
+        int o = Ends[stage] * NX;
         for (int i = 0; i < 3; i++)
         {
             r[i] = x[o + i] * Dyn.LU;
             v[i] = x[o + 3 + i] * Dyn.VU;
         }
         t = 0.0;
-        for (int s = 0; s <= RecStage; s++)
+        for (int s = 0; s <= stage; s++)
             t += sig[s] * Dyn.TU;
+    }
+
+    /// <summary>Each booster's need at a trajectory's separations (<see cref="Needs"/>), with its slopes when <paramref name="gradient"/>; <paramref name="impulses"/> warm-starts each from an earlier answer, or null.</summary>
+    public BoostbackOracle.Need[] EvaluateNeeds(double[] x, double[] sig, BoostbackOracle.Need[]? impulses, bool gradient)
+    {
+        var needs = new BoostbackOracle.Need[Needs.Length];
+        double[] r = new double[3], v = new double[3];
+        for (int j = 0; j < Needs.Length; j++)
+        {
+            Separation(Reserves[Needs[j].Reserve].Stage, x, sig, r, v, out double t);
+            double[]? warm = impulses != null && j < impulses.Length && impulses[j].Ok ? impulses[j].Impulse : null;
+            needs[j] = Needs[j].Oracle.Evaluate(r, v, t, warm, gradient);
+        }
+        return needs;
     }
 
     public static double Norm3(ReadOnlySpan<double> v) => Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);

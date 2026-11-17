@@ -153,7 +153,7 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
         VehicleAutopilotState s = VehicleAutopilotState.For(craft);
         s.ConvexQMaxKpa = 150.0;
         int moved = BodySettings.Follow(s, "Luna");
-        t.Check("Luna's UPFG FROM is taken", moved == 1 && s.ConvexHandoverAltKm == 10.0 && s.DefaultsBody == "Luna", $"moved {moved}, {s.ConvexHandoverAltKm} km, body '{s.DefaultsBody}'");
+        t.Check("Luna's UPFG FROM and orbit are taken", moved == 3 && s.ConvexHandoverAltKm == 10.0 && s.PeKm == 30.0 && s.ApKm == 50.0 && s.DefaultsBody == "Luna", $"moved {moved}, {s.ConvexHandoverAltKm} km, {s.PeKm} x {s.ApKm} km, body '{s.DefaultsBody}'");
         t.CheckAbs("a value the player set stays", s.ConvexQMaxKpa, 150.0, 1e-12);
         t.Check("a value at Luna's default is not counted as changed", SettingAccess.CountChanged(s, GuidanceSettingSpecs.TuningAscent) == 0);
         List<(string Key, string Value)> record = CraftSettings.Record(s);

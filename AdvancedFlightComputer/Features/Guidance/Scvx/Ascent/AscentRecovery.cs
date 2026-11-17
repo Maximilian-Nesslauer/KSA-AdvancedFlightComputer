@@ -16,10 +16,33 @@ public sealed class AscentRecovery
     public required int Stage { get; init; }
     /// <summary>The reserve the stage list was built with, kg: where the solve starts. It may move either way from here (AscentSolution.RecoveryReserveKg).</summary>
     public required double InitialReserveKg { get; init; }
-    /// <summary>The booster's dry mass, kg: what leaves at separation besides the reserve.</summary>
+    /// <summary>The booster's dry mass, kg: what leaves at separation besides the reserve. For side boosters leaving together, all of theirs (<see cref="BoostersOnStage"/>).</summary>
     public required double BoosterDryKg { get; init; }
+    /// <summary>
+    /// How many boosters leave together at this separation and share <see cref="BoosterDryKg"/> and the reserve: two for a pair of side boosters. Each flies home alone, so its coast and its terminal velocity go with its own share of the mass against its own drag area (<see cref="ReferenceArea"/>); the reserve stays the pair's.
+    /// </summary>
+    public int BoostersOnStage { get; init; } = 1;
+    /// <summary>
+    /// The share of <see cref="Stage"/>'s propellant flow that the separating booster draws, in (0, 1]. One for a booster that is all that burns in its stage.
+    ///
+    /// SIDE BOOSTERS (#176). Below one, the booster leaves beside a core whose liquid burns on into the next stage, and the one throttle drives both. A reserve R kept in the booster ends the stage R / share of propellant sooner, and the core's part of that, R (1 / share - 1), is still aboard. It is burned in the next stage, not jettisoned with the booster.
+    /// </summary>
+    public double FlowShare { get; init; } = 1.0;
+    /// <summary>
+    /// OPTIMAL RETURN (a drone ship): the booster flies no boostback and lands wherever its coast from separation comes down, so it needs only the landing burn. <see cref="SiteCci"/> then only gives the surface radius the coast ends at; the landing point is where that coast lands, worked out from the plan (BoosterReturn), not set beforehand.
+    /// </summary>
+    public bool OptimalReturn { get; init; }
     /// <summary>The booster's engines' exhaust velocity, m/s.</summary>
     public required double ExhaustVelocity { get; init; }
+    /// <summary>
+    /// The booster's engines' exhaust velocity at sea level, m/s, for the landing burn; NaN takes <see cref="ExhaustVelocity"/>.
+    ///
+    /// THE LANDING BURN IS NEAR THE GROUND, where back pressure takes a large share of a vacuum-tuned engine's exhaust velocity: a heavy's core read 436 s in vacuum and flew its landing at 342 s, 22 % less burn per kilogram than the reserve was sized for, and came down short of propellant (2026-11-17). The boostback stays on <see cref="ExhaustVelocity"/>, high up.
+    /// </summary>
+    public double LandingExhaustVelocity { get; init; } = double.NaN;
+
+    /// <summary>The exhaust velocity the landing burn is priced at: <see cref="LandingExhaustVelocity"/>, or the vacuum one where that is not known.</summary>
+    public double LandingVe => LandingExhaustVelocity > 0.0 && double.IsFinite(LandingExhaustVelocity) ? LandingExhaustVelocity : ExhaustVelocity;
     /// <summary>The landing site at lift-off, in the problem's inertial frame, m. Fixed to the ground: at separation it has turned with the body.</summary>
     public required double[] SiteCci { get; init; }
     /// <summary>Drag reference area, m^2, for <see cref="Drag"/> and <see cref="Lift"/>.</summary>
@@ -32,8 +55,20 @@ public sealed class AscentRecovery
     public double Alpha { get; init; }
     /// <summary>The air the booster coasts through.</summary>
     public required AtmosphereModel Air { get; init; }
-    /// <summary>The landing burn, as a multiple of the booster's terminal velocity.</summary>
+    /// <summary>The landing burn, as a multiple of the booster's terminal velocity, where <see cref="LandingAccel"/> is not known; zero for a booster that does not land (an expendable one's fall).</summary>
     public double LandingFactor { get; init; } = 1.3;
+    /// <summary>
+    /// The thrust acceleration the landing burn is flown at, m/s^2: the lower of the booster's sea-level thrust over its mass and the landing guidance's acceleration limit (VehicleAutopilotState.LandingAccelLimitG). NaN prices the burn with <see cref="LandingFactor"/> instead.
+    ///
+    /// THE BURN IS HELD TO A LIMIT, so it is not short. Falling at terminal velocity v and braking at a, it fights gravity the whole way: it takes v / (a - g) and costs v a / (a - g). At the 3 g the landing flies to that is 1.5 v, which the flat 1.3 v undersized: a heavy's core lit at 97 m/s, burned 5.4 s and needed about 150 m/s (2026-11-17).
+    /// </summary>
+    public double LandingAccel { get; init; } = double.NaN;
+    /// <summary>The landing burn over what braking from terminal velocity at <see cref="LandingAccel"/> costs: ignition timing, the plan's last metres, steering.</summary>
+    public double LandingMargin { get; init; } = 1.1;
+    /// <summary>
+    /// A fixed allowance for small corrections, m/s, kept on top of the boostback and the landing burn and priced at the vacuum exhaust velocity like the boostback: a small boostback after a glide-only miss, the trim the plan's impulse leaves, a separation that is not quite the plan's. Zero for none.
+    /// </summary>
+    public double CorrectionDv { get; init; }
     /// <summary>The boostback, as a multiple of its impulse: a real burn is finite, flipped into and flown through gravity and drag, where the impulse is none of these.</summary>
     /// <summary>
     /// What a real boostback burn costs over the impulse, as a factor on its dv. Not small, and longer the burn the more it is: from boosters_controlled's planned separation (3.3 km/s at 241 km) the booster's own planner needed 5080 m/s for a 4383 m/s impulse, 16 % more, which at 1.15 left 0.2 t of the 0.32 t the landing needs (2026-11-05).
@@ -47,7 +82,7 @@ public sealed class AscentRecovery
     /// <summary>The same booster, its reserve starting at <paramref name="initialReserveKg"/>.</summary>
     public AscentRecovery WithInitialReserve(double initialReserveKg) => new()
     {
-        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, ExhaustVelocity = ExhaustVelocity, BurnDelayS = BurnDelayS,
+        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, BoostersOnStage = BoostersOnStage, FlowShare = FlowShare, OptimalReturn = OptimalReturn, ExhaustVelocity = ExhaustVelocity, LandingExhaustVelocity = LandingExhaustVelocity, LandingAccel = LandingAccel, LandingMargin = LandingMargin, CorrectionDv = CorrectionDv, BurnDelayS = BurnDelayS,
         SiteCci = SiteCci, ReferenceArea = ReferenceArea, Drag = Drag, Lift = Lift, Alpha = Alpha, Air = Air,
         LandingFactor = LandingFactor, BoostbackMargin = BoostbackMargin,
     };
@@ -60,9 +95,16 @@ public sealed class AscentRecovery
             return "the recovered booster is not valid";
         if (SiteCci is not { Length: 3 } || !SiteCci.All(double.IsFinite))
             return "the landing site is not valid";
+        if (!(FlowShare > 0.0 && FlowShare <= 1.0))
+            return "the booster's flow share is not in (0, 1]";
+        if (FlowShare < 1.0 && !p.Stages[Stage + 1].HasLiquid)
+            return "a side booster's core has no liquid to burn on in the next stage";
         return "";
     }
 }
+
+/// <summary>One booster brought home, as a plan has it (AscentSolution.Recoveries): the stage it leaves at; the reserve that stage keeps, kg, shared by every booster leaving there; what this booster needs from the plan's separation, kg; that need's boostback impulse and landing burn, m/s; and when it separates, s from lift-off.</summary>
+public readonly record struct AscentRecoveryResult(int Stage, double ReserveKg, double RequiredKg, double BoostbackDv, double LandingDv, double SeparationTime);
 
 /// <summary>
 /// What a booster separated at a given state and time needs to come home, and how that moves with the state: the ascent's recovery row (AscentSubproblem) is that need linearised.
@@ -100,25 +142,32 @@ public sealed class BoostbackOracle
     /// <summary>Why the last boostback solve failed, for the log: the coast's status, or where the iteration stopped.</summary>
     public string LastFailure { get; private set; } = "";
 
-    public BoostbackOracle(AscentProblem p, AscentRecovery r)
+    public BoostbackOracle(AscentProblem p, AscentRecovery r) : this(p.Mu, p.BodyRadius, p.Omega, r) { }
+
+    /// <summary>The same, from the body alone: gravitational parameter, m^3/s^2, mean radius, m, and spin rate, rad/s.</summary>
+    public BoostbackOracle(double mu, double bodyRadius, double omega, AscentRecovery r)
     {
         _r = r;
-        _omega = p.Omega;
-        double g = p.Mu / (p.BodyRadius * p.BodyRadius);
+        _omega = omega;
+        double g = mu / (bodyRadius * bodyRadius);
         double cd = r.Drag.Cd(0.3, 0.0);
+        // One booster's share: a pair's drag area is each one's, flying home alone.
+        double eachDryKg = r.BoosterDryKg / Math.Max(r.BoostersOnStage, 1);
         TerminalVelocity = cd > 0.0 && r.Air.SeaLevelDensity > 0.0
-            ? Math.Sqrt(2.0 * r.BoosterDryKg * g / (r.Air.SeaLevelDensity * cd * r.ReferenceArea))
+            ? Math.Sqrt(2.0 * eachDryKg * g / (r.Air.SeaLevelDensity * cd * r.ReferenceArea))
             : 0.0;
-        LandingDv = r.LandingFactor * TerminalVelocity;
+        LandingDv = LandingBurn(r, TerminalVelocity, g);
         // Through the coast the booster carries its landing propellant.
-        double coastMass = r.BoosterDryKg * Math.Exp(LandingDv / r.ExhaustVelocity);
+        double coastMass = eachDryKg * Math.Exp(LandingDv / r.LandingVe);
         _sys = new DragCoastSystem
         {
-            Mu = p.Mu,
-            OmegaZ = p.Omega,
-            MeanRadius = p.BodyRadius,
+            Mu = mu,
+            OmegaZ = omega,
+            MeanRadius = bodyRadius,
             AreaOverMass = r.ReferenceArea / coastMass,
             Alpha = r.Alpha,
+            // An optimal return flies no boostback, so it climbs nose first to its apex and glides from there, as the booster flies it.
+            ClimbNoseFirst = r.OptimalReturn,
             Table = r.Drag,
             LiftTable = r.Lift,
             Atmosphere = r.Air,
@@ -129,14 +178,28 @@ public sealed class BoostbackOracle
         _opt.PathStride = 0;
     }
 
-    /// <summary>The propellant the booster needs for a boostback of <paramref name="boostbackDv"/>, kg.</summary>
+    /// <summary>
+    /// The landing burn, m/s: braking from terminal velocity <paramref name="terminal"/> at the thrust acceleration it is flown at, against gravity <paramref name="g"/>, with its margin (AscentRecovery.LandingAccel); or the flat factor on the terminal velocity where that acceleration is not known. Zero for a booster that does not land.
+    /// </summary>
+    public static double LandingBurn(AscentRecovery r, double terminal, double g)
+    {
+        if (!(r.LandingFactor > 0.0))
+            return 0.0;
+        if (!(r.LandingAccel > 0.0) || !double.IsFinite(r.LandingAccel))
+            return r.LandingFactor * terminal;
+        // A booster that can barely outweigh gravity cannot land at all; held to 1.2 g here so the price stays finite and large rather than blowing up.
+        double a = Math.Max(r.LandingAccel, 1.2 * g);
+        return r.LandingMargin * terminal * a / (a - g);
+    }
+
+    /// <summary>The propellant the booster needs for a boostback of <paramref name="boostbackDv"/>, kg: the boostback high up at the vacuum exhaust velocity, then the landing burn at the sea-level one (AscentRecovery.LandingExhaustVelocity).</summary>
     public double RequiredKg(double boostbackDv)
-        => _r.BoosterDryKg * (Math.Exp((_r.BoostbackMargin * boostbackDv + LandingDv) / _r.ExhaustVelocity) - 1.0);
+        => _r.BoosterDryKg * (Math.Exp((_r.BoostbackMargin * boostbackDv + _r.CorrectionDv) / _r.ExhaustVelocity + LandingDv / _r.LandingVe) - 1.0);
 
     /// <summary>d(RequiredKg)/d(boostback dv), kg per m/s.</summary>
     public double RequiredKgSlope(double boostbackDv)
         => _r.BoosterDryKg * _r.BoostbackMargin / _r.ExhaustVelocity
-           * Math.Exp((_r.BoostbackMargin * boostbackDv + LandingDv) / _r.ExhaustVelocity);
+           * Math.Exp((_r.BoostbackMargin * boostbackDv + _r.CorrectionDv) / _r.ExhaustVelocity + LandingDv / _r.LandingVe);
 
     /// <summary>
     /// The smallest impulse at separation, state (<paramref name="r"/>, <paramref name="v"/>) in SI at <paramref name="tSep"/> s after lift-off, that lands the booster on the site; <paramref name="dv"/> carries the starting guess in and the impulse out. False if the coast never lands or the correction cannot be solved.
@@ -265,6 +328,73 @@ public sealed class BoostbackOracle
         return missM <= MissToleranceM;
     }
 
+    /// <summary>
+    /// The booster's flight from separation to the ground, with <paramref name="impulse"/> (m/s, or null for none) fired after the coast to the burn (BurnDelayS), as the boostback flies it. <paramref name="ground"/> gets the path as points fixed to the ground, x y z per point in the problem's frame at lift-off, from separation to impact; <paramref name="times"/> each point's time from lift-off. <paramref name="impact"/> is where it lands, in the same frame. False, with the reason in <see cref="LastFailure"/>, if the coast never reaches the ground.
+    ///
+    /// FIXED TO THE GROUND, not inertial: each point is turned back by the angle the body has turned since lift-off, so the path ends on the ground point it lands on, which is what a landing site, and a ship placed there, are.
+    /// </summary>
+    public bool Path(ReadOnlySpan<double> r, ReadOnlySpan<double> v, double tSep, double[]? impulse, List<double> ground, List<double> times, out double[] impact)
+    {
+        impact = [];
+        ground.Clear();
+        times.Clear();
+        void Add(double x, double y, double z, double t)
+        {
+            double a = -_omega * t, c = Math.Cos(a), s = Math.Sin(a);
+            ground.Add(c * x - s * y);
+            ground.Add(s * x + c * y);
+            ground.Add(z);
+            times.Add(t);
+        }
+
+        double[] rr = r.ToArray(), vv = v.ToArray();
+        Add(rr[0], rr[1], rr[2], tSep);
+        double delay = Math.Max(_r.BurnDelayS, 0.0);
+        if (delay > 0.0)
+        {
+            Span<Dual> s0 = stackalloc Dual[ImpactPredictor.N];
+            Span<Dual> s1 = stackalloc Dual[ImpactPredictor.N];
+            for (int i = 0; i < 3; i++)
+            {
+                s0[i] = rr[i];
+                s0[3 + i] = vv[i];
+            }
+            Rk4.Integrate(in _sys, 0.0, s0, delay, 1.0, s1, _scratch.AsSpan(0, Rk4.IntegrateScratch(ImpactPredictor.N)));
+            for (int i = 0; i < 3; i++)
+            {
+                rr[i] = s1[i].V;
+                vv[i] = s1[3 + i].V;
+            }
+        }
+        double tBurn = tSep + delay;
+
+        Span<Dual> x0 = stackalloc Dual[ImpactPredictor.N];
+        for (int i = 0; i < 3; i++)
+        {
+            x0[i] = rr[i];
+            x0[3 + i] = vv[i] + (impulse != null ? impulse[i] : 0.0);
+        }
+        ImpactOptions opt = _opt;
+        opt.PathStride = 4;
+        var path = new double[ImpactPredictor.PathStrideDoubles * 2000];
+        ImpactPrediction pred = ImpactPredictor.Predict(in _sys, x0, in opt, _scratch, path);
+        if (!pred.Hit)
+        {
+            LastFailure = $"the coast from separation ends {pred.Status}";
+            return false;
+        }
+        for (int k = 0; k < pred.PathPoints; k++)
+        {
+            int o = k * ImpactPredictor.PathStrideDoubles;
+            Add(path[o], path[o + 1], path[o + 2], tBurn + path[o + 3]);
+        }
+        double tHit = tBurn + pred.TimeOfFlight.V;
+        Add(pred.Rx.V, pred.Ry.V, pred.Rz.V, tHit);
+        int n = ground.Count;
+        impact = [ground[n - 3], ground[n - 2], ground[n - 1]];
+        return true;
+    }
+
     /// <summary>The unit direction J maps to nothing: the cross product of the two of its rows that are furthest from parallel. J's rows are the impact's three ground coordinates, held to the surface, so they span a plane.</summary>
     private static bool NullDirection(double[] g, out double nx, out double ny, out double nz)
     {
@@ -294,6 +424,10 @@ public sealed class BoostbackOracle
     /// </summary>
     public Need Evaluate(ReadOnlySpan<double> r, ReadOnlySpan<double> v, double tSep, double[]? guess, bool gradient)
     {
+        // An optimal return flies no boostback: its need is the landing burn wherever it separates, so it has no slope.
+        if (_r.OptimalReturn)
+            return new Need(true, 0.0, RequiredKg(0.0), new double[3], new double[3], new double[3], 0.0);
+
         double[] dv = guess != null ? (double[])guess.Clone() : new double[3];
         if (!Boostback(r, v, tSep, dv, out double mag, out _))
         {

@@ -89,5 +89,8 @@ public sealed class GuidanceAeroSweepTest : AfcTest
         t.Check("an airless body gives no atmosphere", aero.Atmosphere == null);
         t.Check("an airless body gives no drag", aero.Table != null && Array.TrueForAll(aero.CdTable, cd => cd == 0.0)
             && Array.TrueForAll(aero.LiftTable, cl => cl == 0.0));
+        var state = new VehicleAutopilotState { Aero = aero };
+        t.Check("the airless table stays current for its mesh",
+            !state.AeroStale(aero.SampledExtents, KsaAeroSweep.LiveMeshHash(vehicle), moon));
     }
 }

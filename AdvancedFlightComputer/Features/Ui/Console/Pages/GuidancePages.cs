@@ -41,8 +41,8 @@ internal static class LaunchPage
                 ctx.ToInputs();
             using (Core.ConsoleUi.Dim(after))
             {
-                GuidanceWindow.DrawLaunchLimits(ctx.Subject, ctx.FoldsOpen);
                 GuidanceWindow.DrawLaunchBoosters(ctx.Subject, ctx.FoldsOpen);
+                GuidanceWindow.DrawLaunchLimits(ctx.Subject, ctx.FoldsOpen);
             }
             if (!planDraws && AfcConsole.HasPanes)
             {
