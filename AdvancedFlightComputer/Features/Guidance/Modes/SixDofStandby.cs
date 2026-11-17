@@ -89,7 +89,7 @@ public static partial class GuidanceWindow
         // No pacing: the solve is off the sim thread, so there is no frame to protect.
         // Under the braking burn the craft brakes at many times the local gravity with its thrust axis near the horizon. There the cold solve starts from the braking path, and the subproblems of this guidance get the time they need, also after it takes the craft, because its solves run on the worker and a solve cut short gives no plan at all.
         bool braking = _s.LandingPhase == LandingPhase.Burn;
-        var guidance = new Ksa6DofGuidance(cfg, dyn)
+        var guidance = new Ksa6DofGuidance(cfg, dyn, Ksa6DofSetup.LateralTorqueLead(vehicle))
         {
             FixedTime = false, ColdIterationIntervalS = 0.0,
             BrakingSeed = braking, LongBudgetMs = braking ? BrakingStandbyBudgetMs : 0.0,

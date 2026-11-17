@@ -28,6 +28,7 @@ public sealed class Ksa6DofGuidance
     private readonly Dynamics6Dof.Params _dyn;
     private readonly Scvx6DofSolver _solver;
     private readonly int _n;
+    private readonly double _lateralTorqueLeadS;
 
     /// <summary>
     /// The plan as the SIM THREAD sees it - the only guidance state that crosses a thread boundary. Written by one reference assignment at the end of a successful solve, so a reader gets a whole plan or the previous whole plan, never a mixture. See Ksa6DofPlan.
@@ -444,11 +445,12 @@ public sealed class Ksa6DofGuidance
     public ReadOnlySpan<double> PlanState => _planX;
     public ReadOnlySpan<double> PlanControl => _planU;
 
-    public Ksa6DofGuidance(Scvx6DofConfig cfg, Dynamics6Dof.Params dyn)
+    public Ksa6DofGuidance(Scvx6DofConfig cfg, Dynamics6Dof.Params dyn, double lateralTorqueLeadS = 0.0)
     {
         _cfg = cfg;
         _dyn = dyn;
         _n = cfg.Nodes;
+        _lateralTorqueLeadS = lateralTorqueLeadS;
         // The price the config asks for is where pricing ends up, not where it starts; see PricingStage.
         _vcTarget = cfg.VirtualControlScale is { } target ? (double[])target.Clone() : null;
         _solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
@@ -1408,9 +1410,7 @@ public sealed class Ksa6DofGuidance
         double t = Math.Max(0.0, simNow - plan.SolveTime);
         PlanElapsed = t;
 
-        double sNode = Math.Clamp(t / dt, 0.0, plan.Nodes - 1.001);
-        int k = (int)sNode;
-        double f = sNode - k;
+        (int k, double f) = ControlSegment(plan, t / dt);
 
         double tdx = Lerp(plan.U, 0, k, f);
         double tdy = Lerp(plan.U, 1, k, f);
@@ -1418,7 +1418,11 @@ public sealed class Ksa6DofGuidance
         double tauRoll = Lerp(plan.U, 3, k, f);
 
         // tau = r_T x T_body with r_T = (0,0,-LArm), i.e. the engine below the centre of mass - the model's own gimbal-torque relation, verbatim.
-        torqueModel = new double3(_dyn.LArm * tdy, -_dyn.LArm * tdx, tauRoll);
+        // Lead the lateral gimbals' response while the axial thrust and roll follow the current plan step.
+        (int leadNode, double leadFraction) = ControlSegment(plan, (t + _lateralTorqueLeadS) / dt);
+        double leadTdx = Lerp(plan.U, 0, leadNode, leadFraction);
+        double leadTdy = Lerp(plan.U, 1, leadNode, leadFraction);
+        torqueModel = new double3(_dyn.LArm * leadTdy, -_dyn.LArm * leadTdx, tauRoll);
 
         // AXIAL THRUST IN NEWTONS, not a throttle fraction.
         //  This previously return thrust / _cfg.Tmax, and that was the systematic error behind the descend-until-it-loops behaviour. Tmax is fixed when the plan is built, so the moment the vehicle's real capability differs from it - a different ambient pressure, an engine out, propellant starvation - every commanded thrust is wrong by exactly that ratio. It is invisible to the MPC too: re-solving corrects the STATE, but the error is in the actuator mapping, so each new plan is executed just as wrongly as the last.
@@ -1443,6 +1447,13 @@ public sealed class Ksa6DofGuidance
             }
         }
         return true;
+    }
+
+    private static (int node, double fraction) ControlSegment(Ksa6DofPlan plan, double sample)
+    {
+        double position = Math.Clamp(sample, 0.0, plan.Nodes - 1.001);
+        int node = (int)position;
+        return (node, position - node);
     }
 
     /// <summary>

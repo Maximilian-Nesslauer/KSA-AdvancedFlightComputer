@@ -1850,7 +1850,10 @@ public static partial class GuidanceWindow
             return false;
         }
 
-        _s.Guidance = new Ksa6DofGuidance(cfg, dyn) { FixedTime = _s.SixDofFixedTime };
+        _s.Guidance = new Ksa6DofGuidance(cfg, dyn, Ksa6DofSetup.LateralTorqueLead(vehicle))
+        {
+            FixedTime = _s.SixDofFixedTime
+        };
 
         // SEED FROM G-FOLD.
         // SCvx refines a reference rather than searching for one, so the seed decides how many iterations the cold solve needs and which local solution it walks toward.
