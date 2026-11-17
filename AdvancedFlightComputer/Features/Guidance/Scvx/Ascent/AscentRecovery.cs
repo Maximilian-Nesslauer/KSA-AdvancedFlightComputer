@@ -16,8 +16,12 @@ public sealed class AscentRecovery
     public required int Stage { get; init; }
     /// <summary>The reserve the stage list was built with, kg: where the solve starts. It may move either way from here (AscentSolution.RecoveryReserveKg).</summary>
     public required double InitialReserveKg { get; init; }
-    /// <summary>The booster's dry mass, kg: what leaves at separation besides the reserve.</summary>
+    /// <summary>The booster's dry mass, kg: what leaves at separation besides the reserve. For side boosters leaving together, all of theirs (<see cref="BoostersOnStage"/>).</summary>
     public required double BoosterDryKg { get; init; }
+    /// <summary>
+    /// How many boosters leave together at this separation and share <see cref="BoosterDryKg"/> and the reserve: two for a pair of side boosters. Each flies home alone, so its coast and its terminal velocity go with its own share of the mass against its own drag area (<see cref="ReferenceArea"/>); the reserve stays the pair's.
+    /// </summary>
+    public int BoostersOnStage { get; init; } = 1;
     /// <summary>
     /// The share of <see cref="Stage"/>'s propellant flow that the separating booster draws, in (0, 1]. One for a booster that is all that burns in its stage.
     ///
@@ -78,7 +82,7 @@ public sealed class AscentRecovery
     /// <summary>The same booster, its reserve starting at <paramref name="initialReserveKg"/>.</summary>
     public AscentRecovery WithInitialReserve(double initialReserveKg) => new()
     {
-        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, FlowShare = FlowShare, OptimalReturn = OptimalReturn, ExhaustVelocity = ExhaustVelocity, LandingExhaustVelocity = LandingExhaustVelocity, LandingAccel = LandingAccel, LandingMargin = LandingMargin, CorrectionDv = CorrectionDv, BurnDelayS = BurnDelayS,
+        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, BoostersOnStage = BoostersOnStage, FlowShare = FlowShare, OptimalReturn = OptimalReturn, ExhaustVelocity = ExhaustVelocity, LandingExhaustVelocity = LandingExhaustVelocity, LandingAccel = LandingAccel, LandingMargin = LandingMargin, CorrectionDv = CorrectionDv, BurnDelayS = BurnDelayS,
         SiteCci = SiteCci, ReferenceArea = ReferenceArea, Drag = Drag, Lift = Lift, Alpha = Alpha, Air = Air,
         LandingFactor = LandingFactor, BoostbackMargin = BoostbackMargin,
     };
@@ -147,12 +151,14 @@ public sealed class BoostbackOracle
         _omega = omega;
         double g = mu / (bodyRadius * bodyRadius);
         double cd = r.Drag.Cd(0.3, 0.0);
+        // One booster's share: a pair's drag area is each one's, flying home alone.
+        double eachDryKg = r.BoosterDryKg / Math.Max(r.BoostersOnStage, 1);
         TerminalVelocity = cd > 0.0 && r.Air.SeaLevelDensity > 0.0
-            ? Math.Sqrt(2.0 * r.BoosterDryKg * g / (r.Air.SeaLevelDensity * cd * r.ReferenceArea))
+            ? Math.Sqrt(2.0 * eachDryKg * g / (r.Air.SeaLevelDensity * cd * r.ReferenceArea))
             : 0.0;
         LandingDv = LandingBurn(r, TerminalVelocity, g);
         // Through the coast the booster carries its landing propellant.
-        double coastMass = r.BoosterDryKg * Math.Exp(LandingDv / r.LandingVe);
+        double coastMass = eachDryKg * Math.Exp(LandingDv / r.LandingVe);
         _sys = new DragCoastSystem
         {
             Mu = mu,

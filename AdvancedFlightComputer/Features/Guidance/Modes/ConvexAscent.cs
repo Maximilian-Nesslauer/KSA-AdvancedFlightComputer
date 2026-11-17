@@ -525,6 +525,7 @@ public static partial class GuidanceWindow
                 Stage = boosterStage,
                 InitialReserveKg = 0.0,
                 BoosterDryKg = boosterDryKg,
+                BoostersOnStage = Math.Max(onRow, 1),
                 FlowShare = flowShare,
                 OptimalReturn = booster.OptimalReturn,
                 ExhaustVelocity = b.HasLiquid ? b.Thrust / b.MassFlow : b.ExhaustVelocity,

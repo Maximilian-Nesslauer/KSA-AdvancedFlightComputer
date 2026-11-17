@@ -542,7 +542,7 @@ public sealed class AscentProblem
             for (int j = 0; j < i; j++)
             {
                 AscentRecovery o = Recoveries[j];
-                if (o.Stage == r.Stage && (o.FlowShare != r.FlowShare || o.BoosterDryKg != r.BoosterDryKg || o.InitialReserveKg != r.InitialReserveKg))
+                if (o.Stage == r.Stage && (o.FlowShare != r.FlowShare || o.BoosterDryKg != r.BoosterDryKg || o.BoostersOnStage != r.BoostersOnStage || o.InitialReserveKg != r.InitialReserveKg))
                     return $"the boosters leaving at stage {r.Stage + 1} disagree on the reserve they share";
             }
         }

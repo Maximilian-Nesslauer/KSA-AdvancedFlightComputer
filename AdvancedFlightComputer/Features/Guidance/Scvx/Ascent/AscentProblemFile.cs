@@ -76,6 +76,7 @@ public static class AscentProblemFile
         public int Stage { get; set; }
         public double InitialReserveKg { get; set; }
         public double BoosterDryKg { get; set; }
+        public int BoostersOnStage { get; set; } = 1;
         // Missing in an older dump, which reads as a booster that is all its stage burns.
         public double FlowShare { get; set; } = 1.0;
         public bool OptimalReturn { get; set; }
@@ -175,6 +176,7 @@ public static class AscentProblemFile
                 Stage = rec.Stage,
                 InitialReserveKg = rec.InitialReserveKg,
                 BoosterDryKg = rec.BoosterDryKg,
+                BoostersOnStage = rec.BoostersOnStage,
                 FlowShare = rec.FlowShare,
                 OptimalReturn = rec.OptimalReturn,
                 LandingExhaustVelocity = double.IsFinite(rec.LandingExhaustVelocity) ? rec.LandingExhaustVelocity : null,
@@ -227,6 +229,7 @@ public static class AscentProblemFile
                 Stage = r.Stage,
                 InitialReserveKg = r.InitialReserveKg,
                 BoosterDryKg = r.BoosterDryKg,
+                BoostersOnStage = Math.Max(r.BoostersOnStage, 1),
                 FlowShare = r.FlowShare,
                 OptimalReturn = r.OptimalReturn,
                 LandingExhaustVelocity = r.LandingExhaustVelocity ?? double.NaN,
