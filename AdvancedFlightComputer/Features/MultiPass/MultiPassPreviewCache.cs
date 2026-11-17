@@ -134,15 +134,18 @@ internal static class MultiPassPreviewCache
     {
         hc.Add(engine);
         hc.Add(engine.IsActive);
-        hc.Add(engine.Cores.Length);
-        foreach (RocketCore core in engine.Cores)
+        hc.Add(engine.Rockets.Length);
+        foreach (Rocket rocket in engine.Rockets)
         {
-            hc.Add(core);
-            hc.Add(core.Reaction);
-            hc.Add(core.MinimumThrottle);
-            hc.Add(core.MinimumPulseTime);
-            AddCoreInputs(core, ref hc);
-            AddNozzleInputs(core, ref hc);
+            hc.Add(rocket.MinimumThrottle);
+            hc.Add(rocket.MinimumPulseTime);
+            foreach (RocketCore core in rocket.Cores)
+            {
+                hc.Add(core);
+                hc.Add(core.Reaction);
+                AddCoreInputs(core, ref hc);
+                AddNozzleInputs(core, ref hc);
+            }
         }
     }
 
@@ -224,7 +227,7 @@ internal static class MultiPassPreviewCache
     // Sample that state only when another key input changes. The per-mole mass buckets set the ordinary drain cadence.
     private static void AddNozzleInputs(RocketCore core, ref HashCode hc)
     {
-        RocketNozzle[] nozzles = core.Rocket.Nozzles;
+        RocketNozzle[] nozzles = core.Nozzles;
         hc.Add(nozzles.Length);
         foreach (RocketNozzle nozzle in nozzles)
         {

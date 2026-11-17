@@ -256,8 +256,8 @@ public static class KsaVehicleAdapter
         Span<EngineController> engines = part.Modules.Get<EngineController>();
         for (int i = 0; i < engines.Length; i++)
         {
-            RocketCore[] cores = engines[i].Cores;
-            if (cores != null && Array.Exists(cores, core => !KsaEnginePerf.FollowsThrottle(core)))
+            Rocket[] rockets = engines[i].Rockets;
+            if (rockets != null && Array.Exists(rockets, rocket => !KsaEnginePerf.FollowsThrottle(rocket)))
                 return false;
         }
         return true;
@@ -268,12 +268,13 @@ public static class KsaVehicleAdapter
         Span<EngineController> engines = part.Modules.Get<EngineController>();
         for (int i = 0; i < engines.Length; i++)
         {
-            RocketCore[] cores = engines[i].Cores;
-            if (cores == null)
+            Rocket[] rockets = engines[i].Rockets;
+            if (rockets == null)
                 continue;
-            for (int j = 0; j < cores.Length; j++)
-                if (cores[j] is SolidMotor)
-                    return true;
+            foreach (Rocket rocket in rockets)
+                foreach (RocketCore core in rocket.Cores)
+                    if (core is SolidMotor)
+                        return true;
         }
         return false;
     }
@@ -347,15 +348,16 @@ public static class KsaVehicleAdapter
         Span<EngineController> engines = part.Modules.Get<EngineController>();
         for (int i = 0; i < engines.Length; i++)
         {
-            RocketCore[] cores = engines[i].Cores;
-            if (cores == null)
+            Rocket[] rockets = engines[i].Rockets;
+            if (rockets == null)
                 continue;
-            for (int j = 0; j < cores.Length; j++)
+            foreach (Rocket rocket in rockets)
+            foreach (RocketCore core in rocket.Cores)
             {
-                RocketNozzle[] nozzles = cores[j]?.Rocket?.Nozzles;
+                RocketNozzle[] nozzles = core?.Nozzles;
                 if (nozzles == null)
                     continue;
-                ref readonly RocketCoreConditions conditions = ref cores[j].DesignConditions;
+                ref readonly RocketCoreConditions conditions = ref core.DesignConditions;
                 foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(nozzles.AsSpan()))
                 {
                     RocketPerformance performance = nozzle.Module.ComputePerformance(in conditions, ambient).GetRocketPerformance();

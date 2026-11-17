@@ -205,10 +205,10 @@ public sealed class SequenceBurnStateTest : AfcTest
             Span<EngineController> engines = parts[i].Modules.Get<EngineController>();
             for (int e = 0; e < engines.Length; e++)
             {
-                foreach (RocketCore core in engines[e].Cores)
+                foreach (Rocket rocket in engines[e].Rockets)
                 {
                     // Only liquid combustors have a FlowRule.
-                    if (core is not Combustor combustor || combustor.ResourceManager == null)
+                    if (rocket.Core is not Combustor combustor || combustor.ResourceManager == null)
                         continue;
                     combustor.ResourceManager.FlowRule = rule;
                     changed++;
@@ -336,9 +336,9 @@ public sealed class SequenceBurnStateTest : AfcTest
             Span<EngineController> engines = parts[p].Modules.Get<EngineController>();
             for (int e = 0; e < engines.Length; e++)
             {
-                foreach (RocketCore core in engines[e].Cores)
+                foreach (Rocket rocket in engines[e].Rockets)
                 {
-                    if (core is not Combustor { ResourceManager: not null } combustor)
+                    if (rocket.Core is not Combustor { ResourceManager: not null } combustor)
                         continue;
                     FlowOrder<Tank> levels = combustor.ResourceManager.ConsumptionOrder;
                     for (int level = 0; level < levels.LevelCount; level++)
@@ -455,7 +455,7 @@ public sealed class SequenceBurnStateTest : AfcTest
                 break;
             }
         }
-        if (motor == null || motor.Controller is not EngineController { IsActive: true }
+        if (motor == null || motor.Rocket?.Controller is not EngineController { IsActive: true }
             || motor.Stack.Segments.Length == 0 || motor.Rocket.Nozzles.Length == 0)
         {
             t.Skip("sub-quantum drain cache: no active solid motor state.");

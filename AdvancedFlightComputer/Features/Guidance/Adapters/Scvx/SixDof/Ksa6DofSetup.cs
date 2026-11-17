@@ -158,11 +158,11 @@ public static class Ksa6DofSetup
         foreach (RocketNozzle nozzle in vehicle.Parts.Modules.Get<RocketNozzle>())
         {
             Rocket rocket = nozzle.Rocket;
-            if (rocket?.Core?.Controller is not EngineController engine || onGimbal.Contains(nozzle))
+            if (rocket?.Controller is not EngineController engine || nozzle.Core == null || onGimbal.Contains(nozzle))
                 continue;
             if (anyActive && !engine.IsActive)
                 continue;
-            RocketCoreConditions combustion = rocket.Core.ComputeConditions(2f);
+            RocketCoreConditions combustion = rocket.ComputeCoreConditions(nozzle.Core, 2f);
             double thrust = nozzle.ComputePerformance(in combustion, 0f).GetTotalThrust();
             if (double.IsFinite(thrust) && thrust > 0.0)
                 total += thrust;

@@ -26,11 +26,11 @@ internal static class StagingHelpers
         // The staging hooks run in Universe.ApplyVehicleSolvers, before Program.PrepareFrame flushes dirty part trees, and IsFueled reads SolidMotor.Stack.
         vehicle.Parts.EnsureDerived(DerivedData.SolidMotorStacks);
         ReadOnlySpan<MoleState> moleStates = vehicle.Parts.Moles.States;
-        ReadOnlySpan<RocketCoreState> coreStates = vehicle.Parts.RocketCores.States;
+        ReadOnlySpan<RocketState> rocketStates = RocketStates.Of(vehicle.Parts);
         Span<EngineController> engines = vehicle.Parts.Modules.Get<EngineController>();
         for (int i = 0; i < engines.Length; i++)
         {
-            if (engines[i].IsActive && VehiclePropellant.IsFueled(engines[i], moleStates, coreStates, out _, out _))
+            if (engines[i].IsActive && VehiclePropellant.IsFueled(engines[i], moleStates, rocketStates, out _, out _))
                 return true;
         }
         return false;
@@ -42,7 +42,7 @@ internal static class StagingHelpers
         vehicle.Parts.EnsureDerived(DerivedData.SolidMotorStacks);
         EngineSurvey survey = default;
         ReadOnlySpan<MoleState> moleStates = vehicle.Parts.Moles.States;
-        ReadOnlySpan<RocketCoreState> coreStates = vehicle.Parts.RocketCores.States;
+        ReadOnlySpan<RocketState> rocketStates = RocketStates.Of(vehicle.Parts);
         Span<EngineController> engines = vehicle.Parts.Modules.Get<EngineController>();
         for (int i = 0; i < engines.Length; i++)
         {
@@ -58,7 +58,7 @@ internal static class StagingHelpers
                 continue;
             }
 
-            bool fueled = VehiclePropellant.IsFueled(engine, moleStates, coreStates, out bool burning, out bool broken);
+            bool fueled = VehiclePropellant.IsFueled(engine, moleStates, rocketStates, out bool burning, out bool broken);
             if (fueled)
                 survey.AnyFueled = true;
 

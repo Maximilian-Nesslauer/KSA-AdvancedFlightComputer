@@ -354,7 +354,7 @@ public static class KsaAeroSweep
 
             // dt = 0 turns off the semi-implicit limiter stock applies to its drag, which is a property of the integrator rather than of the air. No thrusters, no chutes.
             Disturbances d = PhysicsStates.ComputeDerivatives(in _origin, in _kinematic, in _props, in _environment,
-                0.0, 0.0, _origin.PositionBub, _origin.VelocityBub, default, default);
+                0.0, 0.0, _origin.PositionBub, _origin.VelocityBub, default, default, null);
             return d.ForceBody;
         }
     }

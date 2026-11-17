@@ -159,17 +159,17 @@ internal sealed class ConsoleFrame
 
     private static bool AnyEngineBurns(Vehicle v) => HighestThrottle(v) > 0f;
 
-    // The throttle of a rocket core is what it burns now (RocketCore.UpdateState, SolidMotor.UpdateState), under the manual inputs and under stock AUTO alike.
+    // The throttle of a rocket is what it burns now (Rocket.UpdateState, SolidRocket.UpdateState), under the manual inputs and under stock AUTO alike.
     private static float HighestThrottle(Vehicle v)
     {
-        if (v.Parts?.States == null
-            || !ModuleStateful<RocketCore, RocketCoreState, RocketCoreGlobalState, EmptyStruct>.TryGetFrom(v.Parts.States, out var cores))
+        ReadOnlySpan<RocketState> rockets = RocketStates.Of(v.Parts);
+        if (rockets.IsEmpty)
             return 0f;
         float highest = 0f;
         foreach (EngineController engine in v.Parts.Modules.Get<EngineController>())
         {
-            foreach (RocketCore core in engine.Cores)
-                highest = Math.Max(highest, cores.States[core.StatesIdx].Throttle);
+            foreach (Rocket rocket in engine.Rockets)
+                highest = Math.Max(highest, rockets[rocket.StatesIdx].Throttle);
         }
         return highest;
     }

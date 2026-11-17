@@ -547,7 +547,7 @@ public sealed class GuidanceLandingStagingTest : AfcTest
         internal readonly VehicleAutopilotState State = new();
         internal readonly GuidanceWindow.LandingPhase Phase;
         private readonly EngineController _engine = Empty<EngineController>();
-        private readonly RocketCore _core;
+        private readonly Rocket _rocket;
 
         internal Fixture(GuidanceWindow.LandingPhase phase, int sequenceCount, bool solid = false)
         {
@@ -564,10 +564,15 @@ public sealed class GuidanceLandingStagingTest : AfcTest
             typeof(SequenceList).GetField("_sequences", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .SetValue(tree.SequenceList, sequences);
 
-            _core = solid ? Empty<SolidMotor>() : Empty<Combustor>();
-            _engine.Cores = [_core];
+            RocketCore core = solid ? Empty<SolidMotor>() : Empty<Combustor>();
+            _rocket = solid ? Empty<SolidRocket>() : Empty<Rocket>();
+            _rocket.Core = core;
+            _rocket.Nozzles = [];
+            core.Rocket = _rocket;
+            core.Nozzles = [];
+            _engine.Rockets = [_rocket];
             tree.States.AddNew<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>(_engine);
-            tree.States.AddNew<RocketCore, RocketCoreState, RocketCoreGlobalState, EmptyStruct>(_core);
+            tree.States.AddNew<Rocket, RocketState, EmptyStruct, EmptyStruct>(_rocket);
 
             State.Engage = State.AutoStage = true;
             State.LandingPhase = phase;
@@ -584,8 +589,8 @@ public sealed class GuidanceLandingStagingTest : AfcTest
             Unsafe.AsRef(in engineStates.States[_engine.StatesIdx]).IsPropellantAvailable = true;
             engineStates.GetMutableGlobalStateForInitialization().IsAnyActive = true;
             engineStates.GetMutableGlobalStateForInitialization().IsAnyPropellantAvailable = true;
-            RocketCore.TryGetFrom(Vehicle.Parts.States, out var coreStates);
-            Unsafe.AsRef(in coreStates.States[_core.StatesIdx]).IsPropellantAvailable = true;
+            Rocket.TryGetFrom(Vehicle.Parts.States, out var rocketStates);
+            Unsafe.AsRef(in rocketStates.States[_rocket.StatesIdx]).IsPropellantAvailable = true;
         }
     }
 

@@ -1,4 +1,5 @@
 using Brutal.Numerics;
+using AdvancedFlightComputer.Core;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
@@ -43,14 +44,14 @@ internal sealed class RcsWrenchTable
         UsableCount = 0;
         Ctrl2Body = ctrl.Ctrl2Body;
 
-        ReadOnlySpan<RocketCoreState> coreStates = vehicle.Parts.RocketCores.States;
+        ReadOnlySpan<RocketState> rocketStates = RocketStates.Of(vehicle.Parts);
         float3 com = vehicle.TotalMassPropsAsmb.Offset;
         float ambientPressure = vehicle.PhysicsEnvironment.AtmosphericPressure;
 
         for (int i = 0; i < Count; i++)
         {
             ThrusterController thruster = thrusters[i];
-            ComputeLive(thruster, coreStates, com, ambientPressure, in ctrl,
+            ComputeLive(thruster, rocketStates, com, ambientPressure, in ctrl,
                 out float3 force, out float3 torque, out float massFlow);
 
             ForceCtrl[i] = force;
@@ -65,7 +66,7 @@ internal sealed class RcsWrenchTable
 
     /// <summary>Compute thrust and mass flow from the same full-throttle nozzle performance, as ThrusterController.RecomputeDynamicData does for force. Use live conditions because the stock cache tolerates pressure and mass drift.</summary>
     public static void ComputeLive(
-        ThrusterController thruster, ReadOnlySpan<RocketCoreState> coreStates,
+        ThrusterController thruster, ReadOnlySpan<RocketState> rocketStates,
         float3 com, float ambientPressure, in RcsCtrlFrame ctrl,
         out float3 force, out float3 torque, out float massFlow)
     {
@@ -74,15 +75,18 @@ internal sealed class RcsWrenchTable
         massFlow = 0f;
         if (thruster.IsActive)
         {
-            foreach (RocketCore core in thruster.Cores)
+            foreach (Rocket rocket in thruster.Rockets)
             {
-                if (!coreStates[core.StatesIdx].IsPropellantAvailable)
+                if (!rocketStates[rocket.StatesIdx].IsPropellantAvailable)
                     continue;
-                ComputeLiveCoreAsmb(core, com, ambientPressure,
-                    out float3 coreForce, out float3 coreTorque, out float coreMassFlow);
-                forceAsmb += coreForce;
-                torqueAsmb += coreTorque;
-                massFlow += coreMassFlow;
+                foreach (RocketCore core in rocket.Cores)
+                {
+                    ComputeLiveCoreAsmb(rocket, core, com, ambientPressure,
+                        out float3 coreForce, out float3 coreTorque, out float coreMassFlow);
+                    forceAsmb += coreForce;
+                    torqueAsmb += coreTorque;
+                    massFlow += coreMassFlow;
+                }
             }
         }
         force = ctrl.ToCtrl(forceAsmb);
@@ -90,15 +94,15 @@ internal sealed class RcsWrenchTable
     }
 
     internal static void ComputeLiveCoreAsmb(
-        RocketCore core, float3 com, float ambientPressure,
+        Rocket rocket, RocketCore core, float3 com, float ambientPressure,
         out float3 force, out float3 torque, out float massFlow)
     {
         float3 forceAsmb = float3.Zero;
         float3 torqueAsmb = float3.Zero;
         massFlow = 0f;
         // Full-throttle probe because thruster pulses always command throttle 1.
-        RocketCoreConditions combustion = core.ComputeConditions(1f);
-        foreach (RocketNozzle nozzle in core.Rocket.Nozzles)
+        RocketCoreConditions combustion = rocket.ComputeCoreConditions(core, 1f);
+        foreach (RocketNozzle nozzle in core.Nozzles)
         {
             float4x4 matrix = float4x4.Pack(nozzle.Parent.MatrixAsmb2VehicleAsmb);
             floatQuat rotation = floatQuat.Pack(nozzle.Parent.Asmb2VehicleAsmb);

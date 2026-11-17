@@ -93,7 +93,7 @@ internal static class PlannedBurnPhases
     {
         tree.EnsureDerived(DerivedData.SolidMotorStacks | DerivedData.Sequences);
         ReadOnlySpan<MoleState> moleStates = tree.Moles.States;
-        ReadOnlySpan<RocketCoreState> coreStates = tree.RocketCores.States;
+        ReadOnlySpan<RocketState> rocketStates = RocketStates.Of(tree);
         var hash = new HashCode();
         bool burns = flightComputer.ActiveEnginePerformanceMax.Thrust > 0f;
 
@@ -102,7 +102,7 @@ internal static class PlannedBurnPhases
         for (int i = 0; i < engines.Length; i++)
         {
             EngineController engine = engines[i];
-            bool fueled = VehiclePropellant.IsFueled(engine, moleStates, coreStates, out _, out _);
+            bool fueled = VehiclePropellant.IsFueled(engine, moleStates, rocketStates, out _, out _);
             hash.Add(engine.IsActive);
             hash.Add(fueled);
             hash.Add(engine.Sequence);

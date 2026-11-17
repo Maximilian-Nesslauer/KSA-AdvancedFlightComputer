@@ -202,11 +202,11 @@ public sealed class GuidanceDuplicateRegistrationTest : AfcTest
         bool any = false;
         foreach (EngineController engine in part.Modules.Get<EngineController>())
         {
-            if (engine.Cores == null)
+            if (engine.Rockets == null)
                 continue;
-            foreach (RocketCore core in engine.Cores)
+            foreach (Rocket rocket in engine.Rockets)
             {
-                if (core is SolidMotor != solid)
+                if (rocket.Core is SolidMotor != solid)
                     return false;
                 any = true;
             }
