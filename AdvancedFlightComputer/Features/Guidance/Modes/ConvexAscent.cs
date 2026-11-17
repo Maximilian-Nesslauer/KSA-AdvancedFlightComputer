@@ -494,6 +494,17 @@ public static partial class GuidanceWindow
                 double cs = Math.Cos(turn), sn = Math.Sin(turn);
                 site = new double3(cs * site.X - sn * site.Y, sn * site.X + cs * site.Y, site.Z);
             }
+            // ITS OWN AIR, measured as the vehicle it becomes when it separates (KsaBoosterGeometry): a heavy's core priced with the whole stack's drag fell at twice the terminal velocity its reserve was sized for. The stack's stands in, and says so, where a booster cannot be measured.
+            KsaAeroSweep.Result boosterAero = aero;
+            Part boosterRoot = FindPart(vehicle, booster.RootId);
+            string boosterAeroError = "BOOSTER NOT FOUND";
+            if (boosterRoot == null || !KsaAeroSweep.TryBuildBooster(vehicle, boosterRoot, parent, SimNow(), out boosterAero, out boosterAeroError))
+            {
+                boosterAero = aero;
+                recoveryNotes.Add($"'{booster.Name}': STACK AERO FOR ITS RETURN ({boosterAeroError})");
+            }
+            else
+                recoveryNotes.Add(FormattableString.Invariant($"'{booster.Name}': OWN AERO {boosterAero.BoxExtents.X:F1} x {boosterAero.BoxExtents.Y:F1} x {boosterAero.BoxExtents.Z:F1} m, Cd {boosterAero.CdTailFirst:F2} TAIL-FIRST ON {boosterAero.ReferenceArea:F1} m^2 (STACK {aero.ReferenceArea:F1} m^2)"));
             // Built with no reserve, so the drop at the stage's end is the dry mass of every booster leaving there.
             AscentStage b = allStages[boosterStage];
             double boosterDryKg = b.JettisonMass;
@@ -507,10 +518,10 @@ public static partial class GuidanceWindow
                 ExhaustVelocity = b.HasLiquid ? b.Thrust / b.MassFlow : b.ExhaustVelocity,
                 LandingExhaustVelocity = landingVe,
                 SiteCci = [site.X, site.Y, site.Z],
-                ReferenceArea = aero.ReferenceArea,
-                Drag = aero.Table,
-                Lift = aero.Lift,
-                Alpha = GlideNominalAlpha(aero),
+                ReferenceArea = boosterAero.ReferenceArea,
+                Drag = boosterAero.Table,
+                Lift = boosterAero.Lift,
+                Alpha = GlideNominalAlpha(boosterAero),
                 Air = aero.Atmosphere,
                 // An expendable booster falls empty.
                 LandingFactor = booster.ComesHome ? 1.3 : 0.0,
@@ -871,6 +882,16 @@ public static partial class GuidanceWindow
             parts.Add(FormattableString.Invariant($"{r.ReserveKg / 1000.0:F2} t AT STAGE {r.Stage + 1}"));
         }
         return " BOOSTER RESERVES " + string.Join(", ", parts) + ".";
+    }
+
+    /// <summary>The part with InstanceId <paramref name="rootId"/> on <paramref name="vehicle"/>, or null.</summary>
+    private static Part FindPart(Vehicle vehicle, uint rootId)
+    {
+        ReadOnlySpan<Part> parts = vehicle.Parts.Parts;
+        for (int i = 0; i < parts.Length; i++)
+            if (parts[i].InstanceId == rootId)
+                return parts[i];
+        return null;
     }
 
     /// <summary>
