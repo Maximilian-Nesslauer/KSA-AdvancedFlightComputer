@@ -1102,6 +1102,10 @@ internal static class Program
         drain.Update(6.0, 11900.0, 2);
         Check("a gap in the samples starts again", double.IsNaN(drain.Update(20.0, 11000.0, 2)));
 
+        Check("the green band shows in the last 10 s only", StagingCountdown.BandShows(10.0) && StagingCountdown.BandShows(0.0) && !StagingCountdown.BandShows(10.5) && !StagingCountdown.BandShows(double.NaN));
+        Check("the green band pulses in the last 3 s", StagingCountdown.BandPulses(2.5) && !StagingCountdown.BandPulses(5.0));
+        Check("the band rounds up, so it never reads T-0 before the parts come off", StagingCountdown.BandText(4.2) == "SEPARATION T-5 s" && StagingCountdown.BandText(0.3) == "SEPARATION T-1 s");
+
         HeadValue[] withSep = PageText.AscentNumbers(true, 120.0, 200.0, -10.0, 200.0, double.NaN, 42.0);
         Check("the ascent head leads with the separation countdown", withSep.Length > 0 && withSep[0].Text == "SEPARATION T-42 s" && withSep[0].ShortText == "SEP T-42 s");
         Check("no separation coming, no value", !Array.Exists(PageText.AscentNumbers(true, 120.0, 200.0, -10.0, 200.0), v => v.Text.StartsWith("SEP", StringComparison.Ordinal)));

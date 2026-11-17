@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- During an ascent that AFC flies, the head of the console counts down to the next separation: **SEPARATION T-** (**SEP T-** when the head is narrow), first among the ascent numbers. It counts to the parts coming off, decoupler delay included, from whichever comes first: the booster reserve, the burnout of the burning stage, or a drone-ship booster reaching its ship. Each is the propellant left before its cue over the rate it is burning now, so throttle and the g-limit are in it. It shows while AutoStage is armed and a stage will separate, and not on the last stage.
+- During an ascent that AFC flies, the head of the console counts down to the next separation: **SEPARATION T-** (**SEP T-** when the head is narrow), first among the ascent numbers. It counts to the parts coming off, decoupler delay included, from whichever comes first: the booster reserve, the burnout of the burning stage, or a drone-ship booster reaching its ship. Each is the propellant left before its cue over the rate it is burning now, so throttle and the g-limit are in it. It shows while AutoStage is armed and a stage will separate, and not on the last stage. In the last 10 s a green **SEPARATION T-** band also shows under the altitude counter, with the console open or closed, and pulses in the last 3 s. It stands under the red failure band when both show.
 
 - The **BOOSTERS** fold on LAUNCH is now **REUSE**, and it is the first fold under the picture, above **LIMITS**.
 

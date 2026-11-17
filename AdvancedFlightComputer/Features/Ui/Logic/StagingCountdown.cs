@@ -80,6 +80,19 @@ internal static class StagingCountdown
     public static double Now(double seconds, double takenAt, double now)
         => double.IsFinite(seconds) && double.IsFinite(takenAt) && double.IsFinite(now) ? Math.Max(0.0, seconds - Math.Max(0.0, now - takenAt)) : double.NaN;
 
+    /// <summary>The green band shows in the last this many seconds before a separation.</summary>
+    public const double BandFromS = 10.0;
+
+    /// <summary>And pulses in the last this many.</summary>
+    public const double BandPulseFromS = 3.0;
+
+    public static bool BandShows(double seconds) => double.IsFinite(seconds) && seconds >= 0.0 && seconds <= BandFromS;
+
+    public static bool BandPulses(double seconds) => BandShows(seconds) && seconds <= BandPulseFromS;
+
+    /// <summary>The band's text, whole seconds rounded up, so it reads T-1 until the parts come off.</summary>
+    public static string BandText(double seconds) => "SEPARATION T-" + Fmt.Time(Math.Ceiling(seconds));
+
     /// <summary>The head value: SEPARATION T- with room, SEP T- without. It ranks after the periapsis, so a narrow head drops it before the orbit.</summary>
     public static HeadValue Head(double seconds)
         => new("SEPARATION T-" + Fmt.Time(seconds), 1, "SEP T-" + Fmt.Time(seconds));

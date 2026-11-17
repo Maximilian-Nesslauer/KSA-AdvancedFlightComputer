@@ -24,6 +24,12 @@ public static partial class GuidanceWindow
     internal static double SeparationSecondsNow()
         => StagingCountdown.Now(_s.SeparationInS, _s.SeparationTakenAt, SimNow());
 
+    /// <summary>The countdown of <paramref name="vehicle"/>'s own guidance, for a reader that is not bound to it, such as the separation band.</summary>
+    internal static double SeparationSecondsOf(Vehicle vehicle)
+        => vehicle != null && VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState s) && s.Running
+            ? StagingCountdown.Now(s.SeparationInS, s.SeparationTakenAt, SimNow())
+            : double.NaN;
+
     private static void UpdateSeparationCountdown(Vehicle vehicle, bool thrustOn)
     {
         double now = SimNow();
