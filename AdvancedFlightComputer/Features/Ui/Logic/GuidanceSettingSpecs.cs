@@ -87,7 +87,7 @@ internal static class GuidanceSettingSpecs
         "Duration of the settling burn after separation, before the turn.");
     public static readonly SettingSpec BoostbackPitchDeg = new("BoostbackPitchDeg", "MIN PITCH", "deg", E, 0.0, -180.0, 90.0, "%.1f",
         "Lowest pitch of the burn against the horizon. A very negative value switches the shaping off.");
-    public static readonly SettingSpec GlideMaxAoaDeg = new("GlideMaxAoaDeg", "GLIDE MAX AoA", "deg", E, 1.0, 0.0, 60.0, "%.1f",
+    public static readonly SettingSpec GlideMaxAoaDeg = new("GlideMaxAoaDeg", "GLIDE MAX AoA", "deg", E, 7.5, 0.0, 60.0, "%.1f",
         "Largest angle of attack (AoA) the glide may fly to steer the impact point.");
     public static readonly SettingSpec GlideNominalAoaDeg = new("GlideNominalAoaDeg", "GLIDE PLAN AoA", "deg", E, 0.0, 0.0, 60.0, "%.1f",
         "Angle of attack that every impact prediction assumes for the glide, with the lift pointed up the trajectory. 0 plans an engine-first ballistic coast.");
