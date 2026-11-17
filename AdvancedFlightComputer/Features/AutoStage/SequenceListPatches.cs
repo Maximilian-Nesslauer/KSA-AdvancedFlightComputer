@@ -11,10 +11,15 @@ internal static class SequenceListPatches
     internal static class ActivateNextSequencePatch
     {
         static void Prefix(SequenceList __instance, Vehicle vehicle, out PlayerStaging __state)
-            => __state = new PlayerStaging(__instance.ActiveSequence,
+        {
+            __state = new PlayerStaging(__instance.ActiveSequence,
                 vehicle?.FlightComputer.BurnMode == FlightComputerBurnMode.Auto
                     ? StagingHelpers.EnginesLitByNextRow(__instance)
                     : null);
+            // Before stock fires the row, so what it separates is still attached. A row stock then declines to fire leaves only a record that expires.
+            if (vehicle != null && StagingHooks.NextRowToFire(__instance) is Sequence next)
+                StagingHooks.RaiseSequenceActivating(vehicle, next);
+        }
 
         // Stock activates a row only when that changes ActiveSequence.
         static void Postfix(SequenceList __instance, Vehicle vehicle, PlayerStaging __state)

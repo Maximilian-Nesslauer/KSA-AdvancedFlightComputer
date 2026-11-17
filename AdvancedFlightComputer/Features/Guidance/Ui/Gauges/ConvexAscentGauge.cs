@@ -144,9 +144,16 @@ public static partial class GuidanceWindow
             return;
 
         GaugeRowText(D, "SOLVE", PageText.PlanSolve(sol.Message, sol.Iterations, sol.Accepted, plan.WallSeconds), sol.Usable ? ConsoleStyle.TextPrimary : CvxWarn);
-        if (double.IsFinite(sol.RecoveryReserveKg))
-            GaugeRowText(D, "BOOSTER", PageText.PlanBooster(sol.RecoveryReserveKg, sol.BoostbackDv, sol.LandingDv, sol.SeparationTime),
-                sol.RecoveryReserveKg >= sol.RecoveryRequiredKg - 50.0 ? ConsoleStyle.TextPrimary : CvxWarn);
+        // A row per booster the plan brings home (#130); boosters leaving together show their shared reserve each, against their own need.
+        for (int j = 0; j < sol.Recoveries.Length; j++)
+        {
+            AscentRecoveryResult r = sol.Recoveries[j];
+            if (!double.IsFinite(r.ReserveKg))
+                continue;
+            GaugeRowText(D, sol.Recoveries.Length > 1 ? FormattableString.Invariant($"BOOSTER {j + 1}") : "BOOSTER",
+                PageText.PlanBooster(r.ReserveKg, r.BoostbackDv, r.LandingDv, r.SeparationTime),
+                r.ReserveKg >= r.RequiredKg - 50.0 ? ConsoleStyle.TextPrimary : CvxWarn);
+        }
         if (plan.LaunchDelayS != 0.0)
             GaugeRowText(D, "LAUNCH TIME", PageText.PlanLaunchShift(plan.LaunchDelayS));
         else if (plan.LanChosen)

@@ -60,8 +60,21 @@ public static partial class GuidanceWindow
         /// below is actually about rather than hypothetical.</summary>
         public bool IsNext;
 
+        /// <summary>A landing site set by the player (VehicleAutopilotState.StageTargets), at <see cref="TargetLatDeg"/>, <see cref="TargetLonDeg"/>.</summary>
         public bool HasTarget;
         public double TargetLatDeg, TargetLonDeg;
+
+        /// <summary>Set to optimal return (a drone ship, VehicleAutopilotState.StageOptimalReturn): it comes home with no site set, to where its coast from the plan's separation lands.</summary>
+        public bool OptimalReturn;
+
+        /// <summary>It is brought home, to a site or by an optimal return: the plan keeps a reserve for it and it is handed over at separation. Otherwise it is expendable.</summary>
+        public bool ComesHome => HasTarget || OptimalReturn;
+
+        /// <summary>How it comes home, as the plan's return paths have it.</summary>
+        public AdvancedFlightComputer.Guidance.Scvx.Ascent.BoosterReturnMode Mode
+            => HasTarget ? AdvancedFlightComputer.Guidance.Scvx.Ascent.BoosterReturnMode.Site
+             : OptimalReturn ? AdvancedFlightComputer.Guidance.Scvx.Ascent.BoosterReturnMode.OptimalReturn
+             : AdvancedFlightComputer.Guidance.Scvx.Ascent.BoosterReturnMode.Expendable;
 
         /// <summary>Impulse to put the ballistic impact on this stage's site from the
         /// current state, m/s. NaN when it has no target or nothing landed.</summary>
@@ -105,66 +118,120 @@ public static partial class GuidanceWindow
             if (sequences[i].Activated || sequences[i].Parts.IsEmpty)
                 continue;
 
-            _returnDrops.Clear();
-            ReadOnlySpan<Part> parts = sequences[i].Parts;
-            Part detached = null;
-            for (int j = 0; j < parts.Length; j++)
-            {
-                Span<Decoupler> decouplers = parts[j].SubtreeModules.Get<Decoupler>();
-                for (int k = 0; k < decouplers.Length; k++)
-                {
-                    Part root = DetachedRoot(decouplers[k]);
-                    if (root == null)
-                        continue;
-                    detached ??= root;
-                    CollectSubtree(root, _returnDrops);
-                }
-            }
-            if (detached == null || _returnDrops.Count == 0)
+            SequenceRoots(sequences[i], _returnRoots);
+            if (_returnRoots.Count == 0)
                 continue;   // an ignition-only sequence: it separates nothing
-            _returnDropsSoFar.UnionWith(_returnDrops);
-
-            // THE TEST.
-            // A command pod on the side that leaves is what makes the thing that leaves a vehicle rather than debris.
-            bool controllable = false;
-            for (int c = 0; c < controls.Length && !controllable; c++)
-                controllable = _returnDrops.Contains(controls[c].Parent.FullPart);
-            if (!controllable)
-            {
-                // Still a separation, so the NEXT flag has to move past it: a dumb interstage coming off first does not make the booster behind it next.
-                first = false;
-                continue;
-            }
+            for (int r = 0; r < _returnRoots.Count; r++)
+                CollectSubtree(_returnRoots[r], _returnDropsSoFar);
 
             // NOT ONE THAT REACHES ORBIT. A stage that separates once the climb is over - an upper stage leaving its payload, a capsule - is already going orbital speed, and no boostback brings that home, command pod or not. The climb is over when nothing left aboard lights at this sequence or later: the booster's own separation lights the stage above it, and a strap-on's leaves the core and the upper stage still to fire. Hot staging, an upper stage lit a sequence before the booster leaves, would read as orbital here.
-            if (!LightsLater(engines, i))
-                continue;
+            bool climbGoesOn = LightsLater(engines, i);
 
-            uint rootId = detached.InstanceId;
-            if (!cache.TryGetValue(rootId, out ReturnableStage stage))
+            // ONE ENTRY PER SEPARATED ROOT, not per sequence (#130). Two side boosters leaving on one sequence are two craft, each needing its own target. Each root is judged on the part of its subtree it takes with it: a root nested inside another's subtree on the same row leaves as a craft of its own.
+            for (int r = 0; r < _returnRoots.Count; r++)
             {
-                stage = new ReturnableStage { RootId = rootId };
-                cache[rootId] = stage;
+                Part root = _returnRoots[r];
+                _returnDrops.Clear();
+                CollectOwnSubtree(root, root, _returnRoots, _returnDrops);
+
+                // THE TEST.
+                // A command pod on the side that leaves is what makes the thing that leaves a vehicle rather than debris.
+                bool controllable = false;
+                for (int c = 0; c < controls.Length && !controllable; c++)
+                    controllable = _returnDrops.Contains(controls[c].Parent.FullPart);
+                if (!controllable || !climbGoesOn)
+                    continue;
+
+                uint rootId = root.InstanceId;
+                if (!cache.TryGetValue(rootId, out ReturnableStage stage))
+                {
+                    stage = new ReturnableStage { RootId = rootId };
+                    cache[rootId] = stage;
+                }
+                stage.Name = string.IsNullOrEmpty(root.DisplayName) ? "stage" : root.DisplayName;
+                stage.SequenceIndex = i;
+                stage.SequenceNumber = sequences[i].Number;
+                // Every craft the first separating row drops is next, and none of a later row's: a dumb interstage coming off first does not make the booster behind it next.
+                stage.IsNext = first;
+                stage.HasTarget = false;
+                stage.OptimalReturn = false;
+                if (_s.StageTargets.TryGetValue(stage.RootId, out double2 site))
+                {
+                    stage.HasTarget = true;
+                    stage.TargetLatDeg = site.X;
+                    stage.TargetLonDeg = site.Y;
+                }
+                else if (_s.StageOptimalReturn.Contains(stage.RootId))
+                {
+                    stage.OptimalReturn = true;
+                    // The drone ship's point once a plan has found it; NaN until then.
+                    bool known = _s.OptimalReturnSites.TryGetValue(stage.RootId, out double2 ship);
+                    stage.TargetLatDeg = known ? ship.X : double.NaN;
+                    stage.TargetLonDeg = known ? ship.Y : double.NaN;
+                }
+                list.Add(stage);
             }
-            stage.Name = string.IsNullOrEmpty(detached.DisplayName) ? "stage" : detached.DisplayName;
-            stage.SequenceIndex = i;
-            stage.SequenceNumber = sequences[i].Number;
-            stage.IsNext = first;
-            stage.HasTarget = false;
-            if (_s.StageTargets.TryGetValue(stage.RootId, out double2 site))
-            {
-                stage.HasTarget = true;
-                stage.TargetLatDeg = site.X;
-                stage.TargetLonDeg = site.Y;
-            }
-            list.Add(stage);
             first = false;
         }
+        _returnDrops.Clear();
+        _returnRoots.Clear();
+    }
+
+    /// <summary>The distinct roots of the subtrees that <paramref name="sequence"/> separates, in the order its decouplers come; empty for a row that separates nothing.</summary>
+    private static void SequenceRoots(Sequence sequence, List<Part> roots)
+    {
+        roots.Clear();
+        ReadOnlySpan<Part> parts = sequence.Parts;
+        for (int j = 0; j < parts.Length; j++)
+        {
+            Span<Decoupler> decouplers = parts[j].SubtreeModules.Get<Decoupler>();
+            for (int k = 0; k < decouplers.Length; k++)
+            {
+                Part root = DetachedRoot(decouplers[k]);
+                if (root != null && !roots.Contains(root))
+                    roots.Add(root);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The parts that leave with the booster rooted at <paramref name="root"/> when its row fires (sequence list index <paramref name="sequenceIndex"/>): its subtree, short of every subtree a row up to and including its own separates from it first or beside it. Side boosters hang off the core in the part tree; by the time the core leaves they have gone.
+    /// </summary>
+    internal static HashSet<Part> PartsLeavingWith(Vehicle vehicle, Part root, int sequenceIndex)
+    {
+        var others = new List<Part>();
+        var rowRoots = new List<Part>();
+        ReadOnlySpan<Sequence> sequences = vehicle.Parts.SequenceList.Sequences;
+        for (int i = 0; i <= sequenceIndex && i < sequences.Length; i++)
+        {
+            if (sequences[i].Activated || sequences[i].Parts.IsEmpty)
+                continue;
+            SequenceRoots(sequences[i], rowRoots);
+            foreach (Part r in rowRoots)
+                if (r != root && !others.Contains(r))
+                    others.Add(r);
+        }
+        var parts = new HashSet<Part>();
+        CollectOwnSubtree(root, root, others, parts);
+        return parts;
+    }
+
+    /// <summary>The parts that leave with <paramref name="root"/> itself: its subtree, short of any other separated root's, which leaves as a craft of its own.</summary>
+    private static void CollectOwnSubtree(Part node, Part root, List<Part> roots, HashSet<Part> into)
+    {
+        if (node != root && roots.Contains(node))
+            return;
+        if (!into.Add(node))
+            return;
+        foreach (Part child in node.TreeChildren)
+            CollectOwnSubtree(child, root, roots, into);
     }
 
     // Scratch for the subtree walk.
     // Same contract as _stagingDropped: filled and consumed inside one call, never read across calls.
     private static readonly HashSet<Part> _returnDrops = new HashSet<Part>();
+    // The roots one sequence separates.
+    private static readonly List<Part> _returnRoots = new List<Part>();
     // Everything the separations so far in the walk drop, this one included.
     private static readonly HashSet<Part> _returnDropsSoFar = new HashSet<Part>();
 
@@ -311,17 +378,4 @@ public static partial class GuidanceWindow
             Math.Sin(lat));
     }
 
-    /// <summary>The stage-specific target a separating subtree should be handed, falling
-    /// back to the vehicle's own site when none was set for it.</summary>
-    private static void ResolveStageTarget(uint rootId, out double latDeg, out double lonDeg)
-    {
-        if (_s.StageTargets.TryGetValue(rootId, out double2 site))
-        {
-            latDeg = site.X;
-            lonDeg = site.Y;
-            return;
-        }
-        latDeg = _s.SiteLatDeg;
-        lonDeg = _s.SiteLonDeg;
-    }
 }

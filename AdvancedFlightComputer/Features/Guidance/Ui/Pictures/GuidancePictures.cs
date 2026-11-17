@@ -23,6 +23,7 @@ public static partial class GuidanceWindow
     private static readonly Labels _pictureLabels = new();
     private static readonly PointBuffer _picturePoints = new();
     private static readonly PointBuffer _pictureFlown = new();
+    private static readonly PointBuffer _pictureTrack = new();
 
     #region LAUNCH
 
@@ -44,7 +45,7 @@ public static partial class GuidanceWindow
         return SketchMath.TrackIsClimb((_s.Trace[start].Length() - radius) / 1000.0, (_s.Trace[(_s.TraceHead - 1 + cap) % cap].Length() - radius) / 1000.0, airTopKm);
     }
 
-    private static readonly string[] LaunchLegendNames = { "Q-ALPHA", "FLOWN" };
+    private static readonly string[] LaunchLegendNames = { "Q-ALPHA", "FLOWN", "RETURN", "EXPENDABLE" };
     private const string FlownKeySample = "SEQ 0, NOW 0";
     private static readonly string[] _launchLegendNames = new string[16];
 
@@ -246,6 +247,13 @@ public static partial class GuidanceWindow
                     planTop = Math.Max(planTop, series.AltitudeKm[i]);
             }
         }
+        // Each booster's way down from the plan's separation (AscentPlan.BoosterTracks), on the same ground-fixed downrange: a return to the pad folds back towards zero, a drone ship lies on out downrange.
+        BoosterTrackView[] boosterTracks = series != null ? _s.AscentPlan?.BoosterTracks ?? Array.Empty<BoosterTrackView>() : Array.Empty<BoosterTrackView>();
+        foreach (BoosterTrackView t in boosterTracks)
+            if (t.Track.Ok)
+                foreach (double d in t.DownrangeKm)
+                    if (double.IsFinite(d))
+                        maxDown = Math.Max(maxDown, d);
         double topKm = SketchMath.ProfileTopKm(planTop, flownTop, Math.Min(_s.PeKm, _s.ApKm), atmoKm);
 
         // No decision needs the distance, so it stands small in the head lane and the plot takes the room of a big number. While the ascent flies the head holds the numbers, and the card of those numbers the velocity to go.
@@ -307,6 +315,25 @@ public static partial class GuidanceWindow
                 }
             }
 
+            foreach (BoosterTrackView t in boosterTracks)
+            {
+                int tn = t.Track.Ok ? Math.Min(t.DownrangeKm.Length, t.AltitudeKm.Length) : 0;
+                if (tn < 2)
+                    continue;
+                float2[] tp = _pictureTrack.Get(tn);
+                for (int i = 0; i < tn; i++)
+                    tp[i] = v.ToScreen(t.DownrangeKm[i], Math.Max(t.AltitudeKm[i], 0.0));
+                bool expendable = t.Mode == BoosterReturnMode.Expendable;
+                Rgb hue = expendable ? Palette.Dim : t.Mode == BoosterReturnMode.OptimalReturn ? Palette.Target : Palette.Good;
+                ImColor8 ink = hue.A(expendable ? 0.5f : old ? OldPlanAlpha : 1f);
+                dl.AddPolyline(tp.AsSpan(0, tn), ink, ImDrawFlags.None, (expendable ? 1f : 1.5f) * s);
+                if (expendable)
+                    Glyphs.Ring(dl, tp[tn - 1], 3.5f * s, ink, 1f * s);
+                else
+                    Glyphs.Dot(dl, tp[tn - 1], 3.5f * s, ink);
+                labels.Mark(tp[tn - 1], 3.5f * s);
+            }
+
             if (flownCount > 1)
             {
                 float2[] flown = _pictureFlown.Get(flownCount);
@@ -355,6 +382,18 @@ public static partial class GuidanceWindow
             _launchSwatches[entries++] = new Picture.Swatch("PLAN", Palette.Plan, Alpha: old ? OldPlanAlpha : 1f);
         if (flownCount > 1)
             _launchSwatches[entries++] = new Picture.Swatch("FLOWN", Palette.Flown);
+        foreach (BoosterTrackView t in boosterTracks)
+            if (t.Track.Ok && t.Mode != BoosterReturnMode.Expendable)
+            {
+                _launchSwatches[entries++] = new Picture.Swatch("RETURN", Palette.Good, Alpha: old ? OldPlanAlpha : 1f);
+                break;
+            }
+        foreach (BoosterTrackView t in boosterTracks)
+            if (t.Track.Ok && t.Mode == BoosterReturnMode.Expendable)
+            {
+                _launchSwatches[entries++] = new Picture.Swatch("EXPENDABLE", Palette.Dim, Alpha: 0.5f);
+                break;
+            }
         if (!targetNamed)
             _launchSwatches[entries++] = new Picture.Swatch("ORBIT", Palette.Target, SwatchKind.Filled);
         if (!handoverNamed)
@@ -574,8 +613,8 @@ public static partial class GuidanceWindow
         else if (onPad || HasImpactPath)
             Picture.EmptyState(onPad ? (NoStageHome ? PageText.BoostbackNoStage : PageText.BoostbackNotYet) : PageText.NoSiteToDraw);
 
-        if (!BoostbackLive && !NoStageHome && Picture.LegendLine("", default, default, "AfcBoostbackLegend", default, "STAGE SITES: LAUNCH > BOOSTERS",
-                "Opens LAUNCH with the BOOSTERS fold open. The fold sets the site of each returnable stage.") == 0)
+        if (!BoostbackLive && !NoStageHome && Picture.LegendLine("", default, default, "AfcBoostbackLegend", default, "STAGE SITES: LAUNCH > REUSE",
+                "Opens LAUNCH with the REUSE fold open. The fold sets the site of each returnable stage.") == 0)
         {
             ConsoleUi.OpenFold(BoostersFoldId);
             CraftActivity activity = ReadMode(vehicle).Activity;
@@ -605,86 +644,6 @@ public static partial class GuidanceWindow
             return;
         using (PictureScope pic = Picture.Open(height))
             DrawReturnSideView(in pic.Frame, vehicle, orbit, parent);
-    }
-
-    /// <summary>The short lane picture of LAUNCH > BOOSTERS: one lane per stage that can fly home, from the craft to its site with the cost of the return.</summary>
-    private static void DrawBoosterLanes(Vehicle vehicle)
-    {
-        Orbit orbit = vehicle.Orbit;
-        IParentBody parent = orbit?.Parent;
-        if (parent == null || _s.ReturnableStages.Count == 0)
-            return;
-        PictureFrame probe = Picture.Probe();
-        int count = _s.ReturnableStages.Count;
-        using (PictureScope pic = Picture.Open(Picture.FrameHeight(Picture.HeadHeight(in probe, BoosterLaneBig(count)) + 28f * probe.Scale * count)))
-            DrawReturnLanes(in pic.Frame, orbit, parent);
-    }
-
-    private static string BoosterLaneBig(int count)
-    {
-        int targeted = 0;
-        foreach (ReturnableStage stage in _s.ReturnableStages)
-            if (stage.HasTarget)
-                targeted++;
-        return string.Format(PicInv, "{0}/{1} WITH SITE", targeted, count);
-    }
-
-    private static void DrawReturnLanes(in PictureFrame f, Orbit orbit, IParentBody parent)
-    {
-        float s = f.Scale;
-        int count = _s.ReturnableStages.Count;
-        if (count == 0)
-        {
-            Picture.Empty(in f, "NO RETURNABLE STAGE");
-            return;
-        }
-
-        double3 craftCcf = double3.Normalize(orbit.StateVectors.PositionCci.Transform(parent.GetCci2Ccf()));
-        double maxKm = 20.0;
-        foreach (ReturnableStage stage in _s.ReturnableStages)
-        {
-            if (stage.HasTarget)
-                maxKm = Math.Max(maxKm, AngleBetween(craftCcf, SiteDirCcf(stage.TargetLatDeg, stage.TargetLonDeg)) * parent.MeanRadius / 1000.0);
-        }
-
-        string big = BoosterLaneBig(count);
-        PictureLanes lanes = Picture.Lanes(in f, Picture.HeadHeight(in f, big), minPlot: Picture.StripPlot);
-        PicBox plot = lanes.Plot;
-        float left = plot.X + 14f * s, right = plot.Right - 14f * s;
-        float laneH = plot.H / Math.Max(1, count);
-        ConsoleUi.PushSmall();
-        try
-        {
-        float font = ImGui.GetFontSize();
-        for (int i = 0; i < count; i++)
-        {
-            ReturnableStage stage = _s.ReturnableStages[i];
-            // The text on top of each lane and its line under the text, so a line can never cross a name.
-            float rowTop = plot.Y + laneH * i;
-            float y = Math.Min(rowTop + font + 7f * s, plot.Y + laneH * (i + 1) - 5f * s);
-            float2 textAt = new float2(left, rowTop + 1f * s);
-            Glyphs.Dot(f.Dl, new float2(left, y), 4f * s, Palette.Flown.Solid);
-            // SEQ marks the stock staging sequence that separates the stage.
-            string name = string.Format(PicInv, "SEQ {0} {1}{2}", stage.SequenceNumber, stage.Name, stage.IsNext ? " (NEXT)" : "");
-            if (!stage.HasTarget)
-            {
-                Glyphs.DashedLine(f.Dl, new float2(left, y), new float2(right, y), Palette.Dim.A(0.5f), 1f * s, 4f * s, 4f * s);
-                f.Dl.AddText(textAt, Palette.Dim.Solid, ConsoleUi.FitEllipsis(name + "   NO SITE", right - left));
-                continue;
-            }
-            double km = AngleBetween(craftCcf, SiteDirCcf(stage.TargetLatDeg, stage.TargetLonDeg)) * parent.MeanRadius / 1000.0;
-            float x = left + (float)(km / maxKm) * (right - left);
-            f.Dl.AddLine(new float2(left, y), new float2(x, y), Palette.Plan.Solid, 2f * s);
-            Glyphs.Site(f.Dl, new float2(x, y), 4f * s, Palette.Target.Solid, 1.5f * s);
-            string cost = double.IsFinite(stage.RequiredDvMs) ? string.Format(PicInv, "   ~{0:F0} m/s", stage.RequiredDvMs) : "";
-            f.Dl.AddText(textAt, Palette.Text.Solid, ConsoleUi.FitEllipsis(name + "   " + Fmt.Km(km) + cost, right - left));
-        }
-        }
-        finally
-        {
-            ConsoleStyle.PopFont();
-        }
-        Picture.BigNumber(in f, big, Palette.Text.Solid);
     }
 
     private static void DrawReturnSideView(in PictureFrame f, Vehicle vehicle, Orbit orbit, IParentBody parent)

@@ -84,16 +84,16 @@ internal sealed class DeorbitRequest
     internal double3 GateAt(double time, double3 normal) =>
         GuidanceWindow.RotateAbout(SiteAt(time), normal, -Settings.GateUprange / Parent.MeanRadius) * GateRadius;
 
-    internal double Terrain(double3 directionCcf) => Parent is Celestial celestial
-        ? celestial.GetTerrainHeightFromDirCcf(directionCcf) : double.NaN;
+    // The surface, the sea where it covers the ground (KsaSurfaceHeight), so a site at sea sits on the water.
+    internal double Terrain(double3 directionCcf) => Parent is Celestial
+        ? KsaSurfaceHeight.At(Parent, directionCcf) : double.NaN;
 
     internal double Clearance(double3 position, double time)
     {
         double radius = position.Length();
         if (!(radius > 0) || !DeorbitPlanner.Finite(position)) return double.NaN;
         double terrain = Terrain((position / radius).Transform(Parent.GetCci2Ccf(new UniverseTime(time))));
-        double ocean = Parent.GetOceanReference() == null ? double.NegativeInfinity : 0;
-        return radius - Parent.MeanRadius - Math.Max(terrain, ocean) - VehicleRadius;
+        return radius - Parent.MeanRadius - terrain - VehicleRadius;
     }
 
     internal UpfgVehicle ModelAt(double mass)
