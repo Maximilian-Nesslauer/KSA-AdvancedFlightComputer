@@ -162,12 +162,11 @@ internal static class Patch_FindClosestApproaches
     {
         try
         {
-            // Mirrors the branch selection in the original.
-            // The window comes from the second body's Period only when neither eccentricity is below 1 and the patch has a finite end time.
+            // Mirrors the branch selection in the original, which tests both orbits with Orbit.IsBound.
+            // The window comes from the second body's Period when the two orbits are not both bound and the patch has a finite end time, so an unbound second body with a finite patch is the case to skip.
             Orbit? target = secondBody?.Orbit;
             if (target == null || target.IsBound()) return true;
             if (__instance.EndTime.IsEndOfTime()) return true;
-            if (__instance.Orbit.Eccentricity < 1.0 && target.Eccentricity < 1.0) return true;
             searchedUntil = UniverseTime.EndOfTime;
             return false;
         }
