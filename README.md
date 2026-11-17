@@ -7,7 +7,7 @@ Its powered guidance flies an ascent to orbit, a launch to a flyby or an orbit o
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
-Validated against KSA build version 2026.11.10.5801.
+Validated against KSA build version 2026.11.16.5901.
 
 ## The AFC console at a glance
 

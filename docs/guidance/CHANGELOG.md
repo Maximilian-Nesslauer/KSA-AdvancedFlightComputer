@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+- AFC works on KSA 2026.11.16.5901. The game moved the throttle, the burn timers and the propellant state from the rocket core to the rocket, and AFC now reads them there.
+
+- The aero sweep measures the new aerodynamics of KSA 2026.11.16.5901, pressure and skin friction on the surface of the craft, in place of the old box model. The solved climb, the impact prediction, boostback and entry guidance plan with the forces the game flies.
+  - While the game builds the aero mesh of a craft, for example after staging, the sweep waits and the old table stays in use. A CALCULATE request waits for the mesh too.
+  - On a body without air, such as the Moon, the sweep measures nothing and the solved climb plans in vacuum.
+  - Boostback and entry guidance steer with the lift the sweep measures on any aero model. The warning that stock aerodynamics make no lift is gone.
+  - The game log gives the time of each sweep. It is about one second on the stock Rocket.
+
+- Guidance stops when the craft loses control: no kitten in the command pod can fly it, or the probe core is out of power, switched off, failed or rebooting. It cuts the engine, because the game blocks the engine keys of a craft out of control, and the status line gives the reason. Guidance does not start on a craft out of control.
+
+- The burn right-click menu shows the AFC apse shortcuts under At Periapsis and At Apoapsis again.
+
 - A landing deploys the landing legs on the clock of the plan that flies it, when the time to the touchdown is the time the legs take to open plus a buffer (#169). Before, the legs came down at a height over the ground, 1000 m by default. On a fast landing burn that is only a few seconds, so the legs were still opening at the touchdown. The stock leg takes 5 s to open, so with the default buffer of 1 s it now deploys 6 s before the touchdown.
   - The time to the touchdown is the one of the plan that flies the landing: touchdown guidance, entry guidance, the G-FOLD descent (at the gate of the vertical approach, which comes before the touchdown), touchdown guidance on standby, or the predicted impact of a boostback glide. Without a plan it is the fall time of the legs to the ground at the descent rate, with gravity, which is never longer than the height divided by the descent rate.
   - The **LEGS** fold shows **DEPLOY TIME** (the longest deploy animation of the legs), **BUFFER** in place of **LEGS DOWN AT**, and **DEPLOYS AT**, the time to go that results. The fold title, the legs note, **THIS LANDING** and the log line give the time to go, and the last two also the height of the legs at the deploy.
