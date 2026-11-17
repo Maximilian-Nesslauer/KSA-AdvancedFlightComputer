@@ -193,6 +193,9 @@ public static partial class GuidanceWindow
     /// <summary>How long a clear booster waits, engine off, for its first steering solution before it settles anyway, s: the decision between a burn and going straight to the glide needs it.</summary>
     private const double BoostbackDecideTimeoutS = 3.0;
 
+    /// <summary>The correction left, m/s, at which a burn that is flying is done early: the targeting tolerance a boostback burns to. Whether to burn at all is judged on the miss instead (VehicleAutopilotState.BoostbackGlideMissKm).</summary>
+    private const double BoostbackCutoffDvMs = 5.0;
+
     /// <summary>How long a small boostback may turn with the engine off before it lights the engine to turn on its gimbal, s (VehicleAutopilotState.BoostbackSmall).</summary>
     private const double BoostbackSmallTurnTimeoutS = 60.0;
 
@@ -516,9 +519,9 @@ public static partial class GuidanceWindow
                 // The closed-loop cutoff: the ballistic impact is already ON the site, so continuing would take it back off.
                 // Targeting only, not the commanded total - shaping would hold this number up after the miss was nulled and the burn would never end on its own.
                 // Disabled once locked, where the whole point is that nothing new is listened to.
-                // Within the glide's reach (BoostbackGlideMissKm): the glide's lift takes it from here, and every further second of burn comes out of the landing.
+                // ONCE BURNING, AIM TO HIT: the burn runs until the correction is nulled to BoostbackCutoffDvMs, not merely until the miss is within the glide's reach. The glide-only distance (BoostbackGlideMissKm) only decides whether to burn at all.
                 bool nulled = !_s.BoostbackLocked && _s.HasSteer
-                           && _s.SteerMissM / 1000.0 <= _s.BoostbackGlideMissKm;
+                           && missDv < BoostbackCutoffDvMs;
 
                 if (done || nulled || dry || overrun)
                 {
