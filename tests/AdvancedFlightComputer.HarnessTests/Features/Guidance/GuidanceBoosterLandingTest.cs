@@ -505,6 +505,8 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
             throw new InvalidOperationException($"vehicle save '{saveId}' not found in the game's Vehicles folder.");
         PartInstance design = save.VehicleSaveData.RootPartInstance
             ?? throw new InvalidOperationException($"vehicle save '{saveId}' has no root part instance.");
+        // Connector indices a part no longer has make PartTree.Deserialize index past the end, so they go first, as on a load.
+        design.DropStaleConnectors();
         PartTree tree = PartTree.Deserialize(design);
         Vehicle vehicle = Vehicle.CreateVehicle(system, body2Cce, double3.Zero, parent, id, tree.Root, orbit);
         vehicle.Parts.SequenceList.SetActiveSequence(save.VehicleSaveData.ActiveSequence);
