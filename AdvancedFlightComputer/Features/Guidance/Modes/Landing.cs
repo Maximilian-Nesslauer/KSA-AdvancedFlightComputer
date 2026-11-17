@@ -386,6 +386,7 @@ public static partial class GuidanceWindow
                 // The last seconds of the burn with no plan from the standby.
                 if (!GfoldCanFly(vehicle, parent, out _))
                 {
+                    StopSixDofStandby();
                     HandBrakingBurnToTouchdown(vehicle, "HANDOVER: TOUCHDOWN, NO PLAN YET");
                     return;
                 }

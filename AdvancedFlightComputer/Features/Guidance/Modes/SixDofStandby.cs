@@ -52,8 +52,8 @@ public static partial class GuidanceWindow
                                           double[] brakingState = null)
         => _s.SixDofStandby && !_s.Converging && _s.Guidance?.Published is { } plan
            && now - plan.SolveTime <= maxPlanAgeS
-           && (brakingState == null || Ksa6DofGuidance.MatchesHandoffAttitude(
-               plan, brakingState, now, BrakingHandoffAngleRad, BrakingHandoffRateRadS));
+           && (brakingState == null || (GuidanceIdle && Ksa6DofGuidance.MatchesHandoffAttitude(
+               plan, brakingState, now, BrakingHandoffAngleRad, BrakingHandoffRateRadS)));
 
     /// <summary>The burn-time floor for restarts and node rebuilds: the configured seed, or the entry seed when this engagement started from a shorter burn (the 3-DOF hand-over). Restarting a 3 s burn on a 20 s seed would pin sigma at a minimum longer than the burn.</summary>
     private static double SixDofSeedFloor => Math.Min(_s.SixDofSigmaSeed, _s.SixDofEntrySigmaSeed);
@@ -248,6 +248,10 @@ public static partial class GuidanceWindow
             _s.Worker.TryDispatchStepCold(_s.Guidance, x, now);
             return;
         }
+
+        // Once the braking burn can hand over, leave the accepted publication in place for its first command.
+        if (_s.LandingPhase == LandingPhase.Burn && SixDofStandbyReady(now, BrakingStandbyMaxPlanAgeS, x))
+            return;
 
         // Nothing published for too long, or the craft far off the last plan: start again from here.
         double age = published != null ? now - published.SolveTime : double.PositiveInfinity;
