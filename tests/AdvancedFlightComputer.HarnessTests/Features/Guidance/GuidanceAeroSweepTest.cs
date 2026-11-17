@@ -83,6 +83,9 @@ public sealed class GuidanceAeroSweepTest : AfcTest
 
     private static void CheckAirless(TestContext t, Vehicle vehicle, IParentBody moon)
     {
+        ulong hash = vehicle.Parts.AwaitAerodynamics()?.Source.Hash ?? 0;
+        if (!t.Check("the airless fixture has a published aero mesh", hash != 0))
+            return;
         bool built = KsaAeroSweep.TryBuild(vehicle, moon, 0.0, out KsaAeroSweep.Result aero, out string error);
         if (!t.Check("the sweep over an airless body gives no error", built && error.Length == 0, error))
             return;
@@ -91,6 +94,6 @@ public sealed class GuidanceAeroSweepTest : AfcTest
             && Array.TrueForAll(aero.LiftTable, cl => cl == 0.0));
         var state = new VehicleAutopilotState { Aero = aero };
         t.Check("the airless table stays current for its mesh",
-            !state.AeroStale(aero.SampledExtents, KsaAeroSweep.LiveMeshHash(vehicle), moon));
+            !state.AeroStale(aero.SampledExtents, hash, moon));
     }
 }

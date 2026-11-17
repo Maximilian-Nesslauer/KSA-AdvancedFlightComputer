@@ -4,10 +4,12 @@ namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
 using System.Diagnostics;
+using System.Numerics;
 using System.Text;
 using Brutal.Logging;
 using Brutal.Numerics;
 using KSA;
+using KSA.Aero;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
 
@@ -273,6 +275,7 @@ public static class KsaAeroSweep
         double speedOfSound = physical.Mixture.ComputeSpeedOfSound(seaTemperature);
         if (!ForceProbe.TryCreate(vehicle, props, parts, parent, sea.Density, sea.Pressure, seaTemperature, speedOfSound, out ForceProbe probe, out error))
             return false;
+        using var flow = new SamplingFlow(vehicle, parts);
 
         // Every direction the grid uses, in body axes, with the force the game applies at a crawl in that direction. Subtracting it removes everything that does not depend on airspeed - buoyancy - and leaves the aerodynamics.
         //  RETROGRADE-FIRST: alpha = 0 means the wind comes at the TAIL, so the velocity in body axes points along -x. This is the sign that carries the whole convention - see AeroTable.AngleOfAttack.
@@ -297,6 +300,7 @@ public static class KsaAeroSweep
             {
                 double phi = 2.0 * Math.PI * k / RollSamples;
                 var u = new double3(-ca, sa * Math.Cos(phi), sa * Math.Sin(phi));
+                flow.Prepare(u);
                 double3 tilt = sa > 1e-9
                     ? new double3(-sa, -ca * Math.Cos(phi), -ca * Math.Sin(phi))
                     : double3.Zero;
@@ -402,6 +406,47 @@ public static class KsaAeroSweep
 
         result = res;
         return true;
+    }
+
+    private sealed class SamplingFlow : IDisposable
+    {
+        private readonly PartTree _parts;
+        private readonly Aerodynamics _product;
+        private readonly AeroSurfaceFlow _flow;
+        private readonly Vector3? _restoreWind;
+
+        public SamplingFlow(Vehicle vehicle, PartTree parts)
+        {
+            _parts = parts;
+            _product = parts?.AwaitAerodynamics();
+            _flow = _product?.GetSurfaceFlow();
+            if (!ReferenceEquals(parts, vehicle.Parts))
+                return;
+            BubbleOrigin origin = vehicle.BubbleOrigin;
+            KinematicStates kinematic = vehicle.KinematicStates;
+            PhysicsEnvironment environment = vehicle.PhysicsEnvironment;
+            float3 air = PhysicsStates.ComputeAirVelocityBody(in origin, in kinematic, in environment);
+            var wind = new Vector3(-air.X, -air.Y, -air.Z);
+            float speedSquared = wind.LengthSquared();
+            if (speedSquared > 1e-6f && float.IsFinite(speedSquared))
+                _restoreWind = Vector3.Normalize(wind);
+        }
+
+        public void Prepare(double3 airDirection)
+        {
+            // Stock reuses geometry within one degree. An opposite wind forces fresh geometry for the next sample.
+            _flow?.Update(airDirection.ToBepu());
+        }
+
+        public void Dispose()
+        {
+            if (!_restoreWind.HasValue || _flow == null || _parts.IsRebuildingAerodynamics
+                || !ReferenceEquals(_parts.Aerodynamics, _product))
+                return;
+            Vector3 wind = _restoreWind.Value;
+            _flow.Update(-wind);
+            _flow.Update(wind);
+        }
     }
 
     /// <summary>

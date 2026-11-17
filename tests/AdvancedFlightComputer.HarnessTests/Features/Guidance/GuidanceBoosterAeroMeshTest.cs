@@ -137,6 +137,7 @@ public sealed class GuidanceBoosterAeroMeshTest : AfcTest
             predicted.MachGrid.SequenceEqual(measured.MachGrid) && predicted.AlphaGridDeg.SequenceEqual(measured.AlphaGridDeg)))
             return;
         double dragError = 0.0, liftError = 0.0;
+        int worstLift = 0;
         for (int i = 0; i < predicted.CdTable.Length; i++)
         {
             double predictedDrag = predicted.CdTable[i] * predicted.ReferenceArea;
@@ -144,12 +145,17 @@ public sealed class GuidanceBoosterAeroMeshTest : AfcTest
             double predictedLift = predicted.LiftTable[i] * predicted.ReferenceArea;
             double measuredLift = measured.LiftTable[i] * measured.ReferenceArea;
             dragError = Math.Max(dragError, Math.Abs(predictedDrag - measuredDrag) / Math.Max(1.0, Math.Abs(measuredDrag)));
-            liftError = Math.Max(liftError, Math.Abs(predictedLift - measuredLift) / Math.Max(1.0, Math.Abs(measuredLift)));
+            double error = Math.Abs(predictedLift - measuredLift) / Math.Max(1.0, Math.Abs(measuredLift));
+            if (error > liftError)
+            {
+                liftError = error;
+                worstLift = i;
+            }
         }
         t.Check("the complete booster drag-area table matches after separation", dragError <= 0.03,
             FormattableString.Invariant($"maximum scaled error {dragError:G6}"));
         t.Check("the complete signed lift-area table matches after separation", liftError <= 0.03,
-            FormattableString.Invariant($"maximum scaled error {liftError:G6}"));
+            FormattableString.Invariant($"maximum scaled error {liftError:G6} at Mach {predicted.MachGrid[worstLift / predicted.AlphaGridDeg.Length]:G4}, alpha {predicted.AlphaGridDeg[worstLift % predicted.AlphaGridDeg.Length]:G4}; areas {predicted.LiftTable[worstLift] * predicted.ReferenceArea:G6} / {measured.LiftTable[worstLift] * measured.ReferenceArea:G6} m^2"));
     }
 
     private static (Decoupler?, Part?, HashSet<Part>?) FindSplit(Vehicle stack)
