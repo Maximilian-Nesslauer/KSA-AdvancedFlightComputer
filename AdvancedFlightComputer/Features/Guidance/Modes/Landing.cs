@@ -426,6 +426,8 @@ public static partial class GuidanceWindow
 
         _s.EngagePending = false;
         _s.SixDofFromBrakingBurn = false;
+        if (HasTouchedDown(vehicle))
+            return;
         double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         double[] x = KsaFrameBridge.ToModelState(vehicle, KsaFrameBridge.BuildSiteFrame(siteCci));
         if (SixDofStandbyReady(SimNow(), BrakingStandbyMaxPlanAgeS, x))

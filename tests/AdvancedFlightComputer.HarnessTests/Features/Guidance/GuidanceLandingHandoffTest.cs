@@ -42,6 +42,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
     private static bool _sixDofCanTake;
     private static bool _standbyReady;
     private static bool _gfoldCanFly;
+    private static bool _contact;
 
     protected override void Execute(TestContext t)
     {
@@ -93,11 +94,13 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             harmony.Patch(Method("StepSixDofStandby"), prefix: Prefix(nameof(NotForFixture)));
             harmony.Patch(Method("SixDofStandbyReady"), prefix: Prefix(nameof(AnswerStandbyReady)));
             harmony.Patch(Method("GfoldCanFly"), prefix: Prefix(nameof(AnswerGfoldCanFly)));
+            harmony.Patch(Method("HasTouchedDown"), prefix: Prefix(nameof(AnswerContact)));
 
             TheBurnHandsOverToSixDof(t, craft);
             TheBurnHandsOverToGfold(t, craft);
             ACraftSixDofRefusesGoesToGfold(t, craft);
             AStandbyWithNoPlanGoesToGfold(t, craft);
+            ContactCancelsHandoff(t, craft);
         }
         finally
         {
@@ -107,6 +110,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             _sixDofCanTake = false;
             _standbyReady = false;
             _gfoldCanFly = false;
+            _contact = false;
             if (craft != null)
             {
                 StagingDetector.Arm(craft, false);
@@ -117,6 +121,34 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             ambient.SetValue(null, previousAmbient);
             TestSupport.DespawnNewVehicles(t.System, preexisting);
         }
+    }
+
+    private static bool AnswerContact(Vehicle vehicle, ref bool __result)
+    {
+        if (!ReferenceEquals(vehicle, _fixture))
+            return true;
+        __result = _contact;
+        return false;
+    }
+
+    private static void ContactCancelsHandoff(TestContext t, Vehicle craft)
+    {
+        VehicleAutopilotState state = BurnAtHandoff(craft, sixDof: true);
+        _sixDofSteps = 0;
+        _sixDofCanTake = true;
+        _standbyReady = true;
+        GuidanceWindow.ApplyAutopilot(craft);
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("the airborne vehicle queued a standby handoff", state.EngagePending && state.LandingTouchdownArmed);
+
+        _contact = true;
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("ground contact cancels the pending handoff and cuts the engine",
+            !state.EngagePending && _sixDofSteps == 0 && !Inputs(craft).EngineOn);
+        _contact = false;
+        state.SixDofStandby = false;
+        VehicleControlOwnership.ReleaseAll(craft);
+        VehicleAutopilotState.Remove(craft);
     }
 
     private static void CheckStandbyAttitude(TestContext t)
