@@ -369,7 +369,7 @@ public static partial class GuidanceWindow
             return;
         // While a landing flies with the deploy on, the legs come down by themselves, so the note says when and is no warning.
         bool auto = _s.LegsAutoDeploy && LandFlies;
-        string note = auto ? PageText.LegsStowedAuto(_s.LegsDeployHeightM) : PageText.LegsStowed;
+        string note = auto ? PageText.LegsStowedAuto(LegsRules.DeployAtS(KsaLandingLegs.DeploySeconds(vehicle), _s.LegsDeployBufferS)) : PageText.LegsStowed;
         if (roomOnly)
         {
             ConsoleUi.SentenceRoom(note);

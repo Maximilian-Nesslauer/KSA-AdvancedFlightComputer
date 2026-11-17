@@ -415,6 +415,8 @@ public sealed class VehicleAutopilotState
     public double3 MoonChainNodeDv;
     /// <summary>Sim time since which the chain's armed burn reads Manual without being complete, s, or NaN while it reads Auto.</summary>
     public double MoonChainManualSince = double.NaN;
+    /// <summary>Stock reported the chain's node complete (FlightComputer.AutoBurnCompleted), which counts even when AutoRemove took the node out of the plan in the same frame.</summary>
+    public bool MoonChainCompleted;
     /// <summary>The chain asked for the warp of the current stage. It asks once, so a warp the player stops stays stopped.</summary>
     public bool MoonChainWarpAsked;
     /// <summary>The sim time the chain's own warp runs to, s, or NaN.</summary>
@@ -722,12 +724,13 @@ public sealed class VehicleAutopilotState
     internal string VehicleHeightCard = "";
     internal long VehicleHeightNextMs;
 
-    /// <summary>A landing that guidance flies deploys the landing legs once, when they come below LegsDeployHeightM over the ground under the craft (StepLandingLegs).</summary>
+    /// <summary>A landing that guidance flies deploys the landing legs once, when its time to the touchdown comes down to the deploy time of the legs plus LegsDeployBufferS (StepLandingLegs).</summary>
     public bool LegsAutoDeploy = true;
-    public double LegsDeployHeightM = 1000.0;
+    public double LegsDeployBufferS = 1.0;
 
-    // The landing that flies has deployed the legs, or found them down, at LegsFiredAtM of leg height, commanding LegsCommanded of them. Cleared when no landing holds the craft any more.
+    // The landing that flies has deployed the legs, or found them down, at LegsFiredToGoS before the touchdown and LegsFiredAtM of leg height, commanding LegsCommanded of them. Cleared when no landing holds the craft any more.
     internal bool LegsFired;
+    internal double LegsFiredToGoS = double.NaN;
     internal double LegsFiredAtM = double.NaN;
     internal int LegsCommanded;
 
