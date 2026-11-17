@@ -10,7 +10,7 @@ using KSA.Rendering.Water.Data;
 /// <summary>
 /// The height of what a craft comes down on, above the body's mean-radius sphere: the terrain, or the sea where the sea covers it.
 ///
-/// THE SEA IS A SURFACE TOO. KSA's terrain height under an ocean is the seabed. A site out at sea measured on it put the landing hundreds of metres under the water, so a booster flew its landing burn into the sea and arrived at the surface still falling. The game floats a craft at the ocean's own radius, MeanRadius + OceanReference.Level (VehicleEnvironment.ComputeOceanRadius), so that is the surface here wherever it is higher than the terrain. That is what lets a booster set down softly on the water, and later on a drone ship.
+/// THE SEA IS A SURFACE TOO. KSA's terrain height under an ocean is the seabed. A site out at sea measured on it put the landing hundreds of metres under the water, so a booster flew its landing burn into the sea and arrived at the surface still falling. The game floats a craft at the ocean's own radius, MeanRadius + OceanReference.Level (PhysicsEnvironment.ComputeOceanRadius), so that is the surface here wherever it is higher than the terrain. That is what lets a booster set down softly on the water, and later on a drone ship.
 ///
 /// THE STILL SEA, not the waves. The game's per-position wave height comes from the ocean renderer, which a headless run and the planners' worker threads do not have, and which moves with time where a site has to stay put. The level is the mean the waves move about.
 /// </summary>
