@@ -1553,7 +1553,7 @@ public static partial class GuidanceWindow
         bool coastWaits = keepWaitingCoast && LandingWaits(_s.LandingPhase);
         // kFS can own actuator allocation without changing the C# attitude fields first.
         // Drop saved settings so cleanup cannot overwrite its command or restore stock Auto.
-        if (vehicle.IsControllable && VehicleControlOwnership.KfsOwns(vehicle))
+        if (VehicleControlOwnership.KfsOwns(vehicle) && vehicle.IsControllable)
         {
             _s.AttitudeOwnership.Forget();
             _s.RcsHeldOff = false;
