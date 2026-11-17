@@ -67,9 +67,9 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
         bool previousModActive = GuidanceWindow.ModActive;
         bool previousEnabled = SharedVehicleHooks.GuidanceEnabled;
         // The production hooks, on a test-scoped id: the PrepareWorker prefix steps guidance, the command sink applies its gimbal and engine commands.
-        // The player's aerodynamics (KSAero), when it is deployed: without it the booster flies on stock aero, which is a different vehicle. AFC_LANDING_KSAERO=0 flies stock.
-        using KsaeroScope aero = Env("AFC_LANDING_KSAERO", 1.0) > 0.0 ? KsaeroScope.Apply() : null!;
-        t.Info(aero?.Status ?? "stock aerodynamics (AFC_LANDING_KSAERO=0)");
+        // The booster flies on the game's own aerodynamics. AFC_LANDING_KSAERO=1 flies it on the KSAero mod instead, when that is deployed and built for this game version.
+        using KsaeroScope aero = Env("AFC_LANDING_KSAERO", 0.0) > 0.0 ? KsaeroScope.Apply() : null!;
+        t.Info(aero?.Status ?? "stock aerodynamics (AFC_LANDING_KSAERO=1 flies KSAero)");
         Harmony harmony = new("com.maxi.afc.harnesstests.guidance.boosterlanding");
         VehicleCommandSink.ApplyPatches(harmony);
         GuidanceFeature.ApplyDriverPatches(harmony);

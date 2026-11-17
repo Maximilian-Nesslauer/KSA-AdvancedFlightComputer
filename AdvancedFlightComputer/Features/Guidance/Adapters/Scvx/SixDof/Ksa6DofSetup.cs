@@ -405,7 +405,7 @@ public static class Ksa6DofSetup
             G0 = G0,
             Isp = 1.0 / (alpha * G0),
             MassFlowOffset = flowOffset,
-            // THE AERODYNAMICS, from the same KSAero-sampled tables the 3-DOF flies (Ksa3DofSetup.BuildModel), read at the site's altitude plus the model's height. Without them the model had none, and the bias estimate stood in: a constant acceleration measured at the hand-over's ~90 m/s - several m/s^2 of drag and lift - that the plan leaned on to brake, and that fell away as the booster slowed (2026-10-08: it crossed the site still moving 13 m/s sideways).
+            // THE AERODYNAMICS, from the same sweep-measured tables the 3-DOF flies (Ksa3DofSetup.BuildModel), read at the site's altitude plus the model's height. Without them the model had none, and the bias estimate stood in: a constant acceleration measured at the hand-over's ~90 m/s - several m/s^2 of drag and lift - that the plan leaned on to brake, and that fell away as the booster slowed (2026-10-08: it crossed the site still moving 13 m/s sideways).
             Aero = aero?.Table != null
                 ? new KsaPointMassModel
                 {

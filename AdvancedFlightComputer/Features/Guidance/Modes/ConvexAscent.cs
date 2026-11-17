@@ -161,6 +161,12 @@ public static partial class GuidanceWindow
 
         if (!_s.AscentPlanRequested)
             return;
+        // The aero sweep refuses while the game rebuilds the aero mesh, so the request waits for the build instead of failing the plan.
+        if (KsaAeroSweep.MeshRebuilding(vehicle))
+        {
+            _s.AscentPlanStatus = "WAITING FOR AERO MESH...";
+            return;
+        }
         _s.AscentPlanRequested = false;
         if (_s.AscentPlanJob != null)
             return;

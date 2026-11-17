@@ -955,17 +955,17 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// Make sure this vehicle has an aero surrogate, resampling only when its bounding
-    /// box says the old one describes a different stack.
+    /// Make sure this vehicle has an aero surrogate, resampling only when its aero mesh
+    /// or bounding box says the old one describes a different stack.
     ///
     /// Shared by the page (which needs it to draw) and the guidance step (which needs it
     /// to predict), so a boostback flown with the console shut is fitted to the same
-    /// table a watched one is. KSA only recomputes AerodynamicCdABody on a part-tree
-    /// modification, so the box is exactly as stale as the table is.
+    /// table a watched one is. A sweep refused while the game rebuilds the mesh keeps the
+    /// old table, and the next frame asks again.
     /// </summary>
     private static void EnsureBoostbackAero(Vehicle vehicle, IParentBody parent)
     {
-        if (_s.AeroStale(LiveBoxExtents(vehicle)))
+        if (_s.AeroStale(LiveBoxExtents(vehicle), KsaAeroSweep.LiveMeshHash(vehicle)))
             ResampleBoostbackAero(vehicle, parent);
     }
 

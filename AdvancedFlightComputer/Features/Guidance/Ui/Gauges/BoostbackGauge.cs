@@ -389,7 +389,7 @@ public static partial class GuidanceWindow
             // ATTITUDE SENSITIVITY is global. Broadside drag is large whatever the number above says, because a slender stack's flank area dwarfs its nose area - so the alpha axis is carrying real information even when the vehicle is insensitive to attitude where it normally sits.
             GaugeRowText(D, "CD(90)/CD(0)", FormattableString.Invariant($"{a.AttitudeSensitivity,7:F1} x"));
 
-            // Roll dependence the table cannot represent, because it has no roll input and stores the azimuthal mean. Zero only for an axisymmetric drag model: stock's is a box, so a square-section booster rolled 45 degrees presents sqrt(2) the flank it does at 0, about 25% for a slender stack.
+            // Roll dependence the table cannot represent, because it has no roll input and stores the azimuthal mean. Zero only for an airframe that is axisymmetric about its long axis: fins, strap-ons and a square section all spread it.
             GaugeRowText(D, "ROLL SPREAD", FormattableString.Invariant($"{a.RollSpread * 100.0,7:F1} %  (AVERAGED)"),
                 a.RollSpread > 0.35 ? warn : plain);
 

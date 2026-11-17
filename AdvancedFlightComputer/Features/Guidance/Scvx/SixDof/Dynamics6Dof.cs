@@ -57,7 +57,7 @@ public static class Dynamics6Dof
         public double Alpha => 1.0 / (Isp * G0);
 
         /// <summary>
-        /// The aerodynamics, or null for none: drag and lift on the body +Z axis from the 3-DOF model's KSAero-sampled tables (KsaPointMassModel.AeroForce), read at the model's height plus <see cref="AeroAltitudeOffset"/>. The velocity is the airspeed, the frame turning with the body as the atmosphere does. Aerodynamic moments are not modelled.
+        /// The aerodynamics, or null for none: drag and lift on the body +Z axis from the 3-DOF model's sweep-measured tables (KsaPointMassModel.AeroForce), read at the model's height plus <see cref="AeroAltitudeOffset"/>. The velocity is the airspeed, the frame turning with the body as the atmosphere does. Aerodynamic moments are not modelled.
         /// </summary>
         public KsaPointMassModel? Aero;
 

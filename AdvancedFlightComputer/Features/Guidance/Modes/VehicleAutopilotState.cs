@@ -953,14 +953,15 @@ public sealed class VehicleAutopilotState
     /// <summary>
     /// Resample when the vehicle's geometry changes, not merely when it is looked at.
     ///
-    /// KSA recomputes AerodynamicCdABody only in UpdateAfterPartTreeModification, so
-    /// the table is exactly as stale as the bounding box is - which staging changes and
-    /// nothing else does. Comparing the box the sweep was taken from against the live
-    /// one catches that without hooking anything.
+    /// The game rebuilds the aero mesh when the hash of its source changes, so a live
+    /// mesh hash other than the one the sweep measured means a stale table. While a
+    /// rebuild runs there is no live hash, and the bounding box the sweep was taken from
+    /// against the live one still catches a staging without hooking anything.
     /// </summary>
-    public bool AeroStale(double3 liveExtents)
+    public bool AeroStale(double3 liveExtents, ulong liveMeshHash)
     {
         if (Aero == null) return true;
+        if (liveMeshHash != 0 && Aero.MeshHash != 0 && liveMeshHash != Aero.MeshHash) return true;
         double3 was = Aero.SampledExtents;
         double tol = 1e-3;
         return System.Math.Abs(was.X - liveExtents.X) > tol
