@@ -230,7 +230,9 @@ public static partial class GuidanceWindow
     // Keep pending handovers outside vehicle state because the detached vehicles do not exist yet. Each separated root has its own landing target, so two boosters leaving on one sequence go to their own sites (#130).
     private sealed class BoosterHandover
     {
-        internal uint RootId;
+        internal Part AttachmentRoot;
+        internal Part.Connector Connector;
+        internal Part.Connection Connection;
         internal double SiteLatDeg;
         internal double SiteLonDeg;
         internal double ExpiresAt;
@@ -264,7 +266,7 @@ public static partial class GuidanceWindow
         double now = SimNow();
         DropExpiredHandovers(now);
         Part root = DetachedRoot(decoupler);
-        if (root == null || AlreadyArmed(root.InstanceId, vehicle))
+        if (root == null || AlreadyArmed(root, vehicle))
             return;
 
         // A drone ship's point comes from the ascent plan and stays fixed after lift-off.
@@ -278,7 +280,9 @@ public static partial class GuidanceWindow
         }
         _handovers.Add(new BoosterHandover
         {
-            RootId = root.InstanceId,
+            AttachmentRoot = root,
+            Connector = decoupler.Connector,
+            Connection = decoupler.Connector.Connection,
             SiteLatDeg = site.X,
             SiteLonDeg = site.Y,
             ExpiresAt = now + HandoverWindowS,
@@ -290,11 +294,11 @@ public static partial class GuidanceWindow
     }
 
     // The player's staging key and AutoStage can both announce one row, so a root already recorded from this stack is not recorded twice.
-    private static bool AlreadyArmed(uint rootId, Vehicle from)
+    private static bool AlreadyArmed(Part root, Vehicle from)
     {
         for (int i = 0; i < _handovers.Count; i++)
         {
-            if (_handovers[i].RootId == rootId && ReferenceEquals(_handovers[i].From, from))
+            if (ReferenceEquals(_handovers[i].AttachmentRoot, root) && ReferenceEquals(_handovers[i].From, from))
                 return true;
         }
         return false;
@@ -320,13 +324,15 @@ public static partial class GuidanceWindow
         if (_handovers.Count == 0)
             return false;
 
-        Part root = vehicle?.Parts?.Root;
-        if (root == null)
+        PartTree tree = vehicle?.Parts;
+        if (tree == null)
             return false;
 
-        // A nested booster can still be attached to the craft that just separated.
-        BoosterHandover mine = _handovers.Find(record => record.RootId == root.InstanceId
-            && !ReferenceEquals(record.From, vehicle));
+        // Vehicle.Split can restore the pre-dock root. The attachment part still belongs to the child,
+        // but a nested booster cannot claim its record while its own joint remains connected.
+        BoosterHandover mine = _handovers.Find(record => ReferenceEquals(record.AttachmentRoot.Tree, tree)
+            && !ReferenceEquals(record.From, vehicle)
+            && !ReferenceEquals(record.Connector.Connection, record.Connection));
         if (mine == null)
             return false;
 
@@ -336,15 +342,28 @@ public static partial class GuidanceWindow
         if (VehicleControlOwnership.KfsOwns(vehicle))
             return false;
 
+        bool alreadyClaimed = VehicleControlOwnership.Holds(vehicle, ControlClaimant.Guidance);
+        if (!VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.Guidance, out _))
+            return false;
+
+        // The child inherits the stack's engine command and can drive back into it. Cut now,
+        // then give up this claim until the boostback is ready to fly.
+        try
+        {
+            ManualInputs(vehicle).EngineOn = false;
+        }
+        finally
+        {
+            if (!alreadyClaimed)
+                VehicleControlOwnership.Release(vehicle, ControlClaimant.Guidance);
+        }
+
         _s = VehicleAutopilotState.For(vehicle);
         _s.SiteLatDeg = mine.SiteLatDeg;
         _s.SiteLonDeg = mine.SiteLonDeg;
         _s.BoostbackGlideOnly = mine.GlideOnly;
         GuidanceLog.Info(vehicle, $"adopted as a separated booster, boostback engages within {HandoverWindowS:F0} s.");
 
-        // ENGINE OFF ON THIS FRAME, and the settling burn held until the two are clear. A split vehicle inherits the stack's control inputs, so a booster dropped under the reserve comes away still burning - and from below the stage it let go of, that thrust drives it straight back into it, whose engine is usually held for a few seconds yet. KSA breaks the parts that hit: the first flights lost the booster's interstage, which took this vehicle and its boostback with it and left the rest of the booster as a new craft nothing was flying. The engage below can take seconds to stick, so the cut cannot wait for it. Written before any claim, but the inputs are the ascent's, inherited, not the player's.
-        ref ManualControlInputs inputs = ref ManualInputs(vehicle);
-        inputs.EngineOn = false;
         if (mine.From is { IsDisposed: false } stage)
         {
             _s.BoostbackClearOf = stage;

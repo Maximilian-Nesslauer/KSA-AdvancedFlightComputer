@@ -14,6 +14,7 @@ public sealed class GuidancePendingBoostbackTest : AfcTest
 {
     public override string Name => "afc-guidance-pending-boostback";
     private static int _engages;
+    private static bool _heldAtStart;
 
     private static readonly AccessTools.FieldRef<VehicleAutopilotState> Ambient =
         AccessTools.StaticFieldRefAccess<VehicleAutopilotState>(AccessTools.Field(typeof(GuidanceWindow), "_s"));
@@ -108,23 +109,25 @@ public sealed class GuidancePendingBoostbackTest : AfcTest
         var state = VehicleAutopilotState.For(craft);
         state.HousekeepingRetryTick = long.MaxValue;
         GuidanceDeorbitLifecycleTest.Seed(fixture, state);
-        if (!GuidanceDeorbitLifecycleTest.Arm(t, fixture, state))
-            return;
-
-        // Hold a valid older table while making the new sweep refuse.
         IParentBody parent = craft.Orbit.Parent!;
         if (!t.Check("the airless craft has an aero table",
             KsaAeroSweep.TryBuild(craft, parent, Universe.GetElapsedSeconds(), out var aero, out string error), error))
             return;
         state.Aero = aero;
+        harmony.Patch(AccessTools.Method(typeof(KsaAeroSweep), nameof(KsaAeroSweep.MeshRebuilding)),
+            prefix: new HarmonyMethod(typeof(GuidancePendingBoostbackTest), nameof(MeshReady)));
+        if (!CheckRcsBlocksTakeover(t, craft, state) || !GuidanceDeorbitLifecycleTest.Arm(t, fixture, state))
+            return;
+        t.Check("releasing RCS lets the old deorbit arm without a second boostback attempt",
+            state.BoostbackPhase == GuidanceWindow.BoostbackPhase.Idle && !state.BoostbackEngagePending);
+
+        // Retain the older table when the new sweep refuses.
         Burn node = state.DeorbitNode;
         BurnTarget target = state.DeorbitTarget;
         FlightComputer fc = craft.FlightComputer;
         TestSupport.SetManualControlInputs(craft, 0.63f, engineOn: true);
         var inputs = AccessTools.FieldRefAccess<Vehicle, ManualControlInputs>("_manualControlInputs");
         MethodInfo resample = AccessTools.Method(typeof(GuidanceWindow), "ResampleBoostbackAero");
-        harmony.Patch(AccessTools.Method(typeof(KsaAeroSweep), nameof(KsaAeroSweep.MeshRebuilding)),
-            prefix: new HarmonyMethod(typeof(GuidancePendingBoostbackTest), nameof(MeshReady)));
         harmony.Patch(resample,
             prefix: new HarmonyMethod(typeof(GuidancePendingBoostbackTest), nameof(RefuseSweep)));
         state.BoostbackEngagePending = true;
@@ -136,14 +139,45 @@ public sealed class GuidancePendingBoostbackTest : AfcTest
             && state.BoostbackStatus.Contains("TEST SWEEP REFUSAL"));
 
         harmony.Unpatch(resample, HarmonyPatchType.All, harmony.Id);
+        _heldAtStart = false;
+        harmony.Patch(AccessTools.Method(typeof(GuidanceWindow), "StartBoostbackRun"),
+            prefix: new HarmonyMethod(typeof(GuidancePendingBoostbackTest), nameof(ObserveClaimAtStart)));
         state.BoostbackEngagePending = true;
         GuidanceWindow.ApplyAutopilot(craft);
         t.Check("a ready boostback takes over the stock deorbit on the same step",
             !state.BoostbackEngagePending && state.LandingPhase == GuidanceWindow.LandingPhase.Idle
             && !state.DeorbitNodeClaimed && !fc.BurnPlan.TryGetBurn(node)
-            && fc.BurnMode == FlightComputerBurnMode.Manual && state.ControlAcquired
+            && fc.BurnMode == FlightComputerBurnMode.Manual && state.ControlAcquired && _heldAtStart
             && VehicleControlOwnership.Holds(craft, ControlClaimant.Guidance));
     }
+
+    private static bool CheckRcsBlocksTakeover(TestContext t, Vehicle craft, VehicleAutopilotState state)
+    {
+        if (!t.Check("RCS owns the craft during the deorbit coast",
+            state.LandingPhase == GuidanceWindow.LandingPhase.DeorbitCoast
+            && VehicleControlOwnership.TryClaim(craft, ControlClaimant.RcsTranslation, out _)))
+            return false;
+        try
+        {
+            var plan = state.DeorbitPlan;
+            var request = state.DeorbitRequest;
+            state.BoostbackEngagePending = true;
+            GuidanceWindow.ApplyAutopilot(craft);
+            return t.Check("RCS refusal consumes boostback and preserves the deorbit coast",
+                !state.BoostbackEngagePending && state.BoostbackPhase == GuidanceWindow.BoostbackPhase.Idle
+                && state.LandingPhase == GuidanceWindow.LandingPhase.DeorbitCoast
+                && ReferenceEquals(state.DeorbitPlan, plan) && ReferenceEquals(state.DeorbitRequest, request)
+                && state.Aero?.Table != null && state.AeroError.Length == 0
+                && VehicleControlOwnership.Holds(craft, ControlClaimant.RcsTranslation));
+        }
+        finally
+        {
+            VehicleControlOwnership.Release(craft, ControlClaimant.RcsTranslation);
+        }
+    }
+
+    private static void ObserveClaimAtStart(Vehicle vehicle)
+        => _heldAtStart = VehicleControlOwnership.Holds(vehicle, ControlClaimant.Guidance);
 
     private static bool MeshReady(ref bool __result)
     {

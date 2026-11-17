@@ -65,6 +65,8 @@ public sealed class GuidanceBoosterHandoverTest : AfcTest
             CheckDecouplerActivation(t, home, cancel: true);
             CheckKfsStage(t, home);
             CheckExactRow(t, home);
+            CheckRestoredRoot(t, home, rcsOwns: false);
+            CheckRestoredRoot(t, home, rcsOwns: true);
         }
         finally
         {
@@ -501,6 +503,97 @@ public sealed class GuidanceBoosterHandoverTest : AfcTest
         {
             TestSupport.DespawnNewVehicles(t.System, preexisting);
         }
+    }
+
+    private static void CheckRestoredRoot(TestContext t, IParentBody home, bool rcsOwns)
+    {
+        SimDriver driver = t.Session.CreateDriver();
+        HashSet<string> preexisting = TestSupport.CollectVehicleIds(t.System);
+        bool railsBefore = PhysicsBubble._forceOffRails;
+        Vehicle? child = null;
+        try
+        {
+            PhysicsBubble._forceOffRails = true;
+            Vehicle source = SpawnRocket(t, home, driver, "AfcRestoredBooster" + rcsOwns);
+            Sequence? row = TargetFirstSeparation(source, driver);
+            if (!t.Check("the fixture has a targeted separation", row != null))
+                return;
+
+            if (FindPreDockFixture(row!) is not { } found)
+            {
+                t.Fail("pre-dock fixture", "the detached subtree needs a connector and another possible root");
+                return;
+            }
+            (Part attachment, Part.Connector connector, Part restoredRoot) = found;
+            // Give the stock split the same pre-dock record it saves when docking reroots the child.
+            DockingPort port = (DockingPort)AccessTools.Constructor(typeof(DockingPort), [typeof(string)])
+                .Invoke(["AfcTestDock"]);
+            port.Parent = attachment;
+            port.Connector = connector;
+            port.PreDock = new DockingPort.PreDockRecord
+            {
+                RootPart = restoredRoot,
+                RootPositionParentAsmb = restoredRoot.PositionParentAsmb,
+                RootAsmb2ParentAsmb = restoredRoot.Asmb2ParentAsmb,
+            };
+            attachment.Modules.Add(port);
+
+            var site = VehicleAutopilotState.For(source).StageTargets[attachment.InstanceId];
+            source.Parts.SequenceList.ActivateNextSequence(source);
+            driver.Step(0.05, 2);
+            child = attachment.Tree?.OwningVehicle;
+            if (!t.Check("stock split consumes the pre-dock record and restores a different root",
+                child != null && !ReferenceEquals(child, source) && port.PreDock == null
+                && ReferenceEquals(child.Parts.Root, restoredRoot) && !ReferenceEquals(restoredRoot, attachment)))
+                return;
+
+            TestSupport.SetManualControlInputs(child!, 0.37f, engineOn: true);
+            var inputs = AccessTools.FieldRefAccess<Vehicle, ManualControlInputs>("_manualControlInputs");
+            if (rcsOwns)
+            {
+                if (!t.Check("RCS owns the newly separated craft",
+                    VehicleControlOwnership.TryClaim(child!, ControlClaimant.RcsTranslation, out _)))
+                    return;
+                t.Check("handover leaves a craft held by RCS untouched",
+                    !Adopt(child!) && inputs(child!).EngineOn && inputs(child!).EngineThrottle == 0.37f
+                    && VehicleControlOwnership.Holds(child!, ControlClaimant.RcsTranslation)
+                    && !VehicleAutopilotState.TryGet(child!, out _));
+                VehicleControlOwnership.Release(child!, ControlClaimant.RcsTranslation);
+                t.Check("the refused handover cannot start after RCS releases", !Adopt(child!));
+                return;
+            }
+
+            t.Check("rerooted child adopts the attachment's site and cuts its inherited engine",
+                Adopt(child!) && !inputs(child!).EngineOn && VehicleAutopilotState.TryGet(child!, out var state)
+                && state.SiteLatDeg == site.X && state.SiteLonDeg == site.Y
+                && state.HandoverPendingUntil > _now && VehicleControlOwnership.HolderOf(child!) == ControlClaimant.None);
+        }
+        finally
+        {
+            if (child != null)
+                VehicleControlOwnership.Release(child, ControlClaimant.RcsTranslation);
+            PhysicsBubble._forceOffRails = railsBefore;
+            TestSupport.DespawnNewVehicles(t.System, preexisting);
+        }
+    }
+
+    private static (Part Attachment, Part.Connector Connector, Part RestoredRoot)? FindPreDockFixture(Sequence row)
+    {
+        MethodInfo detachedRoot = Method("DetachedRoot");
+        foreach (Part part in row.Parts)
+            foreach (ISequenced module in part.InSequence(row.Number))
+            {
+                if (module is not Decoupler decoupler || !StagingHooks.CanActivate(decoupler)
+                    || detachedRoot.Invoke(null, [decoupler]) is not Part attachment
+                    || attachment.TreeChildren.FirstOrDefault() is not Part restoredRoot)
+                    continue;
+                Part.Connection connection = decoupler.Connector.Connection!;
+                var endpoint = ReferenceEquals(connection.Connectors[0].ConnectionPart, attachment)
+                    ? connection.Connectors[0] : connection.Connectors[1];
+                if (endpoint is Part.Connector connector)
+                    return (attachment, connector, restoredRoot);
+            }
+        return null;
     }
 
     private static bool Adopt(Vehicle vehicle) =>

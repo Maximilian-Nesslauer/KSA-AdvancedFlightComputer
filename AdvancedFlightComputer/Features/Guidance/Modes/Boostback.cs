@@ -3,6 +3,7 @@
 namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
+using AdvancedFlightComputer.Core;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
@@ -268,15 +269,32 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // The stock deorbit keeps its burn until the incoming mode has a usable aero table.
-        ReleaseStockDeorbit(vehicle);
-        // Every mode drives the same flight-computer command path, and two of them writing it would fight.
-        ClaimVehicle(GuidanceMode.Boostback, vehicle);
-        StartBoostbackRun(vehicle);
+        bool alreadyClaimed = VehicleControlOwnership.Holds(vehicle, ControlClaimant.Guidance);
+        if (!TryTakeCraft(vehicle, acquire: false))
+        {
+            _s.HandoverPendingUntil = double.NegativeInfinity;
+            return;
+        }
 
-        // Only a booster adopted at separation has a stage alongside to clear, see TryAdoptBooster. A manual engage, or one after the hand-over window, settles at once.
-        if (!(_s.HandoverPendingUntil > SimNow()))
-            _s.BoostbackClearOf = null;
+        bool started = false;
+        try
+        {
+            // Keep the claim while giving up the stock burn and publishing the incoming mode.
+            ReleaseStockDeorbit(vehicle, keepClaim: true);
+            ClaimVehicle(GuidanceMode.Boostback, vehicle);
+            StartBoostbackRun(vehicle);
+            started = true;
+
+            // A manual start has no departing stage to clear.
+            if (!(_s.HandoverPendingUntil > SimNow()))
+                _s.BoostbackClearOf = null;
+        }
+        finally
+        {
+            // A failed start returns its provisional claim. A successful preview commands nothing.
+            if ((!started && !alreadyClaimed) || (started && !_s.Engage && !_s.ControlAcquired))
+                VehicleControlOwnership.Release(vehicle, ControlClaimant.Guidance);
+        }
     }
 
     /// <summary>
