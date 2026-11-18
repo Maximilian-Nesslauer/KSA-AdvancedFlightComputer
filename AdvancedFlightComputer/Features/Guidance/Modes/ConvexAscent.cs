@@ -497,12 +497,13 @@ public static partial class GuidanceWindow
         // OPTIMAL RETURN (a drone ship): no site going in. The booster flies no boostback, so it keeps only its landing burn, and it lands where its coast from the plan's separation comes down (BoosterReturn). Its site here only gives the surface the coast ends at.
         // EVERY BOOSTER GETS A RETURN PATH for the pictures (AscentPlan.BoosterTracks): to its site, to its drone ship's point, or, expendable, its fall.
         var planned = new List<(AscentRecovery Recovery, uint RootId)>();
-        var tracks = new List<(AscentRecovery Recovery, uint RootId, string Name, BoosterReturnMode Mode)>();
+        var tracks = new List<(AscentRecovery Recovery, uint RootId, string Name, BoosterReturnMode Mode, string SiteKey, string SiteLabel)>();
         var recoveryNotes = new List<string>();
         string recoverySite = RecoverySitesKey();
         double3 padDir = double3.Normalize(new double3(r0[0], r0[1], r0[2]));
-        foreach (ReturnableStage booster in _s.ReturnableStages)
+        for (int boosterIndex = 0; boosterIndex < _s.ReturnableStages.Count; boosterIndex++)
         {
+            ReturnableStage booster = _s.ReturnableStages[boosterIndex];
             int boosterStage = BoosterPlanStage(vehicle, booster, model, stageParts, allStages, out double flowShare, out string note);
 
             if (boosterStage < 0 || aero.Table == null || aero.Atmosphere == null)
@@ -567,7 +568,8 @@ public static partial class GuidanceWindow
                 // An expendable booster falls empty.
                 LandingFactor = booster.ComesHome ? 1.3 : 0.0,
             };
-            tracks.Add((rec, booster.RootId, booster.Name, booster.Mode));
+            tracks.Add((rec, booster.RootId, booster.Name, booster.Mode, RecoverySiteKey(booster),
+                ReturnableStageIdText(_s.ReturnableStages, boosterIndex)));
             if (!booster.ComesHome)
                 continue;
             if (!AscentPhasePlan.CanKeepReserve(allStages, boosterStage))
@@ -650,7 +652,7 @@ public static partial class GuidanceWindow
             {
                 double3 pad = double3.Normalize(new double3(sol.Position[0], sol.Position[1], sol.Position[2]));
                 double trackTurn = freeTime ? -solved.PlaneTurn : 0.0;
-                foreach ((AscentRecovery rec, uint rootId, string name, BoosterReturnMode mode) in tracks)
+                foreach (var (rec, rootId, name, mode, siteKey, siteLabel) in tracks)
                 {
                     BoosterReturnTrack track;
                     try
@@ -661,7 +663,8 @@ public static partial class GuidanceWindow
                     {
                         track = new BoosterReturnTrack(mode, false, "threw: " + e.Message, [], [], [], double.NaN, double.NaN);
                     }
-                    boosterTracks.Add(BoosterTrackView.From(rootId, name, track, trackTurn, pad, bodyRadius));
+                    boosterTracks.Add(BoosterTrackView.From(rootId, name, track, trackTurn, pad, bodyRadius,
+                        siteKey, siteLabel, mode == BoosterReturnMode.Site ? rec.SiteCci : null));
                 }
             }
 

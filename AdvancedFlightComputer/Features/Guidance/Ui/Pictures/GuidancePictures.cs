@@ -29,8 +29,10 @@ public static partial class GuidanceWindow
 
     internal static bool LaunchPictureHasData => LaunchPictureShows;
 
+    private static AscentPlan LaunchPicturePlan => _s.Running ? _s.FlyingPlan ?? _s.AscentPlan : _s.AscentPlan;
+
     private static bool LaunchPictureShows
-        => (_s.AscentPlan?.Series != null && _s.AscentPlan.Solution.Nodes > 1) || FlownClimbShows(_s.TraceParent);
+        => LaunchPicturePlan is { Series: not null, Solution.Nodes: > 1 } || FlownClimbShows(_s.TraceParent);
 
     private static bool LaunchOrbitBandDraws => LaunchPictureShows && _launchView == 0;
 
@@ -77,8 +79,8 @@ public static partial class GuidanceWindow
             return;
 
         bool busy = AscentPlanBusy;
-        bool hasPlan = _s.AscentPlan != null;
-        AscentPlan plan = _s.AscentPlan;
+        AscentPlan plan = LaunchPicturePlan;
+        bool hasPlan = plan != null;
         AscentPlanSeries series = plan?.Series != null && plan.Solution.Nodes > 1 ? plan.Series : null;
         if (series == null)
             _launchView = 0;
@@ -105,7 +107,8 @@ public static partial class GuidanceWindow
             }
             ImGui.SetCursorScreenPos(underRow);
 
-            bool old = series != null && LaunchPlanWhy(vehicle, orbit, parent).Length > 0;
+            bool old = series != null && (!_s.Running || _s.FlyingPlan == null)
+                && LaunchPlanWhy(vehicle, orbit, parent).Length > 0;
             using (PictureScope pic = Picture.Open(height))
             {
                 PictureFrame f = pic.Frame;
@@ -143,7 +146,7 @@ public static partial class GuidanceWindow
                             series.StagingNodes, "", _planSwatch, old);
                         break;
                     default:
-                        DrawProfileView(in f, parent, series, old);
+                        DrawProfileView(in f, parent, series != null ? plan : null, old);
                         break;
                 }
             }
@@ -203,8 +206,9 @@ public static partial class GuidanceWindow
 
     private static ImColor8 StageInk(int stage, bool old) => old ? ((Rgb)ColorRules.Stage(stage)).A(OldPlanAlpha) : Palette.Stage(stage);
 
-    private static void DrawProfileView(in PictureFrame f, IParentBody parent, AscentPlanSeries series, bool old)
+    private static void DrawProfileView(in PictureFrame f, IParentBody parent, AscentPlan plan, bool old)
     {
+        AscentPlanSeries series = plan?.Series;
         double radius = parent.MeanRadius;
         double atmoKm = (parent.GetPhysicalAtmosphere()?.Height ?? 0.0) / 1000.0;
 
@@ -248,17 +252,16 @@ public static partial class GuidanceWindow
             }
         }
         // Each booster's way down from the plan's separation (AscentPlan.BoosterTracks), on the same ground-fixed downrange: a return to the pad folds back towards zero, a drone ship lies on out downrange.
-        BoosterTrackView[] boosterTracks = series != null ? _s.AscentPlan?.BoosterTracks ?? Array.Empty<BoosterTrackView>() : Array.Empty<BoosterTrackView>();
-        AscentPlan returnPlan = series != null ? _s.AscentPlan : null;
-        if (returnPlan != null)
-            foreach (ReturnableStage stage in _s.ReturnableStages)
-                if (ReturnSiteDownrangeKm(returnPlan, stage) is double down)
-                    maxDown = Math.Max(maxDown, down);
+        BoosterTrackView[] boosterTracks = plan?.BoosterTracks ?? Array.Empty<BoosterTrackView>();
         foreach (BoosterTrackView t in boosterTracks)
+        {
+            if (double.IsFinite(t.SiteDownrangeKm))
+                maxDown = Math.Max(maxDown, t.SiteDownrangeKm);
             if (t.Track.Ok)
                 foreach (double d in t.DownrangeKm)
                     if (double.IsFinite(d))
                         maxDown = Math.Max(maxDown, d);
+        }
         double topKm = SketchMath.ProfileTopKm(planTop, flownTop, Math.Min(_s.PeKm, _s.ApKm), atmoKm);
 
         // No decision needs the distance, so it stands small in the head lane and the plot takes the room of a big number. While the ascent flies the head holds the numbers, and the card of those numbers the velocity to go.
@@ -370,19 +373,8 @@ public static partial class GuidanceWindow
             handoverNamed = labels.Guide("UPFG FROM " + Fmt.Km(_s.HandoverAltKm), v.Sy(_s.HandoverAltKm), Palette.Dim.Solid);
         }
         bool airNamed = atmoKm <= 0.0 || labels.Guide("AIR", v.Sy(atmoKm), Palette.Air.Solid);
-        if (returnPlan != null && v.Y0 <= 0.0 && v.Y1 >= 0.0 && plot.W > 8f * s && plot.H > 8f * s)
-        {
-            foreach (ReturnableStage stage in _s.ReturnableStages)
-            {
-                if (ReturnSiteDownrangeKm(returnPlan, stage) is not double down || down < v.X0 || down > v.X1)
-                    continue;
-                var at = new float2(Math.Clamp(v.Sx(down), plot.X + 4f * s, plot.Right - 4f * s),
-                    Math.Clamp(v.Sy(0.0) - StageRibbonHeight * s, plot.Y + 4f * s, plot.Bottom - 4f * s));
-                Glyphs.Diamond(dl, at, 4f * s, Palette.Good.Solid);
-                labels.Mark(at, 4f * s);
-                labels.Point(stage.Name + " SITE", at, 6f * s, Palette.Good.Solid);
-            }
-        }
+        if (plan != null && v.Y0 <= 0.0 && v.Y1 >= 0.0 && plot.W > 8f * s && plot.H > 8f * s)
+            DrawProfileSites(dl, labels, v, in plot, s, plan, old);
         int qPeak = n > 0 ? ArgMaxFinite(series.QFraction) : -1;
         if (qPeak >= 0 && qPeak < n)
         {
@@ -641,11 +633,65 @@ public static partial class GuidanceWindow
         }
     }
 
-    private static double? ReturnSiteDownrangeKm(AscentPlan plan, ReturnableStage stage)
-        => stage.ComesHome && double.IsFinite(stage.TargetLatDeg) && double.IsFinite(stage.TargetLonDeg)
-            && plan.StartCcf.LengthSquared() > 0.0
-            ? AngleBetween(plan.StartCcf, SiteDirCcf(stage.TargetLatDeg, stage.TargetLonDeg)) * plan.BodyRadius / 1000.0
-            : null;
+    private static void DrawProfileSites(ImDrawListPtr draw, Labels labels, CanvasView view, in PicBox plot,
+                                         float scale, AscentPlan plan, bool old)
+    {
+        var planned = new List<(float X, string Label)>();
+        var pending = new List<(float X, string Label)>();
+        foreach (BoosterTrackView track in plan.BoosterTracks)
+            if (track.SiteDownrangeKm >= view.X0 && track.SiteDownrangeKm <= view.X1 && track.SiteLabel.Length > 0)
+                planned.Add((view.Sx(track.SiteDownrangeKm), track.SiteLabel));
+
+        if (!_s.Running && plan.StartCcf.LengthSquared() > 0.0)
+        {
+            var stages = _s.ReturnableStages;
+            for (int i = 0; i < stages.Count; i++)
+            {
+                ReturnableStage stage = stages[i];
+                if (!stage.HasTarget || !double.IsFinite(stage.TargetLatDeg) || !double.IsFinite(stage.TargetLonDeg)
+                    || PlanHasBoosterSite(plan, stage))
+                    continue;
+                double down = AngleBetween(plan.StartCcf, SiteDirCcf(stage.TargetLatDeg, stage.TargetLonDeg)) * plan.BodyRadius / 1000.0;
+                if (down >= view.X0 && down <= view.X1)
+                    pending.Add((view.Sx(down), ReturnableStageIdText(stages, i)));
+            }
+        }
+
+        float left = plot.X + 4f * scale, right = plot.Right - 4f * scale;
+        float ground = view.Sy(0.0) - StageRibbonHeight * scale;
+        float top = plot.Y + 4f * scale, bottom = plot.Bottom - 4f * scale;
+        DrawGroups(planned, Math.Clamp(ground, top, bottom), isPending: false);
+        DrawGroups(pending, Math.Clamp(ground - 10f * scale, top, bottom), isPending: true);
+
+        void DrawGroups(List<(float X, string Label)> markers, float y, bool isPending)
+        {
+            markers.Sort((a, b) => a.X.CompareTo(b.X));
+            for (int i = 0; i < markers.Count;)
+            {
+                float x = markers[i].X;
+                string names = markers[i++].Label;
+                while (i < markers.Count && markers[i].X - x < 8f * scale)
+                    names += "/" + markers[i++].Label;
+                var position = new float2(Math.Clamp(x, left, right), y);
+                ImColor8 ink = isPending ? Palette.Warn.Solid : Palette.Good.A(old ? OldPlanAlpha : 1f);
+                if (isPending)
+                    Glyphs.Ring(draw, position, 4f * scale, ink, scale);
+                else
+                    Glyphs.Diamond(draw, position, 4f * scale, ink);
+                labels.Mark(position, 4f * scale);
+                labels.Point(names + (isPending ? " PENDING" : " SITE"), position, 6f * scale, ink);
+            }
+        }
+    }
+
+    private static bool PlanHasBoosterSite(AscentPlan plan, ReturnableStage stage)
+    {
+        string key = RecoverySiteKey(stage);
+        foreach (BoosterTrackView track in plan.BoosterTracks)
+            if (track.RootId == stage.RootId && track.SiteKey == key)
+                return true;
+        return false;
+    }
 
     private static bool FallPictureShows(IParentBody parent) => HasImpactPath && !NoSitePicked(parent);
 
