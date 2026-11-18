@@ -51,7 +51,9 @@ public static partial class GuidanceWindow
 
     private static bool StockDeorbitNodeUnchanged => _s.DeorbitNode != null
         && Math.Abs(_s.DeorbitNode.ImpulseTime.Seconds() - _s.DeorbitNodeTime) < 0.001
-        && (_s.DeorbitNode.DeltaVVlf - _s.DeorbitNodeDeltaV).Length() < 0.001;
+        && (_s.DeorbitNode.DeltaVVlf - _s.DeorbitNodeDeltaV).Length() < 0.001
+        && _s.DeorbitNode.PlannedThrottle == _s.DeorbitNodePlannedThrottle
+        && !_s.DeorbitNode.IsInterstellar && _s.DeorbitNode.InterstellarBrake is null;
 
     // This runs in the PrepareWorker prefix, after the input queue is drained and before vehicle workers start.
     // ApplyAutopilot releases a claimed node once the phase leaves the stock phases, before this step runs.
@@ -122,6 +124,8 @@ public static partial class GuidanceWindow
             plan.DepartureTime, dvVlf, patch, vehicle);
         if (_s.DeorbitRequest.Settings.EntryPeriapsis.HasValue)
             _s.DeorbitNode.PlannedThrottle = Math.Max(fc.ActiveEnginePerformanceMax.MinThrottle, 0.001f);
+        _s.DeorbitNodePlannedThrottle = _s.DeorbitNode.PlannedThrottle;
+        _s.DeorbitPreviewEngineSignature = DeorbitEngineSignature(vehicle);
         _s.DeorbitNodeTime = _s.DeorbitNode.ImpulseTime.Seconds();
         _s.DeorbitNode.IsGizmoActive = false;
         fc.AddBurn(_s.DeorbitNode);
@@ -147,6 +151,8 @@ public static partial class GuidanceWindow
         if (!nodeLoaded || fc.BurnMode != FlightComputerBurnMode.Manual || inputs.EngineOn
             || inputs.EngineThrottle != _s.DeorbitPreviewThrottle)
         { StopStockDeorbit(vehicle, "CONTROLS CHANGED DURING STOCK TIMING CHECK. BURN STAYS MANUAL.", keepNode: true); return; }
+        if (_s.DeorbitPreviewEngineSignature != DeorbitEngineSignature(vehicle))
+        { StopStockDeorbit(vehicle, "ENGINE CONFIGURATION CHANGED. BURN STAYS MANUAL.", keepNode: true); return; }
         if (plan.DepartureTime <= SimNow() + PrepLeadTime)
         { StopStockDeorbit(vehicle, "STOCK TIMING NOT READY BEFORE PREPARATION WINDOW. BURN STAYS MANUAL.", keepNode: true); return; }
         // A new BurnTarget has no duration and an EndOfTime ignition until a vehicle worker updates it.
@@ -212,15 +218,14 @@ public static partial class GuidanceWindow
     {
         // The main flight computer can lack the worker's measured turn time until it loads a burn.
         // Replan once from the stock target's actual preparation time and verify the replacement.
-        if (!_s.DeorbitRequest.Settings.EntryPeriapsis.HasValue || _s.DeorbitEntryMeasuredPreparation > 0.0
+        DeorbitRequest request = _s.DeorbitRequest;
+        if (!request.Settings.EntryPeriapsis.HasValue || _s.DeorbitEntryMeasuredPreparation > 0.0
             || !(measuredPreparation > 0.0) || !double.IsFinite(measuredPreparation))
             return false;
         ReleaseStockDeorbit(vehicle);
-        ClearDeorbitPlanState();
         _s.DeorbitEntryMeasuredPreparation = measuredPreparation;
-        _s.LandingPhase = LandingPhase.DeorbitPlanning;
-        _s.LandingStatus = "REPLANNING ENTRY BURN WITH STOCK TURN TIME.";
         GuidanceLog.Info(vehicle, FormattableString.Invariant($"Replanning the entry burn with {measuredPreparation:F1} s of stock preparation."));
+        PlanEntryBurn(vehicle, request);
         return true;
     }
 
@@ -309,6 +314,8 @@ public static partial class GuidanceWindow
         _s.DeorbitNodeDeltaV = default;
         _s.DeorbitNodeDeltaVCci = default;
         _s.DeorbitNodeTime = double.NaN;
+        _s.DeorbitNodePlannedThrottle = null;
+        _s.DeorbitPreviewEngineSignature = 0;
         _s.DeorbitThrottleHeld = false;
         _s.DeorbitSavedThrottle = 0;
         _s.DeorbitPreviewThrottle = 0;
@@ -318,7 +325,7 @@ public static partial class GuidanceWindow
     {
         if (!_s.DeorbitThrottleHeld) return;
         ref ManualControlInputs inputs = ref ManualInputs(vehicle);
-        if (inputs.EngineThrottle == _s.DeorbitPreviewThrottle)
+        if (!inputs.EngineOn && inputs.EngineThrottle == _s.DeorbitPreviewThrottle)
             inputs.EngineThrottle = _s.DeorbitSavedThrottle;
         _s.DeorbitThrottleHeld = false;
     }

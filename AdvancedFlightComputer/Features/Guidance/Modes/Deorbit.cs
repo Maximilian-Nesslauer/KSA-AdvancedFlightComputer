@@ -293,18 +293,7 @@ public static partial class GuidanceWindow
         if (!TryCaptureDeorbitRequest(vehicle, orbit, parent)) { RefuseDeorbit(vehicle, "NO USABLE ENGINE MODEL."); return false; }
         DeorbitRequest request = _s.DeorbitRequest;
         if (request.Settings.EntryPeriapsis.HasValue)
-        {
-            _s.DeorbitPlan = EntryDeorbitPlanner.Plan(request, out string reason, _s.DeorbitEntryMeasuredPreparation);
-            if (_s.DeorbitPlan is not { } entry)
-            {
-                RefuseDeorbit(vehicle, reason);
-                return false;
-            }
-            _s.BurnStartTime = entry.ArrivalTime;
-            _s.LandingPhase = LandingPhase.DeorbitCoast;
-            _s.LandingStatus = $"ENTRY BURN PLANNED: {entry.DeltaV.Length():F1} M/S";
-            return true;
-        }
+            return PlanEntryBurn(vehicle, request);
         _s.DeorbitPlanner = new DeorbitPlanner(request);
         _s.DeorbitNextValidationTick = GuidanceClock.NowMs + DeorbitRevalidateMs;
         StateVectors captured = request.Source.StateVectors;
@@ -316,6 +305,20 @@ public static partial class GuidanceWindow
             + $", step {request.ControlStep:F6} s, minimum pulse {request.MinimumPulse:F6} s, {thrust}, G limit {request.GLimit:F3}, structural limit {request.StructuralGLimit:F3} g"
             + $", position CCI ({captured.PositionCci.X:F4}, {captured.PositionCci.Y:F4}, {captured.PositionCci.Z:F4}) m"
             + $", velocity CCI ({captured.VelocityCci.X:F4}, {captured.VelocityCci.Y:F4}, {captured.VelocityCci.Z:F4}) m/s.");
+        return true;
+    }
+
+    private static bool PlanEntryBurn(Vehicle vehicle, DeorbitRequest request)
+    {
+        _s.DeorbitPlan = EntryDeorbitPlanner.Plan(request, out string reason, _s.DeorbitEntryMeasuredPreparation, SimNow());
+        if (_s.DeorbitPlan is not { } entry)
+        {
+            RefuseDeorbit(vehicle, reason);
+            return false;
+        }
+        _s.BurnStartTime = entry.ArrivalTime;
+        _s.LandingPhase = LandingPhase.DeorbitCoast;
+        _s.LandingStatus = $"ENTRY BURN PLANNED: {entry.DeltaV.Length():F1} M/S";
         return true;
     }
 

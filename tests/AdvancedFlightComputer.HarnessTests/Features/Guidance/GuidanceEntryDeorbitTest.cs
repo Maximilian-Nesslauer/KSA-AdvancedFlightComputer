@@ -44,9 +44,10 @@ public sealed class GuidanceEntryDeorbitTest : AfcTest
             && double3.Dot(plan.DeltaV, plan.DepartureVelocity) < 0.0);
         t.Check("a target above the atmosphere is refused", EntryDeorbitPlanner.Refusal(home, parking).Length > 0);
         const double measuredPreparation = 180.0;
-        DeorbitPlan? retry = EntryDeorbitPlanner.Plan(request, out refusal, measuredPreparation);
+        double verifiedAt = now.Seconds() + 60.0;
+        DeorbitPlan? retry = EntryDeorbitPlanner.Plan(request, out refusal, measuredPreparation, verifiedAt);
         if (!t.Check("the retry uses the measured stock turn time",
-            retry != null && retry.DepartureTime >= now.Seconds() + measuredPreparation
+            retry != null && retry.DepartureTime >= verifiedAt + measuredPreparation
             && retry.DepartureTime > plan.DepartureTime, refusal))
             return;
         Orbit retriedOrbit = Orbit.CreateFromStateCci(home, new UniverseTime(retry!.DepartureTime),

@@ -588,6 +588,8 @@ public sealed class VehicleAutopilotState
     internal int DeorbitEngineSignature;
     internal double DeorbitRequestHeightM;
     internal double DeorbitEntryMeasuredPreparation;
+    internal float? DeorbitNodePlannedThrottle;
+    internal int DeorbitPreviewEngineSignature;
     internal double DeorbitLastResidual = double.PositiveInfinity;
     internal long DeorbitNextValidationTick;
     internal Burn DeorbitNode;

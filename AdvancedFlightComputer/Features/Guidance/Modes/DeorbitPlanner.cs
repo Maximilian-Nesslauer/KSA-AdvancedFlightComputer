@@ -41,7 +41,8 @@ internal static class EntryDeorbitPlanner
         return "";
     }
 
-    internal static DeorbitPlan? Plan(DeorbitRequest request, out string refusal, double measuredPreparation = 0.0)
+    internal static DeorbitPlan? Plan(DeorbitRequest request, out string refusal,
+        double measuredPreparation = 0.0, double? scheduleFrom = null)
     {
         double periapsis = request.Parent.MeanRadius + request.Settings.EntryPeriapsis!.Value;
         double entry = request.Parent.GetAtmosphereRadius();
@@ -49,7 +50,8 @@ internal static class EntryDeorbitPlanner
         refusal = "DEORBIT ONLY NEEDS A BOUND PARKING ORBIT ABOVE THE ATMOSPHERE.";
         if (!request.Source.IsBound())
             return null;
-        StateVectors current = request.Source.GetStateVectorsAt(new UniverseTime(request.Epoch));
+        double epoch = Math.Max(request.Epoch, scheduleFrom ?? request.Epoch);
+        StateVectors current = request.Source.GetStateVectorsAt(new UniverseTime(epoch));
         if (!(current.PositionCci.Length() > entry) || !(request.Source.GetPeriapsisPositionOrb().Length() > entry))
             return null;
         refusal = "NO SUPPLIED ENGINE FOR DEORBIT.";
@@ -58,7 +60,7 @@ internal static class EntryDeorbitPlanner
 
         const double schedulingMargin = 45.0;
         double preparation = Math.Max(request.StockPreparation, measuredPreparation);
-        double soon = request.Epoch + preparation + schedulingMargin;
+        double soon = epoch + preparation + schedulingMargin;
         for (int attempt = 0; attempt < 4; attempt++)
         {
             UniverseTime departure = new(soon);
@@ -91,7 +93,7 @@ internal static class EntryDeorbitPlanner
                 return null;
             }
             double duration = (request.Mass - cutoff) / request.Engines[0].MassFlow;
-            double earliestDeparture = request.Epoch + preparation + schedulingMargin + duration * 0.6;
+            double earliestDeparture = epoch + preparation + schedulingMargin + duration * 0.6;
             if (departure.Seconds() < earliestDeparture)
             {
                 // Allow for the next candidate's duration and for UniverseTime rounding.
