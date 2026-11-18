@@ -1482,7 +1482,6 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Set once the burn is inside the hand-over time with 6-DOF not ready yet, so that is logged once.</summary>
     public bool ThreeDofSixDofWaiting;
-    internal Ksa6DofPlan ThreeDofRejectedTouchdownPlan;
     public bool ThreeDofBurnSolveFault;
     public (string Status, bool Warning) ThreeDofTouchdownHandoff;
     public double SixDofEntryBlendStart = double.NaN;

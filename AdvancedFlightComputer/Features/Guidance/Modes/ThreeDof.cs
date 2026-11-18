@@ -164,7 +164,6 @@ public static partial class GuidanceWindow
         _s.ThreeDofEngineOn = false;
         _s.ThreeDofThrottle = _s.ThreeDofPlanThrottle = 0.0;
         _s.ThreeDofSixDofWaiting = false;
-        _s.ThreeDofRejectedTouchdownPlan = null;
         _s.ThreeDofBurnSolveFault = false;
         _s.ThreeDofTouchdownHandoff = default;
         _s.ThreeDofHandoffRefusal = "";
@@ -589,7 +588,9 @@ public static partial class GuidanceWindow
             if (_s.ThreeDofPlan == null)
                 GuidanceLog.Info(vehicle, $"Entry guidance first plan at {x[2] / 1000:F1} km: ignition in {plan.IgnitionTime - now:F1} s, burn {plan.SigmaBurn:F1} s.");
             _s.ThreeDofPlan = plan;
-            NoteEntryPlanRecovery(_s);
+            _s.ThreeDofBurnSolveFault = false;
+            if (_s.ThreeDofTouchdownHandoff.Warning)
+                _s.ThreeDofTouchdownHandoff = default;
         }
 
         double height = x[2];
@@ -895,14 +896,11 @@ public static partial class GuidanceWindow
         }
         _s.ThreeDofHandoffRefusal = "";
         double seed = double.IsFinite(burnLeft) ? Math.Max(burnLeft, SixDofStandbyMinSeedS) : _s.SixDofSigmaSeed;
-        if (!handoff)
-            _s.ThreeDofSixDofWaiting = false;
-        bool rejected = RejectedEntryStandby();
-        StepSixDofStandby(vehicle, parent, siteCci, x, now, seed, holdForEntryHandoff: handoff && !rejected);
+        StepSixDofStandby(vehicle, parent, siteCci, x, now, seed, holdForEntryHandoff: handoff);
         if (!handoff)
             return;
 
-        if (RejectedEntryStandby() || !SixDofStandbyReady(now, SixDofStandbyMaxPlanAgeS, x))
+        if (!SixDofStandbyReady(now, SixDofStandbyMaxPlanAgeS, x))
         {
             if (!_s.ThreeDofSixDofWaiting)
             {
@@ -952,35 +950,13 @@ public static partial class GuidanceWindow
         if (!carried.EngineOn || !(carried.EngineThrottle > 0.0f))
             return;
         double throttle = carried.EngineThrottle;
-        double now = SimNow();
-        if (!EntryThrustMatches(vehicle, parent, siteCci, x, now, throttle))
-        {
-            _s.ThreeDofRejectedTouchdownPlan = _s.Guidance?.Published;
-            KeepEntryBurn(vehicle, "TOUCHDOWN THRUST DOES NOT MATCH THE ENTRY BURN.");
-            return;
-        }
         GuidanceLog.Info(vehicle, status);
         Engage6Dof(vehicle, fromBrakingBurn: true, tookBurn: true);
-        _s.SixDofEntryBlendStart = now;
+        _s.SixDofEntryBlendStart = SimNow();
         _s.SixDofEntryBlendThrottle = throttle;
-        _s.LastThrottle = throttle;
         _s.ThreeDofStatus = status;
         if (warning)
             _s.WarnEntry(status);
-    }
-
-    private static bool RejectedEntryStandby()
-        => _s.ThreeDofRejectedTouchdownPlan != null
-            && ReferenceEquals(_s.ThreeDofRejectedTouchdownPlan, _s.Guidance?.Published);
-
-    internal static void NoteEntryPlanRecovery(VehicleAutopilotState state)
-    {
-        state.ThreeDofBurnSolveFault = false;
-        state.ThreeDofRefusing = false;
-        state.ThreeDofSixDofWaiting = false;
-        state.ThreeDofHandoffRefusal = "";
-        if (state.ThreeDofTouchdownHandoff.Warning)
-            state.ThreeDofTouchdownHandoff = default;
     }
 
     private static void KeepEntryBurn(Vehicle vehicle, string reason)
