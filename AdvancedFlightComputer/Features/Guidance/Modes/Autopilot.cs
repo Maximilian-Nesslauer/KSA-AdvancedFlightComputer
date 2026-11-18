@@ -1811,7 +1811,7 @@ public static partial class GuidanceWindow
     //
     // fullEngage=true additionally switches the FC into Custom/Auto tracking - done once on engage, exactly like clicking "Apply Euler Target" in the attitude tab.
     private static void CommandAttitude(Vehicle vehicle, IParentBody parent, double3 dir,
-                                        bool fullEngage, double3? rollRef = null)
+                                        bool fullEngage, double3? rollRef = null, FlightComputerRollMode? rollMode = null)
     {
         double3 r = vehicle.Orbit.StateVectors.PositionCci;
 
@@ -1838,7 +1838,9 @@ public static partial class GuidanceWindow
         // Also decoupled below ForceRollMinAltM even with the box ticked: right off the pad is exactly where the vehicle has the least authority to fight a commanded roll and the least room to recover if it can't, so a forced roll waits for some clearance first.
         //
         // Written every step, not only on engagement: the box can be ticked mid-ascent, and un-ticking it has to give the roll freedom back.
-        if (_s.Running)
+        if (rollMode is { } requestedRollMode)
+            fc.RollMode = requestedRollMode;
+        else if (_s.Running)
         {
             double altM = r.Length() - parent.MeanRadius;
             // An ascent engaged on the pad rolls as soon as it is clear of it (PadHold), while it still climbs straight up: the roll program (RollProgramHolds) holds the pitch-over until the roll is done. ForceRollMinAltM, above the mean radius, only gates an ascent engaged in flight, which has no pad to clear; on a pad near sea level it came 150 m after the pitch-over had begun.
@@ -1853,7 +1855,7 @@ public static partial class GuidanceWindow
             fc.AttitudeFrame = VehicleReferenceFrame.EclBody;
             fc.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
         }
-        _s.AttitudeOwnership.EndWrite(fc, writesRoll: _s.Running);
+        _s.AttitudeOwnership.EndWrite(fc, writesRoll: _s.Running || rollMode.HasValue);
     }
 
     /// <summary>

@@ -107,6 +107,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             AStandbyWithNoPlanGoesToGfold(t, craft);
             ContactCancelsHandoff(t, craft);
             EntryFaultWaitsForAReadyPlan(t, craft, home, ambient);
+            TouchdownCoastUsesAvailableRcs(t, craft, home, ambient);
         }
         finally
         {
@@ -221,6 +222,35 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             && Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle);
         _standbyReady = false;
         state.SixDofStandby = false;
+        VehicleAutopilotState.Remove(craft);
+    }
+
+    private static void TouchdownCoastUsesAvailableRcs(TestContext t, Vehicle craft, IParentBody home, FieldInfo ambient)
+    {
+        VehicleAutopilotState state = VehicleAutopilotState.For(craft);
+        ambient.SetValue(null, state);
+        FlightComputer computer = craft.FlightComputer;
+        computer.RollMode = FlightComputerRollMode.Down;
+        computer.RCSMode = FlightComputerRCSMode.Disabled;
+        state.RcsHeldOff = true;
+        Inputs(craft).EngineOn = false;
+        MethodInfo hold = Method("HoldTouchdownAttitude");
+        hold.Invoke(null, [craft, home]);
+        t.Check("the touchdown coast uses stock pointing and restores guidance-held RCS",
+            computer.AttitudeMode == FlightComputerAttitudeMode.Auto
+            && computer.AttitudeTrackTarget == FlightComputerAttitudeTrackTarget.Custom
+            && computer.RollMode == FlightComputerRollMode.Decoupled
+            && computer.RCSMode == FlightComputerRCSMode.Enabled && !Inputs(craft).EngineOn);
+
+        Method("ReleaseAttitude").Invoke(null, [craft]);
+        t.Check("touchdown attitude release restores the player's roll mode",
+            computer.RollMode == FlightComputerRollMode.Down);
+        computer.RCSMode = FlightComputerRCSMode.Disabled;
+        hold.Invoke(null, [craft, home]);
+        t.Check("the touchdown coast respects disabled player RCS",
+            computer.RCSMode == FlightComputerRCSMode.Disabled && !state.RcsHeldOff);
+        Method("ReleaseAttitude").Invoke(null, [craft]);
+        VehicleControlOwnership.ReleaseAll(craft);
         VehicleAutopilotState.Remove(craft);
     }
 

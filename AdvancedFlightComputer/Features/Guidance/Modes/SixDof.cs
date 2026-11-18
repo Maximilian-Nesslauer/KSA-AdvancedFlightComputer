@@ -1148,9 +1148,10 @@ public static partial class GuidanceWindow
         // The plan has ended. Let stock TVC and RCS damp the turn until first contact.
         KsaGimbalControl.Disengage(vehicle);
         KsaAttitudeRate.Clear(vehicle);
+        GiveRcsBack(vehicle);
         double3 up = double3.Normalize(vehicle.Orbit.StateVectors.PositionCci);
         double3 heading = double3.UnitY.Transform(KsaFrameBridge.BodyToCci(vehicle));
-        CommandAttitude(vehicle, parent, up, !_s.WasEngaged, heading);
+        CommandAttitude(vehicle, parent, up, !_s.WasEngaged, heading, FlightComputerRollMode.Decoupled);
         _s.WasEngaged = true;
     }
 
