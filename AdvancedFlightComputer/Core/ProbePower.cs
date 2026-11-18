@@ -55,19 +55,40 @@ internal static class ProbePower
             circuits[index] = (part, prior.HasActiveCore || wanted, prior.StandbyWatts + (wanted ? 0.0 : consumer.Consumed.Value()));
         }
 
-        double remaining = double.NaN;
-        foreach (var circuit in circuits.Values)
+        if (circuits.Count == 0)
+            return double.NaN;
+
+        var estimates = new Dictionary<int, PowerForecast>(circuits.Count);
+        double handover = 0.0;
+        foreach (var (index, circuit) in circuits)
         {
             PowerForecast estimate = PowerForecast.Compute(tree, circuit.Representative);
-            double seconds = estimate.Remaining.IsEndOfTime() ? double.PositiveInfinity : estimate.Remaining.Seconds();
-            // When control is lost on the primary circuit, stock wakes its eligible backups together.
-            if (!circuit.HasActiveCore && estimate.Drain != PowerDrain.NoBattery)
-            {
-                double drain = (estimate.Draw - estimate.Supply).Value() + circuit.StandbyWatts;
-                seconds = drain > 0.0 ? estimate.Charge.Value() / drain : double.PositiveInfinity;
-            }
-            remaining = double.IsNaN(remaining) ? seconds : Math.Max(remaining, seconds);
+            estimates.Add(index, estimate);
+            if (!circuit.HasActiveCore)
+                continue;
+            if (estimate.Remaining.IsEndOfTime())
+                return double.PositiveInfinity;
+            handover = Math.Max(handover, estimate.Remaining.Seconds());
         }
+
+        // When the last powered primary runs out, stock wakes the eligible Auto cores together.
+        double remaining = handover;
+        foreach (var (index, circuit) in circuits)
+        {
+            PowerForecast estimate = estimates[index];
+            if (!(circuit.StandbyWatts > 0.0) || estimate.Drain == PowerDrain.NoBattery)
+                continue;
+            double capacity = 0.0;
+            foreach (Battery battery in tree.ElectricalCircuits.Batteries(index))
+                capacity += battery.MaximumCapacity.Value();
+            double backgroundDrain = (estimate.Draw - estimate.Supply).Value();
+            double charge = Math.Clamp(estimate.Charge.Value() - backgroundDrain * handover, 0.0, capacity);
+            double activeDrain = backgroundDrain + circuit.StandbyWatts;
+            if (activeDrain <= 0.0)
+                return double.PositiveInfinity;
+            remaining = Math.Max(remaining, handover + charge / activeDrain);
+        }
+
         return remaining;
     }
 

@@ -122,6 +122,26 @@ public sealed class ProbePowerTest : AfcTest
         backup.Mode = PowerSwitchMode.Off;
         t.Check("a switched-off probe does not extend the forecast", double.IsNaN(ProbePower.RemainingSeconds(vehicle)));
         core.Mode = PowerSwitchMode.On;
+
+        Part backupPart = backup.Parent.FullPart;
+        foreach (Part.Connector connector in backupPart.Connectors)
+            connector.Capabilities &= ~ConnectorCapability.Electricity;
+        tree.ElectricalCircuits.MarkDirty();
+        tree.ElectricalCircuits.EnsureBuilt(tree);
+        int backupCircuit = tree.ElectricalCircuits.IndexFor(backupPart);
+        t.Check("the backup is on an isolated stock circuit", backupCircuit != circuit);
+        backup.Mode = PowerSwitchMode.Auto;
+        backup.Hold = PowerHold.AutoStandby;
+        foreach (Battery battery in tree.ElectricalCircuits.Batteries(backupCircuit))
+            battery.Refill(ref tree.Batteries.GetModuleAndAllMutableStatesForInitialization(battery).State);
+        PowerForecast primaryEstimate = PowerForecast.Compute(tree, core.Parent);
+        PowerForecast standbyEstimate = PowerForecast.Compute(tree, backupPart);
+        double expectedWithHandover = primaryEstimate.Remaining.Seconds() + standbyEstimate.Charge.Value() / backup.Consumed.Value();
+        t.Check("an isolated standby battery keeps its charge until the primary runs out",
+            expectedWithHandover > primaryEstimate.Remaining.Seconds()
+            && Math.Abs(ProbePower.RemainingSeconds(vehicle) - expectedWithHandover) < 0.001,
+            $"predicted {ProbePower.RemainingSeconds(vehicle):F2} s, expected {expectedWithHandover:F2} s");
+        backup.Mode = PowerSwitchMode.Off;
     }
 
     private static void CheckWarp(TestContext t, Vehicle v)
@@ -179,6 +199,18 @@ public sealed class ProbePowerTest : AfcTest
             Universe.ResetSimulationSpeed();
             moon.Invoke(null, [v, target]);
             t.Check("stock 1x cancels a retry before the guidance step consumes it",
+                !Universe.IsAutoWarpActive && state.MoonChainPowerWarp == ProbeWarpRetry.Spent);
+
+            state.MoonChainPowerWarp = ProbeWarpRetry.Interrupted;
+            new InputEvents.SimSpeedData { Action = InputAction.SimSpeedDefault }.Apply();
+            moon.Invoke(null, [v, target]);
+            t.Check("the stock 1x key also cancels before the offer is visible",
+                !Universe.IsAutoWarpActive && state.MoonChainPowerWarp == ProbeWarpRetry.Spent);
+
+            state.MoonChainPowerWarp = ProbeWarpRetry.Requested;
+            new InputEvents.SimSpeedData { Speed = new SimSpeed(1.0) }.Apply();
+            moon.Invoke(null, [v, target]);
+            t.Check("the stock Speed menu cancels a queued retry",
                 !Universe.IsAutoWarpActive && state.MoonChainPowerWarp == ProbeWarpRetry.Spent);
 
             state.MoonChainWarpAsked = false;

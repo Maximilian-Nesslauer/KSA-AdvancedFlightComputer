@@ -31,6 +31,8 @@ public static partial class GuidanceWindow
             postfix: new HarmonyMethod(typeof(GuidanceWindow), nameof(AfterProbePowerWarning)));
         harmony.Patch(AccessTools.DeclaredMethod(typeof(Universe), nameof(Universe.ResetSimulationSpeed), Type.EmptyTypes),
             postfix: new HarmonyMethod(typeof(GuidanceWindow), nameof(CancelQueuedProbeWarp)));
+        harmony.Patch(AccessTools.DeclaredMethod(typeof(InputEvents.SimSpeedData), nameof(InputEvents.SimSpeedData.Apply)),
+            postfix: new HarmonyMethod(typeof(GuidanceWindow), nameof(AfterProbeSimulationSpeedInput)));
     }
 
     private static void BeforeProbePowerWarning(Vehicle __instance, out ProbeWarpStop? __state)
@@ -71,10 +73,17 @@ public static partial class GuidanceWindow
     {
         if (Program.ControlledVehicle is not { } vehicle || !VehicleAutopilotState.TryGet(vehicle, out var state))
             return;
-        if (state.MoonChainPowerWarp is ProbeWarpRetry.Offered or ProbeWarpRetry.Requested)
+        if (state.MoonChainPowerWarp is ProbeWarpRetry.Interrupted or ProbeWarpRetry.Offered or ProbeWarpRetry.Requested)
             state.MoonChainPowerWarp = ProbeWarpRetry.Spent;
-        if (state.DeorbitPowerWarp is ProbeWarpRetry.Offered or ProbeWarpRetry.Requested)
+        if (state.DeorbitPowerWarp is ProbeWarpRetry.Interrupted or ProbeWarpRetry.Offered or ProbeWarpRetry.Requested)
             state.DeorbitPowerWarp = ProbeWarpRetry.Spent;
+    }
+
+    // The stock Speed menu sets a SimSpeed directly, even when the current speed is already 1x.
+    private static void AfterProbeSimulationSpeedInput(ref InputEvents.SimSpeedData __instance)
+    {
+        if (__instance.Speed is { } speed && speed.Approximately(1.0))
+            CancelQueuedProbeWarp();
     }
 
     // Called only while the chain still owns the same wait. The console answers the offer on the main thread.
