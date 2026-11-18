@@ -166,6 +166,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         state.ThreeDofEngineOn = true;
         state.ThreeDofThrottle = BurnThrottle;
         state.SixDofStandby = true;
+        state.SixDofStandbyEngines = (EngineController[])Method("CaptureStandbyEngines").Invoke(null, [craft])!;
         state.ThreeDofBurnSolveFault = true;
         Inputs(craft).EngineOn = true;
         Inputs(craft).EngineThrottle = BurnThrottle;
@@ -213,6 +214,15 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             state.ThreeDofTouchdownHandoff.Status == null && !state.EngagePending
             && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn);
         state.ThreeDofGuidance = null;
+
+        step.Invoke(null, args);
+        state.SixDofStandbyEngines = [.. state.SixDofStandbyEngines, null!];
+        take.Invoke(null, [craft, home]);
+        t.Check("a standby with a changed engine configuration leaves the entry burn in control",
+            state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn && !state.EngagePending
+            && Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle);
+        state.SixDofStandby = true;
+        state.SixDofStandbyEngines = (EngineController[])Method("CaptureStandbyEngines").Invoke(null, [craft])!;
 
         step.Invoke(null, args);
         take.Invoke(null, [craft, home]);
