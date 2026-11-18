@@ -33,10 +33,16 @@ internal static class TransferCommitter
             return "SOLVE FIRST";
         if (TransferSession.SelectedEntry == null)
             return "NO TRANSFER SELECTED";
+        if (TransferSession.SelectedEntry.TransferData.DepartureInfeasible)
+            return "NO DEPARTURE TRAJECTORY FOR THIS TRANSFER";
         if (TransferSession.Refining)
             return "REFINING INTERCEPT";
         if (TransferSession.TransferBurn != null)
             return "TRANSFER CREATED";
+        if (!TransferSession.BasisCurrent())
+            return "ORBIT CHANGED. SOLVE AGAIN.";
+        if (TransferSession.SelectedEntry.TransferData.Impacts || TransferSession.SelectedEntry.TransferData.BadEncounter)
+            return "TRANSFER PASSES THROUGH ANOTHER BODY";
         if (MultiPassRegistry.Has(source.Id))
             return "MULTI-PASS ACTIVE";
         if (source.FlightPlan.TryFindPatch(TransferSession.SelectedEntry.TransferData.Start) == null)

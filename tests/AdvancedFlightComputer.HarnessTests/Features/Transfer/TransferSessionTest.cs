@@ -82,6 +82,11 @@ public sealed class TransferSessionTest : AfcTest
             if (!t.Check("a best departure is found", bestValid, $"index {best.X}, {best.Y}"))
                 return;
             double bestDv = info.PorkChopData![best.X, best.Y].TransferData.TransferDvVlf.Length();
+            int propagated = info.PorkChopData.Cast<OrbitalTransfers.PorkChopEntry?>().Count(entry => entry != null);
+            t.Check("only a short list of selected candidates propagated", propagated is > 0 and <= 8,
+                $"{propagated} trajectories for {TransferSession.Size * TransferSession.Size} grid points");
+            t.Check("the selected cell costs agree with the full transfer",
+                TransferSession.ScoreAt(best.X, best.Y) is { } score && Math.Abs(score.DepartureDv - bestDv) < 0.001);
             t.Check("the best departure dV is finite and positive", double.IsFinite(bestDv) && bestDv > 0.0, $"{bestDv:F1} m/s");
             t.Check("the best entry is selected", TransferSession.Selected.X == best.X && TransferSession.Selected.Y == best.Y
                 && TransferSession.SelectedEntry != null);
