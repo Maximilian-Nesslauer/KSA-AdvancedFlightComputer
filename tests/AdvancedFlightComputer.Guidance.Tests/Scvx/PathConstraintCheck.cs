@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
@@ -62,7 +63,7 @@ internal static class PathConstraintCheck
         }
         Console.WriteLine();
 
-        bool ok = CheckAccelerationMerit();
+        bool ok = CheckAccelerationMerit() && CheckSolvedAccelerationMerit(n, x0, xf);
 
         // Enforced: the plan must come inside the cone and stop climbing.
         (double w1, _, double c1, ScvxStatus s1) = Solve(n, x0, xf, tight, 0.5, "constrained");
@@ -102,17 +103,17 @@ internal static class PathConstraintCheck
 
         // ACCELERATION LIMIT, sized like the cone from the unconstrained plan's own peak, so it binds.
         Console.WriteLine();
-        (double[] xFree, double[] uFree, double sigFree, _) = SolveFull(n, x0, xf, 0.0, -1.0, 0.0);
+        (double[] xFree, double[] uFree, double sigFree, _, _) = SolveFull(n, x0, xf, 0.0, -1.0, 0.0);
         double peakFree = PeakAccel(xFree, uFree, n);
         double limit = 0.75 * peakFree;
-        (double[] xSoft, double[] uSoft, _, _) = SolveFull(n, x0, xf, 0.0, -1.0, limit);
+        (double[] xSoft, double[] uSoft, _, _, _) = SolveFull(n, x0, xf, 0.0, -1.0, limit);
         // The flight default allows the constraint to open. Give the limit a high price in the binding test.
-        (double[] xLim, double[] uLim, double sigLim, ScvxStatus sLim) =
+        (double[] xLim, double[] uLim, double sigLim, ScvxStatus sLim, bool accepted) =
             SolveFull(n, x0, xf, 0.0, -1.0, limit, accelerationWeight: 10_000.0);
         double peakLim = PeakAccel(xLim, uLim, n);
         double miss = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => Math.Pow(xLim[(n - 1) * NX + i] - xf[i], 2)));
-        bool limBinds = Usable(sLim) && peakLim <= limit * 1.01;
-        bool limLands = Usable(sLim) && miss <= 1.0;
+        bool limBinds = Usable(sLim) && accepted && peakLim <= limit * 1.01;
+        bool limLands = Usable(sLim) && accepted && miss <= 1.0;
         Console.WriteLine($"  unconstrained peak thrust acceleration {peakFree:F1} m/s^2 over {sigFree:F1} s -> limiting to {limit:F1}");
         Console.WriteLine($"  flight default soft limit peaks at {PeakAccel(xSoft, uSoft, n):F2} m/s^2");
         Console.WriteLine($"  acceleration binds     {(limBinds ? "PASS" : "FAIL")}  " +
@@ -141,10 +142,11 @@ internal static class PathConstraintCheck
         initial[Dynamics6Dof.IM] = 100.0;
         var state = new double[nodes * NX];
         var control = new double[nodes * NU];
+        double[] thrusts = [1100.0, 900.0, 1300.0];
         for (int k = 0; k < nodes; k++)
         {
             initial.CopyTo(state, k * NX);
-            control[k * NU + Dynamics6Dof.IT] = 900.0 + 200.0 * k;
+            control[k * NU + Dynamics6Dof.IT] = thrusts[k];
         }
         free.Initialize(initial, initial, state, control, sigmaSeed: 2.0);
         limited.Initialize(initial, initial, state, control, sigmaSeed: 2.0);
@@ -152,6 +154,40 @@ internal static class PathConstraintCheck
         bool pass = Math.Abs(penalty - 21.0) < 1e-9;
         Console.WriteLine($"  normalized acceleration merit {(pass ? "PASS" : "FAIL")} ({penalty:F4} vs 21.0000)");
         return pass;
+    }
+
+    private static bool CheckSolvedAccelerationMerit(int nodes, double[] initial, double[] terminal)
+    {
+        // A limit below gravity guarantees a nonzero slack on this lit descent.
+        Scvx6DofSolver solver = Build(nodes, initial, terminal, 0.0, -1.0, 5.0);
+        const BindingFlags members = BindingFlags.Instance | BindingFlags.NonPublic;
+        Type type = typeof(Scvx6DofSolver);
+        var cfg = (Scvx6DofConfig)type.GetField("_cfg", members)!.GetValue(solver)!;
+        var subproblem = (Scvx6DofSubproblemScs)type.GetField("_sub", members)!.GetValue(solver)!;
+        for (int attempt = 0; attempt < 8; attempt++)
+        {
+            double before = solver.Cost;
+            ScvxIteration result = solver.Iterate();
+            if (!result.Solved)
+                continue;
+            double[] x = subproblem.SolutionX, u = subproblem.SolutionU, virtualControl = subproblem.SolutionWv;
+            double slack = subproblem.Solution[^nodes..].Sum();
+            double fuel = (initial[Dynamics6Dof.IM] - x[^1]) / initial[Dynamics6Dof.IM];
+            double smoothing = (double)type.GetMethod("Smoothing", members)!.Invoke(solver, [x, u])!;
+            double defects = virtualControl.Select((v, i) =>
+                Math.Pow(v / cfg.VirtualControlScaleOf(i % NX), 2)).Sum();
+            double oldPrediction = before - (fuel + smoothing + cfg.RhoVc * defects);
+            double predicted = oldPrediction - cfg.AccelWeight * slack / cfg.ResolvedUScale[Dynamics6Dof.IT];
+            double actual = before - solver.TrueCost(x, u, subproblem.SolutionSigma).Cost;
+            double expected = actual / predicted;
+            bool pass = slack > 0.0 && double.IsFinite(expected)
+                && Math.Abs(actual / oldPrediction - expected) > 1e-6
+                && Math.Abs(result.Rho - expected) < 1e-9;
+            Console.WriteLine($"  solved acceleration merit {(pass ? "PASS" : "FAIL")} (ratio {result.Rho:F6} vs {expected:F6})");
+            return pass;
+        }
+        Console.WriteLine("  solved acceleration merit FAIL (no usable acceleration subproblem)");
+        return false;
     }
 
     /// <summary>
@@ -248,7 +284,7 @@ internal static class PathConstraintCheck
     }
 
     /// <summary>A solve with its controls and burn time, for the acceleration limit.</summary>
-    private static (double[] x, double[] u, double sigma, ScvxStatus status) SolveFull(
+    private static (double[] x, double[] u, double sigma, ScvxStatus status, bool accepted) SolveFull(
         int n, double[] x0, double[] xf, double glideDeg, double vzMax, double accelMax,
         double? accelerationWeight = null)
     {
@@ -258,7 +294,7 @@ internal static class PathConstraintCheck
         {
             Scvx6DofSolver solver = Build(n, x0, xf, glideDeg, vzMax, accelMax, accelerationWeight);
             ScvxStatus status = solver.Solve(maxIterations: 150);
-            return (solver.ReferenceX, solver.ReferenceU, solver.Sigma, status);
+            return (solver.ReferenceX, solver.ReferenceU, solver.Sigma, status, solver.Trace.Any(step => step.Accepted));
         }
         finally { Console.SetOut(prev); }
     }
