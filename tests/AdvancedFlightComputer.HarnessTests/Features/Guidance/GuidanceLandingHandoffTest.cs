@@ -101,6 +101,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             ACraftSixDofRefusesGoesToGfold(t, craft);
             AStandbyWithNoPlanGoesToGfold(t, craft);
             ContactCancelsHandoff(t, craft);
+            EntryFaultWaitsForAReadyPlan(t, craft, home, ambient);
         }
         finally
         {
@@ -148,6 +149,37 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         _contact = false;
         state.SixDofStandby = false;
         VehicleControlOwnership.ReleaseAll(craft);
+        VehicleAutopilotState.Remove(craft);
+    }
+
+    private static void EntryFaultWaitsForAReadyPlan(TestContext t, Vehicle craft, IParentBody home, FieldInfo ambient)
+    {
+        VehicleAutopilotState state = VehicleAutopilotState.For(craft);
+        ambient.SetValue(null, state);
+        state.ThreeDofPhase = GuidanceWindow.ThreeDofPhase.Burn;
+        state.ThreeDofEngineOn = true;
+        state.ThreeDofThrottle = BurnThrottle;
+        state.SixDofStandby = true;
+        Inputs(craft).EngineOn = true;
+        Inputs(craft).EngineThrottle = BurnThrottle;
+        object[] args = [craft, home, double3.UnitZ * home.MeanRadius, new double[Dynamics6Dof.NX],
+            Universe.GetElapsedSeconds(), true];
+        MethodInfo step = Method("StepEntryTouchdownHandoff");
+
+        _standbyReady = false;
+        bool tookCold = (bool)step.Invoke(null, args)!;
+        t.Check("an entry solve fault keeps the lit burn while touchdown guidance is cold",
+            !tookCold && !state.EngagePending && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn
+            && state.ThreeDofEngineOn && state.ThreeDofThrottle == BurnThrottle);
+
+        _standbyReady = true;
+        bool tookReady = (bool)step.Invoke(null, args)!;
+        t.Check("a ready standby takes the entry burn without cutting its engine",
+            tookReady && state.EngagePending && state.SixDofStandby
+            && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Idle
+            && Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle);
+        _standbyReady = false;
+        state.SixDofStandby = false;
         VehicleAutopilotState.Remove(craft);
     }
 

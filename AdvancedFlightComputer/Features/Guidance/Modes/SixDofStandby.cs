@@ -52,6 +52,7 @@ public static partial class GuidanceWindow
                                           double[] brakingState = null)
         => _s.SixDofStandby && !_s.Converging && _s.Guidance?.Published is { } plan
            && now - plan.SolveTime <= maxPlanAgeS
+           && now - plan.SolveTime < plan.Sigma
            && (brakingState == null || (GuidanceIdle && Ksa6DofGuidance.MatchesHandoffAttitude(
                plan, brakingState, now, BrakingHandoffAngleRad, BrakingHandoffRateRadS)
                && _s.Guidance.MeasureDrift(brakingState, now) <= SixDofRestartDriftLimit(brakingState[2])));
@@ -154,11 +155,11 @@ public static partial class GuidanceWindow
     /// One standby step through the 3-DOF's burn: collect what the worker finished, then dispatch the next cold iteration or warm re-solve from the measured state. Commands nothing. A fault costs the standby, never the 3-DOF flying the craft.
     /// </summary>
     private static void StepSixDofStandby(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x, double now,
-                                          double sigmaSeed)
+                                          double sigmaSeed, bool holdForEntryHandoff = false)
     {
         try
         {
-            StepSixDofStandbyCore(vehicle, parent, siteCci, x, now, sigmaSeed);
+            StepSixDofStandbyCore(vehicle, parent, siteCci, x, now, sigmaSeed, holdForEntryHandoff);
         }
         catch (Exception e)
         {
@@ -170,7 +171,7 @@ public static partial class GuidanceWindow
     }
 
     private static void StepSixDofStandbyCore(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x, double now,
-                                              double sigmaSeed)
+                                              double sigmaSeed, bool holdForEntryHandoff)
     {
         if (!_s.SixDofStandby)
         {
@@ -250,8 +251,9 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // Once the braking burn can hand over, leave the accepted publication in place for its first command.
-        if (_s.LandingPhase == LandingPhase.Burn && SixDofStandbyReady(now, BrakingStandbyMaxPlanAgeS, x))
+        // Leave a checked publication in place through the first command after handover.
+        if ((_s.LandingPhase == LandingPhase.Burn && SixDofStandbyReady(now, BrakingStandbyMaxPlanAgeS, x))
+            || (holdForEntryHandoff && SixDofStandbyReady(now, SixDofStandbyMaxPlanAgeS, x)))
             return;
 
         // Nothing published for too long, or the craft far off the last plan: start again from here.
