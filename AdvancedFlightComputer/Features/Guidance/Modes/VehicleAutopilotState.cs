@@ -429,6 +429,8 @@ public sealed class VehicleAutopilotState
     public bool MoonChainWarpAsked;
     /// <summary>The sim time the chain's own warp runs to, s, or NaN.</summary>
     public double MoonChainWarpTime = double.NaN;
+    internal ProbeWarpRetry MoonChainPowerWarp;
+    internal double MoonChainCoastEnd = double.NaN;
     /// <summary>Correction burns the chain has flown since the injection.</summary>
     public int MoonChainCorrections;
     /// <summary>The player picked "Stay in orbit" while the chain ran. The step stops the chain.</summary>
@@ -596,6 +598,7 @@ public sealed class VehicleAutopilotState
     internal bool DeorbitAutoArmed;
     internal bool DeorbitWarpRequested;
     internal double DeorbitWarpTime = double.NaN;
+    internal ProbeWarpRetry DeorbitPowerWarp;
     internal float DeorbitSavedThrottle;
     internal float DeorbitPreviewThrottle;
     internal bool DeorbitThrottleHeld;

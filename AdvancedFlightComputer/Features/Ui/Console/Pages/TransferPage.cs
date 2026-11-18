@@ -71,7 +71,7 @@ internal static class TransferPage
         ctx.ToPicture();
         DrawPicture(in ctx, source);
         DrawLegendLine(source);
-        DrawSelectionResult();
+        DrawSelectionResult(source);
         DrawMissionSupply(source, ctx.Flying);
         CollectBars();
         _fuelFact = BurnBars.Draw(source, _bars);
@@ -620,15 +620,22 @@ internal static class TransferPage
         }
     }
 
-    private static void DrawSelectionResult()
+    private static void DrawSelectionResult(Vehicle source)
     {
         if (TransferSession.PresetUnavailable)
             ConsoleUi.WarningWrapped("NO VERIFIED TRANSFER FOR THIS PRESET.");
         if (!TransferSession.Calculated || TransferSession.SelectedEntry?.TransferData is not OrbitalTransfers.TransferData t)
             return;
-        ConsoleUi.Readout("DEPART IN".AsSpan(), FormatHelper.FormatDuration(Math.Max(0.0, (t.Start - Universe.GetElapsedTime()).Seconds())).AsSpan());
+        double depart = (t.Start - Universe.GetElapsedTime()).Seconds();
+        ConsoleUi.Readout("DEPART IN".AsSpan(), FormatHelper.FormatDuration(Math.Max(0.0, depart)).AsSpan());
         ConsoleUi.Readout("FLIGHT TIME".AsSpan(), FormatHelper.FormatDuration(t.Transit.Seconds()).AsSpan());
         ConsoleUi.Readout("ARRIVAL SPEED".AsSpan(), Fmt.Speed(t.RelativeVelocityCci.Length()).AsSpan());
+        double remaining = ProbePower.RemainingSeconds(source);
+        string warning = PageText.ProbePowerWarning(remaining, depart, "DEPARTURE BURN");
+        if (warning.Length == 0)
+            warning = PageText.ProbePowerWarning(remaining, depart + t.Transit.Seconds(), "END OF COAST");
+        if (warning.Length > 0)
+            ConsoleUi.WarningWrapped(warning);
     }
 
     // A porkchop row is a departure time and a column a flight time (TransferTask.WorkerTask.CalculateAutomaticTransfer), so ^ and v move the departure and < and > the flight time, and each pair stands behind its name. A pane too narrow for the two pairs has them on two rows, under one column of names.

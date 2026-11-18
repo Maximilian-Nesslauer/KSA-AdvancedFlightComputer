@@ -57,6 +57,7 @@ internal static class GuidanceFeature
             postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnUpdateAttitudeTarget)));
         harmony.Patch(AccessTools.Method(typeof(Vehicle), nameof(Vehicle.UpdateAfterPartTreeModification), Type.EmptyTypes),
             postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnPartTreeModified)));
+        GuidanceWindow.ApplyProbePowerWarpPatch(harmony);
 
         SaveLoadObserver.SaveLoaded += OnSaveLoaded;
         SaveLoadObserver.SaveWritten += CraftSettings.OnSaveWritten;

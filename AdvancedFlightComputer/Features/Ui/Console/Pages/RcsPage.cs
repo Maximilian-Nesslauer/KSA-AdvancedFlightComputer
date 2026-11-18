@@ -337,6 +337,18 @@ internal static class RcsPage
         }
         int picked = ConsoleUi.ChoiceTable("AfcRcsBurns", BurnList.Heads, cells, active, held, default, PageText.BurnListTip, default,
             CollectionsMarshal.AsSpan(_marks), CollectionsMarshal.AsSpan(_swatches));
+        double remaining = ProbePower.RemainingSeconds(vehicle);
+        for (int i = 0; i < _rows.Count; i++)
+        {
+            ListRow row = _rows[i];
+            double until = ReferenceEquals(row.Burn, next) && next != null ? ProbePower.UntilBurn(vehicle, next) : row.Seconds;
+            string milestone = row.Pass > 0 ? $"PASS {row.Pass}" : $"BURN {i + 1}";
+            string warning = PageText.ProbePowerWarning(remaining, until, milestone);
+            if (warning.Length == 0)
+                continue;
+            ConsoleUi.WarningWrapped(warning);
+            break;
+        }
         if (picked < 0 || _rows[picked].Burn is not Burn chosen)
             return;
         _focus = ReferenceEquals(chosen, next) ? null : chosen;

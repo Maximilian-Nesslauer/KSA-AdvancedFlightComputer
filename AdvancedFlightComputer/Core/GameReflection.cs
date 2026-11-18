@@ -57,6 +57,14 @@ internal static class GameReflection
     [UsedBy(Feature.SoftAnchor)]
     public static readonly FieldInfo? SequencePerformanceList_activeCoreCount =
         AccessTools.DeclaredField(typeof(SequencePerformanceList), "_activeCoreCount");
+    #endregion
+
+    #region Probe power
+
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly MethodInfo? Vehicle_UpdateProbePowerWarning =
+        AccessTools.DeclaredMethod(typeof(Vehicle), "UpdateProbePowerWarning",
+            [typeof(int), typeof(ProbeCorePower), typeof(UniverseTime), typeof(UniverseTime)]);
 
     #endregion
 

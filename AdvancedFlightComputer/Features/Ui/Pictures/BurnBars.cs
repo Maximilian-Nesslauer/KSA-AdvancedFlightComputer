@@ -49,6 +49,7 @@ internal static class BurnBars
         ConsoleUi.NoteShape("AfcBurnRows", has ? bars.Count : 0);
         if (!has)
             return "";
+        double remainingPower = ProbePower.RemainingSeconds(vehicle);
         float scale = ImGuiHelper.InterfaceScale;
         bool chained = plannedBefore != null;
         StageFuel[] all = StagesOf(vehicle);
@@ -80,6 +81,7 @@ internal static class BurnBars
                 ConsoleUi.StageSentence(line.AsSpan(), in ConsoleStyle.TextMuted, marked ? hue : null, second);
                 ImGui.Spacing();
             }
+            DrawPowerWarning(remainingPower, bars[0]);
             return short_ ? PageText.FuelShort(total, onBoard, chained) : "";
         }
         string payer = OnePayer(stages, pays);
@@ -108,6 +110,7 @@ internal static class BurnBars
             labelW = Math.Max(labelW, ImGui.CalcTextSize(bars[i].Label).X + gap);
         float barW = Math.Max(20f * scale, width - labelW);
         ImDrawListPtr dl = ImGui.GetWindowDrawList();
+        bool warnedPower = false;
 
         for (int i = 0; i < bars.Count; i++)
         {
@@ -165,9 +168,20 @@ internal static class BurnBars
                 ConsoleUi.FitText(new float2(noteX, min.Y), room, textH, note, colour.U32);
             }
             ImGui.Dummy(new float2(width, rowH));
+            if (!warnedPower)
+                warnedPower = DrawPowerWarning(remainingPower, bar);
         }
         ImGui.Spacing();
         return short_ ? PageText.FuelShort(total, onBoard, chained) : "";
+    }
+
+    private static bool DrawPowerWarning(double remaining, in BurnBar bar)
+    {
+        string warning = PageText.ProbePowerWarning(remaining, bar.InS, bar.Label);
+        if (warning.Length == 0)
+            return false;
+        ConsoleUi.WarningWrapped(warning);
+        return true;
     }
 
     /// <summary>The hues of the stock sequences that pay a burn, the same as their blocks on the staging bar.</summary>
