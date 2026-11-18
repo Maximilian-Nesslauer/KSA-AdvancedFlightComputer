@@ -196,7 +196,15 @@ internal static class TransferPage
 
         Span<char> buffer = stackalloc char[512];
         using var disabled = new ImGuiDisabledScope(flying);
-        MissionTransfer.Draw(source, destination, transfer.Arrival, buffer);
+        ImGui.PushTextWrapPos(0.0f);
+        try
+        {
+            MissionTransfer.Draw(source, destination, transfer.Arrival, buffer);
+        }
+        finally
+        {
+            ImGui.PopTextWrapPos();
+        }
     }
 
     private static void DrawHeader()
