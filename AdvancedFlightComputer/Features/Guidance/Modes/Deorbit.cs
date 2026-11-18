@@ -112,6 +112,7 @@ public static partial class GuidanceWindow
         _s.DeorbitLastResidual = double.PositiveInfinity;
         _s.DeorbitNextValidationTick = 0;
         _s.DeorbitEngineSignature = 0;
+        _s.DeorbitEntryMeasuredPreparation = 0.0;
         _s.BurnStartTime = 0;
         _s.BurnDownrangeKm = 0;
         _s.DirectBrakingRefusal = "";
@@ -293,7 +294,7 @@ public static partial class GuidanceWindow
         DeorbitRequest request = _s.DeorbitRequest;
         if (request.Settings.EntryPeriapsis.HasValue)
         {
-            _s.DeorbitPlan = EntryDeorbitPlanner.Plan(request, out string reason);
+            _s.DeorbitPlan = EntryDeorbitPlanner.Plan(request, out string reason, _s.DeorbitEntryMeasuredPreparation);
             if (_s.DeorbitPlan is not { } entry)
             {
                 RefuseDeorbit(vehicle, reason);

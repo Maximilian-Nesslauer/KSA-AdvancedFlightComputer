@@ -160,11 +160,14 @@ public static partial class GuidanceWindow
         // The stock estimate at that minimum bounds the ignition lead and burn finish before Auto is armed.
         bool minimumPreview = fc.ActiveEnginePerformanceMax.MinThrottle > 0
             && fc.PlannedBurnThrottle <= fc.ActiveEnginePerformanceMax.MinThrottle + 1e-6;
-        if (!minimumPreview || !(duration > 0) || !double.IsFinite(latestFinish + ignition + preparationStart)
-            || preparationStart < SimNow() || latestFinish >= plan.ArrivalTime - PrepLeadTime)
+        bool boundedBurn = minimumPreview && duration > 0 && double.IsFinite(latestFinish + ignition + preparationStart)
+            && latestFinish < plan.ArrivalTime - PrepLeadTime;
+        if (!boundedBurn || preparationStart < SimNow())
         {
             GuidanceLog.Debug(vehicle, FormattableString.Invariant(
                 $"stock timing check: measured throttle {fc.PlannedBurnThrottle:F3}, minimum {fc.ActiveEnginePerformanceMax.MinThrottle:F3}, duration {duration:F2} s, preparation {preparationStart - SimNow():F2} s, entry lead {plan.ArrivalTime - latestFinish:F2} s."));
+            if (boundedBurn && RetryEntryWithStockPreparation(vehicle, plan.DepartureTime - preparationStart))
+                return;
             StopStockDeorbit(vehicle, "NO BOUNDED STOCK BURN WINDOW WITH ENOUGH PREPARATION TIME. BURN STAYS MANUAL.", keepNode: true);
             return;
         }
@@ -203,6 +206,22 @@ public static partial class GuidanceWindow
         _s.LandingPhase = LandingPhase.DeorbitBurn;
         _s.LandingStatus = "STOCK AUTO: ALIGN + DEORBIT BURN";
         GuidanceLog.Info(vehicle, $"stock deorbit node armed: time {plan.DepartureTime:F3} s, delta-v {plan.DeltaV.Length():F3} m/s, minimum-throttle duration {duration:F3} s.");
+    }
+
+    private static bool RetryEntryWithStockPreparation(Vehicle vehicle, double measuredPreparation)
+    {
+        // The main flight computer can lack the worker's measured turn time until it loads a burn.
+        // Replan once from the stock target's actual preparation time and verify the replacement.
+        if (!_s.DeorbitRequest.Settings.EntryPeriapsis.HasValue || _s.DeorbitEntryMeasuredPreparation > 0.0
+            || !(measuredPreparation > 0.0) || !double.IsFinite(measuredPreparation))
+            return false;
+        ReleaseStockDeorbit(vehicle);
+        ClearDeorbitPlanState();
+        _s.DeorbitEntryMeasuredPreparation = measuredPreparation;
+        _s.LandingPhase = LandingPhase.DeorbitPlanning;
+        _s.LandingStatus = "REPLANNING ENTRY BURN WITH STOCK TURN TIME.";
+        GuidanceLog.Info(vehicle, FormattableString.Invariant($"Replanning the entry burn with {measuredPreparation:F1} s of stock preparation."));
+        return true;
     }
 
     private static void MonitorStockDeorbit(Vehicle vehicle, Orbit orbit, IParentBody parent, DeorbitPlan plan, bool nodeLoaded)

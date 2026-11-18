@@ -41,7 +41,7 @@ internal static class EntryDeorbitPlanner
         return "";
     }
 
-    internal static DeorbitPlan? Plan(DeorbitRequest request, out string refusal)
+    internal static DeorbitPlan? Plan(DeorbitRequest request, out string refusal, double measuredPreparation = 0.0)
     {
         double periapsis = request.Parent.MeanRadius + request.Settings.EntryPeriapsis!.Value;
         double entry = request.Parent.GetAtmosphereRadius();
@@ -57,7 +57,8 @@ internal static class EntryDeorbitPlanner
             return null;
 
         const double schedulingMargin = 45.0;
-        double soon = request.Epoch + request.StockPreparation + schedulingMargin;
+        double preparation = Math.Max(request.StockPreparation, measuredPreparation);
+        double soon = request.Epoch + preparation + schedulingMargin;
         for (int attempt = 0; attempt < 4; attempt++)
         {
             UniverseTime departure = new(soon);
@@ -90,7 +91,7 @@ internal static class EntryDeorbitPlanner
                 return null;
             }
             double duration = (request.Mass - cutoff) / request.Engines[0].MassFlow;
-            double earliestDeparture = request.Epoch + request.StockPreparation + schedulingMargin + duration * 0.6;
+            double earliestDeparture = request.Epoch + preparation + schedulingMargin + duration * 0.6;
             if (departure.Seconds() < earliestDeparture)
             {
                 // Allow for the next candidate's duration and for UniverseTime rounding.

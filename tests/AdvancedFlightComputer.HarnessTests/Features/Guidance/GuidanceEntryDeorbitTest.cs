@@ -43,5 +43,15 @@ public sealed class GuidanceEntryDeorbitTest : AfcTest
             && double3.Dot(plan.ArrivalPosition, plan.ArrivalVelocity) < 0.0
             && double3.Dot(plan.DeltaV, plan.DepartureVelocity) < 0.0);
         t.Check("a target above the atmosphere is refused", EntryDeorbitPlanner.Refusal(home, parking).Length > 0);
+        const double measuredPreparation = 180.0;
+        DeorbitPlan? retry = EntryDeorbitPlanner.Plan(request, out refusal, measuredPreparation);
+        if (!t.Check("the retry uses the measured stock turn time",
+            retry != null && retry.DepartureTime >= now.Seconds() + measuredPreparation
+            && retry.DepartureTime > plan.DepartureTime, refusal))
+            return;
+        Orbit retriedOrbit = Orbit.CreateFromStateCci(home, new UniverseTime(retry!.DepartureTime),
+            retry.DeparturePosition, retry.DepartureVelocity, source.OrbitLineColor);
+        t.CheckAbs("the later burn preserves the selected entry periapsis",
+            retriedOrbit.GetPeriapsisPositionOrb().Length() - home.MeanRadius, altitude, 0.1);
     }
 }
