@@ -131,8 +131,11 @@ public static partial class GuidanceWindow
         }
 
         bool thrustOn = vehicle.IsAnyEngineActive() && vehicle.IsAnyEnginePropellantAvailable();
-        // A queued or newly active engine has not had a worker step to report thrust.
-        if (!thrustOn && (StagingHelpers.HasQueuedEngineActivation(vehicle) || StagingHelpers.HasUnreportedActiveEngine(vehicle)))
+        // A planned launch must let the first engines report ignition before requesting another row.
+        bool waitingForLiftoff = _s.Running && _s.Phase == AscentPhase.Profile && !_s.ConvexLiftoffDetected
+            && double.IsFinite(_s.LiftoffRadius);
+        if (waitingForLiftoff && !thrustOn
+            && (StagingHelpers.HasQueuedEngineActivation(vehicle) || StagingHelpers.HasUnreportedActiveEngine(vehicle)))
         {
             _s.StagingActive = false;
             return;
