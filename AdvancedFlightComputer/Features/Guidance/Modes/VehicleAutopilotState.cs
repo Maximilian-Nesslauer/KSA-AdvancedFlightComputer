@@ -931,7 +931,7 @@ public sealed class VehicleAutopilotState
     /// a second owner rather than interleaving two craft into one CSV.
     /// On by default: per vehicle, so a booster separated in flight never had the box ticked, and the landings that needed diagnosing on 2026-10-08 all flew without a record.
     /// </summary>
-    public bool SixDofLogging = true;
+    public bool SixDofLogging;
 
     // Flown track state.
     //
@@ -1472,6 +1472,12 @@ public sealed class VehicleAutopilotState
     /// <summary>The live guidance, its solver thread, its model corrections and its nominal model, or null before the first solve.</summary>
     public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Guidance3Dof ThreeDofGuidance;
     public Ksa3DofWorker ThreeDofWorker;
+
+    internal void CancelEntrySolve()
+    {
+        ThreeDofWorker?.Dispose();
+        ThreeDofWorker = null;
+    }
     public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.AeroScaleEstimator ThreeDofEstimator;
     public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.KsaPointMassModel ThreeDofNominal;
 
@@ -1557,7 +1563,19 @@ public sealed class VehicleAutopilotState
     internal void FailBoostback(string what, string text) { MarkFailure(what, text); BoostbackStatus = text; BoostbackSeverity = Severity.Error; }
 
     internal void WarnEntry(string text) { ThreeDofStatus = text; ThreeDofSeverity = Severity.Warning; }
-    internal void DiagEntry(string text) { ThreeDofStatus = text; ThreeDofSeverity = Severity.Diag; }
+    internal string ThreeDofHandoffRefusal = "";
+    internal bool ThreeDofCoastAttitudeFixed;
+    internal double ThreeDofCoastTurnAccel;
+    internal EngineController[] SixDofStandbyEngines;
+
+    internal void DiagEntry(string text)
+    {
+        if (ThreeDofHandoffRefusal.Length == 0)
+        {
+            ThreeDofStatus = text;
+            ThreeDofSeverity = Severity.Diag;
+        }
+    }
 
     internal string FailureWhat { get; private set; } = "";
 

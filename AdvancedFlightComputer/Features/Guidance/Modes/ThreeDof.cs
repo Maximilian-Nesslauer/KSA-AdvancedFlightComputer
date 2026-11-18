@@ -5,6 +5,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 using System;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Features.Ui.Logic;
 using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 
 // The 3-DOF glide-and-burn landing, a guidance mode beside 6-DOF (Scvx/ThreeDof/Guidance3Dof.cs is the guidance; Adapters/Scvx/ThreeDof the game side; Ui/Gauges/ThreeDofGauge.cs its page).
@@ -62,11 +63,37 @@ public static partial class GuidanceWindow
     /// <summary>
     /// Take the craft for the 3-DOF landing. From the boostback glide, or from the page. The glide state carries over: until the first plan this mode flies the same PID glide.
     /// </summary>
-    private static void Engage3Dof(Vehicle vehicle, double now)
+    private static bool Engage3Dof(Vehicle vehicle, double now)
     {
+        if (!vehicle.IsControllable)
+            return RefuseEntry(vehicle, vehicle.NoControlTooltip.ToString());
+        IParentBody parent = vehicle.Orbit?.Parent;
+        if (parent?.GetPhysicalAtmosphere() == null)
+            return RefuseEntry(vehicle, "NO ATMOSPHERE.");
+        if (EntryWouldInterruptPoweredMode(vehicle))
+            return RefuseEntry(vehicle, "ANOTHER MODE FLIES A LIT ENGINE.");
+        var thrust = KsaEnginePerf.GetThrottleControlStatus(vehicle);
+        if (thrust == KsaEnginePerf.ThrustStatus.UnsupportedEngine)
+            return RefuseEntry(vehicle, "THROTTLE CONTROL REQUIRES ACTIVE LIQUID ENGINES.");
+        if (thrust != KsaEnginePerf.ThrustStatus.Available)
+            return RefuseEntry(vehicle, "NO ACTIVE, SUPPLIED ENGINE FOR LANDING.");
+
+        EnsureBoostbackAero(vehicle, parent);
+        KsaAeroSweep.Result aero = _s.Aero;
+        if (aero?.Table == null || aero.Atmosphere == null
+            || _s.AeroStale(LiveBoxExtents(vehicle), KsaAeroSweep.LiveMeshHash(vehicle), parent))
+            return RefuseEntry(vehicle, "AERO MODEL UNAVAILABLE.");
+        double3 site = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+        KsaPointMassModel model = Ksa3DofSetup.BuildModel(vehicle, parent, KsaFrameBridge.BuildSiteFrame(site), aero, out string refusal);
+        if (model == null)
+            return RefuseEntry(vehicle, refusal);
+
+        if (IsStockDeorbitPhase(_s.LandingPhase))
+            StopGuidance(vehicle, StopTarget.Landing);
         ClaimVehicle(GuidanceMode.ThreeDof, vehicle);
         _s.Engage = true;
         Reset3Dof();
+        _s.ThreeDofNominal = model;
         _s.ThreeDofPhase = ThreeDofPhase.Glide;
         _s.ThreeDofLastStep = now;
         // A fresh flown path for the entry page's plot, which touchdown guidance's plot carries on after the hand-over.
@@ -79,6 +106,25 @@ public static partial class GuidanceWindow
             GuidanceLog.Info(vehicle, "Entry guidance: " + noLift);
             _s.ThreeDofStatus = "NO LIFT. BALLISTIC FALL. BURN LANDS.";
         }
+        return true;
+    }
+
+    private static bool EntryWouldInterruptPoweredMode(Vehicle vehicle)
+    {
+        if (vehicle.FlightComputer.BurnMode == FlightComputerBurnMode.Auto && vehicle.ComputeLiveThrust() > 0.0)
+            return true;
+        bool poweredGuidance = _s.Active || _s.Running || LandingMachineLive || _s.LandingPhase == LandingPhase.Burn
+            || BoostbackLive && _s.BoostbackEngineOn;
+        return poweredGuidance && (ManualInputs(vehicle).EngineOn || vehicle.ComputeLiveThrust() > 0.0);
+    }
+
+    private static bool RefuseEntry(Vehicle vehicle, string reason)
+    {
+        string status = "ENTRY REFUSED: " + reason;
+        if (_s.ThreeDofStatus != status)
+            GuidanceLog.Info(vehicle, status);
+        _s.WarnEntry(status);
+        return false;
     }
 
     /// <summary>Stop the 3-DOF. In the air the engine is left as it is; a cut there drops the craft.</summary>
@@ -95,9 +141,10 @@ public static partial class GuidanceWindow
         _s.ThreeDofStatus = why;
     }
 
-    /// <summary>Forget the guidance, the model and the command history; the worker finishes whatever it is on and is kept for the next engage.</summary>
+    /// <summary>Cancel the solve and drop the entry model and command history.</summary>
     private static void Reset3Dof()
     {
+        _s.CancelEntrySolve();
         _s.ThreeDofGuidance = null;
         _s.ThreeDofNominal = null;
         _s.ThreeDofEstimator = null;
@@ -112,6 +159,9 @@ public static partial class GuidanceWindow
         _s.ThreeDofSixDofWaiting = false;
         _s.ThreeDofBurnSolveFault = false;
         _s.ThreeDofTouchdownHandoff = default;
+        _s.ThreeDofHandoffRefusal = "";
+        _s.ThreeDofCoastAttitudeFixed = false;
+        _s.ThreeDofCoastTurnAccel = 0.0;
     }
 
     /// <summary>One step of the 3-DOF landing, run for this vehicle from ApplyAutopilot whether or not it is the one on screen.</summary>
@@ -137,10 +187,9 @@ public static partial class GuidanceWindow
         }
 
         bool burning = _s.ThreeDofPhase == ThreeDofPhase.Burn;
-        if (_s.ThreeDofWorker?.LastError is { Length: > 0 } fault)
+        if (_s.ThreeDofWorker?.TakeError(_s.ThreeDofGuidance) is { Length: > 0 } fault)
         {
             GuidanceLog.Info(vehicle, "Entry guidance solve faulted: " + fault);
-            _s.ThreeDofWorker.LastError = "";
             if (burning)
                 _s.ThreeDofBurnSolveFault = true;
             else if (CanRestartEntryGlide(_s.ThreeDofGuidance, now))
@@ -272,15 +321,15 @@ public static partial class GuidanceWindow
                 && g.Phase is not (Phase3Dof.Idle or Phase3Dof.Converging)
                 && now - _s.ThreeDofLastUpdate >= ThreeDofUpdateS)
             {
-                _s.ThreeDofLastUpdate = now;
                 KsaPointMassModel model = _s.ThreeDofEstimator.Apply(_s.ThreeDofNominal);
                 double[] x0 = x, a0 = [anchor.X, anchor.Y, anchor.Z];
                 double[] r0 = turnKnown ? [anchorTurn.X, anchorTurn.Y, anchorTurn.Z] : null;
-                _s.ThreeDofWorker.TryRun(() =>
+                if (_s.ThreeDofWorker.TryRun(g, _ =>
                 {
                     g.Model = model;
                     g.Update(x0, a0, now, r0);
-                });
+                }))
+                    _s.ThreeDofLastUpdate = now;
             }
         }
 
@@ -330,8 +379,10 @@ public static partial class GuidanceWindow
         {
             // Ignition locked: the burn's opening attitude is ahead of us. Turn towards it as the ignition prediction assumed, so the burn opens where the vehicle actually is: speeding up and slowing down at the turn-acceleration limit, as fast as it can still stop on the opening attitude, capped at the rate limit (Guidance3Dof.PredictIgnition). Turned at the rate limit from a standing start, the 2026-10-09 booster was 14 deg off its command by ignition.
             double3 from = _s.ThreeDofCommandLocal.Length() > 0.5 ? _s.ThreeDofCommandLocal : anchor;
-            double accel = _s.ThreeDofTurnAccelInUse * Math.PI / 180.0;
-            double turnSpeed = Ksa3DofSetup.RateMax;
+            if (_s.ThreeDofCoastAttitudeFixed)
+                from = new double3(att[0], att[1], att[2]);
+            double accel = _s.ThreeDofCoastTurnAccel;
+            double turnSpeed = _s.ThreeDofCoastAttitudeFixed ? 0.0 : Ksa3DofSetup.RateMax;
             if (accel > 0.0)
             {
                 double angle = Math.Acos(Math.Clamp(double3.Dot(from.NormalizeOrZero(), b0.NormalizeOrZero()), -1.0, 1.0));
@@ -460,7 +511,6 @@ public static partial class GuidanceWindow
 
     private static void StartThreeDofCold(Vehicle vehicle, double[] x, double now)
     {
-        _s.ThreeDofColdTime = now;
         // Anchored tight on the last command, so consecutive plans start where the command is; see the file summary.
         var settings = new Guidance3Dof.Settings
         {
@@ -475,12 +525,14 @@ public static partial class GuidanceWindow
             : _s.ThreeDofTurnAccelDegS2 < 0.0 ? 0.0
             : Ksa3DofSetup.TurnAccelLimit(vehicle);
         _s.ThreeDofTurnAccelInUse = turn * 180.0 / Math.PI;
+        double coastTurn = _s.ThreeDofTurnAccelDegS2 == 0.0 ? Ksa3DofSetup.CoastTurnAccelLimit(vehicle) : turn;
+        bool fixedCoast = _s.ThreeDofTurnAccelDegS2 == 0.0 && coastTurn == 0.0;
         Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: 12, _s.GlideMaxAoaDeg,
-                                                    _s.VehicleHeightM, settings.GlideAccelMax(LandingAccelLimitMs2), _s.LandingPlanFloorMargin, turn);
+            _s.VehicleHeightM, settings.GlideAccelMax(LandingAccelLimitMs2), _s.LandingPlanFloorMargin, turn,
+            fixedGlideAttitude: fixedCoast);
         Scvx3DofConfig burn = Ksa3DofSetup.Config(vehicle, nodes: 20, glideIntervals: 0, _s.GlideMaxAoaDeg,
                                                    _s.VehicleHeightM, LandingAccelLimitMs2, _s.LandingPlanFloorMargin, turn);
         var g = new Guidance3Dof(glide, burn, _s.ThreeDofEstimator.Apply(_s.ThreeDofNominal), settings);
-        _s.ThreeDofGuidance = g;
         _s.ThreeDofWorker ??= new Ksa3DofWorker();
         // Zero/zero: the legs on the pad, at rest. The plan flies the CoM, VehicleHeightM above the legs.
         double[] xf = [0, 0, _s.VehicleHeightM, 0, 0, 0];
@@ -493,13 +545,18 @@ public static partial class GuidanceWindow
             GlideTilt = _s.GlideLiftSign != 0 ? nominal : 0.0,
             GlideTiltDirection = _s.GlideLiftSign > 0 ? [0, 0, -1] : [0, 0, 1],
         };
-        _s.ThreeDofWorker.TryRun(() =>
+        if (!_s.ThreeDofWorker.TryRun(g, stop =>
         {
-            if (!g.BeginCold(x, xf, now, seed))
+            if (stop.IsCancellationRequested || !g.BeginCold(x, xf, now, seed))
                 return;
-            while (g.Phase == Phase3Dof.Converging)
-                g.StepCold(10);
-        });
+            while (!stop.IsCancellationRequested && g.Phase == Phase3Dof.Converging)
+                g.StepCold(2);
+        }))
+            return;
+        _s.ThreeDofColdTime = now;
+        _s.ThreeDofCoastAttitudeFixed = fixedCoast;
+        _s.ThreeDofCoastTurnAccel = coastTurn;
+        _s.ThreeDofGuidance = g;
     }
 
     /// <summary>
@@ -536,6 +593,7 @@ public static partial class GuidanceWindow
         _s.ThreeDofColdTime = now;
         if (!ThreeDofBusy)
         {
+            _s.CancelEntrySolve();
             _s.ThreeDofGuidance = null;
             _s.ThreeDofPlan = null;
         }
@@ -558,6 +616,13 @@ public static partial class GuidanceWindow
             reason = "ENTRY PLAN RAN OUT IN BURN";
 
         bool handoff = reason != null || (_s.ThreeDofSixDofHandover && burnLeft < _s.ThreeDofSixDofTimeS);
+        if (handoff && !Can6DofTake(vehicle, out string refusal))
+        {
+            StopSixDofStandby();
+            KeepEntryBurn(vehicle, refusal);
+            return;
+        }
+        _s.ThreeDofHandoffRefusal = "";
         double seed = double.IsFinite(burnLeft) ? Math.Max(burnLeft, SixDofStandbyMinSeedS) : _s.SixDofSigmaSeed;
         StepSixDofStandby(vehicle, parent, siteCci, x, now, seed, holdForEntryHandoff: handoff);
         if (!handoff)
@@ -589,6 +654,18 @@ public static partial class GuidanceWindow
         if (warning && (ThreeDofBusy || (_s.ThreeDofGuidance?.Published is { } recovered
             && !ReferenceEquals(recovered, _s.ThreeDofPlan))))
             return;
+        if (!Can6DofTake(vehicle, out string refusal))
+        {
+            StopSixDofStandby();
+            KeepEntryBurn(vehicle, refusal);
+            return;
+        }
+        if (!StandbyEnginesStillMatch(vehicle))
+        {
+            StopSixDofStandby();
+            KeepEntryBurn(vehicle, "ENGINE CONFIGURATION CHANGED.");
+            return;
+        }
 
         double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         double[] x = KsaFrameBridge.ToModelState(vehicle, KsaFrameBridge.BuildSiteFrame(siteCci));
@@ -602,6 +679,16 @@ public static partial class GuidanceWindow
         _s.ThreeDofStatus = status;
         if (warning)
             _s.WarnEntry(status);
+    }
+
+    private static void KeepEntryBurn(Vehicle vehicle, string reason)
+    {
+        string status = "KEEPING ENTRY BURN. TOUCHDOWN UNAVAILABLE: " + reason;
+        if (!_s.ThreeDofSixDofWaiting)
+            GuidanceLog.Info(vehicle, status);
+        _s.ThreeDofSixDofWaiting = true;
+        _s.ThreeDofHandoffRefusal = status;
+        _s.WarnEntry(status);
     }
 
     internal static string ThreeDofPhaseName(ThreeDofPhase p) => p switch
