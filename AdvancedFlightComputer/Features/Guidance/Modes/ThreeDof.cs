@@ -168,6 +168,7 @@ public static partial class GuidanceWindow
         _s.ThreeDofTouchdownHandoff = default;
         _s.ThreeDofHandoffRefusal = "";
         _s.SixDofStandbyPredicted = false;
+        _s.ThreeDofHandoverDueAt = double.NaN;
     }
 
     /// <summary>One step of the 3-DOF landing, run for this vehicle from ApplyAutopilot whether or not it is the one on screen.</summary>
@@ -887,7 +888,11 @@ public static partial class GuidanceWindow
         if (reason == null && burnLeft < -0.5)
             reason = "ENTRY PLAN RAN OUT IN BURN";
 
-        bool handoff = reason != null || (_s.ThreeDofSixDofHandover && burnLeft < _s.ThreeDofSixDofTimeS);
+        // THE HAND-OVER TIME IS SET WHEN THE ENGINE LIGHTS: ThreeDofSixDofTimeS before the end of the burn as planned then, and not pushed back by a burn that grows afterwards. Entry guidance's re-solves stretch the burn once it runs (5.1 s at the lock, 5.5 s left 1.7 s after ignition on 2026-11-18), and judged on the time left each step, the hand-over waited 2.3 s into a 5 s burn with touchdown guidance's plan ready all along.
+        if (!double.IsFinite(_s.ThreeDofHandoverDueAt) && double.IsFinite(burnLeft))
+            _s.ThreeDofHandoverDueAt = now + Math.Max(burnLeft - _s.ThreeDofSixDofTimeS, 0.0);
+        bool due = burnLeft < _s.ThreeDofSixDofTimeS || now >= _s.ThreeDofHandoverDueAt;
+        bool handoff = reason != null || (_s.ThreeDofSixDofHandover && due);
         if (handoff && !Can6DofTake(vehicle, out string refusal))
         {
             StopSixDofStandby();

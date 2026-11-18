@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- A converged touchdown plan is **never refused the hand-over**. The thrust-continuity check, which kept entry guidance flying until its thrust matched touchdown guidance's to half a percent of throttle, is reverted: it held the hand-over 1.6 s into a 5 s burn. The entry throttle is still carried into touchdown guidance's first command and blended to its plan over 0.4 s. The 3 g test on the plan's rebalanced mass is reverted too: it refused accurate plans for passing a soft limit by 0.1 %.
+
+- The hand-over time is **fixed when the engine lights**, AT BURN LEFT before the end of the burn as planned then. A burn that entry guidance stretches afterwards no longer pushes it back; it had waited 2.3 s into a 5 s burn.
+
 - Touchdown guidance gives **pitch and yaw before roll** when the gimbals run out of travel. The gimbals make roll torque by deflecting against each other and pitch and yaw by deflecting together, out of one travel; with both demands at their limits the allocation was scaled down whole, and pitch and yaw lost half their torque for a roll torque a tenth their size. Since KSA 5901 the air rolls a booster (1-6 deg/s at the hand-over), its plan asks 15-19 kN m of roll, and the allocation was scaled to about 0.65 on 83-96 % of steps; the booster got half the torque its plan flew on and left the plan within a second. Roll now gets the travel left over. Flown 2026-11-18: full pitch and yaw torque on every step, and the booster within 0.5 m of its plan where it had been 2-5 m off.
 
 - Touchdown guidance **prepares its plan before ignition**. In the 2.5 s between entry guidance locking the ignition and the engine lighting, the standby solves the burn from the state predicted at ignition, so its plan is converged when the engine lights. KSA 5901 gave boosters about 60 % more drag: they arrive at 103 m/s where they came at 125, the landing burn is 5 s where it was 7, and the standby, which used to have two seconds of burn before the 5 s hand-over, was solving from cold through the hardest braking.

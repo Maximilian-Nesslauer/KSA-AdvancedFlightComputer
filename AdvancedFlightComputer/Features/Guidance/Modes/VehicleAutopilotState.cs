@@ -952,6 +952,9 @@ public sealed class VehicleAutopilotState
     /// <summary>The standby is running on the predicted ignition state and the ignition time, not on the craft as it is: set through the lock window, cleared at the first burn step.</summary>
     internal bool SixDofStandbyPredicted;
 
+    /// <summary>Sim time from which the hand-over to touchdown guidance is due, set on the first step of entry guidance's burn (StepEntryTouchdownHandoff); NaN before.</summary>
+    internal double ThreeDofHandoverDueAt = double.NaN;
+
     // Flown track state.
     //
     // The overlay's trace. Per vehicle so switching craft shows that craft's own flown path rather than blanking a track the player was watching.
