@@ -103,7 +103,8 @@ public sealed class GuidanceGfoldBackoffTest : AfcTest
     {
         ambient.SetValue(null, state);
         Method("SubmitGfoldPlan").Invoke(null, [null, null, null, null, null, now]);
-        if (state.GfoldJob == null || !SpinWait.SpinUntil(() => state.GfoldJob.TryTakeResult(out _), TimeSpan.FromSeconds(2)))
+        if (state.GfoldJob == null || !SpinWait.SpinUntil(() => state.GfoldJob.TryTakeResult(out _, out bool final) && final,
+                TimeSpan.FromSeconds(2)))
         {
             state.CancelGfoldSolve();
             throw new TimeoutException("G-FOLD solve worker did not return.");

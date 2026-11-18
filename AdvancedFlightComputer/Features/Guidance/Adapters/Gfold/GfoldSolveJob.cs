@@ -8,6 +8,7 @@ internal sealed class GfoldSolveJob : IDisposable
 {
     private readonly CancellationTokenSource _stop = new();
     private readonly Task<Result> _task;
+    private Result? _preview;
 
     internal sealed record Request(GfoldParams Parameters, int Nodes, double SimTime, double RetainedArrival,
                                    double MinTime, double MaxTime, bool RestSearch, GfoldOptions Options);
@@ -25,12 +26,13 @@ internal sealed class GfoldSolveJob : IDisposable
         SimTime = request.SimTime;
         Parameters = request.Parameters;
         CancellationToken stop = _stop.Token;
-        _task = Task.Run(() => Solve(request, stop));
+        _task = Task.Run(() => Solve(request, stop, preview => Interlocked.Exchange(ref _preview, preview)));
     }
 
-    public bool TryTakeResult(out Result? result)
+    public bool TryTakeResult(out Result? result, out bool final)
     {
-        result = _task.IsCompletedSuccessfully ? _task.Result : null;
+        final = _task.IsCompletedSuccessfully;
+        result = final ? _task.Result : Interlocked.Exchange(ref _preview, null);
         return result != null;
     }
 
@@ -40,7 +42,7 @@ internal sealed class GfoldSolveJob : IDisposable
         _stop.Dispose();
     }
 
-    private static Result Solve(Request request, CancellationToken stop)
+    private static Result Solve(Request request, CancellationToken stop, Action<Result> offerPreview)
     {
         var clock = Stopwatch.StartNew();
         GfoldParams p = request.Parameters;
@@ -63,7 +65,12 @@ internal sealed class GfoldSolveJob : IDisposable
             GfoldPlanner.SearchResult? best = !stop.IsCancellationRequested && searchBudget > 0
                 ? GfoldPlanner.SearchMinFuel(p, request.Nodes, tfLo: request.MinTime, tfHi: request.MaxTime,
                     options: options, tfGuess: remaining > request.MinTime ? remaining : EstimateTime(p),
-                    searchTimeLimitS: searchBudget, stop: stop)
+                    searchTimeLimitS: searchBudget, stop: stop, onCandidate: candidate =>
+                    {
+                        if (candidate.FuelUsed <= p.FuelMass)
+                            offerPreview(new Result(Outcome.Ready, clock.Elapsed.TotalMilliseconds,
+                                request.SimTime + candidate.TimeOfFlight, candidate.Trajectory));
+                    })
                 : null;
             if (best == null)
                 return new(clock.Elapsed.TotalSeconds >= limit ? Outcome.SearchTimedOut : Outcome.Unreachable,

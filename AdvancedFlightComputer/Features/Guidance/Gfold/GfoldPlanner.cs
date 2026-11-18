@@ -86,11 +86,13 @@ public static class GfoldPlanner
                                               double tfToleranceS = 0.25,
                                               double? tfLo = null, double? tfHi = null,
                                               GfoldOptions? options = null, double? tfGuess = null,
-                                              double searchTimeLimitS = 0.0, CancellationToken stop = default)
+                                              double searchTimeLimitS = 0.0, CancellationToken stop = default,
+                                              Action<SearchResult>? onCandidate = null)
     {
         GfoldOptions opt = options ?? GfoldOptions.Reference;
         var clock = Stopwatch.StartNew();
         int solves = 0;
+        double publishedFuel = double.PositiveInfinity;
         var cache = new Dictionary<double, (double Fuel, GfoldTrajectory? Traj)>();
 
         double RemainingTime() => searchTimeLimitS > 0.0 ? searchTimeLimitS - clock.Elapsed.TotalSeconds : double.PositiveInfinity;
@@ -133,6 +135,11 @@ public static class GfoldPlanner
                 result = (double.PositiveInfinity, null); // tf outside physical range
             }
             cache[tf] = result;
+            if (result.Item2 is { } candidate && result.Item1 < publishedFuel && onCandidate != null && !stop.IsCancellationRequested)
+            {
+                publishedFuel = result.Item1;
+                onCandidate(new SearchResult(candidate, tf, result.Item1, solves, Complete: false));
+            }
             return result;
         }
 

@@ -223,9 +223,10 @@ public static partial class GuidanceWindow
     private static void PublishGfoldPlan(Vehicle vehicle, double now, double3 position, double3 velocity)
     {
         GfoldSolveJob job = _s.GfoldJob;
-        if (job == null || !job.TryTakeResult(out GfoldSolveJob.Result result))
+        if (job == null || !job.TryTakeResult(out GfoldSolveJob.Result result, out bool final))
             return;
-        _s.CancelGfoldSolve();
+        if (final)
+            _s.CancelGfoldSolve();
         _s.GfoldSolveMs = result.SolveMs;
 
         GfoldParams p = job.Parameters;
@@ -258,7 +259,8 @@ public static partial class GuidanceWindow
         double maxAge = Math.Clamp(horizon * 0.2, 0.5, GfoldRequestMaxAgeS);
         if (elapsed < 0 || elapsed > maxAge || !MatchesGfoldStart(candidate, elapsed, position, velocity))
         {
-            FailGfold(vehicle, "G-FOLD PLAN NO LONGER MATCHES THE DESCENT STATE.");
+            if (final && (_s.GfoldPlan == null || _s.GfoldPlanStart != job.SimTime))
+                FailGfold(vehicle, "G-FOLD PLAN NO LONGER MATCHES THE DESCENT STATE.");
             return;
         }
 
