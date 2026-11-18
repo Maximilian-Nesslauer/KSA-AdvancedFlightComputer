@@ -72,6 +72,7 @@ internal static class TransferPage
         DrawPicture(in ctx, source);
         DrawLegendLine(source);
         DrawSelectionResult();
+        DrawMissionSupply(source);
         CollectBars();
         _fuelFact = BurnBars.Draw(source, _bars);
         if (ctx.Flying && MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? running))
@@ -156,12 +157,7 @@ internal static class TransferPage
         }
         if (!found)
         {
-            // No destination yet, or one the source cannot reach any more: the craft's target first, else the first in the list.
-            selected = _destinations[0];
-            if (source.Target is Astronomical target)
-                foreach (TransferObject o in _destinations)
-                    if (o.GetKey() == target.Id)
-                        selected = o;
+            selected = DefaultDestination(source, _destinations);
             if (selected.Body is IOrbiter first)
                 TransferSession.SetDestination(first);
         }
@@ -174,6 +170,32 @@ internal static class TransferPage
             if (_setTarget)
                 InputEvents.ChangeTargetBuffer.Add(new InputEvents.ChangeTargetData { Vehicle = source, Target = picked });
         }
+    }
+
+    internal static TransferObject DefaultDestination(Vehicle source, IReadOnlyList<TransferObject> destinations)
+    {
+        string? mission = MissionTransfer.FindDestinationId(source);
+        string? target = (source.Target as Astronomical)?.Id;
+        TransferObject selected = destinations[0];
+        foreach (TransferObject option in destinations)
+        {
+            string key = option.GetKey();
+            if (mission != null && key == mission)
+                return option;
+            if (target != null && key == target)
+                selected = option;
+        }
+        return selected;
+    }
+
+    private static void DrawMissionSupply(Vehicle source)
+    {
+        if (TransferSession.Destination is not Astronomical destination
+            || TransferSession.SelectedEntry?.TransferData is not OrbitalTransfers.TransferData transfer)
+            return;
+
+        Span<char> buffer = stackalloc char[512];
+        MissionTransfer.Draw(source, destination, transfer.Arrival, buffer);
     }
 
     private static void DrawHeader()
