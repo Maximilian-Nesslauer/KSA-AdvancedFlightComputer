@@ -160,22 +160,44 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         state.ThreeDofEngineOn = true;
         state.ThreeDofThrottle = BurnThrottle;
         state.SixDofStandby = true;
+        state.ThreeDofBurnSolveFault = true;
         Inputs(craft).EngineOn = true;
         Inputs(craft).EngineThrottle = BurnThrottle;
         object[] args = [craft, home, double3.UnitZ * home.MeanRadius, new double[Dynamics6Dof.NX],
-            Universe.GetElapsedSeconds(), true];
+            Universe.GetElapsedSeconds()];
         MethodInfo step = Method("StepEntryTouchdownHandoff");
+        MethodInfo take = Method("CheckPendingEntryTouchdownHandoff");
 
         _standbyReady = false;
-        bool tookCold = (bool)step.Invoke(null, args)!;
+        step.Invoke(null, args);
         t.Check("an entry solve fault keeps the lit burn while touchdown guidance is cold",
-            !tookCold && !state.EngagePending && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn
+            state.ThreeDofTouchdownHandoff.Status == null && !state.EngagePending
+            && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn
             && state.ThreeDofEngineOn && state.ThreeDofThrottle == BurnThrottle);
 
         _standbyReady = true;
-        bool tookReady = (bool)step.Invoke(null, args)!;
+        step.Invoke(null, args);
+        t.Check("a retained fault requests handover after the standby becomes ready",
+            state.ThreeDofTouchdownHandoff.Status != null && !state.EngagePending
+            && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn);
+        _standbyReady = false;
+        take.Invoke(null, [craft, home]);
+        t.Check("a changed standby leaves the entry burn in control on the command step",
+            state.ThreeDofTouchdownHandoff.Status == null && !state.EngagePending
+            && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn && Inputs(craft).EngineOn);
+
+        _standbyReady = true;
+        step.Invoke(null, args);
+        _contact = true;
+        take.Invoke(null, [craft, home]);
+        t.Check("contact cancels the entry handover before touchdown guidance can command",
+            state.ThreeDofTouchdownHandoff.Status == null && !state.EngagePending);
+
+        _contact = false;
+        step.Invoke(null, args);
+        take.Invoke(null, [craft, home]);
         t.Check("a ready standby takes the entry burn without cutting its engine",
-            tookReady && state.EngagePending && state.SixDofStandby
+            state.EngagePending && state.SixDofStandby
             && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Idle
             && Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle);
         _standbyReady = false;

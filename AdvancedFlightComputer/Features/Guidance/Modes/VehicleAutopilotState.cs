@@ -1467,6 +1467,8 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Set once the burn is inside the hand-over time with 6-DOF not ready yet, so that is logged once.</summary>
     public bool ThreeDofSixDofWaiting;
+    public bool ThreeDofBurnSolveFault;
+    public (string Status, bool Warning) ThreeDofTouchdownHandoff;
 
     /// <summary>Hand over with this much of the 3-DOF burn plan left, s. By time rather than speed: a light booster falls slower than any useful hand-over speed, and 6-DOF, with no coast and no drag model, cannot fly a long burn (see ThreeDof.cs).</summary>
     public double ThreeDofSixDofTimeS = 5.0;

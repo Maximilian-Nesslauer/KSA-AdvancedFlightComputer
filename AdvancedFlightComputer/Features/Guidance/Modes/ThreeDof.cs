@@ -104,6 +104,8 @@ public static partial class GuidanceWindow
         _s.ThreeDofEngineOn = false;
         _s.ThreeDofThrottle = _s.ThreeDofPlanThrottle = 0.0;
         _s.ThreeDofSixDofWaiting = false;
+        _s.ThreeDofBurnSolveFault = false;
+        _s.ThreeDofTouchdownHandoff = default;
     }
 
     /// <summary>One step of the 3-DOF landing, run for this vehicle from ApplyAutopilot whether or not it is the one on screen.</summary>
@@ -129,13 +131,12 @@ public static partial class GuidanceWindow
         }
 
         bool burning = _s.ThreeDofPhase == ThreeDofPhase.Burn;
-        bool burnSolveFault = false;
         if (_s.ThreeDofWorker?.LastError is { Length: > 0 } fault)
         {
             GuidanceLog.Info(vehicle, "Entry guidance solve faulted: " + fault);
             _s.ThreeDofWorker.LastError = "";
             if (burning)
-                burnSolveFault = true;
+                _s.ThreeDofBurnSolveFault = true;
             else
                 Drop3Dof(vehicle, "ENTRY SOLVE FAULT. PID GLIDE, COLD RETRY.", now);
         }
@@ -160,8 +161,8 @@ public static partial class GuidanceWindow
         if (_s.ThreeDofNominal != null)
             Measure3Dof(x, att, burning ? _s.ThreeDofThrottle : 0.0, now);
 
-        if (burning && x[5] < 0.0 && StepEntryTouchdownHandoff(vehicle, parent, siteCci, x14, now, burnSolveFault))
-            return;
+        if (burning)
+            StepEntryTouchdownHandoff(vehicle, parent, siteCci, x14, now);
 
         // Fly the plan if there is one; otherwise the PID glide until there is.
         if (!Plan3DofStep(vehicle, parent, frame, x, att, now, dt, out double3 wantLocal, out double3 rateLocal, out bool smooth))
@@ -285,6 +286,9 @@ public static partial class GuidanceWindow
             if (_s.ThreeDofPlan == null)
                 GuidanceLog.Info(vehicle, $"Entry guidance first plan at {x[2] / 1000:F1} km: ignition in {plan.IgnitionTime - now:F1} s, burn {plan.SigmaBurn:F1} s.");
             _s.ThreeDofPlan = plan;
+            _s.ThreeDofBurnSolveFault = false;
+            if (_s.ThreeDofTouchdownHandoff.Warning)
+                _s.ThreeDofTouchdownHandoff = default;
         }
 
         double height = x[2];
@@ -528,12 +532,12 @@ public static partial class GuidanceWindow
         }
     }
 
-    private static bool StepEntryTouchdownHandoff(Vehicle vehicle, IParentBody parent, double3 siteCci,
-                                                  double[] x, double now, bool burnSolveFault)
+    private static void StepEntryTouchdownHandoff(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                                  double[] x, double now)
     {
         Plan3Dof plan = _s.ThreeDofGuidance?.Published ?? _s.ThreeDofPlan;
         double burnLeft = plan?.EndTime - now ?? double.NaN;
-        string reason = burnSolveFault ? "ENTRY SOLVE FAULT IN BURN" : null;
+        string reason = _s.ThreeDofBurnSolveFault ? "ENTRY SOLVE FAULT IN BURN" : null;
         if (reason == null && !ThreeDofBusy && _s.ThreeDofGuidance is { } guidance)
         {
             if (guidance.Phase == Phase3Dof.Idle)
@@ -548,7 +552,7 @@ public static partial class GuidanceWindow
         double seed = double.IsFinite(burnLeft) ? Math.Max(burnLeft, SixDofStandbyMinSeedS) : _s.SixDofSigmaSeed;
         StepSixDofStandby(vehicle, parent, siteCci, x, now, seed, holdForEntryHandoff: handoff);
         if (!handoff)
-            return false;
+            return;
 
         if (!SixDofStandbyReady(now, SixDofStandbyMaxPlanAgeS, x))
         {
@@ -557,18 +561,34 @@ public static partial class GuidanceWindow
                 _s.ThreeDofSixDofWaiting = true;
                 GuidanceLog.Info(vehicle, $"{reason ?? "Entry guidance approaching touchdown"}: keeping the burn while touchdown guidance is {SixDofStandbyText(now)}.");
             }
-            return false;
+            return;
         }
 
         string status = reason != null
             ? reason + ". HANDOVER: TOUCHDOWN."
             : FormattableString.Invariant($"HANDOVER: TOUCHDOWN, {burnLeft:F1} s FROM PAD, {x[2]:F0} m.");
+        _s.ThreeDofTouchdownHandoff = (status, reason != null);
+    }
+
+    private static void CheckPendingEntryTouchdownHandoff(Vehicle vehicle, IParentBody parent)
+    {
+        var (status, warning) = _s.ThreeDofTouchdownHandoff;
+        _s.ThreeDofTouchdownHandoff = default;
+        if (status == null || _s.ThreeDofPhase != ThreeDofPhase.Burn || HasTouchedDown(vehicle))
+            return;
+
+        double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+        double[] x = KsaFrameBridge.ToModelState(vehicle, KsaFrameBridge.BuildSiteFrame(siteCci));
+        if (!SixDofStandbyReady(SimNow(), SixDofStandbyMaxPlanAgeS, x))
+            return;
+        if (x[5] >= 0.0 && TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) > 1.0)
+            return;
+
         GuidanceLog.Info(vehicle, status);
         Engage6Dof(vehicle, fromBrakingBurn: true, tookBurn: true);
         _s.ThreeDofStatus = status;
-        if (reason != null)
+        if (warning)
             _s.WarnEntry(status);
-        return true;
     }
 
     internal static string ThreeDofPhaseName(ThreeDofPhase p) => p switch
