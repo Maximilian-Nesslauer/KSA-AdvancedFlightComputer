@@ -81,6 +81,7 @@ public static partial class GuidanceWindow
 
     private static void ClearLandingEngineCommand()
     {
+        _s.CancelGfoldSolve();
         _s.GfoldPlan = null;
         _s.GfoldThrottle = 0.0;
         _s.GfoldEngineOn = false;

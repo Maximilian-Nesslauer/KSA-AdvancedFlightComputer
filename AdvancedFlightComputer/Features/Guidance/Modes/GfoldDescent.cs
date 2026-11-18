@@ -63,6 +63,7 @@ public static partial class GuidanceWindow
     // A new target makes the previous flight time a wrong guess, so the next solve searches the full range.
     private static void ChangeGfoldApproach(GfoldApproach approach, double now)
     {
+        _s.CancelGfoldSolve();
         _s.GfoldApproach = approach;
         _s.GfoldForceSearch = true;
         _s.GfoldArrivalTime = now + SearchTfMax;
@@ -79,6 +80,7 @@ public static partial class GuidanceWindow
         && _s.GfoldArrivalTime >= now && _s.GfoldArrivalTime - now <= GfoldMinTf;
 
     private const double GfoldMinTf = 4.0;
+    private const double GfoldRequestMaxAgeS = 1.25;
 
     // A planned coast is flown as a real coast. The engine cannot deliver less than its minimum throttle, so a demand under this fraction of full thrust switches it off, and it lights again only above the re-light fraction, so a command that sits near the threshold does not toggle the engine every step.
     private const double GfoldCoastFraction = 0.02;
@@ -89,13 +91,10 @@ public static partial class GuidanceWindow
     private const double GfoldIgnitionAlignLimitS = 3.0;
 
     // Flight-time search bounds.
-    // SearchTfMax is the cold-start ceiling; the two bracket factors are the window searched around the previous solution's remaining time when one is available (see SolveGfoldPlan).
-    // Wide enough to absorb a plan that has drifted, narrow enough to cut most of the coarse scan.
+    // SearchTfMax caps the flight-time search from a new target or from the remaining time of the previous plan.
     private const double SearchTfMax = 120.0;
-    private const double SearchBracketLo = 0.5;
-    private const double SearchBracketHi = 2.0;
 
-    // How long the flight-time searches rest after a plan was refused for propellant. A craft that is short now is still short a quarter second later, and a search costs tens of solves on the sim thread.
+    // Flight-time searches rest after a propellant refusal, while the fixed-arrival solve keeps its normal cadence.
     private const double GfoldFuelSearchRetryS = 2.0;
 
     // Shown while the plan flies to touchdown after a refused handoff, and kept through the re-solves that clear the status on success. The reason is in the guidance log.
@@ -159,26 +158,44 @@ public static partial class GuidanceWindow
 
         // Inside the last GfoldMinTf seconds before the planned arrival, the distance still to fly is too small for any valid flight time: tf >= TfMin (the search floor) overshoots it, so a re-solve goes degenerate and reports the target unreachable right before the handoff.
         // Freeze the committed plan there - it already terminates at the target - and just fly it down.
-        if (!GfoldInTerminalWindow(now) &&
-            (_s.GfoldPlan == null || now - _s.GfoldLastSolveTime >= _s.GfoldIntervalS))
-            SolveGfoldPlan(vehicle, parent, frame, siteCci, r, now);
+        if (GfoldInTerminalWindow(now))
+            _s.CancelGfoldSolve();
+        else
+        {
+            PublishGfoldPlan(vehicle, now, gfLocal, localVelocity);
+            if (_s.GfoldJob is { } job && now - job.SimTime > GfoldRequestMaxAgeS)
+            {
+                _s.CancelGfoldSolve();
+                FailGfold(vehicle, "G-FOLD SOLVE EXPIRED WHILE THE CRAFT WAS MOVING.");
+            }
+            if (_s.LandingPhase == LandingPhase.GfoldDescent && _s.GfoldJob == null
+                && now - _s.GfoldLastSolveTime >= _s.GfoldIntervalS)
+            {
+                _s.GfoldJobSiteCcf = siteCci.Transform(parent.GetCci2Ccf());
+                SubmitGfoldPlan(vehicle, parent, frame, siteCci, r, now);
+            }
+        }
 
         // Fly the committed plan by time index every frame (feed-forward + PD).
         // Track in the LIVE site frame (rebuilt this step), not the solve-time frame: the site is body-fixed, so its CCI position rotates with the body, and the live frame carries the plan around with it so we keep aiming at the real pad.
         if (_s.GfoldPlan != null)
-            TrackGfoldPlan(vehicle, parent, frame, r, vSrf, vehicle.TotalMass, now);
+        {
+            var planFrame = _s.GfoldPlanSiteCcf.LengthSquared() > 0.0
+                ? KsaGfold.BuildFrame(_s.GfoldPlanSiteCcf.Transform(parent.GetCcf2Cci()))
+                : frame;
+            TrackGfoldPlan(vehicle, parent, planFrame, r, vSrf, vehicle.TotalMass, now);
+        }
 
         string ApproachState() => $"ALT {_s.GfoldAltM:F1} m, HORIZONTAL SPEED {horizontalSpeed:F2} m/s"
             + $", SINK {-localVelocity.X:F2} m/s, DISTANCE {horizontalDistance:F1} m, THRUST-AXIS TILT {tilt:F1} deg";
     }
 
-    // Solve a fresh descent plan from the current state and commit it.
-    // A min-fuel search (so it coasts/brakes optimally - "throttles down") to the site; if the site is unreachable in the remaining time the search floats the touchdown to the closest point, so this degrades gracefully instead of going infeasible.
-    private static void SolveGfoldPlan(Vehicle vehicle, IParentBody parent,
+    // Capture the current game state on the simulation thread. The solve uses only these numeric inputs.
+    private static void SubmitGfoldPlan(Vehicle vehicle, IParentBody parent,
                                        KsaGfold.Frame frame, double3 siteCci, double3 comPos, double now)
     {
 #if DEBUG
-        using var _perf = new AdvancedFlightComputer.Core.PerfTracker.Scope("Guidance.SolveGfoldPlan");
+        using var _perf = new AdvancedFlightComputer.Core.PerfTracker.Scope("Guidance.SubmitGfoldPlan");
 #endif
         GfoldParams p = KsaGfold.BuildParams(
             vehicle, parent, frame, siteCci, comPos, GfoldActiveGlideSlopeDeg, GfoldActivePointingDeg, _s.GfoldVMaxMs,
@@ -196,107 +213,82 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // Mark the attempt now (not only on success) so a failing solve retries on the normal cadence rather than every frame while we keep flying the last plan.
         _s.GfoldLastSolveTime = now;
+        double arrival = !_s.GfoldForceSearch && _s.GfoldPlan != null ? _s.GfoldArrivalTime : double.NaN;
+        var options = GfoldOptions.Descent with { SlewReg = _s.GfoldSlewReg, SolveTimeLimitS = _s.GfoldSolveTimeLimitS };
+        _s.GfoldJob = new GfoldSolveJob(new GfoldSolveJob.Request(p, _s.GfoldNodes, now, arrival,
+            GfoldMinTf, SearchTfMax, _s.GfoldPlan != null && now < _s.GfoldSearchRetryTime, options));
+    }
 
-        // GfoldPlanner.SolveTimeLimitS is process-wide, which is safe ONLY because the solve below is synchronous and on this thread: each vehicle sets it immediately before its own call and the call has returned before any other vehicle is serviced.
-        // Move the solve to a worker and this becomes a race - see GfoldSolveMs for why that move is worth making anyway.
-        GfoldPlanner.SolveTimeLimitS = _s.GfoldSolveTimeLimitS > 0 ? _s.GfoldSolveTimeLimitS : null;
-        var solveClock = System.Diagnostics.Stopwatch.StartNew();
+    private static void PublishGfoldPlan(Vehicle vehicle, double now, double3 position, double3 velocity)
+    {
+        GfoldSolveJob job = _s.GfoldJob;
+        if (job == null || !job.TryTakeResult(out GfoldSolveJob.Result result))
+            return;
+        _s.CancelGfoldSolve();
+        _s.GfoldSolveMs = result.SolveMs;
 
-        try
+        GfoldParams p = job.Parameters;
+        switch (result.Status)
         {
-            // On the cadence, prefer to keep the arrival time set at handoff (solve the remaining time); only re-run the full search when that fails or we have no plan yet.
-            GfoldTrajectory traj = null;
-            if (!_s.GfoldForceSearch && _s.GfoldPlan != null && _s.GfoldArrivalTime - now > GfoldMinTf)
-            {
-                double remaining = _s.GfoldArrivalTime - now;
-                GfoldTrajectory t = GfoldPlanner.SolveMinFuel(
-                    p, remaining, _s.GfoldNodes, [GfoldSolverTargetAltM, 0.0, 0.0],
-                    options: GfoldOptions.Descent with { SlewReg = _s.GfoldSlewReg });
-                if (t.Status is ConicStatus.Optimal or ConicStatus.OptimalInaccurate && FitsFuel(t, p))
-                    traj = t;
-            }
-            // While the searches rest after a propellant refusal, the committed plan keeps flying and the single solve above still runs on every cadence, so a plan that fits again is taken at once. A retarget ends the rest, so its first search runs straight away, and a refused retarget rests like any other search. A craft with no plan yet always searches.
-            if (traj == null && _s.GfoldPlan != null && now < _s.GfoldSearchRetryTime)
-            {
+            case GfoldSolveJob.Outcome.Resting:
                 FailGfold(vehicle, FormattableString.Invariant($"G-FOLD SHORT OF PROPELLANT. SEARCH AGAIN IN {_s.GfoldSearchRetryTime - now:F1} s"));
                 return;
-            }
-            if (traj == null)
-            {
-                // Warm-start the SEARCH from the last solution.
-                // The solver itself can't be warm started - ECOS is an interior-point method and the previous optimum sits on the boundary, the worst possible starting iterate - but the flight-time search around it can be.
-                //
-                // The committed plan's remaining time IS the previous solution carried forward: _s.GfoldArrivalTime was set to now + tf* when that search ran, so (_s.GfoldArrivalTime - now) is tf* minus the time since.
-                // That's the best available estimate of the new optimum, so bracket it instead of rescanning the full range.
-                // Searching [4, 120] from cold spends 8 coarse points plus ~10 golden-section steps, at up to two SOCP solves each - 35-40 solves.
-                // A tight bracket collapses the coarse scan onto the plausible range.
-                //
-                // Both bounds move, not just the upper one: with a 20 s remaining flight the old floor of 4 s was as wasteful as the old 120 s ceiling, just at the other end. _s.GfoldForceSearch means the previous solution is no longer a valid guess - a retarget replaces _s.GfoldArrivalTime with a placeholder far in the future purely to escape the terminal freeze, so bracketing around it would spend a narrow search on a fabricated centre and then fall back anyway.
-                // Go straight to the full range.
-                double tfLo = GfoldMinTf, tfHi = SearchTfMax;
-                bool bracketed = !_s.GfoldForceSearch
-                    && _s.GfoldPlan != null && _s.GfoldArrivalTime - now > GfoldMinTf;
-                if (bracketed)
-                {
-                    double expected = _s.GfoldArrivalTime - now;
-                    tfLo = Math.Max(expected * SearchBracketLo, GfoldMinTf);
-                    tfHi = Math.Min(expected * SearchBracketHi, SearchTfMax);
-                    bracketed = tfHi > tfLo;
-                }
-
-                GfoldPlanner.SearchResult best = bracketed
-                    ? GfoldPlanner.SearchMinFuel(
-                        p, _s.GfoldNodes, tfLo: tfLo, tfHi: tfHi,
-                        options: GfoldOptions.Descent with { SlewReg = _s.GfoldSlewReg })
-                    : null;
-
-                // A bracket can only lose solutions that lie outside it, so the full range is still tried before declaring the site unreachable.
-                // Costs the old price only when the cheap window genuinely found nothing - which is also exactly when the vehicle's situation has changed enough that the previous solution was a bad guess.
-                // A plan the tanks cannot supply is no better than none, so the full range is also searched for a cheaper one.
-                // The bracket's plan is kept when that finds nothing, so the refusal below can say how much propellant it was short.
-                if (best == null || !FitsFuel(best.Trajectory, p))
-                    best = GfoldPlanner.SearchMinFuel(
-                        p, _s.GfoldNodes, tfLo: GfoldMinTf, tfHi: SearchTfMax,
-                        options: GfoldOptions.Descent with { SlewReg = _s.GfoldSlewReg }) ?? best;
-
-                if (best == null)
-                {
-                    FailGfold(vehicle, FormattableString.Invariant($"G-FOLD UNREACHABLE: ALT {_s.GfoldAltM:F0} m, {_s.GfoldSpeedMs:F0} m/s, ") +
-                              FormattableString.Invariant($"TWR {p.ThrustMax / (vehicle.TotalMass * p.GravityMag):F1}, FUEL {p.FuelMass:F0} kg")
-                              + (double.IsFinite(p.AccelMax) ? FormattableString.Invariant($", THRUST ACCELERATION LIMIT {p.AccelMax / p.GravityMag:F1} local g") : ""));
-                    return;
-                }
-                if (!FitsFuel(best.Trajectory, p))
-                {
-                    _s.GfoldSearchRetryTime = now + GfoldFuelSearchRetryS;
-                    FailGfold(vehicle, FormattableString.Invariant($"G-FOLD NEEDS {best.FuelUsed:F0} kg PROPELLANT, {p.FuelMass:F0} kg ABOARD"));
-                    return;
-                }
-                traj = best.Trajectory;
-                _s.GfoldArrivalTime = now + best.TimeOfFlight;
-            }
-
-            _s.GfoldSolveMs = solveClock.Elapsed.TotalMilliseconds;
-            _s.GfoldStatus = traj.Status;
-            _s.GfoldPlan = traj;
-            _s.GfoldPlanStart = now;
-            _s.GfoldThrustMax = p.ThrustMax;
-            _s.GfoldFailStreak = 0;
-            _s.GfoldForceSearch = false;
-            _s.GfoldSearchRetryTime = double.NegativeInfinity;
-            _s.LandingStatus = _s.GfoldHoverRefused ? GfoldHoverRefusedStatus
-                : GfoldBrakingToGate ? $"BRAKING TO VERTICAL APPROACH AT {_s.LandingVerticalGateM:F0} m"
-                : GfoldVerticalFinal ? "VERTICAL FINAL DESCENT" : "";
-            if (_s.GfoldHoverRefused)
-                _s.WarnLanding(GfoldHoverRefusedStatus);
+            case GfoldSolveJob.Outcome.Unreachable:
+                FailGfold(vehicle, FormattableString.Invariant($"G-FOLD UNREACHABLE: ALT {_s.GfoldAltM:F0} m, {_s.GfoldSpeedMs:F0} m/s, ")
+                    + FormattableString.Invariant($"TWR {p.ThrustMax / (vehicle.TotalMass * p.GravityMag):F1}, FUEL {p.FuelMass:F0} kg")
+                    + (double.IsFinite(p.AccelMax) ? FormattableString.Invariant($", THRUST ACCELERATION LIMIT {p.AccelMax / p.GravityMag:F1} local g") : ""));
+                return;
+            case GfoldSolveJob.Outcome.SearchTimedOut:
+                FailGfold(vehicle, "G-FOLD FLIGHT-TIME SEARCH REACHED ITS TIME LIMIT.");
+                return;
+            case GfoldSolveJob.Outcome.FuelShort:
+                _s.GfoldSearchRetryTime = now + GfoldFuelSearchRetryS;
+                FailGfold(vehicle, FormattableString.Invariant($"G-FOLD NEEDS {result.Trajectory.FuelUsed:F0} kg PROPELLANT, {p.FuelMass:F0} kg ABOARD"));
+                return;
+            case GfoldSolveJob.Outcome.Fault:
+                FailGfold(vehicle, "G-FOLD: " + result.Error);
+                return;
         }
-        catch (Exception e)
+
+        // The trajectory starts at the measured state in the request, so advance through it by the time spent solving.
+        GfoldTrajectory candidate = result.Trajectory;
+        double elapsed = now - job.SimTime;
+        double horizon = result.Arrival - job.SimTime;
+        double maxAge = Math.Clamp(horizon * 0.2, 0.5, GfoldRequestMaxAgeS);
+        if (elapsed < 0 || elapsed > maxAge || !MatchesGfoldStart(candidate, elapsed, position, velocity))
         {
-            _s.GfoldSolveMs = solveClock.Elapsed.TotalMilliseconds;
-            FailGfold(vehicle, "G-FOLD: " + e.Message);
+            FailGfold(vehicle, "G-FOLD PLAN NO LONGER MATCHES THE DESCENT STATE.");
+            return;
         }
+
+        _s.GfoldStatus = candidate.Status;
+        _s.GfoldPlan = candidate;
+        _s.GfoldPlanSiteCcf = _s.GfoldJobSiteCcf;
+        _s.GfoldPlanStart = job.SimTime;
+        _s.GfoldArrivalTime = result.Arrival;
+        _s.GfoldThrustMax = p.ThrustMax;
+        _s.GfoldFailStreak = 0;
+        _s.GfoldForceSearch = false;
+        _s.GfoldSearchRetryTime = double.NegativeInfinity;
+        _s.LandingStatus = _s.GfoldHoverRefused ? GfoldHoverRefusedStatus
+            : GfoldBrakingToGate ? $"BRAKING TO VERTICAL APPROACH AT {_s.LandingVerticalGateM:F0} m"
+            : GfoldVerticalFinal ? "VERTICAL FINAL DESCENT" : "";
+        if (_s.GfoldHoverRefused)
+            _s.WarnLanding(GfoldHoverRefusedStatus);
+    }
+
+    private static bool MatchesGfoldStart(GfoldTrajectory plan, double elapsed, double3 position, double3 velocity)
+    {
+        double sample = Math.Clamp(elapsed / plan.Dt, 0.0, plan.Nodes - 1);
+        int node = Math.Min((int)sample, plan.Nodes - 2);
+        double fraction = sample - node;
+        double3 expectedPosition = Lerp(Node(plan.Position, node), Node(plan.Position, node + 1), fraction);
+        double3 expectedVelocity = Lerp(Node(plan.Velocity, node), Node(plan.Velocity, node + 1), fraction);
+        double positionTolerance = Math.Clamp(expectedVelocity.Length() * 0.1, 3.0, 15.0);
+        double velocityTolerance = Math.Clamp(expectedVelocity.Length() * 0.08, 2.0, 8.0);
+        return (expectedPosition - position).Length() <= positionTolerance
+            && (expectedVelocity - velocity).Length() <= velocityTolerance;
     }
 
     // Fly the committed plan: feed-forward the planned thrust at the current time plus PD feedback on the planned state, expressed in the given (live) site frame so the plan stays locked to the body-fixed, rotating landing pad.
@@ -422,9 +414,6 @@ public static partial class GuidanceWindow
         double3 hUnit = h > 1e-9 ? horiz * (1.0 / h) : new double3(0, 1, 0);
         return new double3(cosMax, sinMax * hUnit.Y, sinMax * hUnit.Z);
     }
-
-    // The formulation carries no fuel budget, so a usable conic status can still describe a burn the tanks cannot supply. FuelMass counts every tank on the craft, so this can refuse a plan but cannot prove that the landing engines reach that propellant.
-    private static bool FitsFuel(GfoldTrajectory plan, GfoldParams p) => plan.FuelUsed <= p.FuelMass;
 
     // A failed solve holds the last command briefly; a short run of failures gives the vehicle back rather than flying a stale (often sideways) command in.
     private static void FailGfold(Vehicle vehicle, string message)

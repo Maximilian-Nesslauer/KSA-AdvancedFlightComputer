@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using AdvancedFlightComputer.Guidance.Conic;
 
 namespace AdvancedFlightComputer.Guidance.Gfold;
@@ -44,6 +45,9 @@ public sealed record GfoldOptions
     // Larger values trade some fuel for smoother commands, and 0 disables the regularizer.
     public double SlewReg { get; init; }
 
+    /// <summary>Wall-clock ceiling for one native solve, in seconds. Zero lets it finish.</summary>
+    public double SolveTimeLimitS { get; init; }
+
     public static readonly GfoldOptions Reference = new();
     public static readonly GfoldOptions RealTime = new()
     {
@@ -59,12 +63,6 @@ public sealed record GfoldOptions
 
 public static class GfoldPlanner
 {
-    /// <summary>
-    /// Wall-clock ceiling per solve, in seconds. Null or 0 means no limit. A search
-    /// performs many solves, so this limits each solve rather than the full search.
-    /// </summary>
-    public static double? SolveTimeLimitS;
-
     public static GfoldTrajectory SolveMinError(GfoldParams p, double tf, int nodes,
                                                 bool verbose = false, GfoldOptions? options = null)
         => Solve(p, tf, nodes, fixedLanding: null, verbose, options ?? GfoldOptions.Reference);
@@ -75,7 +73,7 @@ public static class GfoldPlanner
         => Solve(p, tf, nodes, fixedLanding: landingPoint, verbose, options ?? GfoldOptions.Reference);
 
     public sealed record SearchResult(GfoldTrajectory Trajectory, double TimeOfFlight,
-                                      double FuelUsed, int Solves);
+                                      double FuelUsed, int Solves, bool Complete = true);
 
     // Search over time of flight for the minimum-fuel landing.
     // Fuel(tf) is +inf when the target is unreachable and is usually U-shaped otherwise, so a coarse bracket and golden-section refinement find the minimum.
@@ -87,29 +85,44 @@ public static class GfoldPlanner
                                               double landingToleranceM = 10.0,
                                               double tfToleranceS = 0.25,
                                               double? tfLo = null, double? tfHi = null,
-                                              GfoldOptions? options = null)
+                                              GfoldOptions? options = null, double? tfGuess = null,
+                                              double searchTimeLimitS = 0.0, CancellationToken stop = default)
     {
         GfoldOptions opt = options ?? GfoldOptions.Reference;
+        var clock = Stopwatch.StartNew();
         int solves = 0;
         var cache = new Dictionary<double, (double Fuel, GfoldTrajectory? Traj)>();
+
+        double RemainingTime() => searchTimeLimitS > 0.0 ? searchTimeLimitS - clock.Elapsed.TotalSeconds : double.PositiveInfinity;
+        bool Stopped() => stop.IsCancellationRequested || RemainingTime() <= 0.0;
+        GfoldOptions CurrentOptions()
+        {
+            double remaining = RemainingTime();
+            if (!double.IsFinite(remaining))
+                return opt;
+            double limit = opt.SolveTimeLimitS > 0.0 ? Math.Min(opt.SolveTimeLimitS, remaining) : remaining;
+            return opt with { SolveTimeLimitS = Math.Max(limit, 1e-6) };
+        }
 
         (double Fuel, GfoldTrajectory? Traj) Eval(double tf)
         {
             if (cache.TryGetValue(tf, out var hit))
                 return hit;
+            if (Stopped())
+                return (double.PositiveInfinity, null);
             (double, GfoldTrajectory?) result;
             try
             {
                 solves++;
-                GfoldTrajectory p3 = SolveMinError(p, tf, nodes, options: opt);
-                if (!IsUsable(p3.Status) || p3.LandingErrorNorm > landingToleranceM)
+                GfoldTrajectory p3 = SolveMinError(p, tf, nodes, options: CurrentOptions());
+                if (!IsUsable(p3.Status) || p3.LandingErrorNorm > landingToleranceM || Stopped())
                 {
                     result = (double.PositiveInfinity, null);
                 }
                 else
                 {
                     solves++;
-                    GfoldTrajectory p4 = SolveMinFuel(p, tf, nodes, p3.LandingPoint, options: opt);
+                    GfoldTrajectory p4 = SolveMinFuel(p, tf, nodes, p3.LandingPoint, options: CurrentOptions());
                     result = IsUsable(p4.Status)
                         ? (p4.FuelUsed, p4)
                         : (double.PositiveInfinity, null);
@@ -130,26 +143,39 @@ public static class GfoldPlanner
             return null;
         const int coarse = 8;
         double bestTf = double.NaN, bestFuel = double.PositiveInfinity;
-        var grid = new double[coarse];
-        for (int i = 0; i < coarse; i++)
+        var grid = Enumerable.Range(0, coarse).Select(i => lo + (hi - lo) * (i + 0.5) / coarse).ToList();
+        bool hasGuess = tfGuess.HasValue && double.IsFinite(tfGuess.Value);
+        double guess = hasGuess ? Math.Clamp(tfGuess!.Value, lo, hi) : 0.0;
+        if (hasGuess && !grid.Contains(guess))
         {
-            grid[i] = lo + (hi - lo) * (i + 0.5) / coarse;
-            double fuel = Eval(grid[i]).Fuel;
-            if (fuel < bestFuel) { bestFuel = fuel; bestTf = grid[i]; }
+            grid.Add(guess);
+            grid.Sort();
+        }
+        IEnumerable<double> candidates = hasGuess ? grid.OrderBy(tf => Math.Abs(tf - guess)) : grid;
+        foreach (double tf in candidates)
+        {
+            if (Stopped())
+                break;
+            double fuel = Eval(tf).Fuel;
+            if (fuel < bestFuel)
+            {
+                bestFuel = fuel;
+                bestTf = tf;
+            }
         }
         if (double.IsInfinity(bestFuel))
             return null; // no tf reaches the target at all
 
         // Golden-section inside the bracket around the best coarse point.
-        int k = Array.IndexOf(grid, bestTf);
+        int k = grid.IndexOf(bestTf);
         double a = k > 0 ? grid[k - 1] : lo;
-        double b = k < coarse - 1 ? grid[k + 1] : hi;
+        double b = k < grid.Count - 1 ? grid[k + 1] : hi;
         const double phi = 0.6180339887498949;
         double x1 = b - phi * (b - a);
         double x2 = a + phi * (b - a);
         double f1 = Eval(x1).Fuel;
         double f2 = Eval(x2).Fuel;
-        while (b - a > tfToleranceS)
+        while (b - a > tfToleranceS && !Stopped())
         {
             if (f1 <= f2)
             {
@@ -166,7 +192,7 @@ public static class GfoldPlanner
         }
 
         var all = cache.Where(e => e.Value.Traj != null).OrderBy(e => e.Value.Fuel).First();
-        return new SearchResult(all.Value.Traj!, all.Key, all.Value.Fuel, solves);
+        return new SearchResult(all.Value.Traj!, all.Key, all.Value.Fuel, solves, !Stopped());
     }
 
     private static bool IsUsable(ConicStatus s) =>
@@ -489,7 +515,7 @@ public static class GfoldPlanner
         };
 
         ConicResult result =
-            ClarabelSolver.Solve(problem, verbose, timeLimitS: SolveTimeLimitS ?? 0.0);
+            ClarabelSolver.Solve(problem, verbose, timeLimitS: opt.SolveTimeLimitS);
         return Extract(result, N, dtPhys, P.Rf, lenScale, velScale, accScale);
     }
 

@@ -21,12 +21,12 @@ public sealed class GuidanceGfoldBackoffTest : AfcTest
     private static double _searchFuel;
     private static int _solves;
     private static int _searches;
+    private static int _solveThread;
 
     protected override void Execute(TestContext t)
     {
         FieldInfo ambient = typeof(GuidanceWindow).GetField("_s", PrivateStatic)!;
         object? previousAmbient = ambient.GetValue(null);
-        double? previousLimit = GfoldPlanner.SolveTimeLimitS;
         double rest = (double)typeof(GuidanceWindow).GetField("GfoldFuelSearchRetryS", PrivateStatic)!.GetRawConstantValue()!;
         var harmony = new Harmony("com.maxi.afc.harnesstests.guidance.gfoldbackoff");
         try
@@ -40,11 +40,12 @@ public sealed class GuidanceGfoldBackoffTest : AfcTest
             var state = new VehicleAutopilotState { GfoldPlan = committed, GfoldArrivalTime = 130.0 };
             _solves = _searches = 0;
 
-            // A committed plan whose re-plan comes back short, from the single solve and from both searches.
+            // A committed plan whose re-plan comes back short from both the fixed arrival and the search.
             _solveFuel = _searchFuel = Short;
             double now = 100.0;
             Replan(ambient, state, now);
-            t.Check("a re-plan short of propellant runs both searches once", _searches == 2, $"searches={_searches}");
+            t.Check("a re-plan short of propellant runs one search", _searches == 1, $"searches={_searches}");
+            t.Check("the solve ran away from the calling thread", _solveThread != Environment.CurrentManagedThreadId);
             t.Check("the refusal starts the rest", state.GfoldSearchRetryTime == now + rest, $"retry={state.GfoldSearchRetryTime}");
             t.Check("the committed plan keeps flying", ReferenceEquals(state.GfoldPlan, committed));
             t.Check("the refusal is visible", state.LandingStatus.Contains("PROPELLANT"), state.LandingStatus);
@@ -52,17 +53,17 @@ public sealed class GuidanceGfoldBackoffTest : AfcTest
             int solvesBefore = _solves;
             for (int i = 1; i < 8; i++)
                 Replan(ambient, state, now + rest * i / 8.0);
-            t.Check("the searches rest after the refusal", _searches == 2, $"searches={_searches}");
+            t.Check("the searches rest after the refusal", _searches == 1, $"searches={_searches}");
             t.Check("the single solve still runs on every cadence", _solves == solvesBefore + 7, $"solves={_solves - solvesBefore}");
 
             now += rest + 0.25;
             Replan(ambient, state, now);
-            t.Check("the searches run again once the rest is over", _searches == 4, $"searches={_searches}");
+            t.Check("the searches run again once the rest is over", _searches == 2, $"searches={_searches}");
 
             _solveFuel = Fits;
             Replan(ambient, state, now + 0.25);
             t.Check("a single solve that fits again is taken during the rest",
-                !ReferenceEquals(state.GfoldPlan, committed) && _searches == 4, $"searches={_searches}");
+                !ReferenceEquals(state.GfoldPlan, committed) && _searches == 2, $"searches={_searches}");
             t.Check("taking a plan ends the rest",
                 double.IsNegativeInfinity(state.GfoldSearchRetryTime) && state.GfoldFailStreak == 0);
 
@@ -94,7 +95,6 @@ public sealed class GuidanceGfoldBackoffTest : AfcTest
         finally
         {
             harmony.UnpatchAll(harmony.Id);
-            GfoldPlanner.SolveTimeLimitS = previousLimit;
             ambient.SetValue(null, previousAmbient);
         }
     }
@@ -102,7 +102,13 @@ public sealed class GuidanceGfoldBackoffTest : AfcTest
     private static void Replan(FieldInfo ambient, VehicleAutopilotState state, double now)
     {
         ambient.SetValue(null, state);
-        Method("SolveGfoldPlan").Invoke(null, [null, null, null, null, null, now]);
+        Method("SubmitGfoldPlan").Invoke(null, [null, null, null, null, null, now]);
+        if (state.GfoldJob == null || !SpinWait.SpinUntil(() => state.GfoldJob.TryTakeResult(out _), TimeSpan.FromSeconds(2)))
+        {
+            state.CancelGfoldSolve();
+            throw new TimeoutException("G-FOLD solve worker did not return.");
+        }
+        Method("PublishGfoldPlan").Invoke(null, [null, now, new Brutal.Numerics.double3(), new Brutal.Numerics.double3()]);
     }
 
     private static MethodInfo Method(string name) =>
@@ -135,6 +141,7 @@ public sealed class GuidanceGfoldBackoffTest : AfcTest
 
     private static bool StubSolve(ref GfoldTrajectory __result)
     {
+        _solveThread = Environment.CurrentManagedThreadId;
         _solves++;
         __result = Plan(_solveFuel);
         return false;

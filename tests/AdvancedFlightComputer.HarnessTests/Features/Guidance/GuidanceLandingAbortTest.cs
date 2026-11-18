@@ -183,7 +183,7 @@ public sealed class GuidanceLandingAbortTest : AfcTest
         PatchEngineAnswers(harmony);
         harmony.Patch(Method("PrepareLandingEngines"),
             prefix: new HarmonyMethod(typeof(GuidanceLandingAbortTest), nameof(ForceEnginesReady)));
-        harmony.Patch(Method("SolveGfoldPlan"),
+        harmony.Patch(Method("SubmitGfoldPlan"),
             prefix: new HarmonyMethod(typeof(GuidanceLandingAbortTest), nameof(SkipSolve)));
         harmony.Patch(Method("StartTerminalHover"),
             postfix: new HarmonyMethod(typeof(GuidanceLandingAbortTest), nameof(CountHoverStart)));

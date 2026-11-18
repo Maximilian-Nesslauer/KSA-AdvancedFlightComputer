@@ -1734,6 +1734,7 @@ public static partial class GuidanceWindow
         Attempt(() => KsaAttitudeRate.Clear(vehicle));
         Attempt(() => KsaGimbalControl.Disengage(vehicle));
         Attempt(() => GiveRcsBack(vehicle));
+        Attempt(_s.CancelGfoldSolve);
 
         // A cut guidance decided on wins over a no-cut request, whenever it was decided. The request can outlive a failed cleanup, so an abort between two retries would otherwise lose its shutdown.
         bool cutEngine = _s.LandingCutPending || _s.ShutdownRequested || !_s.ReleaseWithoutEngineCut;
