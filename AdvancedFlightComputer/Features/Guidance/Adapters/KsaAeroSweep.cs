@@ -30,6 +30,9 @@ public static class KsaAeroSweep
     /// <summary>Alpha the pointing sensitivity is read at, degrees from tail-first.</summary>
     private const double PointingAlphaDeg = 5.0;
 
+    /// <summary>Alpha the centre of pressure is located at, degrees from tail-first: on the alpha grid, small enough to be the balance a glide flies with and large enough for a force across the axis to measure.</summary>
+    public const double BalanceAlphaDeg = 5.0;
+
     /// <summary>Uniform intervals the atmosphere column is sampled in, before the points of the temperature profile are added. 2048 aims for a chord error of ln(rho) near 1e-5; the mirror check in the boostback gauge measures the real error per body.</summary>
     private const int AtmosphereIntervals = 2048;
 
@@ -73,6 +76,30 @@ public static class KsaAeroSweep
 
         /// <summary>Signed C_L at a Mach number and retrograde-first alpha (radians). Zero when there is no lift table.</summary>
         public double LiftAt(double mach, double alphaRad) => Lift?.Cd(mach, alphaRad) ?? 0.0;
+
+        /// <summary>
+        /// The fitted pitching-moment coefficient C_m(Mach, alpha) about the centre of mass - read it through <see cref="MomentAt"/>. Referenced to <see cref="ReferenceArea"/> times <see cref="ReferenceLength"/>, same grid and retrograde-first alpha as <see cref="Table"/>, roll-averaged.
+        ///  SIGNED BY WHAT IT DOES TO ALPHA: positive turns the craft further off the airflow (statically unstable flying engine first), negative turns it back (stable). The moment needed to hold an alpha is this, whichever its sign.
+        ///  Null where nothing was measured: on an airless body, and from a sweep taken before the moment was recorded.
+        /// </summary>
+        public AeroTable Moment;
+        public double[] MomentTable;
+
+        /// <summary>Signed C_m at a Mach number and retrograde-first alpha (radians), positive away from the airflow. Zero when there is no moment table.</summary>
+        public double MomentAt(double mach, double alphaRad) => Moment?.Cd(mach, alphaRad) ?? 0.0;
+
+        /// <summary>Length the moment coefficient is referenced to, m: the bounding box's long extent.</summary>
+        public double ReferenceLength;
+
+        /// <summary>
+        /// Where the aerodynamic force acts along the long axis, against the centre of mass, per Mach row at <see cref="BalanceAlphaDeg"/>, m. POSITIVE TOWARDS THE NOSE (+x), the trailing end when the craft flies engine first, which is the stable side: the air then turns the engine end back into the wind. NaN where there was no force across the axis to locate.
+        /// </summary>
+        public double[] CentreOfPressureM;
+
+        /// <summary>The smallest of <see cref="CentreOfPressureM"/>, m - the least stable Mach row - and the Mach it is at. NaN when nothing was measured.</summary>
+        public double BalanceWorstM = double.NaN, BalanceWorstMach = double.NaN;
+
+        public bool HasMoment => Moment != null && CentreOfPressureM != null && double.IsFinite(BalanceWorstM);
 
         /// <summary>The game's atmosphere, sampled. Null if the body has none, and then <see cref="Table"/> and <see cref="Lift"/> are all zero, because the game applies no aerodynamic force there.</summary>
         public AtmosphereModel Atmosphere;
@@ -260,6 +287,9 @@ public static class KsaAeroSweep
         var dragSums = new double[nm * na];
         var liftSums = new double[nm * na];
         var signedLiftSums = new double[nm * na];
+        // THE MOMENT, from the same calls: ComputeDerivatives returns the torque about the centre of mass beside the force. Resolved about the axis that turns the engine end further off the airflow, so positive is destabilising, and beside it the moment the force across the axis would make at one metre, which locates the centre of pressure.
+        var momentSums = new double[nm * na];
+        var armSums = new double[nm * na];
         var lowRowLo = new double[na];
         var lowRowHi = new double[na];
         var clock = Stopwatch.StartNew();
@@ -276,16 +306,24 @@ public static class KsaAeroSweep
                 double3 tilt = sa > 1e-9
                     ? new double3(-sa, -ca * Math.Cos(phi), -ca * Math.Sin(phi))
                     : double3.Zero;
-                double3 baseline = probe.ForceBody(BaselineSpeed * u);
+                // The axis a positive rotation about which moves the engine end (-x) towards its tilt, further off the airflow: (-x) x tilt.
+                double3 offAxis = sa > 1e-9 ? double3.Cross(new double3(-1.0, 0.0, 0.0), tilt).NormalizeOrZero() : double3.Zero;
+                probe.Wrench(BaselineSpeed * u, out double3 baseline, out double3 baselineTorque);
                 for (int i = 0; i < nm; i++)
                 {
-                    double3 force = probe.ForceBody(speeds[i] * u) - baseline;
+                    probe.Wrench(speeds[i] * u, out double3 rawForce, out double3 rawTorque);
+                    double3 force = rawForce - baseline;
+                    double3 torque = rawTorque - baselineTorque;
                     double drag = -double3.Dot(force, u);
                     double3 across = force + drag * u;
                     int cell = i * na + j;
                     dragSums[cell] += drag;
                     liftSums[cell] += across.Length();
                     signedLiftSums[cell] += double3.Dot(across, tilt);
+                    momentSums[cell] += double3.Dot(torque, offAxis);
+                    // The same force across the long axis, applied one metre along +x: x x F_normal, about the same axis.
+                    var normal = new double3(0.0, force.Y, force.Z);
+                    armSums[cell] += double3.Dot(double3.Cross(new double3(1.0, 0.0, 0.0), normal), offAxis);
                     if (i == 0)
                     {
                         lowRowLo[j] = Math.Min(lowRowLo[j], drag);
@@ -365,10 +403,48 @@ public static class KsaAeroSweep
         res.LiftToDragMax = liftToDrag;
         res.LiftTable = clTable;
 
+        // The moment coefficient, and the centre of pressure at the balance alpha per Mach row. A torque the game did not report (an aero mod that applies forces without one) leaves the coefficients at zero and every centre of pressure at the centre of mass, which reads as neutral rather than as stable.
+        double refLength = dx;
+        var cmTable = new double[nm * na];
+        var centreOfPressure = new double[nm];
+        int balanceColumn = Array.IndexOf(alphaDeg, BalanceAlphaDeg);
+        double worstCp = double.NaN, worstMach = double.NaN;
+        for (int i = 0; i < nm; i++)
+        {
+            double qal = 0.5 * sea.Density * speeds[i] * speeds[i] * refArea * refLength;
+            for (int j = 0; j < na; j++)
+            {
+                int cell = i * na + j;
+                double cm = momentSums[cell] / RollSamples / qal;
+                cmTable[cell] = double.IsFinite(cm) ? cm : 0.0;
+            }
+            centreOfPressure[i] = double.NaN;
+            if (balanceColumn >= 0)
+            {
+                int cell = i * na + balanceColumn;
+                if (Math.Abs(armSums[cell]) > 1e-9 * Math.Max(dragSums[cell], 1e-9))
+                    centreOfPressure[i] = momentSums[cell] / armSums[cell];
+            }
+            if (double.IsFinite(centreOfPressure[i]) && !(centreOfPressure[i] >= worstCp))
+            {
+                worstCp = centreOfPressure[i];
+                worstMach = machGrid[i];
+            }
+        }
+        res.ReferenceLength = refLength;
+        res.MomentTable = cmTable;
+        res.CentreOfPressureM = centreOfPressure;
+        res.BalanceWorstM = worstCp;
+        res.BalanceWorstMach = worstMach;
+        if (double.IsFinite(worstCp))
+            DefaultCategory.Log.Info(FormattableString.Invariant(
+                $"[AFC] Aero balance of '{vehicle.Id}': {BalanceText(res)}; centre of pressure at {BalanceAlphaDeg:0} deg by Mach: {CentreOfPressureText(res)}."));
+
         try
         {
             res.Table = new AeroTable(machGrid, alphaDeg, cdTable);
             res.Lift = new AeroTable(machGrid, alphaDeg, clTable);
+            res.Moment = refLength > 0.0 ? new AeroTable(machGrid, alphaDeg, cmTable) : null;
         }
         catch (Exception ex)
         {
@@ -439,12 +515,20 @@ public static class KsaAeroSweep
         /// <summary>The body-axis force the game applies at this air velocity (body axes), buoyancy included.</summary>
         public double3 ForceBody(double3 airVelocityBody)
         {
+            Wrench(airVelocityBody, out double3 force, out _);
+            return force;
+        }
+
+        /// <summary>The body-axis force and the torque about the centre of mass the game applies at this air velocity (body axes), from one call.</summary>
+        public void Wrench(double3 airVelocityBody, out double3 force, out double3 torque)
+        {
             _kinematic.VelocityPhys = airVelocityBody.Transform(_kinematic.Body2Phys) - _frameAirPhys;
 
             // dt = 0 turns off the semi-implicit limiter stock applies to its drag, which is a property of the integrator rather than of the air. No thrusters, no chutes.
             Disturbances d = PhysicsStates.ComputeDerivatives(in _origin, in _kinematic, in _props, in _environment,
                 0.0, 0.0, _origin.PositionBub, _origin.VelocityBub, default, default, _parts);
-            return d.ForceBody;
+            force = d.ForceBody;
+            torque = d.TorqueBody;
         }
     }
 
@@ -526,6 +610,38 @@ public static class KsaAeroSweep
             return values[i - 1] + t * (values[i] - values[i - 1]);
         }
         return values[^1];
+    }
+
+    /// <summary>Below this distance between the centre of pressure and the centre of mass, m, the craft reads as neutral rather than stable or unstable.</summary>
+    public const double NeutralBalanceM = 0.05;
+
+    /// <summary>
+    /// The craft's static balance flying engine first, at its least stable Mach row: "STABLE ENGINE FIRST, CENTRE OF PRESSURE 2.1 m TOWARDS THE NOSE" and the like. Empty when the sweep measured no moment.
+    /// </summary>
+    public static string BalanceText(Result r)
+    {
+        if (r == null || !r.HasMoment)
+            return "";
+        double cp = r.BalanceWorstM;
+        string where = FormattableString.Invariant($"CENTRE OF PRESSURE {Math.Abs(cp):F1} m TOWARDS THE {(cp >= 0.0 ? "NOSE" : "ENGINE")} FROM THE CoM, AT MACH {r.BalanceWorstMach:0.##}");
+        return Math.Abs(cp) < NeutralBalanceM ? "NEUTRAL ENGINE FIRST, " + where
+            : cp > 0.0 ? "STABLE ENGINE FIRST, " + where
+            : "UNSTABLE ENGINE FIRST, " + where;
+    }
+
+    /// <summary>The centre of pressure per Mach row, "M0.05 +2.1, M1 +1.8, ...", for the game log.</summary>
+    private static string CentreOfPressureText(Result r)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < r.MachCount; i++)
+        {
+            if (!double.IsFinite(r.CentreOfPressureM[i]))
+                continue;
+            if (sb.Length > 0)
+                sb.Append(", ");
+            sb.Append(FormattableString.Invariant($"M{r.MachGrid[i]:0.##} {r.CentreOfPressureM[i]:+0.00;-0.00} m"));
+        }
+        return sb.ToString();
     }
 
     /// <summary>AeroMeshSource.Hash of the vehicle's current aero mesh, or 0 while it has none, as during a rebuild.</summary>

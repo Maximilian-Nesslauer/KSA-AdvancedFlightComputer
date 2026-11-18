@@ -394,5 +394,26 @@ public static partial class GuidanceWindow
             ConsoleUi.SentenceRoom(note);
         else if (shows)
             ConsoleUi.MutedNote(ConsoleUi.EscapeFormat(note), Fmt.Sentence(AeroLiftWarning()));
+        DrawBalanceNote(vehicle, way, roomOnly);
+    }
+
+    /// <summary>
+    /// The craft's static balance flying engine first, from the aero sweep's moment: where the centre of pressure sits against the centre of mass at the least stable Mach. Shown where the lift note may show, ticked when the craft is unstable, because then the air turns it away from the attitude the glide asks for.
+    /// </summary>
+    private static void DrawBalanceNote(Vehicle vehicle, LandWay way, bool roomOnly)
+    {
+        KsaAeroSweep.Result aero = _s.Aero;
+        string text = HasPhysicalAtmosphere(vehicle?.Orbit?.Parent) ? KsaAeroSweep.BalanceText(aero) : "";
+        bool shows = text.Length > 0 && (LandFlies || FormRules.FlightNoticeShows(Ui.Console.ConsoleFrame.ReadFacts(vehicle).Where, way));
+        ConsoleUi.NoteShape("AfcLandBalance", shows ? 1 : 0);
+        if (!shows)
+            return;
+        string note = "AERO BALANCE: " + text + ".";
+        if (roomOnly)
+            ConsoleUi.SentenceRoom(note);
+        else if (aero.BalanceWorstM <= -KsaAeroSweep.NeutralBalanceM)
+            ConsoleUi.TickedNote(ConsoleUi.EscapeFormat(note), PageText.UnstableBalanceCard);
+        else
+            ConsoleUi.MutedNote(ConsoleUi.EscapeFormat(note), PageText.BalanceCard);
     }
 }

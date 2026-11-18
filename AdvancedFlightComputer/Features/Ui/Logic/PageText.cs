@@ -882,6 +882,10 @@ internal static class PageText
 
     public const string NoLiftAirframe = "NO USABLE LIFT. GLIDE HOLDS RETROGRADE.";
 
+    public const string BalanceCard = "Where the air's force acts on this craft, measured from the game's aerodynamics. Towards the nose, the trailing end flying engine first, the air turns the engine end back into the wind, and the craft holds a glide attitude on less control.";
+
+    public const string UnstableBalanceCard = "The air's force acts ahead of the centre of mass, flying engine first, so it turns the craft further from any attitude off the wind, and the further it is turned the harder it pushes. The controls hold it against that, and a glide or entry flown at an angle of attack may not stay where it is pointed. Move mass towards the engine end, or area towards the nose, to balance it.";
+
     public const string LegsStowed = "LEGS STOWED. DEPLOY IN EACH LEG WINDOW.";
 
     /// <summary>The legs note while a landing that AFC flies deploys the legs by itself.</summary>

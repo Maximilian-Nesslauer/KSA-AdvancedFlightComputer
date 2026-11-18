@@ -405,6 +405,12 @@ public static partial class GuidanceWindow
                 ? "NONE"
                 : FormattableString.Invariant($"L/D UP TO {a.LiftToDragMax:F2}, NOT IN TABLE"), a.LiftToDragMax < 0.01 ? plain : warn);
 
+            // Static balance from the measured moment: the centre of pressure against the centre of mass at the balance alpha, least stable Mach row. Positive is towards the nose, stable flying engine first.
+            if (a.HasMoment)
+                GaugeRowText(D, "BALANCE", FormattableString.Invariant(
+                        $"CP {a.BalanceWorstM:+0.00;-0.00} m (NOSE +), M{a.BalanceWorstMach:0.##}, {(Math.Abs(a.BalanceWorstM) < KsaAeroSweep.NeutralBalanceM ? "NEUTRAL" : a.BalanceWorstM > 0.0 ? "STABLE" : "UNSTABLE")}"),
+                    a.BalanceWorstM <= -KsaAeroSweep.NeutralBalanceM ? warn : plain);
+
             if (_s.AeroError.Length > 0)
                 GaugeRowText(D, "LAST RESAMPLE", _s.AeroError, ConsoleStyle.Danger);
         }

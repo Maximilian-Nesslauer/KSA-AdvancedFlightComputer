@@ -1487,6 +1487,17 @@ public sealed class VehicleAutopilotState
     public double3 ThreeDofCommandLocal;
     public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Plan3Dof ThreeDofPlan;
 
+    /// <summary>The same command in CCI, before the attitude trim: what the low-pass and the slew guard step from. CommandDir is this plus the trim, which is what the flight computer points. Zero until entry guidance has sent one.</summary>
+    public double3 ThreeDofPlanCommandCci;
+
+    /// <summary>
+    /// Wind the difference between the attitude entry guidance asks for and the one flown into the command it sends, as the boostback glide does (GlideTrackGain). The plan assumes the angle of attack it asks for is the one flown; a craft that holds a steady offset - the stock attitude controller leaves one inside its deadband, and an unstable airframe pushes it to one side of it - flies lift the plan did not count. On by default.
+    /// </summary>
+    public bool ThreeDofTrim = true;
+
+    /// <summary>The trim added to the command, CCI, radians across the airflow: a small rotation off the planned attitude. Zero outside the glide on a plan, and faded out once the engine lights.</summary>
+    public double3 ThreeDofTrimCci;
+
     /// <summary>Time constant of the low-pass the plan's attitude and throttle reach the vehicle through, s; 0 switches it off. 0.05 s rather than the 0.2 s it started at: a landing burn of two seconds at 5-6 g turned 0.2 s of throttle lag into a 13 m/s climb off the pad (2026-10-08, 16:19).</summary>
     public double ThreeDofSmoothTau = 0.05;
 
