@@ -436,9 +436,6 @@ public static class KsaAeroSweep
         res.CentreOfPressureM = centreOfPressure;
         res.BalanceWorstM = worstCp;
         res.BalanceWorstMach = worstMach;
-        if (double.IsFinite(worstCp))
-            DefaultCategory.Log.Info(FormattableString.Invariant(
-                $"[AFC] Aero balance of '{vehicle.Id}': {BalanceText(res)}; centre of pressure at {BalanceAlphaDeg:0} deg by Mach: {CentreOfPressureText(res)}."));
 
         try
         {
@@ -452,6 +449,10 @@ public static class KsaAeroSweep
             return false;
         }
 
+        // Logged once the moment table exists, which BalanceText reads.
+        if (double.IsFinite(worstCp))
+            DefaultCategory.Log.Info(FormattableString.Invariant(
+                $"[AFC] Aero balance of '{vehicle.Id}': {BalanceText(res)}; centre of pressure at {BalanceAlphaDeg:0} deg by Mach: {CentreOfPressureText(res)}."));
         result = res;
         return true;
     }
