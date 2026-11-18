@@ -249,6 +249,11 @@ public static partial class GuidanceWindow
         }
         // Each booster's way down from the plan's separation (AscentPlan.BoosterTracks), on the same ground-fixed downrange: a return to the pad folds back towards zero, a drone ship lies on out downrange.
         BoosterTrackView[] boosterTracks = series != null ? _s.AscentPlan?.BoosterTracks ?? Array.Empty<BoosterTrackView>() : Array.Empty<BoosterTrackView>();
+        AscentPlan returnPlan = series != null ? _s.AscentPlan : null;
+        if (returnPlan != null)
+            foreach (ReturnableStage stage in _s.ReturnableStages)
+                if (ReturnSiteDownrangeKm(returnPlan, stage) is double down)
+                    maxDown = Math.Max(maxDown, down);
         foreach (BoosterTrackView t in boosterTracks)
             if (t.Track.Ok)
                 foreach (double d in t.DownrangeKm)
@@ -365,6 +370,19 @@ public static partial class GuidanceWindow
             handoverNamed = labels.Guide("UPFG FROM " + Fmt.Km(_s.HandoverAltKm), v.Sy(_s.HandoverAltKm), Palette.Dim.Solid);
         }
         bool airNamed = atmoKm <= 0.0 || labels.Guide("AIR", v.Sy(atmoKm), Palette.Air.Solid);
+        if (returnPlan != null && v.Y0 <= 0.0 && v.Y1 >= 0.0 && plot.W > 8f * s && plot.H > 8f * s)
+        {
+            foreach (ReturnableStage stage in _s.ReturnableStages)
+            {
+                if (ReturnSiteDownrangeKm(returnPlan, stage) is not double down || down < v.X0 || down > v.X1)
+                    continue;
+                var at = new float2(Math.Clamp(v.Sx(down), plot.X + 4f * s, plot.Right - 4f * s),
+                    Math.Clamp(v.Sy(0.0) - StageRibbonHeight * s, plot.Y + 4f * s, plot.Bottom - 4f * s));
+                Glyphs.Diamond(dl, at, 4f * s, Palette.Good.Solid);
+                labels.Mark(at, 4f * s);
+                labels.Point(stage.Name + " SITE", at, 6f * s, Palette.Good.Solid);
+            }
+        }
         int qPeak = n > 0 ? ArgMaxFinite(series.QFraction) : -1;
         if (qPeak >= 0 && qPeak < n)
         {
@@ -613,16 +631,21 @@ public static partial class GuidanceWindow
         else if (onPad || HasImpactPath)
             Picture.EmptyState(onPad ? (NoStageHome ? PageText.BoostbackNoStage : PageText.BoostbackNotYet) : PageText.NoSiteToDraw);
 
-        if (!BoostbackLive && !NoStageHome && Picture.LegendLine("", default, default, "AfcBoostbackLegend", default, "STAGE SITES: LAUNCH > REUSE",
-                "Opens LAUNCH with the REUSE fold open. The fold sets the site of each returnable stage.") == 0)
+        if (!BoostbackLive && !NoStageHome && Picture.LegendLine("", default, default, "AfcBoostbackLegend", default, "STAGE SITES: LAUNCH",
+                "Opens the booster return settings on LAUNCH.") == 0)
         {
-            ConsoleUi.OpenFold(BoostersFoldId);
             CraftActivity activity = ReadMode(vehicle).Activity;
             if (FlightView.PageFlies(ConsolePage.Launch, LandWay.FromOrbit, LandSolver.Entry, CurrentAscentChoice(), in activity, transferPasses: false))
                 ConsoleUi.OpenFold(FlightView.PlanFoldId);
             PendingNavigation = ConsolePages.CueTarget(ConsolePage.Launch);
         }
     }
+
+    private static double? ReturnSiteDownrangeKm(AscentPlan plan, ReturnableStage stage)
+        => stage.ComesHome && double.IsFinite(stage.TargetLatDeg) && double.IsFinite(stage.TargetLonDeg)
+            && plan.StartCcf.LengthSquared() > 0.0
+            ? AngleBetween(plan.StartCcf, SiteDirCcf(stage.TargetLatDeg, stage.TargetLonDeg)) * plan.BodyRadius / 1000.0
+            : null;
 
     private static bool FallPictureShows(IParentBody parent) => HasImpactPath && !NoSitePicked(parent);
 

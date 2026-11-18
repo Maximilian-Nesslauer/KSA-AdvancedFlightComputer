@@ -521,7 +521,9 @@ public static partial class GuidanceWindow
             }
             ConsoleUi.EndRow();
 
-            GaugeRowText(home ? "REUSED" : "EXPENDED", PageText.StageReturn(stage.HasTarget, stage.OptimalReturn, stage.TargetLatDeg, stage.TargetLonDeg),
+            string site = home ? PageText.StageReturn(stage.HasTarget, stage.OptimalReturn, stage.TargetLatDeg, stage.TargetLonDeg)
+                : "WILL NOT COME HOME. SET A SITE.";
+            GaugeRowText(home ? "REUSED" : "EXPENDED", site,
                 home ? Palette.Good.F4 : ConsoleUi.WarnInk);
             if (home)
                 DrawStageReserve(stage);
