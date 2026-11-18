@@ -836,6 +836,13 @@ public static partial class GuidanceWindow
             GlideAlpha = GlideNominalAlpha(aero),
             LiftTable = aero.Lift,
         };
+        if (HeldRollAero(vehicle, parent, aero, out BodyAeroTable heldTable, out double3 heldRef))
+        {
+            sys.BodyAero = heldTable;
+            sys.RollRefX = heldRef.X;
+            sys.RollRefY = heldRef.Y;
+            sys.RollRefZ = heldRef.Z;
+        }
 
         double3 r0 = orbit.StateVectors.PositionCci;
         double3 v0 = orbit.StateVectors.VelocityCci;

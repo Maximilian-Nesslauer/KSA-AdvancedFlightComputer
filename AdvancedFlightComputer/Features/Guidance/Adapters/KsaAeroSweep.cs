@@ -35,6 +35,9 @@ public static class KsaAeroSweep
     /// <summary>Alpha the centre of pressure is located at, degrees from tail-first: on the alpha grid, small enough to be the balance a glide flies with and large enough for a force across the axis to measure.</summary>
     public const double BalanceAlphaDeg = 5.0;
 
+    /// <summary>Highest Mach the balance verdict is taken over: about the fastest a returning booster glides. The log still lists every row.</summary>
+    public const double BalanceMaxMach = 2.0;
+
     /// <summary>Uniform intervals the atmosphere column is sampled in, before the points of the temperature profile are added. 2048 aims for a chord error of ln(rho) near 1e-5; the mirror check in the boostback gauge measures the real error per body.</summary>
     private const int AtmosphereIntervals = 2048;
 
@@ -62,6 +65,14 @@ public static class KsaAeroSweep
             all.Add(a);
         return all.ToArray();
     }
+
+    /// <summary>
+    /// Alpha and beta breakpoints of the body-axis table, degrees: every degree out to 5, where a booster glides and lands, then wider to 20, which covers a glide's tilt and the burn tracker's on top of it. Past 20 the fit extends linearly.
+    /// </summary>
+    private static readonly double[] BodyAngleBreakpointsDeg = { -20, -16, -12, -8, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 8, 12, 16, 20 };
+
+    /// <summary>Highest Mach row of the body-axis table: above a returning booster's fastest, with the boostback's coast in thin air above it read at this row.</summary>
+    private const double BodyAeroMaxMach = 8.0;
 
     private static double[] SweepMachBreakpoints()
     {
@@ -115,6 +126,19 @@ public static class KsaAeroSweep
         public double BalanceWorstM = double.NaN, BalanceWorstMach = double.NaN;
 
         public bool HasMoment => Moment != null && CentreOfPressureM != null && double.IsFinite(BalanceWorstM);
+
+        /// <summary>
+        /// The body-axis force near retrograde, over Mach, alpha and beta, with no averaging over roll (BodyAeroTable): what a craft held at a fixed roll flies with, fins and all. Null on an airless body.
+        /// </summary>
+        public BodyAeroTable BodyAero;
+
+        /// <summary>
+        /// The body-axis MOMENT over the same Mach, alpha and beta: C_l, C_m, C_n = torque / (q S L) about the x, y and z body axes, through the centre of mass the sweep saw (<see cref="BodyMomentComAsmb"/>), with L the <see cref="ReferenceLength"/>. Fins set at an angle, an asymmetric airframe or a centre of mass off the axis all show here as a moment at alpha and beta 0 or one that is not the mirror of its opposite. Read through <see cref="PredictBodyMoment"/>, which moves it to the centre of mass the craft has now. Null on an airless body.
+        /// </summary>
+        public BodyAeroTable BodyMoment;
+
+        /// <summary>The centre of mass <see cref="BodyMoment"/> is taken about, assembly axes, m.</summary>
+        public double3 BodyMomentComAsmb;
 
         /// <summary>The game's atmosphere, sampled. Null if the body has none, and then <see cref="Table"/> and <see cref="Lift"/> are all zero, because the game applies no aerodynamic force there.</summary>
         public AtmosphereModel Atmosphere;
@@ -373,6 +397,41 @@ public static class KsaAeroSweep
                 }
             }
         }
+        // THE BODY-AXIS TABLE near retrograde (BodyAeroTable): for each alpha and beta, the air direction in body axes, and per Mach row the force the game applies, kept whole - axial, and across the body in y and z - with no averaging over roll. The same calls as above, in the same order: the baseline at a crawl, then the flow prepared for the direction, then the rows.
+        double[] bodyMach = machGrid.Where(m => m <= BodyAeroMaxMach + 1e-9).ToArray();
+        int nbm = bodyMach.Length, nab = BodyAngleBreakpointsDeg.Length;
+        var bodyCoefficients = new double[nbm * nab * nab * 3];
+        var bodyMoments = new double[nbm * nab * nab * 3];
+        double momentLength = dx;
+        for (int ja = 0; ja < nab; ja++)
+        {
+            for (int jb = 0; jb < nab; jb++)
+            {
+                (double ux, double uy, double uz) = BodyAeroTable.AirDirection(BodyAngleBreakpointsDeg[ja] * Math.PI / 180.0, BodyAngleBreakpointsDeg[jb] * Math.PI / 180.0);
+                var u = new double3(ux, uy, uz);
+                probe.Wrench(BaselineSpeed * u, out double3 baseline, out double3 baselineTorque);
+                flow.Prepare(u);
+                for (int i = 0; i < nbm; i++)
+                {
+                    double speed = Math.Max(bodyMach[i], MinProbeMach) * speedOfSound;
+                    probe.Wrench(speed * u, out double3 rawForce, out double3 rawTorque);
+                    double3 force = rawForce - baseline;
+                    double3 torque = rawTorque - baselineTorque;
+                    double qa = 0.5 * sea.Density * speed * speed * refArea;
+                    int node = ((i * nab + ja) * nab + jb) * 3;
+                    bodyCoefficients[node] = force.X / qa;
+                    bodyCoefficients[node + 1] = force.Y / qa;
+                    bodyCoefficients[node + 2] = force.Z / qa;
+                    if (momentLength > 0.0)
+                    {
+                        // A torque the game did not report reads as none, as in the roll-averaged table.
+                        bodyMoments[node] = double.IsFinite(torque.X) ? torque.X / (qa * momentLength) : 0.0;
+                        bodyMoments[node + 1] = double.IsFinite(torque.Y) ? torque.Y / (qa * momentLength) : 0.0;
+                        bodyMoments[node + 2] = double.IsFinite(torque.Z) ? torque.Z / (qa * momentLength) : 0.0;
+                    }
+                }
+            }
+        }
         res.SweepMillis = clock.Elapsed.TotalMilliseconds;
         // Read after the probe, because its first PartTree.AwaitAerodynamics publishes a mesh whose build has ended but was not taken yet.
         res.MeshHash = parts?.Aerodynamics?.Source?.Hash ?? 0UL;
@@ -466,7 +525,8 @@ public static class KsaAeroSweep
                 if (Math.Abs(armSums[cell]) > 1e-9 * Math.Max(dragSums[cell], 1e-9))
                     centreOfPressure[i] = momentSums[cell] / armSums[cell];
             }
-            if (double.IsFinite(centreOfPressure[i]) && !(centreOfPressure[i] >= worstCp))
+            // The verdict is taken over the Mach range a returning booster flies: the hypersonic rows are there for entries from high, and a far-forward centre of pressure at Mach 25 says nothing about the glide.
+            if (machGrid[i] <= BalanceMaxMach && double.IsFinite(centreOfPressure[i]) && !(centreOfPressure[i] >= worstCp))
             {
                 worstCp = centreOfPressure[i];
                 worstMach = machGrid[i];
@@ -483,6 +543,9 @@ public static class KsaAeroSweep
             res.Table = new AeroTable(machGrid, alphaDeg, cdTable);
             res.Lift = new AeroTable(machGrid, alphaDeg, clTable);
             res.Moment = refLength > 0.0 ? new AeroTable(machGrid, alphaDeg, cmTable) : null;
+            res.BodyAero = new BodyAeroTable(bodyMach, BodyAngleBreakpointsDeg, BodyAngleBreakpointsDeg, bodyCoefficients);
+            res.BodyMoment = momentLength > 0.0 ? new BodyAeroTable(bodyMach, BodyAngleBreakpointsDeg, BodyAngleBreakpointsDeg, bodyMoments) : null;
+            res.BodyMomentComAsmb = new double3(props.CenterOfMassAsmb.X, props.CenterOfMassAsmb.Y, props.CenterOfMassAsmb.Z);
         }
         catch (Exception ex)
         {
@@ -492,6 +555,10 @@ public static class KsaAeroSweep
 
         // The measured lift near alpha 0, the angles a booster glides at, so the shape of the curve there can be read off the game log.
         DefaultCategory.Log.Info(FormattableString.Invariant($"[AFC] Lift near alpha 0 of '{vehicle.Id}' (C_L, roll-averaged, + towards the engine end's tilt): {NearZeroLiftText(res)}."));
+        if (res.BodyAero != null)
+            DefaultCategory.Log.Info(FormattableString.Invariant($"[AFC] Body-axis force of '{vehicle.Id}' near retrograde at Mach 0.4 (C_x, C_y, C_z): {BodyAeroText(res.BodyAero, 0.4)}."));
+        if (res.BodyMoment != null)
+            DefaultCategory.Log.Info(FormattableString.Invariant($"[AFC] Body-axis moment of '{vehicle.Id}' near retrograde at Mach 0.4 (C_l, C_m, C_n about the centre of mass, L {res.ReferenceLength:F1} m): {BodyAeroText(res.BodyMoment, 0.4)}."));
         // Logged once the moment table exists, which BalanceText reads.
         if (double.IsFinite(worstCp))
             DefaultCategory.Log.Info(FormattableString.Invariant(
@@ -721,6 +788,21 @@ public static class KsaAeroSweep
             : "UNSTABLE ENGINE FIRST, " + where;
     }
 
+    /// <summary>The body table at a Mach number, at alpha and beta of 0, +-2 and +-5 deg one at a time, for the game log.</summary>
+    private static string BodyAeroText(BodyAeroTable table, double mach)
+    {
+        var sb = new StringBuilder();
+        (double a, double b)[] points = { (0, 0), (2, 0), (-2, 0), (5, 0), (-5, 0), (0, 2), (0, -2), (0, 5), (0, -5) };
+        foreach ((double a, double b) in points)
+        {
+            table.Coefficients(mach, a * Math.PI / 180.0, b * Math.PI / 180.0, out double cx, out double cy, out double cz);
+            if (sb.Length > 0)
+                sb.Append("; ");
+            sb.Append(FormattableString.Invariant($"a{a:+0;-0;0} b{b:+0;-0;0}: {cx:+0.000;-0.000} {cy:+0.0000;-0.0000} {cz:+0.0000;-0.0000}"));
+        }
+        return sb.ToString();
+    }
+
     /// <summary>Mach numbers the near-zero lift is logged at: the nearest row to each.</summary>
     private static readonly double[] LiftLogMach = { 0.0, 0.4, 0.8, 1.2, 2.0, 4.0 };
 
@@ -760,6 +842,67 @@ public static class KsaAeroSweep
             sb.Append(FormattableString.Invariant($"M{r.MachGrid[i]:0.##} {r.CentreOfPressureM[i]:+0.00;-0.00} m"));
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The aerodynamic force and moment the game applies to the vehicle as it is NOW: its own state, air, roll and body rates, through the same ComputeDerivatives the integrator calls, less the same call at a crawl in the same direction, which takes out buoyancy. Body axes, N and N m about the centre of mass.
+    ///  What the tables cannot be: they average over roll, sample at sea-level air and a still body, and leave out any force the craft makes at zero angle of attack. Against this the guidance can tell a model error from a force that is not aerodynamic at all.
+    ///  Main thread only, as the sweep: guidance calls it from the Vehicle.PrepareWorker prefix, where no worker steps the vehicle. The flow direction is the live one, so the mesh's shielding is what the game's own step left. False while the aero mesh rebuilds.
+    /// </summary>
+    public static bool TryLiveAero(Vehicle vehicle, out double3 forceBody, out double3 torqueBody)
+    {
+        forceBody = torqueBody = double3.Zero;
+        PartTree parts = vehicle?.Parts;
+        if (parts == null || parts.IsRebuildingAerodynamics)
+            return false;
+        BubbleOrigin origin = vehicle.BubbleOrigin;
+        KinematicStates live = vehicle.KinematicStates;
+        VehicleProperties props = vehicle.Props;
+        PhysicsEnvironment environment = vehicle.PhysicsEnvironment;
+        Disturbances d = PhysicsStates.ComputeDerivatives(in origin, in live, in props, in environment,
+            0.0, 0.0, origin.PositionBub, origin.VelocityBub, default, default, parts);
+
+        // The crawl: the airspeed scaled down to BaselineSpeed along the same direction, the body rates kept.
+        float3 airBody = PhysicsStates.ComputeAirVelocityBody(in origin, in live, in environment);
+        double3 air = double3.Unpack(in airBody);
+        double airspeed = air.Length();
+        if (!(airspeed > BaselineSpeed))
+            return false;
+        KinematicStates crawl = live;
+        crawl.VelocityPhys = live.VelocityPhys - (air * (1.0 - BaselineSpeed / airspeed)).Transform(live.Body2Phys);
+        Disturbances d0 = PhysicsStates.ComputeDerivatives(in origin, in crawl, in props, in environment,
+            0.0, 0.0, origin.PositionBub, origin.VelocityBub, default, default, parts);
+        forceBody = d.ForceBody - d0.ForceBody;
+        torqueBody = d.TorqueBody - d0.TorqueBody;
+        return double.IsFinite(forceBody.X) && double.IsFinite(forceBody.Y) && double.IsFinite(forceBody.Z);
+    }
+
+    /// <summary>
+    /// The body-axis aerodynamic moment the tables predict, N m about the centre of mass the craft has now (assembly axes, as the torque the game reports), for an air velocity in body axes and the air's density: the moment table at that Mach, alpha and beta, moved from the sweep's centre of mass by M_now = M_sweep + (r_sweep - r_now) x F, with F the force table's. False outside the tables' 30 deg cone round engine first, or without a moment table.
+    ///  The assembly and body axes are taken as one rotation, as the probe that measured both does.
+    /// </summary>
+    public static bool PredictBodyMoment(Result res, double3 airBody, double density, double3 comAsmbNow, out double3 moment)
+    {
+        moment = default;
+        if (res?.BodyMoment == null || res.BodyAero == null || res.Atmosphere == null)
+            return false;
+        double speed = airBody.Length();
+        if (!(speed > 1.0))
+            return false;
+        double3 u = airBody / speed;
+        if (!(-u.X > Math.Cos(30.0 * Math.PI / 180.0)))
+            return false;
+        double alpha = Math.Atan2(u.Z, -u.X), beta = Math.Atan2(u.Y, -u.X);
+        double mach = res.Atmosphere.Mach(speed);
+        double machF = Math.Clamp(mach, res.BodyAero.MachMin, res.BodyAero.MachMax);
+        double machM = Math.Clamp(mach, res.BodyMoment.MachMin, res.BodyMoment.MachMax);
+        double qs = 0.5 * density * speed * speed * res.ReferenceArea;
+        res.BodyAero.Coefficients(machF, alpha, beta, out double cx, out double cy, out double cz);
+        res.BodyMoment.Coefficients(machM, alpha, beta, out double cl, out double cm, out double cn);
+        var force = new double3(cx, cy, cz) * qs;
+        double3 sweepMoment = new double3(cl, cm, cn) * (qs * res.ReferenceLength);
+        moment = sweepMoment + double3.Cross(res.BodyMomentComAsmb - comAsmbNow, force);
+        return double.IsFinite(moment.X) && double.IsFinite(moment.Y) && double.IsFinite(moment.Z);
     }
 
     /// <summary>AeroMeshSource.Hash of the vehicle's current aero mesh, or 0 while it has none, as during a rebuild.</summary>

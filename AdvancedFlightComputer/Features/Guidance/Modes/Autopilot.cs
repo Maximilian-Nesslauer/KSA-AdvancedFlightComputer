@@ -1369,9 +1369,17 @@ public static partial class GuidanceWindow
         if (shouldCommand)
         {
             // An ascent references its roll to its target plane (see SteerBody2Cci and AscentRollRef); a landing keeps the stock position-derived reference, which is well conditioned there because the thrust axis is fighting the velocity, not lying along the position vector.
-            double3? rollRef = _s.Running ? AscentRollRef(vehicle, _s.CommandDir) : null;
+            // A returning booster is held at a fixed roll, wings level along its ground track (ReturnRollRefCci), so the body-axis aero table it plans with applies (KsaPointMassModel.RollRef), and flies the Strict profile so it turns as fast as the plan asks.
+            bool boosterReturn = boostbackGuides || threeDofGuides;
+            bool holdRoll = boosterReturn && _s.BoosterRollHold;
+            double3? rollRef = _s.Running ? AscentRollRef(vehicle, _s.CommandDir)
+                : holdRoll && _s.CommandDir.Length() > 0.5 ? double3.Cross(double3.Normalize(_s.CommandDir), ReturnRollRefCci(vehicle, parent))
+                : null;
             CommandAttitude(vehicle, parent, _s.CommandDir,
-                            fullEngage: !_s.WasEngaged, rollRef: rollRef);
+                            fullEngage: !_s.WasEngaged, rollRef: rollRef,
+                            rollMode: holdRoll ? FlightComputerRollMode.Up : null);
+            if (boosterReturn && _s.BoosterStrictProfile)
+                _s.AttitudeOwnership.WriteProfile(vehicle.FlightComputer, FlightComputerAttitudeProfile.Strict);
 
             // Publish the attitude and its turning rate together so they describe the same instant.
             KsaAttitudeRate.Set(vehicle,
@@ -1935,6 +1943,33 @@ public static partial class GuidanceWindow
     /// plane does - i.e. the vehicle flies wings-level to its own orbital plane from
     /// the pad to cutoff, with no discontinuity anywhere in between.
     /// </summary>
+    /// <summary>
+    /// A returning booster's roll reference in CCI now (VehicleAutopilotState.ReturnRollRefCcf): set on first use, then frozen in the body's frame. The body's +y is held along (axis x it).
+    ///  It points 45 deg below the horizon towards the site: w = (d - up) / sqrt 2, d the horizontal direction to the site. The horizontal d alone would be parallel to the axis in a boostback burn, which points the engine-first booster at the site, and "up" alone is parallel to it in a vertical glide and turns the other way between the two, a half roll after the burn. Against w, axis x w is up x d (wings level along the ground track, navball roll 0) in the glide and in the burn alike, and only an axis pointing down at the site at 45 deg, which a returning booster never flies, leaves it undefined.
+    /// </summary>
+    internal static double3 ReturnRollRefCci(Vehicle vehicle, IParentBody parent)
+    {
+        doubleQuat cci2Ccf = parent.GetCci2Ccf();
+        if (_s.ReturnRollRefCcf.Length() < 0.5)
+        {
+            double3 r = vehicle.Orbit.StateVectors.PositionCci;
+            double3 up = r.NormalizeOrZero();
+            double3 site = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+            double3 toSite = site - r;
+            double3 d = toSite - double3.Dot(toSite, up) * up;
+            // Over the site itself there is no direction to it: the horizontal part of the velocity, reversed, is where it came from.
+            if (d.Length() < 1.0)
+            {
+                double3 vAir = vehicle.Orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r);
+                d = -(vAir - double3.Dot(vAir, up) * up);
+            }
+            if (d.Length() < 1e-6)
+                d = double3.Cross(up, Math.Abs(up.Z) < 0.9 ? new double3(0, 0, 1) : new double3(1, 0, 0));
+            _s.ReturnRollRefCcf = double3.Normalize(double3.Normalize(d) - up).Transform(cci2Ccf);
+        }
+        return _s.ReturnRollRefCcf.Transform(doubleQuat.Inverse(cci2Ccf));
+    }
+
     private static doubleQuat SteerBody2Cci(double3 steerDir, double3 rollRef)
     {
         double3 x = double3.Normalize(steerDir);

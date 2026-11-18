@@ -288,6 +288,16 @@ public static class Ksa6DofSetup
     /// <param name="xf">Terminal model state, same reason.</param>
     /// <param name="accelMaxMs2">Largest thrust acceleration the plan may use, m/s^2, or 0 for none; see Scvx6DofConfig.AccelMax.</param>
     /// <param name="keptRollFree">The Scvx6DofConfig.TerminalRollFree of the plan this one replaces, or null for the first plan of a landing; see RollModel.</param>
+    /// <param name="bodyAero">Read the body-axis table (KsaAeroSweep.Result.BodyAero) at the roll the craft has now, in place of the roll-averaged tables: see BodyAeroRollRef.</param>
+    /// <summary>
+    /// The roll touchdown guidance reads the body-axis table at, site frame (KsaPointMassModel.RollRef): the roll the craft has NOW, which entry guidance held it at and this plan does not turn it from. With w = -(body +z), the model's body +y, along b x w, is the body's own +y. Touchdown flies slow and short, so the roll a re-plan finds is the one it flies.
+    /// </summary>
+    private static double3 BodyAeroRollRef(Vehicle vehicle, double3 siteCci)
+    {
+        double3 bodyZ = double3.UnitZ.Transform(KsaFrameBridge.BodyToCci(vehicle));
+        return KsaFrameBridge.BuildSiteFrame(siteCci).VecToLocal(-bodyZ).NormalizeOrZero();
+    }
+
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                 int nodes, double tiltMaxDeg, double throttleFloor,
                                 double sigmaSeed,
@@ -297,7 +307,7 @@ public static class Ksa6DofSetup
                                 double[] x0, double[] xf,
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
                                 out string error, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
-                                KsaAeroSweep.Result aero = null, bool? keptRollFree = null)
+                                KsaAeroSweep.Result aero = null, bool? keptRollFree = null, bool bodyAero = false)
     {
         cfg = null!;
         dyn = null!;
@@ -417,6 +427,7 @@ public static class Ksa6DofSetup
         double g = parent.Mu / (r * r);
 
         const double G0 = 9.80665;
+        double3 rollRefLocal = bodyAero && aero?.BodyAero != null ? BodyAeroRollRef(vehicle, siteCci) : default;
         dyn = new Dynamics6Dof.Params
         {
             Gx = 0.0, Gy = 0.0, Gz = -g,
@@ -429,8 +440,12 @@ public static class Ksa6DofSetup
                 {
                     Atmosphere = aero.Atmosphere,
                     Drag = aero.Table,
-                    Lift = aero.Lift,
+                    LiftSlope = aero.LiftTable != null
+                        ? KsaPointMassModel.LiftSlopeTable(aero.MachGrid, aero.AlphaGridDeg, aero.LiftTable)
+                        : null,
                     ReferenceArea = aero.ReferenceArea,
+                    BodyAero = rollRefLocal.Length() > 0.5 ? aero.BodyAero : null,
+                    RollRefX = rollRefLocal.X, RollRefY = rollRefLocal.Y, RollRefZ = rollRefLocal.Z,
                 }
                 : null,
             AeroAltitudeOffset = siteAltAsl,

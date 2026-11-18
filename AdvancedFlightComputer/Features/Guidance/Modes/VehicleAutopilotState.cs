@@ -1492,6 +1492,29 @@ public sealed class VehicleAutopilotState
     public double ThreeDofAccelTime = double.NaN;
     public double3 ThreeDofAccelVelocity;
 
+    /// <summary>The last non-gravitational acceleration entry guidance measured, site frame, m/s^2 - what its estimator compares with the model - for the per-step log. Zero before the first.</summary>
+    public double3 ThreeDofMeasuredAccel;
+
+    /// <summary>
+    /// A returning booster's roll reference, body-fixed (CCF): 45 deg below the horizon towards its site, from where it was first commanded, frozen (GuidanceWindow.ReturnRollRefCci says why). The body's +y is held along (axis x this), wings level along the ground track (KsaPointMassModel.RollRef). Zero until set.
+    /// </summary>
+    public double3 ReturnRollRefCcf;
+
+    /// <summary>Hold a returning booster at the fixed roll (ReturnRollRefCcf) through the boostback and entry guidance, so the body-axis aero table applies. On by default.</summary>
+    public bool BoosterRollHold = true;
+
+    /// <summary>Fly a returning booster on the flight computer's Strict attitude profile (30 deg/s, 0.2 deg deadband) from the boostback on; the player's profile comes back on release unless they changed it meanwhile. On by default.</summary>
+    public bool BoosterStrictProfile = true;
+
+    /// <summary>The fastest turn entry guidance's plan uses, rad/s (Ksa3DofSetup.PlanRateMax), read when a cold solve starts: also the turn to the burn's opening attitude.</summary>
+    public double ThreeDofRateInUse = 10.0 * Math.PI / 180.0;
+
+    /// <summary>Write entry guidance's per-step log (EntryLog) to navbox-logs. On while the lift offset is investigated; touchdown guidance's log has its own switch, SixDofLogging, off by default.</summary>
+    public bool EntryLogging = true;
+
+    /// <summary>The cross-flow bias entry guidance has learned, as an acceleration at the craft's last measured state, m/s^2: a readout.</summary>
+    public double ThreeDofBiasAccel;
+
     /// <summary>
     /// The command as last sent, site frame, which the guidance anchors each new plan's opening attitude on, and the plan being flown.
     /// </summary>
@@ -1519,9 +1542,6 @@ public sealed class VehicleAutopilotState
 
     /// <summary>The turn acceleration the running entry guidance plans to, deg/s^2, 0 for none: a readout.</summary>
     public double ThreeDofTurnAccelInUse;
-
-    /// <summary>How fast the command is turning towards the burn's opening attitude between the lock and ignition, rad/s; 0 outside it.</summary>
-    internal double ThreeDofLockTurn;
 
     /// <summary>
     /// Highest throttle the plan may use before ignition is committed, and after; the burn tracker may use the rest up to full. Read when a cold solve starts, so a change applies from the next engage. See Guidance3Dof.Settings.GlideThrottleCeiling.
@@ -1581,8 +1601,6 @@ public sealed class VehicleAutopilotState
 
     internal void WarnEntry(string text) { ThreeDofStatus = text; ThreeDofSeverity = Severity.Warning; }
     internal string ThreeDofHandoffRefusal = "";
-    internal bool ThreeDofCoastAttitudeFixed;
-    internal double ThreeDofCoastTurnAccel;
     internal EngineController[] SixDofStandbyEngines;
 
     internal void DiagEntry(string text)

@@ -14,6 +14,8 @@ internal sealed class AttitudeOwnership
     private Snapshot original;
     private Snapshot last;
     private bool rollWritten;
+    private bool profileWritten;
+    private float originalDeadband, originalRateLimit, writtenDeadband, writtenRateLimit;
 
     private readonly record struct Snapshot(
         FlightComputerAttitudeMode Mode,
@@ -75,6 +77,22 @@ internal sealed class AttitudeOwnership
     {
         computer = null;
         rollWritten = false;
+        profileWritten = false;
+    }
+
+    /// <summary>
+    /// Put the flight computer on an attitude profile, once per ownership: the profile it had is kept, and Release gives it back if nobody has changed it since. A player who picks another profile meanwhile keeps theirs.
+    /// </summary>
+    public void WriteProfile(FlightComputer value, FlightComputerAttitudeProfile profile)
+    {
+        if (profileWritten || computer == null || !ReferenceEquals(computer, value))
+            return;
+        originalDeadband = value.AngleDeadband;
+        originalRateLimit = value.RateLimit;
+        value.SetAttitudeProfile(profile);
+        writtenDeadband = value.AngleDeadband;
+        writtenRateLimit = value.RateLimit;
+        profileWritten = true;
     }
 
     /// <param name="leaveManual">Leave the attitude mode at Manual where the original mode would come back. For a craft that stands on the ground with its engine cut: an Auto hold from before guidance, such as the one a stock burn leaves, would fire the RCS against the ground.</param>
@@ -86,6 +104,7 @@ internal sealed class AttitudeOwnership
         {
             computer = null;
             rollWritten = false;
+            profileWritten = false;
             return;
         }
 
@@ -110,7 +129,13 @@ internal sealed class AttitudeOwnership
             value.AttitudeMode = leaveManual ? FlightComputerAttitudeMode.Manual : original.Mode;
         if (rollWritten && value.RollMode == last.Roll)
             value.RollMode = original.Roll;
+        if (profileWritten && value.AngleDeadband == writtenDeadband && value.RateLimit == writtenRateLimit)
+        {
+            value.AngleDeadband = originalDeadband;
+            value.RateLimit = originalRateLimit;
+        }
         computer = null;
         rollWritten = false;
+        profileWritten = false;
     }
 }

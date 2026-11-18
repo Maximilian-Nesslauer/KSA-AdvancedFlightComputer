@@ -107,6 +107,33 @@ public static partial class GuidanceWindow
         return cd > 0.0 && Math.Abs(cl / cd) >= GlideMinLiftToDrag ? rad : 0.0;
     }
 
+    /// <summary>
+    /// The body-axis table and the held roll's reference (ReturnRollRefCci) a returning booster's predictions read, while its roll is held: boostback or entry guidance flying, BoosterRollHold on, and a table measured. False otherwise, and the predictions keep the roll-averaged tables. Never before the return flies, so the roll reference is not frozen early by a prediction drawn on the way up.
+    /// </summary>
+    internal static bool HeldRollAero(Vehicle vehicle, IParentBody parent, KsaAeroSweep.Result aero, out BodyAeroTable table, out double3 rollRefCci)
+    {
+        table = null;
+        rollRefCci = default;
+        if (!_s.BoosterRollHold || aero?.BodyAero == null || !(BoostbackLive || ThreeDofLive))
+            return false;
+        rollRefCci = ReturnRollRefCci(vehicle, parent);
+        if (rollRefCci.Length() < 0.5)
+            return false;
+        table = aero.BodyAero;
+        return true;
+    }
+
+    /// <summary>Sets a coast prediction's body-axis table and roll (DragCoastSystem.BodyAero) when <see cref="HeldRollAero"/> says the roll is held.</summary>
+    internal static void WithHeldRoll(ref DragCoastSystem sys, Vehicle vehicle, IParentBody parent, KsaAeroSweep.Result aero)
+    {
+        if (!HeldRollAero(vehicle, parent, aero, out BodyAeroTable table, out double3 w))
+            return;
+        sys.BodyAero = table;
+        sys.RollRefX = w.X;
+        sys.RollRefY = w.Y;
+        sys.RollRefZ = w.Z;
+    }
+
     private static void ResetGlide()
     {
         _s.GlideIntCcf = _s.GlideRateCcf = _s.GlidePrevMissCcf = double3.Zero;
@@ -271,6 +298,7 @@ public static partial class GuidanceWindow
             LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,
         };
+        WithHeldRoll(ref sys, vehicle, parent, aero);
         var opt = ImpactOptions.Default(parent.MeanRadius);
         opt.MaxTime = ImpactHorizonMinutes * 60.0;
         opt.PathStride = 0;
@@ -327,6 +355,21 @@ public static partial class GuidanceWindow
 
         double3 pid = _s.GlideKp * miss + _s.GlideKi * _s.GlideIntCcf + _s.GlideKd * _s.GlideRateCcf;
         SolveGlideLift(perUp, perLeft, -pid / tgo, out double aUp, out double aLeft);
+
+        // HELD AT A FIXED ROLL, THE BODY-AXIS TABLE SAYS WHICH TILT GIVES THAT PUSH: the force across the airflow at the planned glide's tilt, plus the correction, solved for the engine end's tilt up and left. Pitch moves the lift up, yaw moves it sideways, and whatever the airframe pushes on its own - strakes, fins, at no angle at all - is in the planned glide's force already, so the prediction and the steering agree about it.
+        if (sys.BodyAero != null
+            && GlideTiltOnBodyTable(in sys, aero, liftUpCci, liftLeftCci, speed, q, mass, aUp, aLeft, maxAoa,
+                                    out double tiltUp, out double tiltLeft, out bool bodySaturated))
+        {
+            _s.GlideAccelCmd = Math.Sqrt(aUp * aUp + aLeft * aLeft);
+            if (!bodySaturated || double3.Dot(miss, _s.GlideIntCcf) < 0.0)
+                _s.GlideIntCcf += miss * dt;
+            _s.GlideTiltUpDeg = tiltUp;
+            _s.GlideTiltLeftDeg = tiltLeft;
+            _s.GlideAoaDeg = Math.Sqrt(tiltUp * tiltUp + tiltLeft * tiltLeft);
+            _s.GlideStatus = bodySaturated ? $"AoA LIMITED TO {maxAoa:F0} deg: LIFT SHORT." : "";
+            return;
+        }
         // ON TOP OF THE PLANNED GLIDE. The prediction assumes the nominal angle's lift, up the trajectory, so that is what flies at zero miss and the PID's lift is a correction to it; with no miss left the vehicle flies the glide the boostback planned for.
         double nominal = sys.Alpha;
         if (nominal > 0.0)
@@ -348,6 +391,112 @@ public static partial class GuidanceWindow
         _s.GlideTiltLeftDeg = _s.GlideLiftSign * nLeft * alphaDeg;
         _s.GlideAoaDeg = alphaDeg;
         _s.GlideStatus = saturated ? $"AoA LIMITED TO {maxAoa:F0} deg: LIFT SHORT." : "";
+    }
+
+    /// <summary>Largest step of the tilt inversion, degrees, and the probe its slopes are differenced over.</summary>
+    private const double GlideTiltStepMaxDeg = 4.0, GlideTiltProbeDeg = 0.05;
+
+    /// <summary>
+    /// The engine end's tilt, degrees up and left, at which the body-axis table's force across the airflow is the planned glide's plus the correction (aUp, aLeft), m/s^2 along the two lift axes: a damped Newton solve on the two-by-two, its slopes differenced off the table, started from the tilt flown last. Held inside the AoA limit, and saturated when the limit leaves the push short. False where the table cannot be read or gives no authority; the roll-averaged lift curve then steers.
+    ///  The planned glide is DragCoastSystem's: tilted by its Alpha towards "up" on the side the lift table says lifts up, so at no miss this flies what the prediction assumed.
+    /// </summary>
+    private static bool GlideTiltOnBodyTable(in DragCoastSystem sys, KsaAeroSweep.Result aero, double3 up, double3 left,
+                                             double speed, double q, double mass, double aUp, double aLeft, double maxAoaDeg,
+                                             out double tiltUp, out double tiltLeft, out bool saturated)
+    {
+        tiltUp = tiltLeft = 0.0;
+        saturated = false;
+        double3 vHat = double3.Cross(left, up);
+        double mach = aero.Atmosphere?.Mach(speed) ?? 0.0;
+        double scale = q * aero.ReferenceArea / mass;
+        BodyAeroTable table = sys.BodyAero;
+        double wx = sys.RollRefX, wy = sys.RollRefY, wz = sys.RollRefZ;
+
+        bool Across(double tu, double tl, out double au, out double al)
+        {
+            au = al = double.NaN;
+            const double DegToRad = Math.PI / 180.0;
+            double size = Math.Sqrt(tu * tu + tl * tl);
+            double3 engine = vHat;
+            if (size > 1e-12)
+            {
+                double th = size * DegToRad;
+                engine = Math.Cos(th) * vHat + Math.Sin(th) * (tu * up + tl * left) / size;
+            }
+            if (!table.WorldCoefficients(new Dual(mach), new Dual(-engine.X), new Dual(-engine.Y), new Dual(-engine.Z),
+                                         new Dual(vHat.X), new Dual(vHat.Y), new Dual(vHat.Z), wx, wy, wz,
+                                         30.0 * DegToRad, out Dual cx, out Dual cy, out Dual cz))
+                return false;
+            var c = new double3(cx.V, cy.V, cz.V);
+            au = scale * double3.Dot(c, up);
+            al = scale * double3.Dot(c, left);
+            return double.IsFinite(au) && double.IsFinite(al);
+        }
+
+        // The planned glide's tilt, as the prediction flies it.
+        double nominalDeg = sys.Alpha * 180.0 / Math.PI;
+        double nominalUp = 0.0;
+        if (nominalDeg > 0.0 && sys.LiftTable != null)
+            nominalUp = (sys.LiftTable.Cd(Math.Clamp(mach, sys.LiftTable.MachMin, sys.LiftTable.MachMax), sys.Alpha) < 0.0 ? -1.0 : 1.0) * nominalDeg;
+        if (!Across(nominalUp, 0.0, out double baseUp, out double baseLeft))
+            return false;
+        double wantUp = baseUp + aUp, wantLeft = baseLeft + aLeft;
+
+        double tu = double.IsFinite(_s.GlideTiltUpDeg) ? _s.GlideTiltUpDeg : nominalUp;
+        double tl = double.IsFinite(_s.GlideTiltLeftDeg) ? _s.GlideTiltLeftDeg : 0.0;
+        double size0 = Math.Sqrt(tu * tu + tl * tl);
+        if (size0 > maxAoaDeg && size0 > 0.0)
+        {
+            tu *= maxAoaDeg / size0;
+            tl *= maxAoaDeg / size0;
+        }
+        double ru = 0.0, rl = 0.0;
+        for (int it = 0; it < 12; it++)
+        {
+            if (!Across(tu, tl, out double au, out double al))
+                return false;
+            ru = au - wantUp;
+            rl = al - wantLeft;
+            if (Math.Sqrt(ru * ru + rl * rl) < 1e-4)
+                break;
+            if (!Across(tu + GlideTiltProbeDeg, tl, out double auU, out double alU) || !Across(tu, tl + GlideTiltProbeDeg, out double auL, out double alL))
+                return false;
+            double j11 = (auU - au) / GlideTiltProbeDeg, j21 = (alU - al) / GlideTiltProbeDeg;
+            double j12 = (auL - au) / GlideTiltProbeDeg, j22 = (alL - al) / GlideTiltProbeDeg;
+            // Damped like the lift solve: a direction the tilt barely moves the force along does not ask for an unbounded tilt.
+            double damp = GlideSolveDamping * (j11 * j11 + j12 * j12 + j21 * j21 + j22 * j22);
+            double m11 = j11 * j11 + j21 * j21 + damp, m12 = j11 * j12 + j21 * j22, m22 = j12 * j12 + j22 * j22 + damp;
+            double g1 = j11 * ru + j21 * rl, g2 = j12 * ru + j22 * rl;
+            double det = m11 * m22 - m12 * m12;
+            if (!(det > 1e-30) || !(m11 + m22 > 1e-12))
+                return false;
+            double du = -(m22 * g1 - m12 * g2) / det;
+            double dl = -(m11 * g2 - m12 * g1) / det;
+            double step = Math.Sqrt(du * du + dl * dl);
+            if (step > GlideTiltStepMaxDeg)
+            {
+                du *= GlideTiltStepMaxDeg / step;
+                dl *= GlideTiltStepMaxDeg / step;
+            }
+            tu += du;
+            tl += dl;
+            double size = Math.Sqrt(tu * tu + tl * tl);
+            if (size > maxAoaDeg && size > 0.0)
+            {
+                tu *= maxAoaDeg / size;
+                tl *= maxAoaDeg / size;
+            }
+            if (step < 1e-3)
+                break;
+        }
+        if (!Across(tu, tl, out double fu, out double fl))
+            return false;
+        ru = fu - wantUp;
+        rl = fl - wantLeft;
+        saturated = Math.Sqrt(tu * tu + tl * tl) >= maxAoaDeg - 1e-6 && Math.Sqrt(ru * ru + rl * rl) > 1e-3;
+        tiltUp = tu;
+        tiltLeft = tl;
+        return true;
     }
 
     /// <summary>

@@ -48,6 +48,7 @@ internal static class EntryLog
             Path = _path;
             _rows.Clear();
             _rows.AppendLine("# navbox entry guidance run " + name + "   vehicle: " + vehicleName + "   body: " + bodyName);
+            _rows.AppendLine("# accelerations in m/s^2, site frame: meas* is the measured non-gravitational acceleration, pred* the model's at the thrust axis flown, without the learned bias (predLiftBody, predSideBody: at the body axis), live* the game's own aerodynamic force on the craft as it is (KsaAeroSweep.TryLiveAero) over its mass; drag is along the airflow, lift along the thrust axis's predicted lift, side across both. meas - live is what is not aerodynamic; live - pred is the model's error");
             _rows.AppendLine("# angles in degrees; past = flown beyond the command along its angle of attack (+ away from the airflow); lag = flown along the command's motion (- behind it); aeroAccel = predicted aero moment / transverse inertia, rad/s^2, + turning the craft further off the airflow");
             _rows.AppendLine(string.Join(",",
                 "t", "phase", "onPlan", "alt", "speed", "mach", "q",
@@ -55,7 +56,11 @@ internal static class EntryLog
                 "trimDeg", "trimPastDeg",
                 "fcErrX", "fcErrY", "fcErrZ", "fcDeadband", "rcsAuthX", "rcsAuthY", "rcsAuthZ", "tvcAuthY", "tvcAuthZ",
                 "cmFlown", "aeroMomentNm", "inertiaT", "aeroAccel", "aeroOverRcs",
-                "throttle", "dragScale", "liftScale", "refusals", "solver"));
+                "throttle", "dragScale", "biasAccel", "refusals",
+                "axisOffsetDeg", "alphaBody", "tnm", "rollDeg",
+                "measDrag", "measLift", "measSide", "predDrag", "predLift", "predLiftBody", "predSideBody",
+                "liveOk", "liveDrag", "liveLift", "liveSide", "liveMomentNm", "bodyAero", "rollHoldErrDeg",
+                "liveMxNm", "liveMyNm", "liveMzNm", "predMxNm", "predMyNm", "predMzNm", "solveWaitMs", "solveRunMs", "solver"));
             _pendingRows = 0;
             _failedFlushes = 0;
             _lastRow = double.NegativeInfinity;
@@ -101,8 +106,14 @@ internal static class EntryLog
             F(sb, r.FcErrX); F(sb, r.FcErrY); F(sb, r.FcErrZ); F(sb, r.FcDeadband);
             F(sb, r.RcsAuthX); F(sb, r.RcsAuthY); F(sb, r.RcsAuthZ); F(sb, r.TvcAuthY); F(sb, r.TvcAuthZ);
             F(sb, r.CmFlown); F(sb, r.AeroMomentNm); F(sb, r.InertiaT); F(sb, r.AeroAccel); F(sb, r.AeroOverRcs);
-            F(sb, r.Throttle); F(sb, r.DragScale); F(sb, r.LiftScale);
+            F(sb, r.Throttle); F(sb, r.DragScale); F(sb, r.BiasAccel);
             sb.Append(r.Refusals).Append(',');
+            F(sb, r.AxisOffsetDeg); F(sb, r.AlphaBody); sb.Append(r.Tnm ? 1 : 0).Append(','); F(sb, r.RollDeg);
+            F(sb, r.MeasDrag); F(sb, r.MeasLift); F(sb, r.MeasSide); F(sb, r.PredDrag); F(sb, r.PredLift); F(sb, r.PredLiftBody); F(sb, r.PredSideBody);
+            sb.Append(r.LiveOk ? 1 : 0).Append(','); F(sb, r.LiveDrag); F(sb, r.LiveLift); F(sb, r.LiveSide); F(sb, r.LiveMomentNm);
+            sb.Append(r.BodyAero ? 1 : 0).Append(','); F(sb, r.RollHoldErrDeg);
+            F(sb, r.LiveMx); F(sb, r.LiveMy); F(sb, r.LiveMz); F(sb, r.PredMx); F(sb, r.PredMy); F(sb, r.PredMz);
+            F(sb, r.SolveWaitMs); F(sb, r.SolveRunMs);
             sb.Append(Csv(r.Solver)).AppendLine();
             if (++_pendingRows >= FlushEveryRows)
                 Flush();
@@ -153,7 +164,17 @@ internal static class EntryLog
         public double TrimDeg, TrimPastDeg;
         public double FcErrX, FcErrY, FcErrZ, FcDeadband, RcsAuthX, RcsAuthY, RcsAuthZ, TvcAuthY, TvcAuthZ;
         public double CmFlown, AeroMomentNm, InertiaT, AeroAccel, AeroOverRcs;
-        public double Throttle, DragScale, LiftScale;
+        public double Throttle, DragScale, BiasAccel;
         public int Refusals;
+        public double AxisOffsetDeg, AlphaBody, RollDeg, MeasDrag, MeasLift, MeasSide, PredDrag, PredLift, PredLiftBody, PredSideBody;
+        public bool Tnm, LiveOk;
+        public double LiveDrag, LiveLift, LiveSide, LiveMomentNm, RollHoldErrDeg;
+
+        /// <summary>The aerodynamic moment about the centre of mass, body axes, N m: the game's own now (KsaAeroSweep.TryLiveAero), and the body-axis tables' for the same air (KsaAeroSweep.PredictBodyMoment). NaN where there is none (set by the caller).</summary>
+        public double LiveMx, LiveMy, LiveMz, PredMx, PredMy, PredMz;
+
+        /// <summary>The last finished entry solve's wait from dispatch to starting on its thread, and its run time, ms (Ksa3DofWorker).</summary>
+        public double SolveWaitMs, SolveRunMs;
+        public bool BodyAero;
     }
 }

@@ -57,7 +57,7 @@ public sealed record Plan3Dof(
 ///
 /// GLIDE. Each cycle re-solves the two-phase problem from the measured state, both durations free, seeded with the last plan resampled onto the new horizon. The glide's duration is the time to ignition, and it is the optimiser's to choose.
 ///
-/// LOCK. When the time to ignition falls to <see cref="Settings.LockSeconds"/>, the ignition time is COMMITTED and the glide phase is dropped - not at ignition, a few seconds before it, so the change of problem never coincides with lighting the engine. From then on the burn-only problem (the same subproblem class with no glide intervals) plans from the state PREDICTED at the committed ignition: the measured state carried through the remaining seconds of glide, every cycle, with the vehicle turning towards the burn's opening attitude. That is still closed loop - a dispersion before ignition shows up in the prediction and the burn plans for it - but the ignition time stops moving, which is the one decision not worth re-making against a model whose bias the solver cannot null: re-solving it into the last seconds would chase a target that moves every time it looks. Node 0's body axis is held within what the vehicle can turn to by ignition, a cone that closes onto the measured attitude as ignition arrives.
+/// LOCK. When the time to ignition falls to <see cref="Settings.LockSeconds"/>, the ignition time is COMMITTED and the glide phase is dropped - not at ignition, a few seconds before it, so the change of problem never coincides with lighting the engine. THE LAST TWO-PHASE PLAN IS THEN FLOWN OPEN LOOP TO IGNITION (<see cref="LockPlan"/>): its glide runs on into its burn's opening attitude, continuous as every plan before it was, so nothing turns the craft that a plan did not ask for. The burn-only problem (the same subproblem class with no glide intervals) plans from the state PREDICTED at the committed ignition: the measured state carried along that plan's attitude through the seconds left, every cycle, with node 0's body axis held within a small cone of the attitude the plan reaches there. That is still closed loop on the burn - a dispersion before ignition shows up in the prediction and the burn plans for it - but the ignition time and the attitude up to it stop moving, which is the one decision not worth re-making against a model whose bias the solver cannot null. Until 2026-11-18 the craft turned instead from its command towards the burn plan's opening attitude, a scripted turn no plan had made; when the plan it locked on was two seconds stale and every locked re-solve was refused, that turn swung the booster across retrograde at 10 deg/s three seconds before ignition.
 ///
 /// BURN. At ignition the prediction horizon is zero, so node 0 is simply the measured state and the cone has closed: nothing switches. The burn is re-solved from the measured state each cycle with the burn's throttle ceiling released, which still stops short of full: the rest is the tracker's (<see cref="BurnTracker3Dof"/>), which flies the plan between re-solves.
 ///
@@ -154,6 +154,12 @@ public sealed class Guidance3Dof
     private double[] _xf = new double[6];
     private bool _burnStarted;
     private volatile Plan3Dof? _published;
+    private volatile Plan3Dof? _lockPlan;
+
+    /// <summary>
+    /// The two-phase plan the ignition was locked on, flown open loop from the lock to ignition (see the type summary): its attitude up to <see cref="CommittedIgnition"/>. Null before the lock. Set before the lock publishes its stand-in, so a reader that sees a Locked plan sees this.
+    /// </summary>
+    public Plan3Dof? LockPlan => _lockPlan;
 
     public Phase3Dof Phase { get; private set; } = Phase3Dof.Idle;
     public Plan3Dof? Published => _published;
@@ -220,6 +226,7 @@ public sealed class Guidance3Dof
         _burnStarted = false;
         CommittedIgnition = double.NaN;
         ConsecutiveRefusals = 0;
+        _lockPlan = null;
         _published = null;
         Phase = Phase3Dof.Converging;
         Error = "converging";
@@ -315,6 +322,7 @@ public sealed class Guidance3Dof
     private bool Lock(Plan3Dof plan, double[] x0, double[] attitude, double now)
     {
         CommittedIgnition = Math.Max(plan.IgnitionTime, now);
+        _lockPlan = plan;
         Scvx3DofConfig cfg = _burn.Config;
         var xs = new double[cfg.Nodes * NX];
         var us = new double[cfg.Nodes * NU];
@@ -334,15 +342,17 @@ public sealed class Guidance3Dof
         double toGo = Math.Max(0.0, CommittedIgnition - now);
         var xs = (double[])plan.X.Clone();
         var us = (double[])plan.U.Clone();
-        double[] opening = plan.U.AsSpan(0, 3).ToArray();
-        double[] predicted = PredictIgnition(x0, attitude, opening, toGo, _attitudeRate, out double[] rateAtIgnition);
+        // Flown open loop to ignition: the plan the ignition was locked on, or the burn's opening attitude held if there is none.
+        Plan3Dof? flown = _lockPlan;
+        double[] predicted = flown != null
+            ? PredictAlong(x0, flown, now, toGo, out double[] opening, out double[] rateAtIgnition)
+            : PredictHeld(x0, plan.U.AsSpan(0, 3).ToArray(), toGo, out opening, out rateAtIgnition);
         Array.Copy(predicted, xs, NX);
 
         _burn.Model = Model;
         cfg.ThrottleCeiling = _set.BurnThrottleCeiling;
-        // What the vehicle can turn to by ignition, closing onto the measured attitude as ignition arrives; and the turn it is predicted to have there, which the burn continues.
-        _burn.SetAttitudeAnchor(attitude, GlideConfig.GlideAttitudeFixed ? 0.0
-            : Math.Max(ReachableAngle(GlideConfig, toGo), _set.AnchorFloor));
+        // The burn opens where that plan leaves the craft, within the cone the glide re-solves anchor in; and continues the turn the plan is making there.
+        _burn.SetAttitudeAnchor(opening, AnchorCone(_set.AnchorSeconds));
         _burn.SetAttitudeRateAnchor(cfg.AttitudeAccelMax > 0.0 ? rateAtIgnition : null);
         bool first = !_burnStarted;
         _burnStarted = true;
@@ -503,82 +513,61 @@ public sealed class Guidance3Dof
     // ------------------------------------------------------------- prediction
 
     /// <summary>
-    /// The state at ignition: the measured state carried engine-off through the seconds left, with the body axis turning from the measured attitude towards the burn's opening attitude at the rate limit - which is what the vehicle is commanded to do in that time.
+    /// The state at ignition: the measured state <paramref name="x0"/>, at <paramref name="now"/>, carried engine-off through the <paramref name="seconds"/> left along the attitude of the plan flown open loop to ignition (<see cref="LockPlan"/>), which is what the craft is commanded to do in that time. <paramref name="opening"/> is that plan's attitude at ignition, unit, and <paramref name="rateAtIgnition"/> its rate of change there (w x b, 1/s).
     /// </summary>
-    public double[] PredictIgnition(double[] x0, double[] attitude, double[] opening, double seconds)
-        => PredictIgnition(x0, attitude, opening, seconds, null, out _);
+    public double[] PredictAlong(double[] x0, Plan3Dof flown, double now, double seconds, out double[] opening, out double[] rateAtIgnition)
+    {
+        double ignition = now + Math.Max(seconds, 0.0);
+        opening = AttitudeAt(flown, ignition);
+        double[] before = AttitudeAt(flown, ignition - RateProbeS);
+        rateAtIgnition = [(opening[0] - before[0]) / RateProbeS, (opening[1] - before[1]) / RateProbeS, (opening[2] - before[2]) / RateProbeS];
+        return Coast(x0, seconds, t => AttitudeAt(flown, now + t));
+    }
 
-    /// <summary>
-    /// The same, with the turn held to the turn-acceleration limit as well, from the measured turn <paramref name="rate0"/> (w x b, 1/s; null for at rest): the axis speeds up towards the opening attitude, and slows to arrive on it, no faster than the vehicle can. <paramref name="rateAtIgnition"/> is the axis's rate of change it is predicted to have at ignition.
-    /// </summary>
-    public double[] PredictIgnition(double[] x0, double[] attitude, double[] opening, double seconds,
-                                    double[]? rate0, out double[] rateAtIgnition)
+    /// <summary>The same with one attitude held throughout: the stand-in for a lock with no plan to fly, which <see cref="Lock"/> never makes.</summary>
+    private double[] PredictHeld(double[] x0, double[] attitude, double seconds, out double[] opening, out double[] rateAtIgnition)
+    {
+        opening = Normalise(attitude);
+        rateAtIgnition = new double[3];
+        double[] b = opening;
+        return Coast(x0, seconds, _ => b);
+    }
+
+    /// <summary>Seconds over which the open-loop plan's turn at ignition is differenced.</summary>
+    private const double RateProbeS = 0.1;
+
+    private static double[] AttitudeAt(Plan3Dof plan, double time)
+    {
+        Span<double> xs = stackalloc double[NX];
+        Span<double> us = stackalloc double[NU];
+        plan.Sample(time, xs, us);
+        return Normalise([us[0], us[1], us[2]]);
+    }
+
+    /// <summary>RK4, engine off, the body axis as <paramref name="axisAt"/> gives it at each time from the start.</summary>
+    private double[] Coast(double[] x0, double seconds, Func<double, double[]> axisAt)
     {
         double[] x = (double[])x0.Clone();
-        rateAtIgnition = rate0 != null && rate0.Length == 3 ? (double[])rate0.Clone() : new double[3];
         if (!(seconds > 0.0)) return x;
-        double rate = GlideConfig.AttitudeRateMax > 0.0 ? GlideConfig.AttitudeRateMax : 10.0;
-        double accel = GlideConfig.AttitudeAccelMax;
-        bool fixedAttitude = GlideConfig.GlideAttitudeFixed;
-        if (fixedAttitude)
-            Array.Clear(rateAtIgnition);
         int steps = Math.Max(1, (int)Math.Ceiling(seconds / _set.PredictionStep));
         double h = seconds / steps;
-        double[] b = Normalise(attitude);
-        double[] target = Normalise(opening);
-        // The axis's speed towards the target, rad/s: the measured turn's component that way, to start.
-        double speed = accel > 0.0 && rate0 != null && rate0.Length == 3
-            ? Math.Clamp(Dot(rate0, TowardTarget(b, target)), 0.0, rate) : 0.0;
         Span<double> k1 = stackalloc double[NX], k2 = stackalloc double[NX], k3 = stackalloc double[NX], k4 = stackalloc double[NX];
         double[] tmp = new double[NX];
         for (int s = 0; s < steps; s++)
         {
-            double[] u = [b[0], b[1], b[2], 0.0];
-            PointMass3Dof.Eval(Model, x, u, k1);
+            double t = s * h;
+            double[] b0 = axisAt(t), bm = axisAt(t + 0.5 * h), b1 = axisAt(t + h);
+            double[] u0 = [b0[0], b0[1], b0[2], 0.0], um = [bm[0], bm[1], bm[2], 0.0], u1 = [b1[0], b1[1], b1[2], 0.0];
+            PointMass3Dof.Eval(Model, x, u0, k1);
             for (int i = 0; i < NX; i++) tmp[i] = x[i] + 0.5 * h * k1[i];
-            PointMass3Dof.Eval(Model, tmp, u, k2);
+            PointMass3Dof.Eval(Model, tmp, um, k2);
             for (int i = 0; i < NX; i++) tmp[i] = x[i] + 0.5 * h * k2[i];
-            PointMass3Dof.Eval(Model, tmp, u, k3);
+            PointMass3Dof.Eval(Model, tmp, um, k3);
             for (int i = 0; i < NX; i++) tmp[i] = x[i] + h * k3[i];
-            PointMass3Dof.Eval(Model, tmp, u, k4);
+            PointMass3Dof.Eval(Model, tmp, u1, k4);
             for (int i = 0; i < NX; i++) x[i] += h / 6.0 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
-            if (fixedAttitude)
-                continue;
-            if (accel > 0.0)
-            {
-                // As fast as it can stop from, capped at the rate limit, and no faster a change than the acceleration allows.
-                double angle = Math.Acos(Math.Clamp(Dot(b, target), -1.0, 1.0));
-                double want = Math.Min(rate, Math.Sqrt(2.0 * accel * angle));
-                speed = speed < want ? Math.Min(want, speed + accel * h) : Math.Max(want, speed - accel * h);
-                double[] toward = TowardTarget(b, target);
-                b = Slew(b, target, speed * h);
-                rateAtIgnition = [toward[0] * speed, toward[1] * speed, toward[2] * speed];
-            }
-            else
-                b = Slew(b, target, rate * h);
         }
         return x;
-    }
-
-    /// <summary>
-    /// The largest angle the vehicle can turn through in <paramref name="seconds"/>, rad: from rest, speeding up at the turn-acceleration limit to the rate limit; the rate limit alone without one.
-    /// </summary>
-    private static double ReachableAngle(Scvx3DofConfig cfg, double seconds)
-    {
-        double rate = cfg.AttitudeRateMax > 0.0 ? cfg.AttitudeRateMax : 10.0 * Math.PI / 180.0;
-        double accel = cfg.AttitudeAccelMax;
-        if (!(accel > 0.0)) return rate * seconds;
-        double ramp = rate / accel;
-        return seconds <= ramp ? 0.5 * accel * seconds * seconds : 0.5 * accel * ramp * ramp + rate * (seconds - ramp);
-    }
-
-    /// <summary>The unit tangent at <paramref name="b"/> along the great circle to <paramref name="target"/>; zero when they coincide.</summary>
-    private static double[] TowardTarget(double[] b, double[] target)
-    {
-        double c = Dot(b, target);
-        double[] t = [target[0] - c * b[0], target[1] - c * b[1], target[2] - c * b[2]];
-        double len = Math.Sqrt(Dot(t, t));
-        return len > 1e-9 ? [t[0] / len, t[1] / len, t[2] / len] : new double[3];
     }
 
     private static double Dot(double[] a, double[] b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -602,18 +591,23 @@ public sealed class Guidance3Dof
 }
 
 /// <summary>
-/// The lumped corrections to the model, estimated from what the vehicle is measured to feel - offset-free MPC, but multiplicative: an additive bias, as the 6-DOF carries, would be wrong over a horizon where the dynamic pressure changes tenfold.
+/// The lumped corrections to the model, estimated from what the vehicle is measured to feel - offset-free MPC.
 ///
-/// IN THE GLIDE THE MEASUREMENT IS CLEAN: the engine is off, so the non-gravitational acceleration is the aerodynamic force and nothing else. Its component against the airflow divided by the model's drag is a drag scale, its component across the airflow projected on the model's lift a lift scale.
+/// IN THE GLIDE THE MEASUREMENT IS CLEAN: the engine is off, so the non-gravitational acceleration is the aerodynamic force and nothing else. Its component against the airflow divided by the model's drag is a drag scale. Across the airflow, what the model's lift leaves unexplained is learned as a force COEFFICIENT across the airflow (KsaPointMassModel.CrossBias): an offset that scales with the dynamic pressure, not a scale on the lift. On KSA 5901 the measured lift fell short of the table's by about 1 m/s^2 at 1 deg and at 7 deg alike; the lift scale this estimator learned before could only follow that by swinging with the angle of attack, 0.5 to 1.1 within seconds, and each re-solve then planned with a different lift (2026-11-18).
 ///
-/// UNDER THRUST the aerodynamic scales are frozen at what the glide learned, and what is left along the body axis once the scaled aerodynamics are taken away is the engine's: divided by the model's thrust it is a thrust scale. A min-fuel burn ends its flare at full throttle, so an engine a few percent weak, unlearned, arrives at the aim point fast with nothing in hand to stop.
+/// UNDER THRUST the aerodynamic corrections are frozen at what the glide learned, and what is left along the body axis once they are taken away is the engine's: divided by the model's thrust it is a thrust scale. A min-fuel burn ends its flare at full throttle, so an engine a few percent weak, unlearned, arrives at the aim point fast with nothing in hand to stop.
 ///
-/// Each is low-passed and clamped, and multiplied into the model the planner uses; see <see cref="Apply"/>.
+/// Each is low-passed and clamped, and applied to the model the planner uses; see <see cref="Apply"/>.
 /// </summary>
 public sealed class AeroScaleEstimator
 {
     public double DragScale { get; private set; } = 1.0;
-    public double LiftScale { get; private set; } = 1.0;
+
+    /// <summary>The learned cross-flow force coefficient, site frame (KsaPointMassModel.CrossBias).</summary>
+    public double BiasX { get; private set; }
+    public double BiasY { get; private set; }
+    public double BiasZ { get; private set; }
+
     public double ThrustScale { get; private set; } = 1.0;
 
     public double TimeConstant { get; init; } = 3.0;
@@ -624,23 +618,39 @@ public sealed class AeroScaleEstimator
     public double MinThrustScale { get; init; } = 0.7;
     public double MaxThrustScale { get; init; } = 1.3;
 
-    /// <summary>Lift is only measured where the model's lift is at least this fraction of its drag; below it the ratio is noise over nothing.</summary>
-    public double MinLiftFraction { get; init; } = 0.1;
+    /// <summary>Largest cross-flow coefficient learned, on the reference area: a correction, not a second lift model. The 2026-11-18 booster needed about 0.05.</summary>
+    public double MaxBias { get; init; } = 0.5;
 
     public void Reset()
     {
-        DragScale = LiftScale = ThrustScale = 1.0;
+        DragScale = ThrustScale = 1.0;
+        BiasX = BiasY = BiasZ = 0.0;
     }
 
-    /// <summary>The nominal model with the learned scales applied.</summary>
+    /// <summary>The nominal model with the learned corrections applied.</summary>
     public KsaPointMassModel Apply(KsaPointMassModel nominal) => nominal with
     {
         DragScale = DragScale,
-        LiftScale = LiftScale,
+        CrossBiasX = BiasX,
+        CrossBiasY = BiasY,
+        CrossBiasZ = BiasZ,
         ThrustScale = ThrustScale,
     };
 
-    /// <param name="nominal">The model with every scale at 1.</param>
+    /// <summary>The learned cross-flow force as an acceleration at a state, m/s^2, for the readouts.</summary>
+    public double BiasAcceleration(KsaPointMassModel nominal, double[] x)
+    {
+        double m = x[PointMass3Dof.IM];
+        if (!(m > 0.0)) return 0.0;
+        double sp = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
+        if (!(sp > 1.0)) return 0.0;
+        double hx = x[3] / sp, hy = x[4] / sp, hz = x[5] / sp;
+        double along = BiasX * hx + BiasY * hy + BiasZ * hz;
+        double cx = BiasX - along * hx, cy = BiasY - along * hy, cz = BiasZ - along * hz;
+        return nominal.DynamicPressure(x) * nominal.ReferenceArea / m * Math.Sqrt(cx * cx + cy * cy + cz * cz);
+    }
+
+    /// <param name="nominal">The model with every correction at its neutral value.</param>
     /// <param name="x">Measured state, model frame.</param>
     /// <param name="b">Measured body axis.</param>
     /// <param name="throttle">Throttle the engine was commanded to, 0 with it off.</param>
@@ -655,31 +665,46 @@ public sealed class AeroScaleEstimator
         {
             double thrustAccel = nominal.Thrust(throttle, nominal.Altitude(x)) / x[PointMass3Dof.IM];
             if (!(thrustAccel > 0.5)) return;
-            double[] aero = PredictedAero(nominal with { DragScale = DragScale, LiftScale = LiftScale }, x, b);
+            double[] aero = PredictedAero(Apply(nominal) with { ThrustScale = 1.0 }, x, b);
             double along = (measured[0] - aero[0]) * b[0] + (measured[1] - aero[1]) * b[1] + (measured[2] - aero[2]) * b[2];
             double blendT = 1.0 - Math.Exp(-dt / ThrustTimeConstant);
             ThrustScale = Math.Clamp(ThrustScale + (along / thrustAccel - ThrustScale) * blendT, MinThrustScale, MaxThrustScale);
             return;
         }
 
-        if (nominal.DynamicPressure(x) < MinDynamicPressure || !(sp > 1.0)) return;
-        double[] a = PredictedAero(nominal, x, b);
+        double q = nominal.DynamicPressure(x);
+        if (q < MinDynamicPressure || !(sp > 1.0)) return;
         double[] h = [vx / sp, vy / sp, vz / sp];
+        double blend = 1.0 - Math.Exp(-dt / TimeConstant);
 
+        // Drag, along the airflow: a scale on the table's.
+        double[] a = PredictedAero(nominal, x, b);
         double predDrag = -(a[0] * h[0] + a[1] * h[1] + a[2] * h[2]);
         double measDrag = -(measured[0] * h[0] + measured[1] * h[1] + measured[2] * h[2]);
-        double blend = 1.0 - Math.Exp(-dt / TimeConstant);
         if (predDrag > 1e-3)
             DragScale = Math.Clamp(DragScale + (measDrag / predDrag - DragScale) * blend, MinScale, MaxScale);
 
-        double[] predLift = [a[0] + predDrag * h[0], a[1] + predDrag * h[1], a[2] + predDrag * h[2]];
-        double[] measLift = [measured[0] + measDrag * h[0], measured[1] + measDrag * h[1], measured[2] + measDrag * h[2]];
-        double pl2 = predLift[0] * predLift[0] + predLift[1] * predLift[1] + predLift[2] * predLift[2];
-        if (pl2 > Math.Pow(MinLiftFraction * predDrag, 2) && pl2 > 1e-6)
+        // Across it: what the table's lift leaves unexplained, as a coefficient on q S. Only the cross-flow part is learned; the model applies only that part.
+        double[] r = [measured[0] - a[0], measured[1] - a[1], measured[2] - a[2]];
+        double rAlong = r[0] * h[0] + r[1] * h[1] + r[2] * h[2];
+        double qsOverM = q * nominal.ReferenceArea / x[PointMass3Dof.IM];
+        if (!(qsOverM > 0.0)) return;
+        double tx = (r[0] - rAlong * h[0]) / qsOverM, ty = (r[1] - rAlong * h[1]) / qsOverM, tz = (r[2] - rAlong * h[2]) / qsOverM;
+        double bAlong = BiasX * h[0] + BiasY * h[1] + BiasZ * h[2];
+        double bx = BiasX - bAlong * h[0], by = BiasY - bAlong * h[1], bz = BiasZ - bAlong * h[2];
+        bx += (tx - bx) * blend;
+        by += (ty - by) * blend;
+        bz += (tz - bz) * blend;
+        double size = Math.Sqrt(bx * bx + by * by + bz * bz);
+        if (size > MaxBias)
         {
-            double ratio = (measLift[0] * predLift[0] + measLift[1] * predLift[1] + measLift[2] * predLift[2]) / pl2;
-            LiftScale = Math.Clamp(LiftScale + (ratio - LiftScale) * blend, MinScale, MaxScale);
+            bx *= MaxBias / size;
+            by *= MaxBias / size;
+            bz *= MaxBias / size;
         }
+        BiasX = bx;
+        BiasY = by;
+        BiasZ = bz;
     }
 
     /// <summary>The model's aerodynamic acceleration at a state and attitude, engine off: its derivative less the same with the air taken away.</summary>
@@ -689,7 +714,7 @@ public sealed class AeroScaleEstimator
         Span<double> f0 = stackalloc double[PointMass3Dof.NX];
         double[] u = [b[0], b[1], b[2], 0.0];
         PointMass3Dof.Eval(model, x, u, f);
-        PointMass3Dof.Eval(model with { Drag = null, Lift = null }, x, u, f0);
+        PointMass3Dof.Eval(model with { Drag = null, LiftSlope = null, CrossBiasX = 0, CrossBiasY = 0, CrossBiasZ = 0 }, x, u, f0);
         return [f[3] - f0[3], f[4] - f0[4], f[5] - f0[5]];
     }
 
@@ -699,7 +724,7 @@ public sealed class AeroScaleEstimator
         Span<double> f = stackalloc double[PointMass3Dof.NX];
         Span<double> f0 = stackalloc double[PointMass3Dof.NX];
         PointMass3Dof.Eval(model, x, [b[0], b[1], b[2], throttle], f);
-        PointMass3Dof.Eval(model with { Drag = null, Lift = null }, x, [b[0], b[1], b[2], 0.0], f0);
+        PointMass3Dof.Eval(model with { Drag = null, LiftSlope = null, CrossBiasX = 0, CrossBiasY = 0, CrossBiasZ = 0 }, x, [b[0], b[1], b[2], 0.0], f0);
         return [f[3] - f0[3], f[4] - f0[4], f[5] - f0[5]];
     }
 }
