@@ -89,8 +89,7 @@ internal static class JettisonAnalysis
         return true;
     }
 
-    // True when the next row that would fire separates every control module from the vehicle.
-    // Staging past the last control module is a legitimate thing to want, not an automatic one.
+    // Hold automatic separation when the retained parts would lose usable stock control.
     public static bool WouldSeparateLastControl(Vehicle vehicle)
     {
         SequenceList seqList = vehicle.Parts.SequenceList;
@@ -103,23 +102,39 @@ internal static class JettisonAnalysis
         for (int i = 0; i < parts.Length; i++)
         {
             foreach (ISequenced module in parts[i].InSequence(next.Number))
-            {
-                if (module is Decoupler decoupler && GetJettisonedRoot(decoupler, out Part? root) == Separation.Predicted)
-                    AddSubtree(root!, _guardSet);
-            }
+                CollectGuardDrop(vehicle, module);
         }
 
-        bool separatesLastControl = false;
-        if (_guardSet.Count > 0)
-        {
-            Span<Control> controls = vehicle.Parts.Modules.Get<Control>();
-            separatesLastControl = controls.Length > 0;
-            for (int i = 0; i < controls.Length && separatesLastControl; i++)
-                separatesLastControl = _guardSet.Contains(controls[i].Parent.FullPart);
-        }
-        // Cleared on the way out, so the scratch set does not pin a shed subtree.
+        return GuardWouldLoseControl(vehicle);
+    }
+
+    internal static bool WouldSeparateLastControl(Vehicle vehicle, IReadOnlyList<ISequenced> pendingDecouplers)
+    {
         _guardSet.Clear();
-        return separatesLastControl;
+        foreach (ISequenced module in pendingDecouplers)
+            CollectGuardDrop(vehicle, module);
+        return GuardWouldLoseControl(vehicle);
+    }
+
+    private static void CollectGuardDrop(Vehicle vehicle, ISequenced module)
+    {
+        if (module is Decoupler decoupler && ReferenceEquals(decoupler.Parent.FullPart.Tree, vehicle.Parts)
+            && GetJettisonedRoot(decoupler, out Part? root) == Separation.Predicted)
+            AddSubtree(root!, _guardSet);
+    }
+
+    private static bool GuardWouldLoseControl(Vehicle vehicle)
+    {
+        try
+        {
+            return _guardSet.Count > 0
+                && StageControl.Evaluate(vehicle, _guardSet, exclude: true) != VehicleControl.Controllable
+                && StageControl.Evaluate(vehicle) == VehicleControl.Controllable;
+        }
+        finally
+        {
+            _guardSet.Clear();
+        }
     }
 
     private static Sequence? FindSequence(SequenceList seqList, int number)

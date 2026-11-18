@@ -2917,7 +2917,7 @@ internal static class Program
         Check("the parts of TUNE have a card each", PageText.TuneLandingCards.Length == Enum.GetValues<TuneLanding>().Length && PageText.DiagViewCards.Length == Enum.GetValues<TuneDiagnostics>().Length
             && Enum.GetValues<TuneSet>().All(s => PageText.TuneSetCard(s).Length > 0));
         Check("the fold cards tell their case", PageText.LimitsTip(false).Contains("without atmosphere") && !PageText.LimitsTip(true).Contains("without atmosphere")
-            && PageText.BoostersTip(0).Contains("command pod") && !PageText.BoostersTip(2).Contains("command pod"));
+            && PageText.BoostersTip(0).Contains("powered probe core") && !PageText.BoostersTip(2).Contains("powered probe core"));
         Check("HOW IT FLIES says the kept rule once", PageText.HowItFliesTip.Contains(PageText.KeptRule));
         Check("the card words stay plain", !PageText.PlanTip.Contains("form of this page") && !PageText.SolverTip.Contains("card of a row") && !PageText.FlownByCard(Owner.Afc).Contains("in the head") && !PageText.FlyPassTip(false).StartsWith("Flies this pass now", StringComparison.Ordinal));
         Check("the card of FLY PASS says who burns it, as the row beside it does", PageText.FlyPassTip(false).Contains("STOCK AUTO") && PageText.FlyPassTip(true).Contains("RCS") && !PageText.FlyPassTip(true).Contains("STOCK AUTO"));

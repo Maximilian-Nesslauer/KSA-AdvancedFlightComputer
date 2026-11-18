@@ -5,6 +5,7 @@ using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
+using Brutal.Numerics;
 using HarmonyLib;
 using HeadlessHarness.Harness;
 using KSA;
@@ -21,6 +22,7 @@ public sealed class GuidanceBoosterHandoverTest : AfcTest
     private const double WindowS = 30.0;
     private const double DecouplerDelayS = 35.0;
     private const int MaxRowsBeforeSeparation = 4;
+    private const string TestProbe = "CoreCommandC_Prefab_ProbeCoreSmallA";
 
     private static double _now;
 
@@ -325,8 +327,12 @@ public sealed class GuidanceBoosterHandoverTest : AfcTest
             if (roots.Count > 0)
             {
                 VehicleAutopilotState state = VehicleAutopilotState.For(vehicle);
+                int sequenceIndex = vehicle.Parts.SequenceList.Sequences.IndexOf(next);
                 foreach (Part root in roots)
                 {
+                    if (StageControl.Evaluate(vehicle, GuidanceWindow.PartsLeavingWith(vehicle, root, sequenceIndex))
+                        != VehicleControl.Controllable)
+                        FitReturnProbe(vehicle, root);
                     double lat = 10.0 + _siteLat.Count;
                     _siteLat[root.InstanceId] = lat;
                     state.StageTargets[root.InstanceId] = new Brutal.Numerics.double2(lat, 20.0);
@@ -337,6 +343,19 @@ public sealed class GuidanceBoosterHandoverTest : AfcTest
             driver.Step(0.05, 2);
         }
         return null;
+    }
+
+    // These fixtures exercise the hand-over itself. Give any uncontrolled stock drops usable avionics.
+    private static void FitReturnProbe(Vehicle vehicle, Part root)
+    {
+        var probe = new Part(TestProbe, ModLibrary.Get<PartTemplate>(TestProbe))
+        {
+            PositionParentAsmb = root.PositionVehicleAsmb + new double3(0.0, 1.8, 0.0)
+        };
+        if (!root.AddChild(probe) || !Part.Connection.ConnectSurfaceMount(probe, root))
+            throw new InvalidOperationException("The hand-over fixture could not attach its stock probe.");
+        foreach (Battery battery in probe.SubtreeModules.Get<Battery>())
+            battery.Refill(ref vehicle.Parts.Batteries.GetModuleAndAllMutableStatesForInitialization(battery).State);
     }
 
     private static Vehicle? FindTargetedChild(TestContext t, Vehicle source, VehicleAutopilotState state)

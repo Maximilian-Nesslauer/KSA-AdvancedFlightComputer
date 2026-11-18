@@ -471,7 +471,7 @@ public static partial class GuidanceWindow
 
     /// <summary>
     /// The stages that can fly themselves home, one row each with its SITE.
-    ///  CONTROLLABILITY IS THE TEST, not size: a stage can be flown if the subtree that separates carries a command pod, which is the same thing Vehicle.IsControllable asks. An interstage does not qualify however large it is, and a stage that separates once the climb is over is going orbital speed and is not listed.
+    /// The separating parts must keep usable stock control. Stages that separate after ascent are outside boostback range.
     ///  A SITE ON A STAGE ASKS FOR ITS RESERVE: the calculated climb sizes what that booster keeps for the boostback and the landing, which the RESERVE row shows.
     /// </summary>
     private static void DrawReturnableStageRows()
@@ -517,12 +517,7 @@ public static partial class GuidanceWindow
             {
                 ImGui.SameLine();
                 if (ConsoleWidgets.Button("X".AsSpan(), $"AfcStageClear{stage.RootId}".AsSpan(), default))
-                {
-                    _s.StageTargets.Remove(stage.RootId);
-                    _s.StageOptimalReturn.Remove(stage.RootId);
-                    _s.OptimalReturnSites.Remove(stage.RootId);
-                    _s.StageModelDirty = true;
-                }
+                    ClearStageReturn(_s, stage.RootId);
             }
             ConsoleUi.EndRow();
 
