@@ -81,7 +81,7 @@ internal static class TransferBounds
                 continue;
             if (!InSameNeighbourhood(astronomical, orbiter, parent))
                 continue;
-            if ((orbiter.Orbit != null && orbiter.Orbit.Eccentricity >= 1.0) || double.IsNaN(orbiter.SphereOfInfluence) || orbiter.SphereOfInfluence <= 0.0)
+            if ((orbiter.Orbit != null && !orbiter.Orbit.IsBound()) || double.IsNaN(orbiter.SphereOfInfluence) || orbiter.SphereOfInfluence <= 0.0)
                 continue;
             list.Add(new TransferObject(astronomical));
         }

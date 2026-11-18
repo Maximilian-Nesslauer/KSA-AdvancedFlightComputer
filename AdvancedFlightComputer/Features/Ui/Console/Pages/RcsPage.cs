@@ -191,7 +191,7 @@ internal static class RcsPage
         Orbit? now = p.Vehicle.Orbit;
         Orbit? after = OrbitToolsPanel.OrbitAfter(p.Node);
         return now == null || after == null ? ""
-            : PageText.BurnGoal(now.PeriapsisAltitude / 1000.0, now.ApoapsisAltitude / 1000.0, after.PeriapsisAltitude / 1000.0, after.ApoapsisAltitude / 1000.0, after.Eccentricity < 1.0);
+            : PageText.BurnGoal(now.PeriapsisAltitude / 1000.0, now.ApoapsisAltitude / 1000.0, after.PeriapsisAltitude / 1000.0, after.ApoapsisAltitude / 1000.0, after.IsBound());
     }
 
     private static Picked ReadPicked(Vehicle vehicle, Burn node, bool isNext, RcsExecution? exec)

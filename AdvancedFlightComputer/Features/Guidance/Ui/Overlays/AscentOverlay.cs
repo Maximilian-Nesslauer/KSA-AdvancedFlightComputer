@@ -273,7 +273,7 @@ public static partial class GuidanceWindow
                 anchor = _s.Upfg.Rd;
                 behind = aim.TrueAnomaly;
             }
-            else if (!_s.Running && orbit.Eccentricity >= UpfgTarget.MinArgPeEccentricity && orbit.Eccentricity < 1.0
+            else if (!_s.Running && orbit.IsBound() && orbit.Eccentricity >= UpfgTarget.MinArgPeEccentricity
                      && orbit.Periapsis > bodyRadius)
             {
                 // The eccentricity vector, which points at periapsis; its scale does not matter here.

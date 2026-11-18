@@ -217,7 +217,7 @@ internal sealed class DeorbitPlanner : IDisposable
         DeorbitRequest request = _request;
         if (!request.Settings.IsValid || !double.IsFinite(request.SiteHeight)
             || !(request.Source.Period > 0) || !double.IsFinite(request.Source.Period)
-            || request.Source.Eccentricity >= 1 || !(request.Mass > 0) || request.Model.Stages.Count == 0)
+            || !request.Source.IsBound() || !(request.Mass > 0) || request.Model.Stages.Count == 0)
         {
             Status = "APPROACH NEEDS: BOUND ORBIT, TERRAIN, ENGINE MODEL.";
             yield break;
@@ -761,7 +761,7 @@ internal sealed class DeorbitArcCheck
         if (orbit.Periapsis > _safeRadius) { _last = true; return; }
         // The next periapsis counts only if it belongs to the flown interval.
         double pe = orbit.TimeAtPeriapsis.Seconds();
-        if (orbit.Eccentricity < 1 && orbit.Period > 0)
+        if (orbit.IsBound() && orbit.Period > 0)
             pe += Math.Ceiling((start - pe) / orbit.Period) * orbit.Period;
         if (pe >= start && pe <= end) Check(pe);
     }

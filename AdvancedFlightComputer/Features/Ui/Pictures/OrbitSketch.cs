@@ -34,7 +34,7 @@ internal static class OrbitSketch
 
     private static OrbitShape ShapeOf(Orbit orbit, in SketchFrame frame)
     {
-        if (!(orbit.Eccentricity < 1.0) || !double.IsFinite(orbit.Apoapsis))
+        if (!orbit.IsBound() || !double.IsFinite(orbit.Apoapsis))
             return default;
         double3 toPe = Normalize(orbit.GetPositionCci(new TrueAnomaly(0.0)));
         double3 onward = orbit.GetPositionCci(new TrueAnomaly(Math.PI * 0.5));
@@ -128,9 +128,9 @@ internal static class OrbitSketch
                 labels.Curve(pts.AsSpan(0, count));
             }
 
-            if (labelled.Eccentricity < 1.0 && SketchMath.ApsisDotsShow(labelled.Eccentricity))
+            if (labelled.IsBound() && SketchMath.ApsisDotsShow(labelled.Eccentricity))
                 ApsisDots(in f, labelled, in frame, Palette.Dim.Solid, labels);
-            if (result != null && result.Eccentricity < 1.0 && SketchMath.ApsisDotsShow(result.Eccentricity))
+            if (result != null && result.IsBound() && SketchMath.ApsisDotsShow(result.Eccentricity))
                 ApsisDots(in f, result, in frame, Palette.Plan.Solid, labels);
         }
 
@@ -164,7 +164,7 @@ internal static class OrbitSketch
     private static int TrackPoints(Orbit orbit, in SketchFrame frame, double limit, float2[] pts)
     {
         OrbitShape shape = ShapeOf(orbit, in frame);
-        (double from, double to) = SketchMath.DrawableAnomaly(orbit.Eccentricity);
+        (double from, double to) = SketchMath.DrawableAnomaly(orbit.Eccentricity, orbit.IsBound());
         int count = 0;
         for (int i = 0; i <= Samples; i++)
         {
@@ -186,14 +186,14 @@ internal static class OrbitSketch
         int solid = 0;
         foreach (Track t in tracks)
         {
-            if (t.Dashed || !(t.Orbit.Eccentricity < 1.0))
+            if (t.Dashed || !t.Orbit.IsBound())
                 continue;
             solidAp[solid] = SketchMath.SchematicRadius(t.Orbit.Apoapsis, radius, top, airRadius: airRadius) * outer;
             solidPe[solid++] = SketchMath.SchematicRadius(t.Orbit.Periapsis, radius, top, airRadius: airRadius) * outer;
         }
         foreach (Track t in tracks)
         {
-            if (!t.Dashed || !(t.Orbit.Eccentricity < 1.0))
+            if (!t.Dashed || !t.Orbit.IsBound())
                 continue;
             double ap = SketchMath.SchematicRadius(t.Orbit.Apoapsis, radius, top, airRadius: airRadius) * outer;
             double pe = SketchMath.SchematicRadius(t.Orbit.Periapsis, radius, top, airRadius: airRadius) * outer;
@@ -365,7 +365,7 @@ internal static class OrbitSketch
         foreach (Track t in tracks)
         {
             int start = _world.Count;
-            (double from, double to) = SketchMath.DrawableAnomaly(t.Orbit.Eccentricity);
+            (double from, double to) = SketchMath.DrawableAnomaly(t.Orbit.Eccentricity, t.Orbit.IsBound());
             for (int i = 0; i <= Samples; i++)
             {
                 double nu = from + (to - from) * i / Samples;
@@ -384,7 +384,7 @@ internal static class OrbitSketch
     private static void ApsisTexts(Orbit orbit, double radius, out string ap, out string pe)
     {
         pe = orbit.Periapsis < radius ? PageText.SketchPeBelowGround : "PE " + Fmt.Km((orbit.Periapsis - radius) / 1000.0);
-        ap = orbit.Eccentricity < 1.0 && double.IsFinite(orbit.Apoapsis) ? "AP " + Fmt.Km((orbit.Apoapsis - radius) / 1000.0) : PageText.Escapes;
+        ap = orbit.IsBound() && double.IsFinite(orbit.Apoapsis) ? "AP " + Fmt.Km((orbit.Apoapsis - radius) / 1000.0) : PageText.Escapes;
     }
 
     private static void ApsisDots(in PictureFrame f, Orbit orbit, in SketchFrame frame, ImColor8 color, Labels labels)
@@ -428,7 +428,7 @@ internal static class OrbitSketch
         double r = 0.0;
         foreach (Track t in tracks)
         {
-            if (t.Orbit.Eccentricity < 1.0 && double.IsFinite(t.Orbit.Apoapsis))
+            if (t.Orbit.IsBound() && double.IsFinite(t.Orbit.Apoapsis))
                 r = Math.Max(r, t.Orbit.Apoapsis);
             else if (double.IsFinite(t.Orbit.Periapsis))
                 r = Math.Max(r, t.Orbit.Periapsis * 2.0);

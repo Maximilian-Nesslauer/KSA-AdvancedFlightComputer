@@ -8,9 +8,9 @@ namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 
 /// <summary>
 /// Adds unbound bodies that stock excludes from the transfer target list. A body still needs a
-/// positive, non-NaN sphere of influence. Stock drops <c>Eccentricity &gt;= 1.0</c>, while the
-/// handling patches use <see cref="Orbit.IsBound"/> so they also cover the narrow parabolic band
-/// whose Period is NaN. Only bodies orbiting the transfer's own frame are listed, see
+/// positive, non-NaN sphere of influence. Stock and AFC use <see cref="Orbit.IsBound"/> to
+/// classify the orbit, including in the narrow parabolic band where Period is NaN.
+/// Only bodies orbiting the transfer's own frame are listed, see
 /// <see cref="HyperbolicTargets.TransferFrame"/>, so from a moon orbit a heliocentric comet stays
 /// out, because a plan around the planet could not reach it.
 /// </summary>
