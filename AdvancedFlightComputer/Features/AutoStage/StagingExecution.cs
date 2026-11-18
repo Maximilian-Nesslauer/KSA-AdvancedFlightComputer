@@ -10,7 +10,7 @@ namespace AdvancedFlightComputer.Features.AutoStage;
 // Sorting per module lets one part fire its motor and its two mounts on three different rows.
 internal static class StagingExecution
 {
-    public static PendingStaging? ActivateNextSequenceSplit(Vehicle vehicle)
+    public static PendingStaging? ActivateNextSequenceSplit(Vehicle vehicle, Sequence? selected = null)
     {
         if (!StagingDetector.ControlAvailable(vehicle))
             return null;
@@ -31,8 +31,11 @@ internal static class StagingExecution
                 seq.Activated = true;
                 continue;
             }
-            target = seq;
-            break;
+            if (selected == null || ReferenceEquals(selected, seq))
+            {
+                target = seq;
+                break;
+            }
         }
 
         if (target == null)

@@ -78,7 +78,7 @@ public static partial class GuidanceWindow
             seconds = StagingCountdown.Soonest(seconds, StagingCountdown.Now(ship, _s.DroneShipLastT, now));
         }
 
-        if (double.IsFinite(seconds) && vehicle.Parts?.SequenceList is SequenceList list && StagingHooks.NextRowToFire(list) is Sequence next)
+        if (double.IsFinite(seconds) && FairingJettison.NextAutomaticSequence(vehicle, StagingDetector.StateOf(vehicle)) is Sequence next)
             seconds += Math.Max(0.0, StagingConfig.GetSequenceDecouplerDelay(vehicle, next.Number));
 
         _s.SeparationInS = seconds;

@@ -51,6 +51,8 @@ internal static class StagingDetector
         state.Active = active;
         if (!active)
         {
+            state.FairingGate.Reset();
+            state.FairingFailed.Clear();
             // Dropped rather than frozen: sim time runs on while the switch is off, so a dwell left armed would already be expired on the frame it is switched back on.
             state.PropagationFrames = 0;
             state.ResetDwell();
@@ -113,6 +115,7 @@ internal static class StagingDetector
             state.SampledHadPropellant = false;
             state.State = StagingState.Phase.Monitoring;
             state.ResetDwell();
+            state.FairingGate.Reset();
         }
         return false;
     }
@@ -173,6 +176,9 @@ internal static class StagingDetector
             if (!ControlAvailable(vehicle))
                 continue;
 
+            if (FairingJettison.AwaitRelease(vehicle, state, now))
+                continue;
+
             // First, armed or not: the row is already marked activated and stock skips activated rows forever, so a module dropped here could never fire again.
             TickPendingStaging(vehicle, state, now);
 
@@ -182,7 +188,10 @@ internal static class StagingDetector
             if (state.Active ? !sampled : state.State == StagingState.Phase.Monitoring)
                 continue;
 
+            bool fairingReady = state.Active && FairingJettison.Observe(vehicle, state, now);
             EvaluateVehicle(vehicle, state, now);
+            if (fairingReady && state.State == StagingState.Phase.Monitoring && state.Pending == null)
+                FairingJettison.TryRelease(vehicle, state, now);
         }
 #if DEBUG
         if (DebugConfig.Performance)
@@ -449,7 +458,7 @@ internal static class StagingDetector
             return;
         state.SpentJettisonBlockerReported = blocker;
 
-        int next = vehicle.Parts.SequenceList.GetNextSequenceNumber();
+        int next = FairingJettison.NextAutomaticSequence(vehicle, state)?.Number ?? -1;
         string detail = measured
             ? $"next sequence {next}, inside: {survey.SpentInside} spent / {survey.FueledInside} fueled / " +
               $"{survey.BrokenInside} broken / {survey.InactiveInside} not run, " +
@@ -551,7 +560,14 @@ internal static class StagingDetector
                 return;
             }
         }
-        if (JettisonAnalysis.WouldSeparateLastControl(vehicle))
+        Sequence? next = FairingJettison.NextAutomaticSequence(vehicle, state);
+        if (next == null)
+        {
+            state.HeldBurn = null;
+            state.State = StagingState.Phase.Monitoring;
+            return;
+        }
+        if (JettisonAnalysis.WouldSeparateLastControl(vehicle, next))
         {
             // Once per row: the triggers keep asking every frame while the row stands.
             if (!state.HeldForControl)
@@ -582,7 +598,7 @@ internal static class StagingDetector
         if (state.Pending?.DecouplersPending == true)
             return;
 
-        PendingStaging? pending = StagingExecution.ActivateNextSequenceSplit(vehicle);
+        PendingStaging? pending = StagingExecution.ActivateNextSequenceSplit(vehicle, next);
         state.Activations++;
 
         KeepAutoBurn(vehicle, state, fc);

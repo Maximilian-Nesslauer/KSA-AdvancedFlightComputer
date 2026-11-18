@@ -523,6 +523,8 @@ public sealed class VehicleAutopilotState
     /// <summary>Max-q 195 kPa, just under the 200 kPa KSA itself holds a vehicle to, so the plan uses all the dynamic pressure the game allows and keeps a margin from its limit. A KSA stack lifting off at three to five g cannot hold the script's Saturn V 35 kPa at full throttle, and at 140 the planner often had to retry looser anyway. Q-alpha is the script's 3500 Pa rad. A plan is solved to 98 % of the break-up dynamic pressure at most, rounded down to 5 kPa, and a relaxed retry goes no higher.</summary>
     public double ConvexQMaxKpa = 195.0;
     public double ConvexQAlphaMax = 3500.0;
+    public double FairingAltitudeKm = 30.0;
+    public double FairingQKpa = 3.0;
 
     /// <summary>Above this altitude the open-loop profile hands over to UPFG, unless the target periapsis is low enough to bring the hand-over lower: see <see cref="HandoverAltKm"/>.</summary>
     public double ConvexHandoverAltKm = 80.0;
