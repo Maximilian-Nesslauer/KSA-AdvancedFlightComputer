@@ -58,7 +58,7 @@ internal static class EntryDeorbitPlanner
 
         const double schedulingMargin = 45.0;
         double soon = request.Epoch + request.StockPreparation + schedulingMargin;
-        for (int attempt = 0; attempt < 2; attempt++)
+        for (int attempt = 0; attempt < 4; attempt++)
         {
             UniverseTime departure = new(soon);
             if (request.Source.Eccentricity > 1e-6)
@@ -90,9 +90,11 @@ internal static class EntryDeorbitPlanner
                 return null;
             }
             double duration = (request.Mass - cutoff) / request.Engines[0].MassFlow;
-            if (departure.Seconds() < request.Epoch + request.StockPreparation + schedulingMargin + duration * 0.6)
+            double earliestDeparture = request.Epoch + request.StockPreparation + schedulingMargin + duration * 0.6;
+            if (departure.Seconds() < earliestDeparture)
             {
-                soon = request.Epoch + request.StockPreparation + schedulingMargin + duration * 0.6;
+                // Allow for the next candidate's duration and for UniverseTime rounding.
+                soon = earliestDeparture + 1.0;
                 continue;
             }
             Orbit lowered = Orbit.CreateFromStateCci(request.Parent, departure, state.PositionCci, velocity,
