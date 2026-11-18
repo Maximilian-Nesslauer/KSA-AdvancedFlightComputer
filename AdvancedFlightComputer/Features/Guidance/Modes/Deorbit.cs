@@ -85,8 +85,22 @@ public static partial class GuidanceWindow
             : "DEORBIT STOPPED: " + string.Join(", ", changed) + " CHANGED.";
     }
 
-    private static string DeorbitSettingsRefusal(IParentBody parent)
+    internal static string AtmosphericDeorbitRefusal(Orbit orbit, bool entryBurnOnly)
     {
+        if (entryBurnOnly || orbit?.Parent is not IParentBody parent || !orbit.IsBound())
+            return "";
+        double atmosphere = parent.GetAtmosphereRadius();
+        return atmosphere > parent.MeanRadius && orbit.GetPeriapsisPositionOrb().Length() >= atmosphere
+            ? Ui.Logic.CommitResolver.AtmosphericDeorbitRoute
+            : "";
+    }
+
+    private static string DeorbitSettingsRefusal(Orbit orbit)
+    {
+        string atmosphere = AtmosphericDeorbitRefusal(orbit, _s.DeorbitOnly);
+        if (atmosphere.Length > 0)
+            return atmosphere;
+        IParentBody parent = orbit?.Parent;
         DeorbitSettings settings = CurrentDeorbitSettings();
         if (_s.GLimitEnabled && (!double.IsFinite(_s.GLimitG) || _s.GLimitG <= 0.1))
             return "SET MAX ACCELERATION ON LAUNCH ABOVE 0.1 g OR G-LIMIT OFF.";
@@ -124,9 +138,11 @@ public static partial class GuidanceWindow
         // Touchdown guidance is the player's only descent solver. G-FOLD flies a craft that touchdown guidance cannot plan for, and that is decided again for each landing, ahead of the settings check, which reads the solver.
         string refusal = LandingSwitchesOff
             ? "DEORBIT NEEDS AFC MAY STEER + AFC MAY USE ENGINES. SEE GNC SWITCHES (MORE)."
-            : _s.DeorbitOnly ? "" : ChooseLandingSolver(vehicle);
+            : AtmosphericDeorbitRefusal(vehicle.Orbit, _s.DeorbitOnly);
+        if (refusal.Length == 0 && !_s.DeorbitOnly)
+            refusal = ChooseLandingSolver(vehicle);
         if (refusal.Length == 0)
-            refusal = DeorbitSettingsRefusal(vehicle.Orbit?.Parent);
+            refusal = DeorbitSettingsRefusal(vehicle.Orbit);
         if (refusal.Length > 0)
         {
             _s.WarnLanding(refusal);
@@ -288,7 +304,7 @@ public static partial class GuidanceWindow
     private static bool StartDeorbitSearch(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
         if (GuidanceClock.NowMs < _s.DeorbitNextValidationTick) return false;
-        string refusal = DeorbitSettingsRefusal(parent);
+        string refusal = DeorbitSettingsRefusal(orbit);
         if (refusal.Length > 0) { RefuseDeorbit(vehicle, refusal); return false; }
         if (!TryCaptureDeorbitRequest(vehicle, orbit, parent)) { RefuseDeorbit(vehicle, "NO USABLE ENGINE MODEL."); return false; }
         DeorbitRequest request = _s.DeorbitRequest;
