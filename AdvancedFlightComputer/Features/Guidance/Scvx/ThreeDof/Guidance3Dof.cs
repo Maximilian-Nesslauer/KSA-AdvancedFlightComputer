@@ -72,8 +72,8 @@ public sealed class Guidance3Dof
 
     public sealed record Settings
     {
-        /// <summary>Time to ignition at which it is committed and the glide phase dropped, s.</summary>
-        public double LockSeconds { get; init; } = 4.0;
+        /// <summary>Time to ignition at which it is committed and the glide phase dropped, s: from here the plan locked on is flown open loop to ignition (<see cref="LockPlan"/>). 4 s until 2026-11-18; 2.5 s keeps the glide re-solving closer to the ground, where the dispersions are, and still leaves the burn-only solves two dozen cycles before the engine lights.</summary>
+        public double LockSeconds { get; init; } = 2.5;
 
         /// <summary>
         /// Throttle the plan may use before ignition is committed, and after. Two margins, stacked:
