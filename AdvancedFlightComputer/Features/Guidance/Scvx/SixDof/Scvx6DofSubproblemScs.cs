@@ -287,6 +287,20 @@ public sealed class Scvx6DofSubproblemScs
     public double SolutionSigma => Solution[_iSig];
     private double[] Slice(int offset, int count) => Solution[offset..(offset + count)];
 
+    internal double AccelerationSlackCost
+    {
+        get
+        {
+            double cost = 0.0;
+            for (int k = 0; k < _nAc; k++)
+            {
+                int column = _oAc + k;
+                cost += _c[column] * _ws.X[column];
+            }
+            return cost;
+        }
+    }
+
     // ---------------------------------------------------------------- objective
 
     private void AssembleObjective(double mInit, double[] xbar)

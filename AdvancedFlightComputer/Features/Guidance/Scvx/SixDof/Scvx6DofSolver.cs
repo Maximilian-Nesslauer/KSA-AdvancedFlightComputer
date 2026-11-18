@@ -422,7 +422,8 @@ public sealed class Scvx6DofSolver
         double sigma = _sub.SolutionSigma;
 
         // 3. Ratio test. Predicted reduction uses the subproblem's own defect proxy (the virtual control); actual reduction uses the true nonlinear defect at the new point.
-        double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * SumSquaresScaled(wv, _vcs);
+        double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * SumSquaresScaled(wv, _vcs)
+            + _sub.AccelerationSlackCost;
         (double jTrue, double defectNorm) = TrueCost(x, u, sigma,
                                                      out int defectChannel, out int defectNode);
 
@@ -512,7 +513,22 @@ public sealed class Scvx6DofSolver
             fk1.CopyTo(fk);
         }
 
-        return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq, worst);
+        return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq + AccelerationViolationCost(x, u), worst);
+    }
+
+    private double AccelerationViolationCost(double[] x, double[] u)
+    {
+        if (!_cfg.AccelLimitEnabled)
+            return 0.0;
+
+        double violation = 0.0;
+        for (int k = 0; k < _n; k++)
+        {
+            double thrust = u[k * NU + Dynamics6Dof.IT];
+            double mass = x[k * NX + Dynamics6Dof.IM];
+            violation += Math.Max(0.0, thrust - _cfg.AccelMax * mass);
+        }
+        return _cfg.AccelWeight * violation / _us[Dynamics6Dof.IT];
     }
 
     /// <summary>
