@@ -1850,7 +1850,7 @@ public static partial class GuidanceWindow
         {
             double groundRadius = double.IsFinite(_s.LiftoffRadius) ? _s.LiftoffRadius : parent.MeanRadius;
             bool clear = r.Length() - groundRadius >= ForceRollMinAltM;
-            fc.RollMode = _s.ForceRoll && clear
+            fc.RollMode = _s.ForceRoll && clear && !_s.RollProgramTimedOut
                 ? FlightComputerRollMode.Up
                 : FlightComputerRollMode.Decoupled;
         }

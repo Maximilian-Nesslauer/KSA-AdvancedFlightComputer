@@ -437,7 +437,8 @@ public static partial class GuidanceWindow
         double3 spin = new double3(0, 0, omega);
         double3 up = double3.Normalize(r);
         bool startsWithSolid = allStages[0] is { IsPinned: true, Solid: not null };
-        bool plansPadRoll = startsWithSolid && _s.ForceRoll && IsPadAscent(vehicle, r, v, parent);
+        bool padAscent = IsPadAscent(vehicle, r, v, parent);
+        bool plansPadRoll = startsWithSolid && _s.ForceRoll && padAscent;
         bool atRest = (v - double3.Cross(spin, r)).Length() < 10.0;
         if (atRest)
             v = double3.Cross(spin, r) + 10.0 * up;
@@ -598,6 +599,7 @@ public static partial class GuidanceWindow
                 Omega = omega,
                 R0 = r0,
                 V0 = v0,
+                LiftoffDirection = padAscent ? r0 : null,
                 M0 = m0,
                 Stages = list,
                 Atmosphere = air,
@@ -633,6 +635,7 @@ public static partial class GuidanceWindow
         bool optimiseTiming = _s.ConvexOptimiseTiming;
         double qMaxKpa = qMax / 1000.0;
         double insAltKm = (rIns - bodyRadius) / 1000.0;
+        double solidBurnAge = startsWithSolid && TryReadSolidBurnAge(vehicle, out double burnAge) ? burnAge : 0.0;
 
         AscentPlan Publish(AscentSolution solved, AscentProblem winningProblem, double qUsed, string[] notes, double wall, AscentPlanJob.ThrottledKept kept)
         {
@@ -695,6 +698,7 @@ public static partial class GuidanceWindow
             QCeilingKpa = qCeiling / 1000.0,
             SolidStages = allStages.Take(stages).Count(st => st.Solid != null),
             StartsWithSolid = startsWithSolid,
+            SolidBurnAgeAtPlan = solidBurnAge,
             PlansPadRoll = plansPadRoll,
             CoreThrottledDown = stagePlan.CoreThrottledDown,
             StageLines = stagePlan.Describe.Take(stages).Select((d, i) => d
@@ -1108,16 +1112,19 @@ public static partial class GuidanceWindow
         double dt = double.IsFinite(_s.ConvexLastTime) ? Math.Max(0.0, now - _s.ConvexLastTime) : 0.0;
         _s.ConvexLastTime = now;
         double mass = vehicle.TotalMass;
-        bool onPad = double.IsFinite(_s.LiftoffRadius) && vehicle.Situation.HasAnyContact();
+        double climb = r.Length() - _s.LiftoffRadius;
+        if (!double.IsFinite(_s.LiftoffRadius) || (climb >= 0.5 && !vehicle.Situation.HasTerrainContact()))
+            _s.ConvexLiftoffDetected = true;
         if (plan.StartsWithSolid && _s.ConvexStage == 0 && profile.StageOfMass(mass) == 0)
         {
-            // A solid grain burns during the vertical flight, but not while guidance waits for ignition.
-            if (!double.IsFinite(_s.ConvexSolidIgnitionTime) && HasBurningSolid(vehicle))
-                _s.ConvexSolidIgnitionTime = now - dt;
-            if (!onPad && double.IsFinite(_s.ConvexSolidIgnitionTime))
+            // Use burn time since the plan's start even when guidance engages after the grain starts burning.
+            if (!double.IsFinite(_s.ConvexSolidIgnitionTime) && TryReadSolidBurnAge(vehicle, out double age))
+                _s.ConvexSolidIgnitionTime = now - Math.Max(0.0, age - plan.SolidBurnAgeAtPlan);
+            if (_s.ConvexLiftoffDetected && double.IsFinite(_s.ConvexSolidIgnitionTime))
                 _s.ConvexPlanTime = Math.Clamp(now - _s.ConvexSolidIgnitionTime, 0.0, profile.StageEndTime(0));
         }
-        else if (!onPad)
+        else if (_s.ConvexLiftoffDetected && !PadHold(r)
+            && !(_s.ForceRoll && double.IsFinite(_s.LiftoffRadius) && !_s.RollProgramDone && !_s.RollProgramTimedOut))
         {
             _s.ConvexPlanTime = profile.Advance(_s.ConvexPlanTime, AirSpeed(r, v, parent), mass, dt,
                 ref _s.ConvexStage, ref _s.ConvexStageSpeed, ref _s.ConvexFastest);
@@ -1125,17 +1132,33 @@ public static partial class GuidanceWindow
         return profile.Direction(r, _s.ConvexPlanTime, _s.ConvexStage);
     }
 
-    private static bool HasBurningSolid(Vehicle vehicle)
+    private static bool TryReadSolidBurnAge(Vehicle vehicle, out double elapsed)
     {
+        elapsed = double.NaN;
         ReadOnlySpan<RocketState> states = RocketStates.Of(vehicle.Parts);
         if (states.IsEmpty)
             return false;
+        ReadOnlySpan<MoleState> moles = vehicle.Parts.Moles.States;
         foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
+        {
             foreach (Rocket rocket in engine.Rockets)
-                if (rocket is SolidRocket && (uint)rocket.StatesIdx < (uint)states.Length
-                    && states[rocket.StatesIdx].Throttle > 0f)
-                    return true;
-        return false;
+            {
+                if (rocket is not SolidRocket || (uint)rocket.StatesIdx >= (uint)states.Length
+                    || states[rocket.StatesIdx].Throttle <= 0f)
+                    continue;
+                foreach (RocketCore core in rocket.Cores)
+                {
+                    if (core is not SolidMotor motor)
+                        continue;
+                    float grain = motor.ComputeGrainMass(moles) - motor.UnburnableGrainMass;
+                    if (!motor.VacuumThrustProfile.TryComputeRemainingBurn(grain, out float remaining, out _))
+                        continue;
+                    double age = Math.Max(0.0, motor.VacuumThrustProfile.TotalBurnSeconds - remaining);
+                    elapsed = double.IsNaN(elapsed) ? age : Math.Max(elapsed, age);
+                }
+            }
+        }
+        return double.IsFinite(elapsed);
     }
 
     /// <summary>The rotation rate that takes <paramref name="last"/> to <paramref name="want"/> in one step, rad/s about their common normal; and <paramref name="last"/> moved on to <paramref name="want"/>.</summary>

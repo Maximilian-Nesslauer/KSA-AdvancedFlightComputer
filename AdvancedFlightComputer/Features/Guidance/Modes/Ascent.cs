@@ -388,6 +388,7 @@ public static partial class GuidanceWindow
         _s.ConvexStageSpeed = 0.0;
         _s.ConvexLastTime = double.NaN;
         _s.ConvexSolidIgnitionTime = double.NaN;
+        _s.ConvexLiftoffDetected = false;
         _s.ConvexBlendStart = double.NaN;
         string convexWhy = "";
         if (_s.FlyConvexAscent && !_s.BackupAscent && ConvexPlanFlyable(vehicle, orbit, parent, SimNow(), out convexWhy))
@@ -409,6 +410,7 @@ public static partial class GuidanceWindow
         }
         _s.RollProgramStart = double.NaN;
         _s.RollProgramDone = false;
+        _s.RollProgramTimedOut = false;
         _s.CutoffDone = false;
         _s.TerminalLaw = null;
         _s.ReserveStagedRoots.Clear();   // a fresh ascent gets its reserve stagings back
@@ -681,7 +683,7 @@ public static partial class GuidanceWindow
     private const double PadHoldMaxSpeedMs = 30.0;
 
     private static bool IsPadAscent(Vehicle vehicle, double3 r, double3 v, IParentBody parent)
-        => vehicle.Situation.HasAnyContact() && AirSpeed(r, v, parent) < PadHoldMaxSpeedMs;
+        => vehicle.Situation.HasTerrainContact() && AirSpeed(r, v, parent) < PadHoldMaxSpeedMs;
 
     /// <summary>
     /// Whether the ascent is still clearing the pad: engaged on the pad and not yet <see cref="PadClearM"/> above where it engaged. Until then the command is straight up and the flight computer's roll stays decoupled, whatever the solved profile or the forced roll asks for.
@@ -696,15 +698,12 @@ public static partial class GuidanceWindow
     private const double RollProgramMaxS = 10.0;
 
     /// <summary>
-    /// THE ROLL PROGRAM: roll first, then pitch. Once an ascent engaged on the pad has cleared it (PadHold), a forced roll (ForceRoll) is flown while the command stays straight up, and the pitch-over waits until the roll is within RollProgramDoneDeg of its target, or RollProgramMaxS has passed. True while it holds.
-    ///
-    /// WHY. The roll and the pitch-over were let go on two separate tests - the roll at ForceRollMinAltM above the mean radius, the pitch 50 m above the pad - so on a pad near sea level the vehicle started pitching over and rolled only some way into the turn, and even with one test the two would have run together (2026-11-17). Rolling while vertical turns the vehicle about its long axis alone, which is the cheapest roll it will ever have, and it starts the pitch-over already facing its azimuth.
-    ///
-    /// Nothing to wait for without a forced roll (the vehicle keeps the roll it lifted off with), or for an ascent engaged in flight, which has no pad hold.
+    /// Hold a forced-roll pad launch vertical through its clearance and roll.
+    /// If the roll takes too long, release pitch with roll free.
     /// </summary>
     private static bool RollProgramHolds(Vehicle vehicle, double3 r)
     {
-        if (_s.RollProgramDone || !_s.ForceRoll || !double.IsFinite(_s.LiftoffRadius) || PadHold(r))
+        if (_s.RollProgramDone || _s.RollProgramTimedOut || !_s.ForceRoll || !double.IsFinite(_s.LiftoffRadius) || PadHold(r))
             return false;
         if (r.Length() - _s.LiftoffRadius < ForceRollMinAltM)
             return true;
@@ -719,7 +718,8 @@ public static partial class GuidanceWindow
         bool rolled = double.IsFinite(errorDeg) && errorDeg <= RollProgramDoneDeg;
         if (!rolled && held < RollProgramMaxS)
             return true;
-        _s.RollProgramDone = true;
+        _s.RollProgramDone = rolled;
+        _s.RollProgramTimedOut = !rolled;
         GuidanceLog.Debug(vehicle, rolled
             ? FormattableString.Invariant($"roll program done in {held:F1} s ({errorDeg:F1} deg off).")
             : FormattableString.Invariant($"roll program out of time after {held:F0} s, {errorDeg:F1} deg off the roll."));

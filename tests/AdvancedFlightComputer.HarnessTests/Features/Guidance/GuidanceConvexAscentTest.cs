@@ -226,6 +226,17 @@ public abstract class ConvexAscentFlightTest : AfcTest
         }
     }
 
+    private static bool SolidThrustObserved(Vehicle vehicle)
+    {
+        ReadOnlySpan<RocketState> states = RocketStates.Of(vehicle.Parts);
+        foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
+            foreach (Rocket rocket in engine.Rockets)
+                if (rocket is SolidRocket && (uint)rocket.StatesIdx < (uint)states.Length
+                    && states[rocket.StatesIdx].Throttle > 0f)
+                    return true;
+        return false;
+    }
+
     private void Fly(TestContext t, Vehicle vehicle, IParentBody home, SimDriver driver, HashSet<string> preexisting)
     {
         VehicleAutopilotState state = VehicleAutopilotState.For(vehicle);
@@ -313,7 +324,20 @@ public abstract class ConvexAscentFlightTest : AfcTest
         if (!AutoStageFlightSupport.Arm(t, vehicle))
             return;
         vehicle.Parts.SequenceList.ActivateNextSequence(vehicle);
-        driver.Step(1.0);
+        double observedSolidIgnition = double.NaN;
+        if (RequiresSolids)
+        {
+            for (int i = 0; i < 20; i++)
+            {
+                double before = driver.Elapsed.Seconds();
+                driver.Step(0.05);
+                if (!double.IsFinite(observedSolidIgnition) && SolidThrustObserved(vehicle))
+                    observedSolidIgnition = before;
+            }
+            t.Check("the stock solid motor lit before guidance engaged", double.IsFinite(observedSolidIgnition));
+        }
+        else
+            driver.Step(1.0);
         StartGuidance.Invoke(null, new object[] { vehicle, vehicle.Orbit, home });
         if (!t.Check("EXECUTE flies the convex profile", state.Running && state.Phase == GuidanceWindow.AscentPhase.Profile,
                 $"running {state.Running}, phase {state.Phase}, status '{state.Status}'"))
@@ -368,8 +392,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 lastActivations = activations;
             }
             if (DespawnJettisoned(t.System, preexisting, vehicle)
-                && double.IsNaN(firstSplitBurnTime) && double.IsFinite(state.ConvexSolidIgnitionTime))
-                firstSplitBurnTime = Universe.GetElapsedSeconds() - state.ConvexSolidIgnitionTime;
+                && double.IsNaN(firstSplitBurnTime) && double.IsFinite(observedSolidIgnition))
+                firstSplitBurnTime = Universe.GetElapsedSeconds() - observedSolidIgnition;
             double3 r = vehicle.Orbit.StateVectors.PositionCci;
             double3 v = vehicle.Orbit.StateVectors.VelocityCci;
             double altKm = (r.Length() - home.MeanRadius) / 1000.0;
@@ -384,6 +408,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
                     && vehicle.TotalMass < plan.Mass0,
                     $"pitch-over at t={time:F2} s, plan t={state.ConvexPlanTime:F2} s, "
                     + $"{(plan.Mass0 - vehicle.TotalMass) / 1000.0:F2} t burned");
+                t.CheckAbs("the AFC solid clock starts at stock ignition",
+                    state.ConvexSolidIgnitionTime, observedSolidIgnition, 0.2);
             }
 
             // How fast the command turns through the hand-over blend.
