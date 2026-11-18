@@ -18,7 +18,8 @@ internal static class JettisonAnalysis
         int generation = StagingHelpers.SequenceGeneration;
         // The part count catches tree changes the sequence generation misses, such as a decouple from a part menu.
         int partCount = vehicle.Parts.Count;
-        int sequenceNumber = vehicle.Parts.SequenceList.GetNextSequenceNumber();
+        Sequence? next = FairingJettison.NextAutomaticSequence(vehicle, state);
+        int sequenceNumber = next?.Number ?? -1;
 
         if (state.JettisonGeneration != generation
             || state.JettisonPartCount != partCount
@@ -29,24 +30,19 @@ internal static class JettisonAnalysis
             state.JettisonPartCount = partCount;
             state.JettisonSequenceNumber = sequenceNumber;
             state.JettisonValid = false;
-            state.JettisonValid = Rebuild(vehicle, state.JettisonSet);
+            state.JettisonValid = Rebuild(vehicle, next, state.JettisonSet);
         }
 
         return state.JettisonValid ? state.JettisonSet : null;
     }
 
-    private static bool Rebuild(Vehicle vehicle, HashSet<Part> jettisonSet)
+    private static bool Rebuild(Vehicle vehicle, Sequence? target, HashSet<Part> jettisonSet)
     {
         jettisonSet.Clear();
 
-        SequenceList seqList = vehicle.Parts.SequenceList;
-        int number = seqList.GetNextSequenceNumber();
-        if (number < 0)
-            return Decline(vehicle, "nothing left to stage");
-
-        Sequence? target = FindSequence(seqList, number);
         if (target == null)
-            return Decline(vehicle, $"sequence {number} is not in the list");
+            return Decline(vehicle, "nothing left to stage");
+        int number = target.Number;
 
         bool anyDecoupler = false;
         ReadOnlySpan<Part> parts = target.Parts;
@@ -94,9 +90,11 @@ internal static class JettisonAnalysis
     {
         SequenceList seqList = vehicle.Parts.SequenceList;
         Sequence? next = FindSequence(seqList, seqList.GetNextSequenceNumber());
-        if (next == null)
-            return false;
+        return next != null && WouldSeparateLastControl(vehicle, next);
+    }
 
+    internal static bool WouldSeparateLastControl(Vehicle vehicle, Sequence next)
+    {
         _guardSet.Clear();
         ReadOnlySpan<Part> parts = next.Parts;
         for (int i = 0; i < parts.Length; i++)

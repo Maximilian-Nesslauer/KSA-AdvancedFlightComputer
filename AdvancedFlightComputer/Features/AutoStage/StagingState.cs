@@ -1,4 +1,5 @@
 using KSA;
+using AdvancedFlightComputer.Features.Ui.Logic;
 
 namespace AdvancedFlightComputer.Features.AutoStage;
 
@@ -69,6 +70,16 @@ internal sealed class StagingState
     public int JettisonPartCount = -1;
     public int JettisonSequenceNumber = -1;
     public bool JettisonValid;
+
+    public readonly FairingReleaseGate FairingGate = new();
+    public IParentBody? FairingBody;
+    public FairingJettison.Row[]? FairingRows;
+    public int FairingRowsGeneration, FairingRowsPartCount;
+    public FairingJettison.Row? FairingPending;
+    public readonly HashSet<Decoupler> FairingFailed = new();
+    public double FairingIssuedAt;
+    public double FairingGateQ, FairingGateClearance;
+    public string FairingLastRelease = "";
 
     public void ResetDwell()
     {

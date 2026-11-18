@@ -113,10 +113,15 @@ public static partial class GuidanceWindow
         _returnDropsSoFar.Clear();
         _returnExcludedRoots.Clear();
         bool first = true;
+        FairingJettison.Row[] fairings = _s.AutoStage
+            ? FairingJettison.Rows(vehicle, StagingDetector.StateOf(vehicle)) : [];
         ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
         for (int i = 0; i < sequences.Length; i++)
         {
             if (sequences[i].Activated || sequences[i].Parts.IsEmpty)
+                continue;
+            int number = sequences[i].Number;
+            if (fairings.Any(row => !row.Mixed && row.Number == number))
                 continue;
 
             SequenceRoots(sequences[i], _returnRoots);
