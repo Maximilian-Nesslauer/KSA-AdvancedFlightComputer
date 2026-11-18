@@ -557,6 +557,8 @@ public sealed class VehicleAutopilotState
     public double ConvexStageSpeed;
     public double ConvexFastest;
     public double ConvexLastTime = double.NaN;
+    public double LastSolidDarkTime = double.NaN;
+    public double ObservedSolidIgnitionTime = double.NaN;
     public double ConvexSolidIgnitionTime = double.NaN;
     public bool ConvexLiftoffDetected;
 

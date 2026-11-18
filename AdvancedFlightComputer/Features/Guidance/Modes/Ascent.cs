@@ -395,6 +395,8 @@ public static partial class GuidanceWindow
         {
             _s.FlyingPlan = _s.AscentPlan;
             _s.FlyingPlanLaunchTime = SimNow();
+            if (_s.FlyingPlan.PlansPadRoll)
+                ObserveSolidIgnition(vehicle);
         }
         _s.Phase = _s.FlyingPlan != null ? AscentPhase.Profile : AscentPhase.Vertical;
         _s.HasCommand = false;

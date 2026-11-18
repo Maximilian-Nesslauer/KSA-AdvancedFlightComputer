@@ -325,10 +325,18 @@ public abstract class ConvexAscentFlightTest : AfcTest
             t.Info($"  profile: {profile.Speed[k],7:F0} m/s  pitch {profile.PitchRad[k] * 180.0 / Math.PI,5:F1} deg  "
                  + $"alt {profile.Altitude[k] / 1000.0,6:F1} km  t {profile.Time[k],5:F0} s");
 
-        // Lit the way the other flight tests light it, then EXECUTE.
         if (!AutoStageFlightSupport.Arm(t, vehicle))
             return;
+        if (RequiresSolids && !t.Check("the grounded stack is cold when the plan is ready",
+            !SolidThrustObserved(vehicle) && double.IsNaN(plan.SolidBurnSnapshotTime)))
+            return;
+
+        // Execute with the stock ignition row queued, before the first worker report of its engines.
         vehicle.Parts.SequenceList.ActivateNextSequence(vehicle);
+        int ignitionSequence = vehicle.Parts.SequenceList.ActiveSequence;
+        if (RequiresSolids && !t.Check("the stock ignition row has queued engine activations",
+            StagingHelpers.HasQueuedEngineActivation(vehicle), $"sequence {ignitionSequence}"))
+            return;
         double observedSolidIgnition = double.NaN;
         if (!RequiresSolids)
             driver.Step(1.0);
@@ -343,7 +351,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
             t.Check("an airborne slow climb does not arm the pad hold", !double.IsFinite(state.LiftoffRadius),
                 $"liftoff radius {state.LiftoffRadius}, situation {vehicle.Situation}");
 
-        double time = 1.0, nextSample = 0.0;
+        double time = RequiresSolids ? 0.0 : 1.0, nextSample = 0.0;
         double handoverAltKm = double.NaN, handoverTime = double.NaN, handoverSpeed = double.NaN;
         double worstDevKm = 0.0, worstDevSpeed = double.NaN;
         bool upfgConverged = false, blended = false;
@@ -365,6 +373,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 }
         double firstSplitBurnTime = double.NaN;
         double worstStagingAltKm = double.NaN;
+        bool launchRowHeld = true, contactSampled = false, contactClockHeld = true;
+        double rollStartClearance = double.NaN;
         double3 lastSampleR = double3.Zero;
         bool frozenReported = false, cutoffLogged = false;
         bool pitchOverObserved = false;
@@ -378,12 +388,25 @@ public abstract class ConvexAscentFlightTest : AfcTest
             // Fine steps through the terminal count: the cutoff lands on a step, and at four g a quarter second is 10 m/s, which is 35 km of apoapsis.
             double dt = state.Phase == GuidanceWindow.AscentPhase.Terminal ? TerminalStepDt : StepDt;
             double beforeStep = driver.Elapsed.Seconds();
+            bool hadTerrainContact = RequiresSolids && vehicle.Situation.HasTerrainContact();
+            double radiusBeforeStep = RequiresSolids ? vehicle.Orbit.StateVectors.PositionCci.Length() : 0.0;
             driver.Step(dt);
             if (RequiresSolids && !double.IsFinite(observedSolidIgnition) && SolidThrustObserved(vehicle))
                 observedSolidIgnition = beforeStep;
             time += dt;
             // A spent stage falls back to the ground minutes later, and the game's ground-impact effect throws in the headless runtime. The flight under test does not need them, so they go as soon as they separate.
             int activations = StagingDetector.ActivationsOf(vehicle);
+            if (RequiresSolids && double.IsNaN(rollStartClearance))
+            {
+                launchRowHeld &= vehicle.Parts.SequenceList.ActiveSequence == ignitionSequence && activations == lastActivations;
+                if (double.IsFinite(state.RollProgramStart))
+                    rollStartClearance = radiusBeforeStep - state.LiftoffRadius;
+            }
+            if (hadTerrainContact && double.IsNaN(rollStartClearance))
+            {
+                contactSampled = true;
+                contactClockHeld &= state.ConvexPlanTime == 0.0;
+            }
             if (activations != lastActivations)
             {
                 t.Info($"AutoStage staged ({activations - lastActivations}) at t={time:F2} s, {vehicle.TotalMass / 1000.0:F2} t, "
@@ -410,8 +433,6 @@ public abstract class ConvexAscentFlightTest : AfcTest
                     && state.ConvexPlanTime > 0.0 && vehicle.TotalMass < plan.Mass0,
                     $"pitch-over at t={time:F2} s, plan t={state.ConvexPlanTime:F2} s, "
                     + $"{(plan.Mass0 - vehicle.TotalMass) / 1000.0:F2} t burned");
-                t.CheckAbs("the AFC solid clock starts at stock ignition",
-                    state.ConvexSolidIgnitionTime, observedSolidIgnition, 2 * StepDt);
             }
 
             // How fast the command turns through the hand-over blend.
@@ -604,8 +625,18 @@ public abstract class ConvexAscentFlightTest : AfcTest
             else
                 t.CheckAbs("each staging lands where the plan stages, km off the plan's altitude", worstStagingAltKm, 0.0, StagingAltitudeTolKm);
         }
-        if (RequiresSolids && !pitchOverObserved)
-            t.Fail("pitch-over", "the vehicle did not pitch over while following the profile.");
+        if (RequiresSolids)
+        {
+            t.Check("AFC holds the stock ignition row through pad clearance",
+                launchRowHeld && double.IsFinite(rollStartClearance), $"ignition sequence {ignitionSequence}");
+            t.Check("the profile clock stays at zero on the pad", contactSampled && contactClockHeld);
+            t.Check("forced roll starts at least 200 m above the pad", rollStartClearance >= 200.0,
+                $"first roll command at {rollStartClearance:F2} m above the pad");
+            t.CheckAbs("the AFC solid clock starts at stock ignition",
+                state.ConvexSolidIgnitionTime, observedSolidIgnition, 2 * StepDt);
+            if (!pitchOverObserved)
+                t.Fail("pitch-over", "the vehicle did not pitch over while following the profile.");
+        }
         if (RequiresSolids && t.Check("the first planned jettison creates a separate vehicle",
             firstPlannedSplit > 0 && double.IsFinite(firstSplitBurnTime)))
         {

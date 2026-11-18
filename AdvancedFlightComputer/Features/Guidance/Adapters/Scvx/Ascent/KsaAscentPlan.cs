@@ -469,7 +469,7 @@ public sealed class AscentPlan
     public bool OverQCeiling => PeakQKpa >= QCeilingKpa;
     public int SolidStages { get; init; }
     public bool StartsWithSolid { get; init; }
-    public double SolidBurnAgeAtPlan { get; init; }
+    public double SolidBurnSnapshotTime { get; init; } = double.NaN;
     public bool PlansPadRoll { get; init; }
     /// <summary>A core that would have run dry before its boosters is planned throttled down to outlast them (#32).</summary>
     public bool CoreThrottledDown { get; init; }

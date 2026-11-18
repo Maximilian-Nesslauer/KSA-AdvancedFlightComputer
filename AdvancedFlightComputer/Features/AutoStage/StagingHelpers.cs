@@ -95,6 +95,16 @@ internal static class StagingHelpers
         return false;
     }
 
+    // SequenceList activates the row before InputEvents applies its engine commands.
+    internal static bool HasQueuedEngineActivation(Vehicle vehicle)
+    {
+        foreach (ref readonly InputEvents.IActivateInputData input in InputEvents.IActivateInputBuffer.Get())
+            if (input.Operation == InputEvents.ActivateOp.Engine && input.ActivationState
+                && input.EngineController?.Parent.FullPart.Tree == vehicle.Parts)
+                return true;
+        return false;
+    }
+
     // The engines SequenceList.ActivateNextSequence is about to switch on, read before it marks the row activated.
     // Stock picks the first unactivated row with parts and walks each part's modules in that row through Part.ActivateSubtreeInStage.
     public static List<EngineController>? EnginesLitByNextRow(SequenceList sequenceList)

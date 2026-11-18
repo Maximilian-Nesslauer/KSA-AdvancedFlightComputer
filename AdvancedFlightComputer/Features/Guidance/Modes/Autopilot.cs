@@ -131,6 +131,12 @@ public static partial class GuidanceWindow
         }
 
         bool thrustOn = vehicle.IsAnyEngineActive() && vehicle.IsAnyEnginePropellantAvailable();
+        // A queued or newly active engine has not had a worker step to report thrust.
+        if (!thrustOn && (StagingHelpers.HasQueuedEngineActivation(vehicle) || StagingHelpers.HasUnreportedActiveEngine(vehicle)))
+        {
+            _s.StagingActive = false;
+            return;
+        }
 
         // The reserve's own cue fires while the stage could still burn, because the propellant left in it is spoken for. UPFG plans stage boundaries but never commands one.
         bool reserveDone = ShouldStageForReserve(vehicle);
