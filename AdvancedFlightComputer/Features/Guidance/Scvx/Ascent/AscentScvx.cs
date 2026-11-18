@@ -451,7 +451,9 @@ public static class AscentScvx
             }
             x[k * NX + 6] = w.Mass[k] / d.MU;
             // A plan solved to a lower floor can sit under this problem's floor, and a reference under its floor by more than the trust region leaves the first subproblem infeasible. The thrust direction is kept.
-            double floor = c.ThrottleMin[c.NodeStage[k]] * c.LimitedThrottle(c.NodeStage[k], x.AsSpan(k * NX, NX));
+            int stage = c.NodeStage[k];
+            double floor = Math.Max(c.PhysicalThrottleMin[stage],
+                                    c.ThrottleMin[stage] * c.LimitedThrottle(stage, x.AsSpan(k * NX, NX)));
             double un = Math.Sqrt(u[k * NU] * u[k * NU] + u[k * NU + 1] * u[k * NU + 1] + u[k * NU + 2] * u[k * NU + 2]);
             if (un > 1e-12 && un < floor)
                 for (int i = 0; i < 3; i++)

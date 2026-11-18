@@ -456,7 +456,7 @@ public sealed class AscentPlan
     public double QAlphaMax { get; init; }
     public double InsertionAltKm { get; init; }
 
-    /// <summary>The throttle floor the plan was solved to, percent, and how many planned stages have solid motors burning in them (#73).</summary>
+    /// <summary>The lowest nominal throttle floor across the planned stages before applying any acceleration cap, in percent.</summary>
     public double ThrottleMinPct { get; init; }
     /// <summary>The floor as the LAUNCH page asked for it, before the engines' own minimum and the 99 % cap.</summary>
     public double ThrottleMinRequestedPct { get; init; }
@@ -526,7 +526,7 @@ public sealed class AscentPlanJob : IDisposable
     private readonly Func<AscentProblem, AscentSolution, bool[]> _toHold;
     private readonly int _available, _initial;
     private readonly double _qMax, _qCeiling;
-    private readonly Func<AscentSolution, int, double, string[], double, ThrottledKept, AscentPlan> _publish;
+    private readonly Func<AscentSolution, AscentProblem, double, string[], double, ThrottledKept, AscentPlan> _publish;
     private readonly object _gate = new();
     private string _progress = "starting";
     private string _retry = "";
@@ -542,7 +542,7 @@ public sealed class AscentPlanJob : IDisposable
     /// <param name="toHold">From the problem and its trajectory, the stages to solve again held at full thrust, or null for none. Run on the worker.</param>
     /// <param name="qCeiling">The ceiling on a retry's max-q, Pa. Positive infinity for none.</param>
     public AscentPlanJob(Func<int, double, bool[], AscentProblem> build, int available, int initial, double qMax,
-                         Func<AscentSolution, int, double, string[], double, ThrottledKept, AscentPlan> publish,
+                         Func<AscentSolution, AscentProblem, double, string[], double, ThrottledKept, AscentPlan> publish,
                          Func<AscentProblem, AscentSolution, bool[]> toHold = null,
                          double qCeiling = double.PositiveInfinity)
     {
@@ -698,13 +698,17 @@ public sealed class AscentPlanJob : IDisposable
                     string which = string.Join(", ", Enumerable.Range(0, hold.Length).Where(i => hold[i]).Select(i => (i + 1).ToString()));
                     lock (_gate)
                         _retry = $"Stage {which} is flown at full thrust after the hand-over: planning it held at full thrust.";
-                    AscentSolution held = SolveOne(_build(bestK, bestQ, hold), $"stage {which} held at full thrust", best);
+                    AscentProblem heldProblem = _build(bestK, bestQ, hold);
+                    AscentSolution held = SolveOne(heldProblem, $"stage {which} held at full thrust", best);
                     lock (_gate)
                         _notes.Add($"{bestK} of {_available} stages at {bestQ / 1000.0:F0} kPa, stage {which} held at full thrust: {held.Message}"
                                 + (held.Nodes > 0 ? $", {held.FinalMass / 1000.0:F2} t to orbit" : "")
                                 + (!held.Usable && best.Usable ? "; the throttled plan is kept" : ""));
                     if (held.Usable)
+                    {
                         best = held;
+                        bestProblem = heldProblem;
+                    }
                     else if (best.Usable && held.Status != AscentStatus.Cancelled)
                         // The held solve starts from this plan, so until it accepts a step its mass is this plan's own.
                         kept = new ThrottledKept(which, held.Nodes > 0 && held.Accepted > 0 && held.FinalMass < best.FinalMass ? held.FinalMass : double.NaN);
@@ -712,7 +716,7 @@ public sealed class AscentPlanJob : IDisposable
             }
 
             if (best != null && !_cts.IsCancellationRequested)
-                plan = _publish(best, bestK, bestQ, Notes, ElapsedSeconds, kept);
+                plan = _publish(best, bestProblem, bestQ, Notes, ElapsedSeconds, kept);
         }
         catch (Exception e)
         {

@@ -42,6 +42,24 @@ internal static class GameReflection
         public Feature Features { get; } = features;
     }
 
+    #region Ascent drain phases
+
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly MethodInfo? SequencePerformanceList_RunDrainSimulation =
+        AccessTools.DeclaredMethod(typeof(SequencePerformanceList), "RunDrainSimulation",
+            [typeof(List<SequencePropellantInfo>), typeof(List<SequencePhaseInfo>), typeof(List<HashSet<Part>>), typeof(float),
+             typeof(float).MakeByRefType(), typeof(float).MakeByRefType(), typeof(Brutal.Numerics.float3).MakeByRefType()]);
+
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly FieldInfo? SequencePerformanceList_activeCores =
+        AccessTools.DeclaredField(typeof(SequencePerformanceList), "_activeCores");
+
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly FieldInfo? SequencePerformanceList_activeCoreCount =
+        AccessTools.DeclaredField(typeof(SequencePerformanceList), "_activeCoreCount");
+
+    #endregion
+
     #region TransferPlanner
 
     // The unbound-target support writes stock planner state from its SetTransferInfo finalizer and lists its comets for stock DESTINATION. The AFC console has its own transfer session and reads none of these.

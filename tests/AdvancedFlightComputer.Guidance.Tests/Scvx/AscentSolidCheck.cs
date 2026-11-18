@@ -148,11 +148,30 @@ internal static class AscentSolidCheck
         CoreOutlasts(verbose);
         CoreThrottledDown(verbose, 0.4);
         CoreThrottledDown(verbose, 0.9);
+        CheckPhaseThrottleFloors();
         RoundTrip();
 
         Console.WriteLine();
         Console.WriteLine(_fails == 0 ? "ALL PASS" : $"{_fails} FAILED");
         return _fails == 0 ? 0 : 1;
+    }
+
+    private static void CheckPhaseThrottleFloors()
+    {
+        AscentPhase[] phases =
+        [
+            new() { StartMass = 1000, EndMass = 800, Duration = 10, LiquidThrust = 30000, LiquidMassFlow = 20, LiquidThrottleMin = 0.1 },
+            new() { StartMass = 700, EndMass = 500, Duration = 10, LiquidThrust = 20000, LiquidMassFlow = 20, LiquidThrottleMin = 0.6 },
+            new() { StartMass = 400, EndMass = 300, Duration = 10, LiquidThrust = 10000, LiquidMassFlow = 10, LiquidThrottleMin = 1.0 }
+        ];
+        AscentStage[] stages = AscentPhasePlan.Build(phases, [], null, 1000, DragArea, 0.15, HeldFloor,
+            accelerationLimit: 30.0).Stages;
+        Check("the low-minimum first stage keeps the requested floor",
+            stages[0].ThrottleMin == 0.15 && stages[0].PhysicalThrottleMin == 0.10);
+        Check("the upper stage keeps the hardware floor independently of the requested floor",
+            stages[1].ThrottleMin == 0.15 && stages[1].PhysicalThrottleMin == 0.60);
+        Check("a phase with an unthrottleable engine uses the held floor",
+            stages[2].ThrottleMin == HeldFloor && double.IsPositiveInfinity(stages[2].AccelerationLimit));
     }
 
     // ---- 1. 2stage: boosters, then two liquid stages.

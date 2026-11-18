@@ -91,7 +91,10 @@ public sealed class Mod
             if (!SharedVehicleHooks.GuidanceEnabled)
                 GuidanceFeature.DisableDriver();
             else
+            {
                 _patches.TryApply("GuidanceSaveRcs", GuidanceFeature.ApplySaveRcsPatch);
+                _patches.TryApply("GuidanceStageThrottle", StageThrottleLimits.ApplyPatch);
+            }
         }
 
         if (coreReady && Validated("AutoStage", GameReflection.ValidateAutoStage)
