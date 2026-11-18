@@ -87,6 +87,9 @@ internal sealed class PorkchopScores
             && SameOrbit(_sourceOrbit, _snapshot.Source.Orbit, now)
             && SameOrbit(_targetOrbit, _snapshot.Target?.Orbit, now);
 
+    internal bool MatchesDeparture(Orbit? orbit, UniverseTime time)
+        => SameOrbit(_snapshot.Starting, orbit, time);
+
     private static bool SameOrbit(Orbit original, Orbit? current, UniverseTime now)
     {
         if (ReferenceEquals(original, current))

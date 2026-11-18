@@ -45,8 +45,12 @@ internal static class TransferCommitter
             return "TRANSFER PASSES THROUGH ANOTHER BODY";
         if (MultiPassRegistry.Has(source.Id))
             return "MULTI-PASS ACTIVE";
-        if (source.FlightPlan.TryFindPatch(TransferSession.SelectedEntry.TransferData.Start) == null)
+        UniverseTime departure = TransferSession.SelectedEntry.TransferData.Start;
+        PatchedConic? patch = source.FlightPlan.TryFindPatch(departure);
+        if (patch == null)
             return "DEPARTURE NOT ON TRAJECTORY";
+        if (!TransferSession.DepartureMatchesBasis(patch, departure))
+            return "DEPARTURE ORBIT CHANGED. SOLVE AGAIN.";
         return HohmannFlybyUI.CreateRefusal(source);
     }
 

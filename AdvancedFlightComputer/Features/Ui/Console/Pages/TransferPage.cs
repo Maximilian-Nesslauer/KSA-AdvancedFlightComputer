@@ -622,6 +622,8 @@ internal static class TransferPage
 
     private static void DrawSelectionResult()
     {
+        if (TransferSession.PresetUnavailable)
+            ConsoleUi.WarningWrapped("NO VERIFIED TRANSFER FOR THIS PRESET.");
         if (!TransferSession.Calculated || TransferSession.SelectedEntry?.TransferData is not OrbitalTransfers.TransferData t)
             return;
         ConsoleUi.Readout("DEPART IN".AsSpan(), FormatHelper.FormatDuration(Math.Max(0.0, (t.Start - Universe.GetElapsedTime()).Seconds())).AsSpan());
