@@ -1,4 +1,3 @@
-using System.Reflection.Emit;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
@@ -245,17 +244,9 @@ public sealed class RcsBurnModeTest : AfcTest
             }
         });
 
-    // Patch the call in EndExecution so tiered compilation can inline the stock method without bypassing the fault.
     private static IEnumerable<CodeInstruction> InterceptAttitudeRelease(IEnumerable<CodeInstruction> code)
-    {
-        var stock = AccessTools.Method(typeof(FlightComputer), nameof(FlightComputer.SetNullRot));
-        var instrumented = AccessTools.DeclaredMethod(typeof(RcsBurnModeTest), nameof(ReleaseAttitude));
-        List<CodeInstruction> instructions = code.ToList();
-        CodeInstruction release = instructions.Single(instruction => instruction.Calls(stock));
-        release.opcode = OpCodes.Call;
-        release.operand = instrumented;
-        return instructions;
-    }
+        => RcsTestPatches.ReplaceAttitudeReleaseCall(code,
+            AccessTools.DeclaredMethod(typeof(RcsBurnModeTest), nameof(ReleaseAttitude)));
 
     private static void ReleaseAttitude(FlightComputer flightComputer, VehicleReferenceFrame frame)
     {
