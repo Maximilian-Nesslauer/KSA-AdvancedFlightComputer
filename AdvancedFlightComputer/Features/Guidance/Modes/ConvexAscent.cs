@@ -635,7 +635,7 @@ public static partial class GuidanceWindow
         bool optimiseTiming = _s.ConvexOptimiseTiming;
         double qMaxKpa = qMax / 1000.0;
         double insAltKm = (rIns - bodyRadius) / 1000.0;
-        double solidBurnAge = startsWithSolid && TryReadSolidBurnAge(vehicle, out double burnAge) ? burnAge : 0.0;
+        double solidBurnAge = plansPadRoll && TryReadSolidBurnAge(vehicle, out double burnAge) ? burnAge : 0.0;
 
         AscentPlan Publish(AscentSolution solved, AscentProblem winningProblem, double qUsed, string[] notes, double wall, AscentPlanJob.ThrottledKept kept)
         {
@@ -1100,7 +1100,7 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// The first solid phase follows its grain burn once the craft leaves the pad. Other phases advance by air speed within each mass band.
+    /// The first phase of a planned solid pad roll follows its grain burn. Other phases advance by air speed within each mass band.
     /// </summary>
     private static double3 ConvexProfileDirection(Vehicle vehicle, double3 r, double3 v, IParentBody parent)
     {
@@ -1115,7 +1115,7 @@ public static partial class GuidanceWindow
         double climb = r.Length() - _s.LiftoffRadius;
         if (!double.IsFinite(_s.LiftoffRadius) || (climb >= 0.5 && !vehicle.Situation.HasTerrainContact()))
             _s.ConvexLiftoffDetected = true;
-        if (plan.StartsWithSolid && _s.ConvexStage == 0 && profile.StageOfMass(mass) == 0)
+        if (plan.PlansPadRoll && _s.ConvexStage == 0 && profile.StageOfMass(mass) == 0)
         {
             // Use burn time since the plan's start even when guidance engages after the grain starts burning.
             if (!double.IsFinite(_s.ConvexSolidIgnitionTime) && TryReadSolidBurnAge(vehicle, out double age))
