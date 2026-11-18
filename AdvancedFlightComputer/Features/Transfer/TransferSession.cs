@@ -10,21 +10,14 @@ using KSA;
 namespace AdvancedFlightComputer.Features.Transfer;
 
 /// <summary>
-/// The AFC porkchop calculation for the TRANSFER page, without a GPU texture. It reproduces the
-/// orchestration of the private TransferTask.Run with the public TransferTask.WorkerTask: the same
-/// bounds as the private TransferPlanner.SetTransferInfo (see TransferBounds), the same synodic sweep
-/// in steps of 1/291, the same worker split, and the same best-entry filters. The workers run on the
-/// thread pool as stock's do; the session reads their arrays only after every Worker.DoneEvent is set,
-/// from the console tick on the main thread, also while the console is closed. The result is drawn as
-/// a binned grid (PorkchopRaster). The selection, the intercept refinement (the public RefineBurnTask)
-/// and the course correction (the public CorrectionBurnTask) follow stock's planner. A created transfer
-/// burn blocks a second CREATE until it is flown or deleted, like stock's own guard.
-/// The stock planner keeps its own calculation in its own TransferInfo, so the two never share state.
+/// Scores the stock transfer window on workers and draws its Lambert costs as a binned grid.
+/// Selection builds a stock trajectory, then uses the stock intercept and correction tasks.
 /// </summary>
 internal static class TransferSession
 {
     public const int Size = 292;
     private const double TimeoutMinutes = 3.0;
+    private const int AutomaticValidationLimit = 8;
 
     public static Vehicle? Source { get; private set; }
     public static IOrbiter? Destination { get; private set; }
@@ -39,7 +32,9 @@ internal static class TransferSession
     public static int2 BestDvRel { get; private set; } = new(-1, -1);
     public static int2 Selected { get; private set; } = new(-1, -1);
     public static OrbitalTransfers.PorkChopEntry? SelectedEntry { get; private set; }
-    public static bool Refining => _refine != null && !_refine.IsResultsReady;
+    internal static bool PresetUnavailable { get; private set; }
+    public static bool Refining => _bestAttempts.HasValue || InterceptPending;
+    private static bool InterceptPending => _refine != null && !_refine.IsResultsReady;
     public static PorkchopRaster? RasterDv { get; private set; }
     public static PorkchopRaster? RasterRel { get; private set; }
 
@@ -63,8 +58,9 @@ internal static class TransferSession
     /// <summary>The periapsis altitude a course correction aims for, m.</summary>
     public static double CorrectionPeAltitude = 100000.0;
 
-    private static TransferTask.Worker[]? _workers;
-    private static TransferTask.WorkerTask[]? _tasks;
+    private static PorkchopScores? _scores;
+    private static int? _bestAttempts;
+    private static readonly HashSet<int2> _rejected = new();
     private static CancellationTokenSource? _cts;
     private static DateTime _startedAt;
     private static RefineBurnTask? _refine;
@@ -74,23 +70,7 @@ internal static class TransferSession
     private static bool _correctionFailed;
 
     /// <summary>Progress of the calculation, 0 to 1.</summary>
-    public static float Progress
-    {
-        get
-        {
-            if (_workers == null || _workers.Length == 0)
-                return 0f;
-            long done = 0, total = 0;
-            foreach (TransferTask.Worker w in _workers)
-            {
-                if (w == null)
-                    continue;
-                done += w.AmountComplete;
-                total += w.TotalWork;
-            }
-            return total > 0 ? Math.Clamp((float)done / total, 0f, 1f) : 0f;
-        }
-    }
+    public static float Progress => Calculating ? _scores?.Progress ?? 0f : 0f;
 
     #region Source and destination
 
@@ -138,14 +118,16 @@ internal static class TransferSession
         return "";
     }
 
-    /// <summary>Starts the calculation: the orchestration of TransferTask.Run, with the workers queued on the thread pool.</summary>
+    /// <summary>Starts a Lambert score calculation for the selected transfer window.</summary>
     public static void StartCalculation()
     {
+        RefreshOrigin();
         if (CalculateRefusal().Length > 0 || Info == null)
             return;
         ResetCalculation();
 
         OrbitalTransfers.TransferInfo info = Info;
+        info.Starting = info.Vehicle.Orbit;
         info.MinTransferTimeOfFlight = new UniverseTime(Math.Max(1.0, MinTofSec));
         info.MaxTransferTimeOfFlight = new UniverseTime(Math.Max(MinTofSec + 1.0, MaxTofSec));
         UniverseTime now = Universe.GetElapsedTime();
@@ -165,22 +147,7 @@ internal static class TransferSession
         FlightSpanS = range.Seconds();
 
         _cts = new CancellationTokenSource();
-        CancellationToken token = _cts.Token;
-        int workerCount = Math.Max(1, TransferTask.WorkerCount);
-        int baseRows = Size / workerCount;
-        int extra = Size % workerCount;
-        _workers = new TransferTask.Worker[workerCount];
-        _tasks = new TransferTask.WorkerTask[workerCount];
-        int offset = 0;
-        for (int i = 0; i < workerCount; i++)
-        {
-            int rows = baseRows + (i < extra ? 1 : 0);
-            _workers[i] = new TransferTask.Worker(initialState: false, rows);
-            _tasks[i] = new TransferTask.WorkerTask(_workers[i], new OrbitalTransfers.TransferInfo(info, usePorkChopData: false),
-                new OrbitalTransfers.PorkChopEntry[rows, Size], offset, rows, now, info.MinTransferTimeOfFlight, transitStep, startStep, token);
-            ThreadPool.QueueUserWorkItem(_tasks[i].ThreadPoolCallback, i);
-            offset += rows;
-        }
+        _scores = new PorkchopScores(info, Size, now, info.MinTransferTimeOfFlight, startStep, transitStep, _cts.Token);
         _startedAt = DateTime.UtcNow;
         Calculating = true;
     }
@@ -192,32 +159,29 @@ internal static class TransferSession
         _cts?.Dispose();
         _cts = null;
         Calculating = false;
-        _workers = null;
-        _tasks = null;
+        _bestAttempts = null;
+        if (!Calculated)
+            _scores = null;
     }
 
     /// <summary>Collects the workers, polls the refinement and the correction, and drops a guard burn that is gone. Called every frame from the console tick.</summary>
     public static void Tick()
     {
-        if (Calculating && _workers != null && _tasks != null)
+        RefreshOrigin();
+        if (_scores != null && TransferBurn == null && !BasisCurrent())
+            ResetCalculation();
+        if (Calculating && !Calculated && _scores is { } scores)
         {
-            bool done = true;
-            foreach (TransferTask.Worker w in _workers)
-            {
-                if (!w.DoneEvent.WaitOne(0))
-                {
-                    done = false;
-                    break;
-                }
-            }
-            if (done)
-                Collect();
+            if (scores.Completion.IsCompleted)
+                Collect(scores);
             else if ((DateTime.UtcNow - _startedAt).TotalMinutes > TimeoutMinutes)
             {
                 DefaultCategory.Log.Warning("[AFC] Transfer calculation took over three minutes and was cancelled, as stock's planner does.");
                 CancelCalculation();
             }
         }
+        if (_bestAttempts is int attempts)
+            ValidateNextBest(attempts);
 
         if (_correction != null && _correction.IsResultsReady)
             FinishCorrection();
@@ -243,45 +207,58 @@ internal static class TransferSession
     private static bool RunsTransferPasses(Vehicle? source)
         => source != null && MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec) && exec.Intent is HohmannTransferIntent;
 
-    private static void Collect()
+    private static void RefreshOrigin()
+    {
+        if (TransferBurn != null || Source?.Orbit is not { } live
+            || Info is not { } info || info.Starting.Parent == live.Parent)
+            return;
+        Info = null;
+        SetDestination(Destination);
+    }
+
+    private static void Collect(PorkchopScores scores)
     {
         OrbitalTransfers.TransferInfo? info = Info;
-        TransferTask.WorkerTask[] tasks = _tasks!;
-        Calculating = false;
-        _workers = null;
-        _tasks = null;
         if (info == null || _cts == null || _cts.IsCancellationRequested)
-            return;
-
-        var data = new OrbitalTransfers.PorkChopEntry[Size, Size];
-        foreach (TransferTask.WorkerTask task in tasks)
         {
-            for (int k = 0; k < task.Rows; k++)
-                for (int l = 0; l < Size; l++)
-                    data[task.Offset + k, l] = task.PorkChopData[k, l];
+            CancelCalculation();
+            return;
         }
-        info.PorkChopData = data;
+        if (scores.Failure is { } failure)
+        {
+            DefaultCategory.Log.Warning("[AFC] Transfer score calculation failed: " + failure);
+            CancelCalculation();
+            return;
+        }
+        _cts.Dispose();
+        _cts = null;
+        Calculated = true;
 
-        // The filters of TransferTask.Run: no impact, no encounter with another body, a feasible departure.
+        var data = scores.Data;
+        UpdateBestScores(info, data);
+        RasterDv = PorkchopRaster.Build((r, c) => data[r, c].DepartureDv, (r, c) => data[r, c].Valid);
+        RasterRel = PorkchopRaster.Build((r, c) => data[r, c].ArrivalSpeed, (r, c) => data[r, c].Valid);
+        SelectBest(SelectBestRel);
+    }
+
+    private static void UpdateBestScores(OrbitalTransfers.TransferInfo info, PorkchopScores.Cell[,] data)
+    {
         double bestDv = double.MaxValue, bestRelDv = double.MaxValue, bestRel = double.MaxValue;
         int2 best = new(-1, -1), bestR = new(-1, -1);
         for (int m = 0; m < Size; m++)
         {
             for (int n = 0; n < Size; n++)
             {
-                OrbitalTransfers.PorkChopEntry e = data[m, n];
-                if (e?.TransferData == null)
+                var cell = data[m, n];
+                if (!cell.Valid || _rejected.Contains(new int2(m, n)))
                     continue;
-                OrbitalTransfers.TransferData t = e.TransferData;
-                if (t.Impacts || t.BadEncounter || t.DepartureInfeasible)
-                    continue;
-                double dv = t.TransferDvVlf.Length();
+                double dv = cell.DepartureDv;
                 if (dv < bestDv)
                 {
                     best = new int2(m, n);
                     bestDv = dv;
                 }
-                double rel = t.RelativeVelocityCci.Length();
+                double rel = cell.ArrivalSpeed;
                 if (dv < bestRelDv && rel < bestRel)
                 {
                     bestR = new int2(m, n);
@@ -294,17 +271,20 @@ internal static class TransferSession
         info.BestDvRelSpeedTransferIndex = bestR;
         BestDv = best;
         BestDvRel = bestR;
-
-        RasterDv = PorkchopRaster.Build((r, c) => data[r, c]?.TransferData?.TransferDvVlf.Length() ?? double.NaN, (r, c) => Usable(data[r, c]));
-        RasterRel = PorkchopRaster.Build((r, c) => data[r, c]?.TransferData?.RelativeVelocityCci.Length() ?? double.NaN, (r, c) => Usable(data[r, c]));
-        Calculated = true;
-        if (best.X >= 0)
-            Select(SelectBestRel && bestR.X >= 0 ? bestR : best);
     }
 
-    // Stock paints impacts and infeasible departures black and every other entry by its value.
-    private static bool Usable(OrbitalTransfers.PorkChopEntry? e)
-        => e?.TransferData != null && !e.TransferData.Impacts && !e.TransferData.DepartureInfeasible;
+    internal static PorkchopScores.Cell? ScoreAt(int row, int column)
+        => Calculated && _scores is { } scores && (uint)row < Size && (uint)column < Size
+            && scores.Data[row, column].Valid ? scores.Data[row, column] : null;
+
+    internal static bool BasisCurrent() => _scores?.StillCurrent(Universe.GetElapsedTime()) == true;
+
+    internal static bool DepartureMatchesBasis(PatchedConic? patch, UniverseTime time)
+        => _scores?.MatchesDeparture(patch?.Orbit, time) == true;
+
+    internal static bool IsValidated(int2 index) => ScoreAt(index.X, index.Y) != null
+        && Info?.PorkChopData[index.X, index.Y]?.TransferData is { } transfer
+        && !transfer.Impacts && !transfer.BadEncounter && !transfer.DepartureInfeasible;
 
     #endregion
 
@@ -316,14 +296,62 @@ internal static class TransferSession
     /// </summary>
     public static void Select(int2 index)
     {
+        if (!Refining && TrySelect(index, automatic: false))
+            PresetUnavailable = false;
+    }
+
+    internal static void SelectBest(bool byArrival)
+    {
+        if (!Calculated || Refining)
+            return;
+        SelectBestRel = byArrival;
+        PresetUnavailable = false;
+        _bestAttempts = 0;
+    }
+
+    private static void ValidateNextBest(int attempts)
+    {
+        int2 choice = SelectBestRel && BestDvRel.X >= 0 ? BestDvRel : BestDv;
+        if (choice.X >= 0 && attempts < AutomaticValidationLimit && !TrySelect(choice, automatic: true))
+        {
+            _rejected.Add(choice);
+            if (Info != null && _scores != null)
+                UpdateBestScores(Info, _scores.Data);
+            _bestAttempts = attempts + 1;
+            return;
+        }
+        if (choice.X < 0 || attempts >= AutomaticValidationLimit)
+        {
+            PresetUnavailable = true;
+            if (!IsValidated(Selected))
+            {
+                Selected = new int2(-1, -1);
+                SelectedEntry = null;
+                _refine = null;
+            }
+        }
+        _bestAttempts = null;
+        Calculating = false;
+    }
+
+    private static bool TrySelect(int2 index, bool automatic)
+    {
         OrbitalTransfers.TransferInfo? info = Info;
-        if (!Calculated || info?.PorkChopData == null || Refining)
-            return;
-        if (index.X < 0 || index.Y < 0 || index.X >= info.PorkChopData.GetLength(0) || index.Y >= info.PorkChopData.GetLength(1))
-            return;
+        if (info?.PorkChopData == null || info.Target is not { } target || InterceptPending
+            || !BasisCurrent() || ScoreAt(index.X, index.Y) == null)
+            return false;
         OrbitalTransfers.PorkChopEntry? cell = info.PorkChopData[index.X, index.Y];
+        if (cell != null && !HasDepartureBasis(info.Vehicle, cell.TransferData.Start))
+            cell.TransferData.DepartureInfeasible = true;
+        if (cell == null && _scores?.SolveForSelection(index.X, index.Y) is { } data)
+        {
+            cell = BuildSelection(info, target, data);
+            info.PorkChopData[index.X, index.Y] = cell;
+        }
         if (cell == null)
-            return;
+            return false;
+        if (automatic && (cell.TransferData.Impacts || cell.TransferData.BadEncounter || cell.TransferData.DepartureInfeasible))
+            return false;
         Selected = index;
         var entry = new OrbitalTransfers.PorkChopEntry(cell);
         SelectedEntry = entry;
@@ -335,8 +363,47 @@ internal static class TransferSession
             if (patch.EndTransition == PatchTransition.Encounter && patch.EncounterBody?.Id == Destination?.Id)
                 encounter = true;
         }
-        if (!encounter)
+        if (!encounter && !entry.TransferData.Impacts && !entry.TransferData.BadEncounter && !entry.TransferData.DepartureInfeasible)
             _refine = new RefineBurnTask(info, ref entry);
+        return true;
+    }
+
+    private static OrbitalTransfers.PorkChopEntry BuildSelection(OrbitalTransfers.TransferInfo info, IOrbiter target,
+                                                                 OrbitalTransfers.TransferData data)
+    {
+        FlightPlan flight = FlightPlan.CreateUninitialized(info.Vehicle.Hash);
+        data.Point = info.Vehicle.Orbit.GetPointAt(data.Start);
+        if (HasDepartureBasis(info.Vehicle, data.Start)
+            && OrbitalTransfers.BuildFlightPlan(ref flight, info, data.Start, data.TransferDvVlf, out var point, out var closest))
+        {
+            data.ClosestApproachDistance = closest;
+            data.Point = point;
+            foreach (PatchedConic patch in flight.Patches)
+            {
+                if (patch.EndTransition == PatchTransition.Impact && patch.Orbit.Parent != target && patch.EndTime < data.Arrival)
+                    data.Impacts = true;
+                else if (patch.PrimaryBody.Id == target.Parent.Id)
+                {
+                    patch.CalculateSetTargetData(target, 4);
+                    if (patch.TryFindClosestApproach(target) is { Body: not null } approach)
+                        data.ClosestApproachDistance = Math.Min(data.ClosestApproachDistance, approach.ClosestDistance);
+                }
+                else if (patch.PrimaryBody.Id != info.Source.Id && patch.PrimaryBody.Id != info.Source.Parent.Id
+                    && patch.PrimaryBody.Id != target.Id)
+                    data.BadEncounter = true;
+            }
+        }
+        else
+            data.DepartureInfeasible = true;
+        return new OrbitalTransfers.PorkChopEntry(data, flight);
+    }
+
+    private static bool HasDepartureBasis(Vehicle vehicle, UniverseTime time)
+    {
+        PatchedConic? patch = vehicle.FlightPlan.TryFindPatch(time);
+        if (patch == null)
+            vehicle.FlightComputer.BurnPlan.FindPatchAt(time, out patch);
+        return DepartureMatchesBasis(patch, time);
     }
 
     /// <summary>Moves the selection by one cell, as stock's arrow buttons do.</summary>
@@ -446,10 +513,13 @@ internal static class TransferSession
     {
         CancelCalculation();
         Calculated = false;
+        _scores = null;
+        _rejected.Clear();
         BestDv = new int2(-1, -1);
         BestDvRel = new int2(-1, -1);
         Selected = new int2(-1, -1);
         SelectedEntry = null;
+        PresetUnavailable = false;
         _refine = null;
         RasterDv = null;
         RasterRel = null;
