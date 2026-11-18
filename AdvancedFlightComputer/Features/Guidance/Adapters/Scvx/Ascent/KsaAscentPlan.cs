@@ -165,14 +165,8 @@ public sealed class ConvexAscentProfile
     public double Advance(double planTime, double speed, double mass, double dt, ref int stage, ref double stageSpeed,
                           ref double fastest)
     {
-        int now = Math.Max(stage, StageOfMass(mass));
-        if (now != stage)
-        {
-            stage = now;
-            stageSpeed = speed;
-            fastest = 0.0;
+        if (SyncStage(speed, mass, ref stage, ref stageSpeed, ref fastest))
             return _stageStart[stage];
-        }
 
         double gained = speed - stageSpeed;
         if (gained > fastest)
@@ -185,6 +179,17 @@ public sealed class ConvexAscentProfile
             planTime += Math.Max(dt, 0.0);
         }
         return Math.Clamp(planTime, _stageStart[stage], _stageEnd[stage]);
+    }
+
+    internal bool SyncStage(double speed, double mass, ref int stage, ref double stageSpeed, ref double fastest)
+    {
+        int current = StageOfMass(mass);
+        if (current <= stage)
+            return false;
+        stage = current;
+        stageSpeed = speed;
+        fastest = 0.0;
+        return true;
     }
 
     /// <summary>The time the plan's given stage had first gained this much air speed since it lit - for the first stage, first reached this air speed. Held at the ends of the stage's records.</summary>

@@ -744,6 +744,23 @@ public abstract class ConvexAscentFlightTest : AfcTest
         t.CheckAbs("a delayed staging holds the burnout direction", AngleDeg(profile.Direction(r, boundary + 1.0, 0), up), 0.0, 1e-5);
         t.CheckAbs("the next phase starts at its ignition throttle", profile.Throttle(boundary, 1), startThrottle, 1e-9);
         t.CheckAbs("the next phase starts at its ignition direction", AngleDeg(profile.Direction(r, boundary, 1), east), 0.0, 1e-5);
+        int phase = 0;
+        double phaseSpeed = 0.0, fastest = 15.0;
+        double nextMass = sample.Mass[ignition];
+        t.Check("a pad hold can reconcile the live phase without advancing its clock",
+            profile.SyncStage(45.0, nextMass, ref phase, ref phaseSpeed, ref fastest)
+            && phase == 1 && phaseSpeed == 45.0 && fastest == 0.0);
+        t.CheckAbs("the held clock samples the following phase's opening throttle",
+            profile.Throttle(before, phase), startThrottle, 1e-9);
+        const double weight = 1000.0;
+        double corrected = GuidanceWindow.PadOpeningDemand(600.0, weight);
+        KsaEnginePerf.ThrustCommand limited = KsaEnginePerf.InvertThrust(corrected, 0.1, u => 2000.0 * u, 0.53);
+        t.Check("the liquid opening requests lift and respects a stock cap that can lift",
+            corrected > weight && limited.Status == KsaEnginePerf.ThrustStatus.AboveMaximum
+            && limited.Throttle == 0.53 && GuidanceWindow.PadEnginesCanLift(limited.DeliveredThrust, weight));
+        t.Check("an already lifting opening stays on the plan and an insufficient cap is refused",
+            GuidanceWindow.PadOpeningDemand(1200.0, weight) == 1200.0
+            && !GuidanceWindow.PadEnginesCanLift(weight, weight));
         double mid = 0.5 * (sample.Time[0] + sample.Time[1]);
         double3 middle = profile.Direction(r, mid, 0);
         t.CheckAbs("opposite azimuths near vertical interpolate through the zenith", AngleDeg(middle, up), 0.0, 1e-5);

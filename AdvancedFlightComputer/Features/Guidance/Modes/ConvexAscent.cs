@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.AutoStage;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
@@ -1140,10 +1141,15 @@ public static partial class GuidanceWindow
             if (_s.ConvexLiftoffDetected && !onTerrain && double.IsFinite(_s.ConvexSolidIgnitionTime))
                 _s.ConvexPlanTime = Math.Clamp(now - _s.ConvexSolidIgnitionTime, 0.0, profile.StageEndTime(0));
         }
-        else if (_s.ConvexLiftoffDetected && !onTerrain && !PadHold(r)
-            && !(_s.ForceRoll && fromPad && !_s.RollProgramDone && !_s.RollProgramTimedOut))
+        else if (!onTerrain && !PadProfileHolds(r))
         {
             _s.ConvexPlanTime = profile.Advance(_s.ConvexPlanTime, AirSpeed(r, v, parent), mass, dt,
+                ref _s.ConvexStage, ref _s.ConvexStageSpeed, ref _s.ConvexFastest);
+        }
+        else
+        {
+            // The attitude and clock are held, but throttle belongs to the live phase.
+            profile.SyncStage(AirSpeed(r, v, parent), mass,
                 ref _s.ConvexStage, ref _s.ConvexStageSpeed, ref _s.ConvexFastest);
         }
         return profile.Direction(r, _s.ConvexPlanTime, _s.ConvexStage);
@@ -1262,10 +1268,57 @@ public static partial class GuidanceWindow
         KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(vehicle, fraction * full, pressure);
         if (command.Status == KsaEnginePerf.ThrustStatus.UnsupportedEngine)
             command = KsaEnginePerf.CommandLiquidFraction(vehicle, fraction, pressure);
+        double3 position = vehicle.Orbit.StateVectors.PositionCci;
+        if (GroundedLiquidOpening() && PadProfileHolds(position))
+        {
+            double3 up = PadUpAsmb(vehicle, position);
+            double lift = PadWeight(vehicle, parent, position);
+            double planned = KsaEnginePerf.ThrustAtThrottle(vehicle, command.Throttle, pressure, up);
+            if (!PadEnginesCanLift(planned, lift))
+            {
+                KsaEnginePerf.ThrustCommand opening = KsaEnginePerf.CommandForThrust(vehicle, PadOpeningDemand(planned, lift), pressure, up);
+                if (opening.Status is KsaEnginePerf.ThrustStatus.Available or KsaEnginePerf.ThrustStatus.BelowMinimum
+                                      or KsaEnginePerf.ThrustStatus.AboveMaximum)
+                    command = opening;
+            }
+        }
         return command.Status is KsaEnginePerf.ThrustStatus.Available or KsaEnginePerf.ThrustStatus.BelowMinimum
                                  or KsaEnginePerf.ThrustStatus.AboveMaximum
             ? (float)command.Throttle
             : 1f;
+    }
+
+    private static bool GroundedLiquidOpening()
+        => _s.Phase == AscentPhase.Profile && _s.FlyingPlan is { StartsWithSolid: false }
+            && double.IsFinite(_s.LiftoffRadius);
+
+    private static bool PadProfileHolds(double3 position)
+        => double.IsFinite(_s.LiftoffRadius) && (!_s.ConvexLiftoffDetected || PadHold(position)
+            || (_s.ForceRoll && !_s.RollProgramDone && !_s.RollProgramTimedOut));
+
+    private static double3 PadUpAsmb(Vehicle vehicle, double3 position)
+        => position.NormalizeOrZero().Transform(KsaFrameBridge.BodyToCci(vehicle).Inverse());
+
+    private static double PadWeight(Vehicle vehicle, IParentBody parent, double3 position)
+        => vehicle.TotalMass * parent.Mu / position.LengthSquared();
+
+    internal static bool PadEnginesCanLift(double availableThrust, double liftThrust)
+        => double.IsFinite(availableThrust) && liftThrust > 0.0 && availableThrust > liftThrust;
+
+    internal static double PadOpeningDemand(double plannedThrust, double liftThrust)
+        => plannedThrust > liftThrust ? plannedThrust : 1.1 * liftThrust;
+
+    private static bool GroundedLiquidCannotLift(Vehicle vehicle, IParentBody parent)
+    {
+        if (!GroundedLiquidOpening() || _s.ConvexLiftoffDetected || StagingHelpers.HasQueuedEngineActivation(vehicle)
+            || StagingHelpers.HasUnreportedActiveEngine(vehicle)
+            || StagingDetector.StateOf(vehicle).Pending?.AnyPending == true
+            || KsaEnginePerf.GetThrottleControlStatus(vehicle) != KsaEnginePerf.ThrustStatus.Available)
+            return false;
+        double3 position = vehicle.Orbit.StateVectors.PositionCci;
+        double pressure = KsaEnginePerf.AmbientPressureAt(parent, position.Length() - parent.MeanRadius);
+        double lift = KsaEnginePerf.ThrustAtThrottle(vehicle, 1.0, pressure, PadUpAsmb(vehicle, position));
+        return !PadEnginesCanLift(lift, PadWeight(vehicle, parent, position));
     }
 
     /// <summary>
@@ -1279,6 +1332,11 @@ public static partial class GuidanceWindow
         {
             why = "NO PROFILE TO FLY";
             return true;
+        }
+        if (PadProfileHolds(r))
+        {
+            why = "";
+            return false;
         }
         if (_s.ConvexPlanTime >= profile.EndTime)
         {

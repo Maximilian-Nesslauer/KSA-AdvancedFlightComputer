@@ -301,6 +301,11 @@ public static partial class GuidanceWindow
         try
         {
             StepGuidance(vehicle, orbit, parent, mu, bodyRadius);
+            if (_s.Running && _s.Engage && _s.AutoStage && GroundedLiquidCannotLift(vehicle, parent))
+            {
+                ReleaseAscent("ASCENT HELD: THE ACTIVE ENGINES CANNOT LIFT THE CRAFT UNDER THE STOCK G LIMIT.", vehicle, warn: true);
+                return;
+            }
             // StepGuidance can end the ascent (EndAscentOutOfPropellant), and an ended ascent stages nothing.
             if (_s.Running && _s.Engage && _s.AutoStage && !_s.CutoffDone)
                 AutoSequence(vehicle);

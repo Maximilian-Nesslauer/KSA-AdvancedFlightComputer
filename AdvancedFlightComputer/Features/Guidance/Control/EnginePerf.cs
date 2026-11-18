@@ -69,8 +69,9 @@ internal static class KsaEnginePerf
         return limit > 0.0 && double.IsFinite(limit) ? limit : double.PositiveInfinity;
     }
 
-    internal static double ThrustAtThrottle(Vehicle vehicle, double throttle, double ambientPressure)
-        => ActivePerformance(vehicle, throttle, ambientPressure).thrust;
+    internal static double ThrustAtThrottle(Vehicle vehicle, double throttle, double ambientPressure, double3? axisAsmb = null)
+        => RawPerformance(vehicle, Math.Min(throttle, StructuralThrottleCap(vehicle, ambientPressure)),
+            ambientPressure, axisAsmb: axisAsmb).thrust;
 
     internal static (double thrust, double massFlow) AtThrottle(Vehicle vehicle, double throttle, double ambientPressure)
         => ActivePerformance(vehicle, throttle, ambientPressure);
@@ -145,7 +146,7 @@ internal static class KsaEnginePerf
     // Uncapped performance at a commanded throttle.
     // liquidOnly leaves out every engine with a core that does not follow the throttle.
     private static (double thrust, double massFlow) RawPerformance(Vehicle vehicle, double throttle, double ambientPressure,
-                                                                   bool liquidOnly = false)
+                                                                   bool liquidOnly = false, double3? axisAsmb = null)
     {
         if (vehicle?.Parts?.States == null || !double.IsFinite(throttle) || !double.IsFinite(ambientPressure)
             || !ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
@@ -187,7 +188,7 @@ internal static class KsaEnginePerf
                     data.MassFlowRateMax += rocketData.MassFlowRateMax;
                 }
             }
-            double force = data.ThrustMax.Length();
+            double force = axisAsmb is { } axis ? double3.Dot(double3.Unpack(data.ThrustMax), axis) : data.ThrustMax.Length();
             if (!double.IsFinite(force) || !float.IsFinite(data.MassFlowRateMax))
                 return (0.0, 0.0);
             thrust += force;
@@ -252,7 +253,7 @@ internal static class KsaEnginePerf
         };
     }
 
-    internal static ThrustCommand CommandForThrust(Vehicle vehicle, double demandN, double ambientPressure)
+    internal static ThrustCommand CommandForThrust(Vehicle vehicle, double demandN, double ambientPressure, double3? axisAsmb = null)
     {
         if (!double.IsFinite(demandN))
             return new(0.0, 0.0, ThrustStatus.InvalidDemand);
@@ -260,7 +261,7 @@ internal static class KsaEnginePerf
         if (status != ThrustStatus.Available)
             return new(0.0, 0.0, status);
         return InvertThrust(demandN, vehicle.GetMinThrottle(),
-            throttle => RawPerformance(vehicle, throttle, ambientPressure).thrust,
+            throttle => RawPerformance(vehicle, throttle, ambientPressure, axisAsmb: axisAsmb).thrust,
             StructuralThrottleCap(vehicle, ambientPressure));
     }
 
