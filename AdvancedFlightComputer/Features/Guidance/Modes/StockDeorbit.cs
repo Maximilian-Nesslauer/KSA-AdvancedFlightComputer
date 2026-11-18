@@ -162,7 +162,12 @@ public static partial class GuidanceWindow
             && fc.PlannedBurnThrottle <= fc.ActiveEnginePerformanceMax.MinThrottle + 1e-6;
         if (!minimumPreview || !(duration > 0) || !double.IsFinite(latestFinish + ignition + preparationStart)
             || preparationStart < SimNow() || latestFinish >= plan.ArrivalTime - PrepLeadTime)
-        { StopStockDeorbit(vehicle, "NO BOUNDED STOCK BURN WINDOW WITH ENOUGH PREPARATION TIME. BURN STAYS MANUAL.", keepNode: true); return; }
+        {
+            GuidanceLog.Debug(vehicle, FormattableString.Invariant(
+                $"stock timing check: measured throttle {fc.PlannedBurnThrottle:F3}, minimum {fc.ActiveEnginePerformanceMax.MinThrottle:F3}, duration {duration:F2} s, preparation {preparationStart - SimNow():F2} s, entry lead {plan.ArrivalTime - latestFinish:F2} s."));
+            StopStockDeorbit(vehicle, "NO BOUNDED STOCK BURN WINDOW WITH ENOUGH PREPARATION TIME. BURN STAYS MANUAL.", keepNode: true);
+            return;
+        }
 
         if (_s.DeorbitRequest.Settings.EntryPeriapsis is double target)
         {
