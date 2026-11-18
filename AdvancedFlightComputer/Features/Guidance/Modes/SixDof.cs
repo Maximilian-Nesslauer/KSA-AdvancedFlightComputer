@@ -1653,6 +1653,27 @@ public static partial class GuidanceWindow
         }
         : null;
 
+    private static double PlanThrottle(Vehicle vehicle, double thrustN, double ambientPa, double capability)
+    {
+        double throttle = KsaEnginePerf.ThrottleForThrust(vehicle, thrustN, ambientPa);
+        if (throttle < 0.0)
+            throttle = thrustN / (capability > 1.0 ? capability : _s.Guidance.Tmax);
+        return Math.Clamp(throttle, 0.0, 1.0);
+    }
+
+    private static bool EntryThrustMatches(Vehicle vehicle, IParentBody parent, double3 siteCci,
+        double[] x, double now, double carried)
+    {
+        if (_s.Guidance?.Published is not { } plan || plan.SolveTime + plan.Sigma - now < EntryHandoffBlendSeconds
+            || !_s.Guidance.Command(now, out _, out double thrustN, x, SixDofTracker()))
+            return false;
+        double pressure = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
+        double capability = KsaEnginePerf.ActiveThrustCapability(vehicle, pressure);
+        double planned = PlanThrottle(vehicle, thrustN, pressure, capability);
+        return EntryHandoffThrustCompatible(KsaEnginePerf.ThrustAtThrottle(vehicle, planned, pressure),
+            KsaEnginePerf.ThrustAtThrottle(vehicle, carried, pressure), vehicle.TotalMass);
+    }
+
     /// <summary>
     /// Turns one plan command into the throttle and the gimbal torque, and logs the cycle.
     /// </summary>
@@ -1674,14 +1695,19 @@ public static partial class GuidanceWindow
         // Thrust is not proportional to throttle in an atmosphere - see KsaEnginePerf.ThrustAtThrottle - so demand/capability under-delivers by a near-constant amount, worst at low throttle, which is precisely where a descent spends its time.
         //
         // Falling back to the linear estimate when there is nothing to invert is not a nicety: before ignition capability is 0 and dividing gives NaN.
-        double throttle = KsaEnginePerf.ThrottleForThrust(vehicle, thrustN, ambientPa);
-        if (throttle < 0.0)
+        double throttle = PlanThrottle(vehicle, thrustN, ambientPa, capability);
+        double blend = EntryHandoffThrottle(throttle, now - _s.SixDofEntryBlendStart, _s.SixDofEntryBlendThrottle);
+        if (blend != throttle)
         {
-            double denom = capability > 1.0 ? capability : _s.Guidance.Tmax;
-            throttle = thrustN / denom;
+            // A replan during the blend can change the thrust. Keep the executed
+            // command inside the same bound that admitted the handoff.
+            double plannedForce = KsaEnginePerf.ThrustAtThrottle(vehicle, throttle, ambientPa);
+            double blendedForce = KsaEnginePerf.ThrustAtThrottle(vehicle, blend, ambientPa);
+            if (EntryHandoffThrustCompatible(plannedForce, blendedForce, vehicle.TotalMass))
+                throttle = blend;
+            else
+                _s.SixDofEntryBlendStart = double.NaN;
         }
-        throttle = Math.Clamp(throttle, 0.0, 1.0);
-        throttle = EntryHandoffThrottle(throttle, now - _s.SixDofEntryBlendStart, _s.SixDofEntryBlendThrottle);
 
         _s.CapabilityN = capability;
         // Saturation is the honest failure signal here: the plan is asking for more than the vehicle physically has, so the trajectory being flown is not the one that was planned, and no amount of feedback recovers it.
@@ -1711,14 +1737,20 @@ public static partial class GuidanceWindow
                  torqueModel, ambientPa);
     }
 
+    private const double EntryHandoffBlendSeconds = 0.4;
+
+    // Bound the velocity error even if the entire blend held its worst thrust difference.
+    internal static bool EntryHandoffThrustCompatible(double plannedN, double carriedN, double massKg)
+        => plannedN > 0.0 && carriedN > 0.0 && massKg > 0.0 && double.IsFinite(massKg)
+            && Math.Abs(plannedN - carriedN) * EntryHandoffBlendSeconds <= 0.25 * massKg;
+
     // The first touchdown command carries the entry throttle. A short blend gives the new
     // tracker a continuous command as it takes the remainder of the burn.
     internal static double EntryHandoffThrottle(double planned, double elapsed, double carried)
     {
-        const double blendSeconds = 0.4;
-        if (!double.IsFinite(elapsed) || elapsed >= blendSeconds)
+        if (!double.IsFinite(elapsed) || elapsed >= EntryHandoffBlendSeconds)
             return planned;
-        double progress = Math.Clamp(elapsed / blendSeconds, 0.0, 1.0);
+        double progress = Math.Clamp(elapsed / EntryHandoffBlendSeconds, 0.0, 1.0);
         double weight = progress * progress * (3.0 - 2.0 * progress);
         return carried + weight * (planned - carried);
     }
