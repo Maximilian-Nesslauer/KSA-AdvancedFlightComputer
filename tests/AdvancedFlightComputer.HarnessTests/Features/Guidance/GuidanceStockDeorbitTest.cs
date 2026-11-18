@@ -422,6 +422,9 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
         try
         {
             engine.SetIsActive(craft, false);
+            InputEvents.ApplyInputEvents();
+            if (!t.Check("the stock input drain deactivates the preview engine", !engine.IsActive))
+                return;
             GuidanceWindow.ApplyAutopilot(craft);
             t.Check("a change in engine configuration prevents using the old timing preview",
                 state.LandingPhase == GuidanceWindow.LandingPhase.Done && craft.FlightComputer.BurnMode == FlightComputerBurnMode.Manual
@@ -431,6 +434,7 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
         finally
         {
             engine.SetIsActive(craft, true);
+            InputEvents.ApplyInputEvents();
             craft.FlightComputer.RemoveBurn(node);
         }
     }
