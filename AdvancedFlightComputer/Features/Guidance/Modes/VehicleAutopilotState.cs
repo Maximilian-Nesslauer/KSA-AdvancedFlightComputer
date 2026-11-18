@@ -934,7 +934,7 @@ public sealed class VehicleAutopilotState
     /// a second owner rather than interleaving two craft into one CSV.
     /// On by default: per vehicle, so a booster separated in flight never had the box ticked, and the landings that needed diagnosing on 2026-10-08 all flew without a record.
     /// </summary>
-    public bool SixDofLogging;
+    public bool SixDofLogging = true;
 
     // Flown track state.
     //
@@ -1509,7 +1509,7 @@ public sealed class VehicleAutopilotState
     /// <summary>The fastest turn entry guidance's plan uses, rad/s (Ksa3DofSetup.PlanRateMax), read when a cold solve starts: also the turn to the burn's opening attitude.</summary>
     public double ThreeDofRateInUse = 10.0 * Math.PI / 180.0;
 
-    /// <summary>Write entry guidance's per-step log (EntryLog) to navbox-logs. On while the lift offset is investigated; touchdown guidance's log has its own switch, SixDofLogging, off by default.</summary>
+    /// <summary>Write entry guidance's per-step log (EntryLog) to navbox-logs. On while the lift offset is investigated; touchdown guidance's log has its own switch, SixDofLogging, on by default too.</summary>
     public bool EntryLogging = true;
 
     /// <summary>The cross-flow bias entry guidance has learned, as an acceleration at the craft's last measured state, m/s^2: a readout.</summary>

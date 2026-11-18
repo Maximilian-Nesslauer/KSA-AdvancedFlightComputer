@@ -52,7 +52,13 @@ internal static class SixDofLog
     internal static bool Start(object owner, string vehicleName, string bodyName)
     {
         if (Enabled && Owner != null && !ReferenceEquals(Owner, owner))
-            return false;
+        {
+            // Unless the craft holding it has written nothing for a while: one destroyed or unloaded mid-run never steps again to stop its own log, and held it from every later landing (as EntryLog did on 2026-11-18).
+            if (Environment.TickCount64 - _lastWriteTick < StaleOwnerMs)
+                return false;
+            Stop(Owner);
+        }
+        _lastWriteTick = Environment.TickCount64;
 
         try
         {
@@ -153,7 +159,18 @@ internal static class SixDofLog
     /// <summary>
     /// May this caller write? The sink is single-owner by design, but only Start and Stop ever checked - so a second craft refused ownership went on appending to the same three buffers anyway, interleaving two vehicles' rows in one CSV and racing a StringBuilder between their guidance threads. Every write checks now.
     /// </summary>
-    private static bool Writable(object owner) => Enabled && ReferenceEquals(Owner, owner);
+    private static bool Writable(object owner)
+    {
+        if (!Enabled || !ReferenceEquals(Owner, owner))
+            return false;
+        _lastWriteTick = Environment.TickCount64;
+        return true;
+    }
+
+    private static long _lastWriteTick;
+
+    /// <summary>Wall-clock time without a write after which another craft may take the log, ms.</summary>
+    private const long StaleOwnerMs = 5000;
 
     internal static void Event(object owner, double t, string message)
     {

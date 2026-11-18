@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Touchdown guidance's log is on by default again, so a booster separated in flight, which never has the box ticked, is recorded. Like the entry log, it is taken over from a craft that has written nothing to it for 5 s.
+
 - Touchdown guidance models the **aerodynamic moment**, and the force, from the body-axis tables for the plan's own attitude, roll included. The moment joins the gimbal's in the plan's rotational dynamics, so the plan holds the gimbal against the air from its start and sends that torque to the gimbals. Before, the plan knew no moment: the craft turned away from it, the gimbal spent correcting that pushed the thrust sideways, and on 2026-11-18 a booster handed over on target touched down 5.4 m off at 9.6 m/s. The moment is moved to the craft's present centre of mass. Below 5-15 m/s, and past 20-28 deg off engine first, where the tables end, the tables fade out smoothly and the roll-averaged force makes up the rest. Offline (`--6dof-aero`), a landing against a steady pitching moment planned with it flies open loop as well as one in still air; planned without it, it ends 327 m off at 95 m/s.
 
 - GLIDE PLAN AoA defaults to 2.5 deg, from 0. Every impact prediction, and entry guidance's seed, now glides with a little lift up the trajectory, so a booster comes in from a definite direction rather than from wherever it happens to arrive over the site.

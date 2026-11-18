@@ -12,7 +12,7 @@ public sealed class SettingSpecDefaultsTest : AfcTest
     protected override void Execute(TestContext t)
     {
         var fresh = new VehicleAutopilotState();
-        t.Check("touchdown logging starts off on a fresh craft", !fresh.SixDofLogging);
+        t.Check("touchdown logging starts on for a fresh craft, so a booster separated in flight is recorded", fresh.SixDofLogging);
 
         foreach (SettingSpec spec in GuidanceSettingSpecs.AllDoubles)
         {
