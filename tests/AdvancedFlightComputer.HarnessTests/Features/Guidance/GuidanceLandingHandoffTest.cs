@@ -4,6 +4,7 @@ using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
+using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
@@ -194,6 +195,20 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             state.ThreeDofTouchdownHandoff.Status == null && !state.EngagePending);
 
         _contact = false;
+        step.Invoke(null, args);
+        var model = new KsaPointMassModel();
+        var guidance = new Guidance3Dof(new Scvx3DofConfig { Nodes = 3, GlideIntervals = 1 },
+            new Scvx3DofConfig { Nodes = 3, GlideIntervals = 0, AttitudeAnchor = true }, model);
+        double now = Universe.GetElapsedSeconds();
+        var recovered = new Plan3Dof([], [], 3, 0, 0.0, 20.0, now, now, Phase3Dof.Burn, 0.0);
+        AccessTools.Field(typeof(Guidance3Dof), "_published").SetValue(guidance, recovered);
+        state.ThreeDofGuidance = guidance;
+        take.Invoke(null, [craft, home]);
+        t.Check("a plan published during a pending fault handoff keeps entry in control",
+            state.ThreeDofTouchdownHandoff.Status == null && !state.EngagePending
+            && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn);
+        state.ThreeDofGuidance = null;
+
         step.Invoke(null, args);
         take.Invoke(null, [craft, home]);
         t.Check("a ready standby takes the entry burn without cutting its engine",

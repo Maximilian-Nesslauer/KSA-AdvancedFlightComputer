@@ -260,7 +260,8 @@ public static partial class GuidanceWindow
                     : $"ENTRY REFUSED {g.ConsecutiveRefusals} RE-SOLVES{RefusalReason(g)}. PID GLIDE, COLD RETRY.", now);
                 return false;
             }
-            if (g.Phase is not (Phase3Dof.Idle or Phase3Dof.Converging)
+            if (_s.ThreeDofTouchdownHandoff.Status == null
+                && g.Phase is not (Phase3Dof.Idle or Phase3Dof.Converging)
                 && now - _s.ThreeDofLastUpdate >= ThreeDofUpdateS)
             {
                 _s.ThreeDofLastUpdate = now;
@@ -575,6 +576,10 @@ public static partial class GuidanceWindow
         var (status, warning) = _s.ThreeDofTouchdownHandoff;
         _s.ThreeDofTouchdownHandoff = default;
         if (status == null || _s.ThreeDofPhase != ThreeDofPhase.Burn || HasTouchedDown(vehicle))
+            return;
+        // A warning can take the burn only once the entry worker has finished without publishing a replacement.
+        if (warning && (ThreeDofBusy || (_s.ThreeDofGuidance?.Published is { } recovered
+            && !ReferenceEquals(recovered, _s.ThreeDofPlan))))
             return;
 
         double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
