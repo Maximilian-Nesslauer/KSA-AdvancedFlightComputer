@@ -1216,18 +1216,18 @@ public static partial class GuidanceWindow
         // Planning waits without control, and the stock node takes its claim before Auto is armed.
         // A direct braking coast enters Prep before the manual control claim below.
         StepDeorbitPlanning(vehicle, orbit, parent);
-        // Check the takeover while stock still owns the burn, because its step returns while it is active.
-        if (IsStockDeorbitPhase(_s.LandingPhase))
-            StepPendingBoostback(vehicle, orbit, parent);
-        if (StepStockDeorbit(vehicle, orbit, parent)) return;
-        StepLandingCoast();
-
         // An entry guidance request engages HERE, ahead of the claim below, so its first step is claimed like any other mode's - consumed in Step3Dof it wrote engine and attitude before the claim, and while touchdown guidance flew, the exclusive branch returned before it was consumed at all. Engage3Dof's ClaimVehicle disengages touchdown guidance.
         if (_s.ThreeDofEngagePending)
         {
             _s.ThreeDofEngagePending = false;
             Engage3Dof(vehicle, SimNow());
         }
+
+        // Check the takeover while stock still owns the burn, because its step returns while it is active.
+        if (IsStockDeorbitPhase(_s.LandingPhase))
+            StepPendingBoostback(vehicle, orbit, parent);
+        if (StepStockDeorbit(vehicle, orbit, parent)) return;
+        StepLandingCoast();
 
         StepPendingBoostback(vehicle, orbit, parent);
 

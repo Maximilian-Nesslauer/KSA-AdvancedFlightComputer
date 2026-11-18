@@ -67,6 +67,9 @@ public sealed class Scvx3DofConfig
     /// </summary>
     public double AttitudeRateMax { get; init; }
 
+    /// <summary>Hold the body axis constant during engine-off coast intervals.</summary>
+    public bool GlideAttitudeFixed { get; init; }
+
     /// <summary>
     /// Turn ACCELERATION limit, rad/s^2, or 0 for none: how fast the body axis's turn rate may change, |b_k+1 - 2 b_k + b_k-1| &lt;= accel * dt^2 at every node, from the measured turn rate at node 0 (see <see cref="Scvx3DofSolver.SetAttitudeRateAnchor"/>) to a stop at the last. A rate limit alone lets the plan change its turn rate instantly, which no vehicle can: planned at 10 deg/s and nothing else, the 2026-10-09 booster's burns swung 24 deg at ignition and flicked upright in the last second at 10-25 deg/s^2, against the 3-4.6 its RCS gives with the engines off, and it was 12 deg off its command by ignition.
     ///  How the vehicle turns is not modelled - gimbals, RCS, fins are all one number - which is the point: this solver flies the part of the descent where aerodynamics matter, and the gimbals' thrust-dependent authority belongs to the 6-DOF after it.

@@ -695,11 +695,9 @@ public static partial class GuidanceWindow
                 }
                 want = GlideDirection(vehicle, orbit, parent, now, dt);
                 // Close enough to impact for the air to be worth planning in: the 3-DOF glide-and-burn landing takes the craft from here (Modes/ThreeDof.cs). It flies the PID glide itself until its first plan, from the same glide state, so the hand-over does not move the command.
-                if (_s.ThreeDofFromGlide && double.IsFinite(_s.GlideTgo) && _s.GlideTgo <= _s.ThreeDofEngageTgoS)
-                {
-                    Engage3Dof(vehicle, now);
+                if (_s.ThreeDofFromGlide && double.IsFinite(_s.GlideTgo) && _s.GlideTgo <= _s.ThreeDofEngageTgoS
+                    && Engage3Dof(vehicle, now))
                     return;
-                }
                 break;
 
             default:

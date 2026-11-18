@@ -99,6 +99,7 @@ public static partial class GuidanceWindow
         _s.Guidance = guidance;
         _s.Worker = new Ksa6DofSolveWorker();
         _s.SixDofStandby = true;
+        _s.SixDofStandbyEngines = CaptureStandbyEngines(vehicle);
         _s.SixDofStandbyStart = now;
         _s.SixDofStandbyRefusal = "";
         _s.SixDofStandbyRefusals = 0;
@@ -141,6 +142,7 @@ public static partial class GuidanceWindow
         if (!_s.SixDofStandby)
             return;
         _s.SixDofStandby = false;
+        _s.SixDofStandbyEngines = null;
         _s.Converging = false;
         // Reference first, as Disengage6Dof does: a dispose that throws must still leave no live worker behind.
         Ksa6DofSolveWorker worker = _s.Worker;
@@ -173,6 +175,8 @@ public static partial class GuidanceWindow
     private static void StepSixDofStandbyCore(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x, double now,
                                               double sigmaSeed, bool holdForEntryHandoff)
     {
+        if (!StandbyEnginesStillMatch(vehicle))
+            StopSixDofStandby();
         if (!_s.SixDofStandby)
         {
             if (now >= _s.SixDofStandbyRetryAt)
@@ -291,6 +295,42 @@ public static partial class GuidanceWindow
         _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz);
         // Back to back, not on the flying cadence: the craft is not following this plan, so the solve has to keep moving to keep up.
         _s.Worker.TryDispatchTrack(_s.Guidance, x, now, SixDofStandbyTrackIterations);
+    }
+
+    private static EngineController[] CaptureStandbyEngines(Vehicle vehicle)
+    {
+        var engines = new List<EngineController>();
+        foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
+            if (StandbyEngineSupplied(vehicle, engine))
+                engines.Add(engine);
+        return engines.ToArray();
+    }
+
+    private static bool StandbyEnginesStillMatch(Vehicle vehicle)
+    {
+        if (!_s.SixDofStandby)
+            return true;
+        EngineController[] expected = _s.SixDofStandbyEngines;
+        if (expected == null)
+            return false;
+        int index = 0;
+        foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
+        {
+            if (!StandbyEngineSupplied(vehicle, engine))
+                continue;
+            if (index >= expected.Length || !ReferenceEquals(expected[index++], engine))
+                return false;
+        }
+        return index == expected.Length;
+    }
+
+    private static bool StandbyEngineSupplied(Vehicle vehicle, EngineController engine)
+    {
+        if (!engine.IsActive)
+            return false;
+        return ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
+            .TryGetFrom(vehicle.Parts.States, out var states)
+            && states.States[engine.StatesIdx].IsPropellantAvailable;
     }
 
     /// <summary>The next node rung finer than <paramref name="nodes"/>, or the finest.</summary>

@@ -75,6 +75,7 @@ public static partial class GuidanceWindow
         _s.Guidance = null;
         _s.SixDofStandby = false;
         _s.CancelGfoldSolve();
+        _s.CancelEntrySolve();
 
         // The ascent solve owns nothing of the game, so cancelling it is all the cleanup it needs.
         _s.AscentPlanJob?.Cancel();

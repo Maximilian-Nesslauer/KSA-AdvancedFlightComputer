@@ -126,7 +126,7 @@ internal static class ThreeDofCheck
         int shared = SharedIterations(solver, lines.Skip(6).Select((_, i) => Row(6 + i)).ToArray());
 
         // SCvx is a LOCAL method on a nonconvex problem, so reproducing the script's trajectory is the wrong pass criterion, for the reason the 6-DOF loop check gives: the two sides walk the same path only while they take the same accept/reject decisions and trust-region steps. Here the script's iteration 7 came back from CLARABEL "inaccurate" with rho 0.03, which halved its trust region and stopped it at 38 s of burn and 5.0 t of propellant; SCS took that step at rho 0.47 and carried on to a lower merit.
-        // So: the iterations both sides DID share must agree - that tests the model, the linearisation and the subproblem - and the end point must converge, be feasible against the true constraints, and be no worse than the script's.
+        // The first five iterations must agree. After that, different native solvers can return different steps even with the same trust region and acceptance decision. The endpoint must still converge, be feasible, and be no worse than the script's.
         bool converged = status == ScvxStatus.Converged;
         bool sharedOk = shared >= 5;
         bool noWorse = costGot <= costRef * (1.0 + 1e-6);
@@ -144,7 +144,7 @@ internal static class ThreeDofCheck
     }
 
     /// <summary>
-    /// How many leading iterations agree with the script's trace: same accept decision and trust region, merit within 2 % and both durations within 0.15 s. Stops at the first iteration where the trust regions differ, since the two runs are on different paths from there.
+    /// Counts the leading iterations that agree with the script's trace. The acceptance decision and trust region must match, the merit must be within 2 %, and both durations must be within 0.15 s.
     /// </summary>
     private static int SharedIterations(Scvx3DofSolver solver, double[][] traceRef)
     {
@@ -162,8 +162,7 @@ internal static class ThreeDofCheck
             bool ok = sameTr && ej < 0.02 && es < 0.15;
             Console.WriteLine($"  iter {i,2}: rho {it.Rho,6:F2} vs {r[1],6:F2}  tr {it.TrustRegion:F3} vs {r[3]:F3}  " +
                               $"merit rel {ej:E1}  sigma diff {es:F3} s  {(ok ? "ok" : sameTr ? "DIFFERS" : "paths part")}");
-            if (!sameTr) break;
-            if (!ok) return 0;
+            if (!ok) break;
             shared++;
         }
         return shared;
