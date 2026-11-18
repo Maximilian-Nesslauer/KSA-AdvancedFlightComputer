@@ -87,9 +87,14 @@ public sealed class ProbePowerTest : AfcTest
         backup.Mode = PowerSwitchMode.Off;
 
         double remaining = ProbePower.RemainingSeconds(vehicle);
-        string warning = PageText.ProbePowerWarning(remaining, 1200.0, "BURN");
+        double charge = 0.0;
+        int circuit = tree.ElectricalCircuits.IndexFor(core.Parent.FullPart);
+        foreach (Battery battery in tree.ElectricalCircuits.Batteries(circuit))
+            charge += tree.Batteries.States[battery.StatesIdx].Charge.Value();
+        double expected = charge / core.Consumed.Value();
+        string warning = PageText.ProbePowerWarning(remaining, expected + 180.0, "BURN");
         t.Check("the small stock core warns for a burn after its battery expires",
-            remaining is > 810.0 and < 855.0 && warning.Contains("BEFORE BURN", StringComparison.Ordinal)
+            expected > 300.0 && Math.Abs(remaining - expected) < 0.001 && warning.Contains("BEFORE BURN", StringComparison.Ordinal)
             && warning.Contains("ECLIPSE", StringComparison.Ordinal), $"{remaining:F2} s, {warning}");
         t.Check("a burn inside the estimate has no warning", PageText.ProbePowerWarning(remaining, 300.0, "BURN").Length == 0);
 

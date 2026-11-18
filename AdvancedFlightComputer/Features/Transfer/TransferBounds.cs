@@ -62,13 +62,13 @@ internal static class TransferBounds
     public static void Destinations(Vehicle source, List<TransferObject> list)
     {
         list.Clear();
-        foreach (Vehicle vehicle in Program.VehiclesInFrame)
+        ReadOnlySpan<Astronomical> all = Universe.CurrentSystem!.All.AsSpan();
+        foreach (Astronomical body in all)
         {
-            if (vehicle.Id != source.Id && vehicle.Parent == source.Parent)
+            if (body is Vehicle vehicle && !vehicle.IsDisposed && vehicle.Id != source.Id && vehicle.Parent == source.Parent)
                 list.Add(new TransferObject(vehicle));
         }
 
-        ReadOnlySpan<Astronomical> all = Universe.CurrentSystem!.All.AsSpan();
         IParentBody? parent = source.Parent;
         if (parent == null)
             return;
