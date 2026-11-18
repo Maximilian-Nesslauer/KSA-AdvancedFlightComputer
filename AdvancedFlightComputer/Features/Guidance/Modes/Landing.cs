@@ -41,14 +41,14 @@ public static partial class GuidanceWindow
         _s.AutoStage = true;
         _s.LandingPhase = LandingPhase.GfoldDescent;
         ResetGfoldTrace();   // fresh flown path and a fresh axis latch
+        _s.CancelGfoldSolve();
         _s.GfoldHandoffTime = now;
         _s.GfoldLastSolveTime = double.NegativeInfinity;
         _s.GfoldPlan = null;
         _s.GfoldFailStreak = 0;
         _s.GfoldTrackInit = false;
         _s.GfoldEngineOn = engineLit;
-        if (engineLit)
-            _s.GfoldThrottle = vehicle.GetManualThrottle();
+        _s.GfoldThrottle = engineLit ? vehicle.GetManualThrottle() : 0.0;
         _s.GfoldRelightRequestTime = double.NaN;
         _s.GfoldHoverRefused = false;
         _s.HasCommand = false;
@@ -58,6 +58,7 @@ public static partial class GuidanceWindow
     // An abort in the air hands the craft back with the engine as it is, because a cut there drops the craft. The coast and the deorbit burn keep the cut, which stops the burn and costs a coasting craft nothing.
     private static void AbortLanding()
     {
+        _s.CancelGfoldSolve();
         ResetLandingEngineWait();
         _s.DeorbitPlanner?.Dispose();
         _s.DeorbitPlanner = null;
@@ -399,6 +400,7 @@ public static partial class GuidanceWindow
         StopSixDofStandby();
         _s.LandingPhase = LandingPhase.GfoldDescent;
         ResetGfoldTrace();   // fresh flown path and a fresh axis latch
+        _s.CancelGfoldSolve();
         _s.GfoldHandoffTime = now;
         _s.GfoldLastSolveTime = double.NegativeInfinity;
         _s.GfoldPlan = null;

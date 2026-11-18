@@ -679,26 +679,10 @@ public sealed class VehicleAutopilotState
     public double GfoldIntervalS = 0.25;   // re-solve cadence
     public int GfoldNodes = 50;
 
-    /// <summary>
-    /// WALL-CLOCK CEILING PER SOLVE, seconds. The guard that stops a hard descent
-    /// state from hanging the game.
-    ///
-    /// SCS ships with no time limit and a 100000-iteration cap, so a state it converges
-    /// on slowly just runs - on the sim thread. And the caller's response to a failed
-    /// solve is to run a 35-solve search, twice, so one slow state became minutes of
-    /// frozen game, retried every GfoldIntervalS. A solve that exceeds this comes back
-    /// as MaxIterations, which reads as "this time of flight does not work" - the same
-    /// answer an infeasible one gives, and the search moves on instead of grinding.
-    ///
-    /// 40 ms is under three frames and roughly twice the 19.6 ms a converging solve
-    /// costs at eps 1e-4, so it bounds the pathological case without truncating the
-    /// normal one. It does NOT bound a search, which is tens of solves - that is the
-    /// argument for moving the solve off this thread, not something a per-solve limit
-    /// can fix.
-    /// </summary>
+    /// <summary>Wall-clock budget for one native solve on the descent worker, in seconds.</summary>
     public double GfoldSolveTimeLimitS = 0.040;
 
-    /// <summary>Wall-clock cost of the last descent solve, ms - the number the frame budget cares about.</summary>
+    /// <summary>Wall-clock cost of the last descent solve on the worker, in milliseconds.</summary>
     public double GfoldSolveMs;
 
     /// <summary>Sim time before which a re-plan skips the flight-time searches, set when a plan was refused for propellant.</summary>
@@ -806,6 +790,16 @@ public sealed class VehicleAutopilotState
 
     /// <summary>The committed descent plan and the tracker flying it.</summary>
     public GfoldTrajectory GfoldPlan;
+    internal GfoldSolveJob GfoldJob;
+    internal double3 GfoldPlanSiteCcf;
+    internal double3 GfoldJobSiteCcf;
+
+    internal void CancelGfoldSolve()
+    {
+        GfoldJob?.Dispose();
+        GfoldJob = null;
+    }
+
     public double GfoldPlanStart;          // sim time of plan node 0
     public double GfoldArrivalTime;        // sim time of planned touchdown
     public double GfoldThrustMax = 1.0;    // engine vac thrust at plan time, N

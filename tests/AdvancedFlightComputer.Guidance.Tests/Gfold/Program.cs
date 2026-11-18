@@ -179,7 +179,7 @@ if (args.Contains("--frame"))
     }
 
     Console.WriteLine();
-    Console.WriteLine("fallback path: bracketed SearchMinFuel (this is what can stall a frame)");
+    Console.WriteLine("fallback path: bracketed SearchMinFuel");
     Console.WriteLine("  solver           mean ms   worst ms   tf s     fuel kg   solves");
     {
         const string label = "Clarabel";
@@ -197,23 +197,24 @@ if (args.Contains("--frame"))
     // solution. If a limited run ever prints Optimal AND usable, the status mapping has
     // regressed and the caller will fly a half-converged plan.
     Console.WriteLine();
-    Console.WriteLine("time-limit guard (the fix for the sim-thread freeze)");
+    Console.WriteLine("native time limit per request");
     Console.WriteLine("  limit           ms   status            usable");
     foreach (double limit in new[] { 0.0, 0.040, 0.002 })
     {
-        GfoldPlanner.SolveTimeLimitS = limit > 0 ? limit : null;
         var w = System.Diagnostics.Stopwatch.StartNew();
-        GfoldTrajectory t = GfoldPlanner.SolveMinFuel(rtP, rtTf, nodes, rtLanding, options: rtOpt);
+        GfoldTrajectory t = GfoldPlanner.SolveMinFuel(rtP, rtTf, nodes, rtLanding,
+            options: rtOpt with { SolveTimeLimitS = limit });
         w.Stop();
         Console.WriteLine($"  {(limit > 0 ? $"{limit * 1000:F0} ms" : "none"),-10} {w.ElapsedMilliseconds,7}   " +
                           $"{t.Status,-16}  {(t.IsUsable ? "yes" : "no")}");
     }
 
     Console.WriteLine();
-    Console.WriteLine("budget: the sim step this runs on has ~16 ms at 60 Hz. A solve longer");
-    Console.WriteLine("than that stalls the frame it lands on, once every 0.25 s.");
-
-    GfoldPlanner.SolveTimeLimitS = null;
+    GfoldPlanner.SearchResult? cancelled = GfoldPlanner.SearchMinFuel(rtP, nodes, options: rtOpt,
+        tfGuess: rtTf, searchTimeLimitS: 0.4, stop: new CancellationToken(canceled: true));
+    if (cancelled != null)
+        return 1;
+    Console.WriteLine("a cancelled search returned no trajectory");
     return 0;
 }
 
