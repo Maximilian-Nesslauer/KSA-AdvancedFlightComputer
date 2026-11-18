@@ -643,7 +643,7 @@ public static partial class GuidanceWindow
         return new CommitGates(
             HasTarget: hasTarget,
             LandingSwitchesOff: LandingSwitchesOff,
-            DeorbitRefusal: LandingSwitchesOff ? "" : DeorbitSettingsRefusal(parent),
+            DeorbitRefusal: LandingSwitchesOff ? "" : DeorbitSettingsRefusal(orbit),
             GravityTurnRefusal: gravityTurnRefusal,
             HoverTwrBelowOne: twrLow,
             PlansFirst: plansFirst,
