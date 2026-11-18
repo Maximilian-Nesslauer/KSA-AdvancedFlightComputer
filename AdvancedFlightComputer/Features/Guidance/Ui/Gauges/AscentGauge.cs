@@ -517,12 +517,7 @@ public static partial class GuidanceWindow
             {
                 ImGui.SameLine();
                 if (ConsoleWidgets.Button("X".AsSpan(), $"AfcStageClear{stage.RootId}".AsSpan(), default))
-                {
-                    _s.StageTargets.Remove(stage.RootId);
-                    _s.StageOptimalReturn.Remove(stage.RootId);
-                    _s.OptimalReturnSites.Remove(stage.RootId);
-                    _s.StageModelDirty = true;
-                }
+                    ClearStageReturn(_s, stage.RootId);
             }
             ConsoleUi.EndRow();
 

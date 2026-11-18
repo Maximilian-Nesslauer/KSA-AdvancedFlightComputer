@@ -262,7 +262,7 @@ public sealed class VehicleAutopilotState
     public readonly System.Collections.Generic.List<GuidanceWindow.ReturnableStage>
         ReturnableStages = new();
 
-    internal readonly List<(string Name, int Sequence, VehicleControl Reason)> ReturnControlRefusals = new();
+    internal readonly List<(uint RootId, string Name, int Sequence, VehicleControl Reason)> ReturnControlRefusals = new();
 
     /// <summary>
     /// Each stage's own landing site, keyed by the detached subtree root's InstanceId

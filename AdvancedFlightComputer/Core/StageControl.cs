@@ -127,18 +127,55 @@ internal static class StageControl
         // cannot prove that a battery remains on the same side of the joint.
         bool powered = selection.Parts == null
             ? consumer.HasPower(vehicle.Parts)
-            : HasSelectedCharge(vehicle.Parts, part, selection);
+            : HasSelectedPower(vehicle.Parts, consumer, selection);
         if (!powered)
             return ProbeCorePower.Unpowered;
         return rebooting ? ProbeCorePower.Rebooting : ProbeCorePower.Powered;
     }
 
-    private static bool HasSelectedCharge(PartTree tree, Part part, Selection selection)
+    private static bool HasSelectedPower(PartTree tree, PowerConsumer consumer, Selection selection)
     {
         ElectricalCircuits circuits = tree.ElectricalCircuits;
-        foreach (Battery battery in circuits.Batteries(circuits.IndexFor(part)))
-            if (selection.Contains(battery.Parent) && tree.Batteries.States[battery.StatesIdx].Charge > Joules.Zero)
+        int circuit = circuits.IndexFor(consumer.Parent);
+        bool hasBattery = false;
+        foreach (Battery battery in circuits.Batteries(circuit))
+        {
+            if (!selection.Contains(battery.Parent))
+                continue;
+            hasBattery = true;
+            if (tree.Batteries.States[battery.StatesIdx].Charge > Joules.Zero)
                 return true;
+        }
+        if (!hasBattery || !consumer.IsSwitchedOn())
+            return false;
+
+        // KSA runs generation before consumers. A supplied consumer can leave the batteries empty.
+        // Count live generation from this side and debit earlier loads in stock update order.
+        Watts available = Watts.Zero;
+        if (Generator.TryGetFrom(tree.States, out var generators)
+            && EngineController.TryGetFrom(tree.States, out var engines))
+            foreach (var item in generators.ModulesAndStates)
+                if (InSelectedCircuit(item.Module.Parent)
+                    && engines.TryGetModuleAndStateById(item.Module.EngineInstanceId, out var engine)
+                    && engine.Module.IsActive && engine.State.CommandBurnTime > 0.0
+                    && InSelectedCircuit(engine.Module.Parent))
+                    available += item.Module.Produced * engine.State.CommandThrottle;
+        if (SolarPanel.TryGetFrom(tree.States, out var panels))
+            foreach (var item in panels.ModulesAndStates)
+                if (item.State.Active && !item.State.IsOccluded && InSelectedCircuit(item.Module.Parent))
+                    available += item.State.Produced;
+        if (!(available > Watts.Zero))
+            return false;
+
+        foreach (var item in tree.PowerConsumers.ModulesAndStates)
+        {
+            if (ReferenceEquals(item.Module, consumer))
+                return available > Watts.Zero && available >= consumer.Consumed;
+            if (item.State.Active && InSelectedCircuit(item.Module.Parent))
+                available -= item.State.Consumed;
+        }
         return false;
+
+        bool InSelectedCircuit(Part part) => selection.Contains(part) && circuits.IndexFor(part) == circuit;
     }
 }

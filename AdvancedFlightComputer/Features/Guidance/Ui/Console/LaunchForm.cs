@@ -4,6 +4,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.Ui.Canvas;
 using AdvancedFlightComputer.Features.Ui.Logic;
 using Brutal.ImGuiApi;
 using KSA;
@@ -142,11 +143,10 @@ public static partial class GuidanceWindow
         ImGui.PushID(BoostersFoldId);
         try
         {
-            foreach (var (name, sequence, reason) in _s.ReturnControlRefusals)
-                ConsoleUi.MutedWrapped($"{name} in sequence {sequence} cannot return. {ReturnControlReason(reason)}");
+            bool unavailable = DrawUnavailableReturns(vehicle);
             if (stages == 0 && _s.ReserveStagedRoots.Count == 0)
             {
-                if (_s.ReturnControlRefusals.Count == 0)
+                if (!unavailable)
                     ConsoleUi.MutedWrapped(PageText.BoostersNone);
                 return;
             }
@@ -160,6 +160,59 @@ public static partial class GuidanceWindow
         {
             ImGui.PopID();
         }
+    }
+
+    private static bool DrawUnavailableReturns(Vehicle vehicle)
+    {
+        bool drawn = false;
+        uint? clear = null;
+        foreach (var (rootId, name, sequence, reason) in _s.ReturnControlRefusals)
+            Draw(rootId, $"{name} in sequence {sequence} cannot return. {ReturnControlReason(reason)}");
+        foreach (uint rootId in _s.StageTargets.Keys)
+            DrawSaved(rootId);
+        foreach (uint rootId in _s.StageOptimalReturn)
+            if (!_s.StageTargets.ContainsKey(rootId))
+                DrawSaved(rootId);
+        if (clear.HasValue)
+            ClearStageReturn(_s, clear.Value);
+        return drawn;
+
+        void DrawSaved(uint rootId)
+        {
+            if (UnlistedStageWithReturn(vehicle, _s, rootId) is { } part
+                && !_s.ReturnControlRefusals.Exists(refusal => refusal.RootId == rootId))
+                Draw(rootId, $"{part.DisplayName} has a saved return target. Planning for this stage is unavailable.");
+        }
+
+        void Draw(uint rootId, string text)
+        {
+            ConsoleUi.MutedWrapped(text);
+            if (HasStageReturn(_s, rootId)
+                && ConsoleWidgets.Button("CLEAR RETURN".AsSpan(), $"AfcUnavailableStageClear{rootId}".AsSpan(), default))
+                clear = rootId;
+            drawn = true;
+        }
+    }
+
+    private static bool HasStageReturn(VehicleAutopilotState state, uint rootId)
+        => state.StageTargets.ContainsKey(rootId) || state.StageOptimalReturn.Contains(rootId);
+
+    internal static Part UnlistedStageWithReturn(Vehicle vehicle, VehicleAutopilotState state, uint rootId)
+        => HasStageReturn(state, rootId) && !state.ReturnableStages.Exists(stage => stage.RootId == rootId)
+            ? vehicle.Parts.Find(rootId)
+            : null;
+
+    internal static void ClearStageReturn(VehicleAutopilotState state, uint rootId)
+    {
+        state.StageTargets.Remove(rootId);
+        state.StageOptimalReturn.Remove(rootId);
+        state.OptimalReturnSites.Remove(rootId);
+        if (_retargetStageId == rootId)
+        {
+            _retargetStageId = 0;
+            _retargetArmed = false;
+        }
+        state.StageModelDirty = true;
     }
 
     internal static string ReturnControlReason(VehicleControl reason) => reason switch

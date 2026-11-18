@@ -278,6 +278,11 @@ public static partial class GuidanceWindow
                 GuidanceLog.Info(vehicle, $"'{root.DisplayName}' is set to optimal return but no plan found its landing point: not handed over.");
             return;
         }
+        if (StageControl.Evaluate(vehicle, PartsLeavingOnActivation(vehicle, root, decoupler)) != VehicleControl.Controllable)
+        {
+            GuidanceLog.Info(vehicle, $"'{root.DisplayName}' has no usable control after separation. Booster hand-over skipped.");
+            return;
+        }
         _handovers.Add(new BoosterHandover
         {
             AttachmentRoot = root,

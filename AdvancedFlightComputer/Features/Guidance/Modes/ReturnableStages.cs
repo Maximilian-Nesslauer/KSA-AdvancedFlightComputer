@@ -144,7 +144,7 @@ public static partial class GuidanceWindow
                 if (control != VehicleControl.Controllable)
                 {
                     if (control.HasValue)
-                        _s.ReturnControlRefusals.Add((name, sequences[i].Number, control.Value));
+                        _s.ReturnControlRefusals.Add((root.InstanceId, name, sequences[i].Number, control.Value));
                     continue;
                 }
 
@@ -222,6 +222,33 @@ public static partial class GuidanceWindow
         }
         var parts = new HashSet<Part>();
         CollectOwnSubtree(root, root, others, parts);
+        return parts;
+    }
+
+    private static HashSet<Part> PartsLeavingOnActivation(Vehicle vehicle, Part root, Decoupler decoupler)
+    {
+        var roots = new List<Part>();
+        // A delayed row is already activated. Its pending modules are the live batch.
+        if (StagingDetector.PendingDecouplersFor(vehicle, decoupler) is { } pending)
+        {
+            foreach (ISequenced module in pending)
+                if (module is Decoupler joint && ReferenceEquals(joint.Parent.FullPart.Tree, vehicle.Parts)
+                    && StagingHooks.CanActivate(joint) && DetachedRoot(joint) is Part departing)
+                    roots.Add(departing);
+        }
+        else
+        {
+            foreach (Sequence row in vehicle.Parts.SequenceList.Sequences)
+            {
+                if (row.Number != decoupler.Sequence)
+                    continue;
+                SequenceRoots(row, roots);
+                break;
+            }
+        }
+
+        var parts = new HashSet<Part>();
+        CollectOwnSubtree(root, root, roots, parts);
         return parts;
     }
 

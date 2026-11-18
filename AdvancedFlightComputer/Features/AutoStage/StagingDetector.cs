@@ -122,6 +122,10 @@ internal static class StagingDetector
     internal static bool IsHeldForControl(Vehicle vehicle)
         => _states.TryGetValue(vehicle, out StagingState? state) && state.HeldForControl;
 
+    internal static IReadOnlyList<ISequenced>? PendingDecouplersFor(Vehicle vehicle, Decoupler decoupler)
+        => _states.TryGetValue(vehicle, out StagingState? state) && state.Pending?.DecouplerModules is { } modules
+            && modules.Contains(decoupler) ? modules : null;
+
     internal static StagingState StateOf(Vehicle vehicle)
     {
         if (!_states.TryGetValue(vehicle, out StagingState? state))
@@ -444,8 +448,22 @@ internal static class StagingDetector
 
         if (p.DecouplersPending && now >= p.DecouplerDeadline)
         {
-            StagingExecution.ActivatePendingModules(vehicle, p.DecouplerModules!, "decoupler");
-            p.ClearDecouplers();
+            if (JettisonAnalysis.WouldSeparateLastControl(vehicle, p.DecouplerModules!))
+            {
+                if (!state.HeldForControl)
+                {
+                    state.HeldForControl = true;
+                    DefaultCategory.Log.Warning($"[AFC] AutoStage held on '{vehicle.Id}': the delayed separation would remove its last usable control.");
+                    AfcAlerts.Info("AutoStage held: delayed separation would remove the last usable control", Color.Yellow, 4.0, vehicle);
+                }
+                state.HeldBurn = null;
+            }
+            else
+            {
+                state.HeldForControl = false;
+                StagingExecution.ActivatePendingModules(vehicle, p.DecouplerModules!, "decoupler");
+                p.ClearDecouplers();
+            }
         }
 
         if (p.EnginesPending && now >= p.EngineDeadline)
@@ -506,6 +524,8 @@ internal static class StagingDetector
 
         state.HeldBurn = heldBurn;
         FlushPendingStaging(vehicle, state);
+        if (state.Pending?.DecouplersPending == true)
+            return;
 
         PendingStaging? pending = StagingExecution.ActivateNextSequenceSplit(vehicle);
         state.Activations++;

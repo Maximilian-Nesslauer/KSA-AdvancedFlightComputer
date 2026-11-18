@@ -102,12 +102,29 @@ internal static class JettisonAnalysis
         for (int i = 0; i < parts.Length; i++)
         {
             foreach (ISequenced module in parts[i].InSequence(next.Number))
-            {
-                if (module is Decoupler decoupler && GetJettisonedRoot(decoupler, out Part? root) == Separation.Predicted)
-                    AddSubtree(root!, _guardSet);
-            }
+                CollectGuardDrop(vehicle, module);
         }
 
+        return GuardWouldLoseControl(vehicle);
+    }
+
+    internal static bool WouldSeparateLastControl(Vehicle vehicle, IReadOnlyList<ISequenced> pendingDecouplers)
+    {
+        _guardSet.Clear();
+        foreach (ISequenced module in pendingDecouplers)
+            CollectGuardDrop(vehicle, module);
+        return GuardWouldLoseControl(vehicle);
+    }
+
+    private static void CollectGuardDrop(Vehicle vehicle, ISequenced module)
+    {
+        if (module is Decoupler decoupler && ReferenceEquals(decoupler.Parent.FullPart.Tree, vehicle.Parts)
+            && GetJettisonedRoot(decoupler, out Part? root) == Separation.Predicted)
+            AddSubtree(root!, _guardSet);
+    }
+
+    private static bool GuardWouldLoseControl(Vehicle vehicle)
+    {
         try
         {
             return _guardSet.Count > 0

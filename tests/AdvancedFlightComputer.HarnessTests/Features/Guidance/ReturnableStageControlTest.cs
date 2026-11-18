@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Reflection;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.AutoStage;
@@ -17,6 +18,7 @@ public sealed class ReturnableStageControlTest : AfcTest
     private const string Capsule = "CoreCommandA_Prefab_MediumCapsuleVariantA";
     private const string Cabin = "CoreIVASpaceA_Prefab_MediumCapsuleA";
     private const string Probe = "CoreCommandC_Prefab_ProbeCoreSmallA";
+    private const string Panel = "CoreElectricalA_Prefab_SolarPanelFixedSmallV1A";
     private const BindingFlags PrivateStatic = BindingFlags.NonPublic | BindingFlags.Static;
 
     protected override void Execute(TestContext t)
@@ -45,7 +47,17 @@ public sealed class ReturnableStageControlTest : AfcTest
             foreach (IVASeat seat in seats)
                 seat.AssignedKittenHash = KeyHash.Zero;
             if (withProbe)
+            {
                 CheckProbe(t, v, joint, departing);
+                CheckGeneratedPower(t, v, departing);
+                IVASeat? retained = Array.Find(seats, seat => !departing.Contains(seat.Parent.FullPart));
+                KeyHash pilot = Array.Find(assignments, hash => hash != KeyHash.Zero);
+                if (t.Check("the retained capsule can seat a rostered kitten", retained != null && pilot != KeyHash.Zero))
+                {
+                    CheckDelayedControl(t, v, retained!, pilot, departing);
+                    CheckUnavailableTarget(t, v, joint, retained!, pilot);
+                }
+            }
             else
                 CheckCrew(t, v, joint, departing);
         }
@@ -121,6 +133,120 @@ public sealed class ReturnableStageControlTest : AfcTest
             !JettisonAnalysis.WouldSeparateLastControl(v));
     }
 
+    private static void CheckGeneratedPower(TestContext t, Vehicle v, HashSet<Part> departing)
+    {
+        PowerConsumer probe = v.Parts.PowerConsumers.Modules.ToArray().Single(consumer => consumer.PowerSwitch);
+        probe.Mode = PowerSwitchMode.On;
+        foreach (Battery battery in v.Parts.Batteries.Modules)
+            v.Parts.Batteries.GetModuleAndAllMutableStatesForInitialization(battery).State = BatteryState.Empty;
+        ref PowerConsumerState consumer = ref v.Parts.PowerConsumers.GetModuleAndAllMutableStatesForInitialization(probe).State;
+        consumer.Active = true;
+        consumer.Consumed = probe.Consumed;
+        var panels = v.Parts.SolarPanels;
+        SolarPanel local = panels.Modules.ToArray().Single(panel => departing.Contains(panel.Parent.FullPart));
+        SolarPanel remote = panels.Modules.ToArray().Single(panel => !departing.Contains(panel.Parent.FullPart));
+        ref SolarPanelState remoteState = ref panels.GetModuleAndAllMutableStatesForInitialization(remote).State;
+        remoteState = new SolarPanelState { Active = true, Produced = probe.Consumed, Stored = probe.Consumed };
+        t.Check("stock reports the supplied probe powered with empty batteries", probe.HasPower(v.Parts));
+        t.Check("an Active probe cannot borrow generation from the retained stack",
+            StageControl.Evaluate(v, departing) == VehicleControl.ProbeCoreUnpowered);
+
+        ref SolarPanelState localState = ref panels.GetModuleAndAllMutableStatesForInitialization(local).State;
+        localState = remoteState;
+        remoteState = default;
+        t.Check("same-side solar generation keeps a supplied probe usable with empty batteries",
+            StageControl.Evaluate(v, departing) == VehicleControl.Controllable);
+        localState.Produced = probe.Consumed * 0.5f;
+        t.Check("partial same-side generation cannot stand in for a supplied probe",
+            StageControl.Evaluate(v, departing) == VehicleControl.ProbeCoreUnpowered);
+        localState = default;
+        foreach (Battery battery in v.Parts.Batteries.Modules)
+            if (departing.Contains(battery.Parent.FullPart))
+                battery.Refill(ref v.Parts.Batteries.GetModuleAndAllMutableStatesForInitialization(battery).State);
+    }
+
+    private static void CheckDelayedControl(TestContext t, Vehicle v, IVASeat retained, KeyHash pilot, HashSet<Part> departing)
+    {
+        retained.AssignedKittenHash = pilot;
+        t.Check("both sides have control when the delayed row is selected",
+            StageControl.Evaluate(v, departing) == VehicleControl.Controllable
+            && !JettisonAnalysis.WouldSeparateLastControl(v));
+        Decoupler joint = v.Parts.Modules.Get<Decoupler>()[0];
+        v.Parts.SequenceList.SetActiveSequence(joint.Sequence);
+        StagingState state = StagingDetector.StateOf(v);
+        state.State = StagingState.Phase.AwaitingIgnition;
+        state.Pending = new PendingStaging([joint], 10.0, null, 0.0, 0.0);
+        try
+        {
+            retained.AssignedKittenHash = KeyHash.Zero;
+            t.Check("the loss leaves the combined craft controllable",
+                v.IsControllable && StageControl.Evaluate(v) == VehicleControl.Controllable);
+            t.Check("the activated row is absent from the next-row guard",
+                v.Parts.SequenceList.GetNextSequenceNumber() < 0 && !JettisonAnalysis.WouldSeparateLastControl(v));
+            int queued = InputEvents.IActivateInputBuffer.Count;
+            typeof(StagingDetector).GetMethod("TickPendingStaging", PrivateStatic)!.Invoke(null, [v, state, 10.0]);
+            t.Check("the due decoupler stays held after the retained pod loses its crew",
+                state.HeldForControl && state.Pending?.DecouplersPending == true
+                && state.State == StagingState.Phase.AwaitingIgnition && InputEvents.IActivateInputBuffer.Count == queued);
+        }
+        finally
+        {
+            StagingDetector.ForgetVehicle(v);
+            v.Parts.SequenceList.SetActiveSequence(0);
+        }
+    }
+
+    private static void CheckUnavailableTarget(TestContext t, Vehicle v, Part joint, IVASeat retained, KeyHash pilot)
+    {
+        retained.AssignedKittenHash = pilot;
+        PowerConsumer probe = v.Parts.PowerConsumers.Modules.ToArray().Single(consumer => consumer.PowerSwitch);
+        Decoupler decoupler = v.Parts.Modules.Get<Decoupler>()[0];
+        VehicleAutopilotState state = VehicleAutopilotState.For(v);
+        uint rootId = joint.InstanceId;
+        state.StageTargets[rootId] = new double2(10.0, 20.0);
+        var records = (IList)typeof(GuidanceWindow).GetField("_handovers", PrivateStatic)!.GetValue(null)!;
+        int before = records.Count;
+        bool active = GuidanceWindow.ModActive;
+        v.Parts.SequenceList.SetActiveSequence(decoupler.Sequence);
+        try
+        {
+            GuidanceWindow.SetModActive(true);
+            probe.Mode = PowerSwitchMode.Off;
+            GuidanceWindow.OnDecouplerActivating(v, decoupler);
+            t.Check("a saved target cannot arm handover after departing control is lost",
+                records.Count == before && state.StageTargets.ContainsKey(rootId));
+            t.Check("an unavailable target is cancellable on an activated row",
+                ReferenceEquals(GuidanceWindow.UnlistedStageWithReturn(v, state, rootId), joint));
+
+            probe.Mode = PowerSwitchMode.On;
+            GuidanceWindow.OnDecouplerActivating(v, decoupler);
+            t.Check("restored departing control can arm the original target on the activated row",
+                records.Count == before + 1);
+            state.StageTargets[v.Parts.Root.InstanceId] = new double2(30.0, 40.0);
+            state.StageModelDirty = false;
+            GuidanceWindow.ClearStageReturn(state, rootId);
+            t.Check("clearing a saved site leaves other selections and invalidates the plan input",
+                !state.StageTargets.ContainsKey(rootId) && state.StageTargets.ContainsKey(v.Parts.Root.InstanceId)
+                && state.StageModelDirty);
+
+            state.StageOptimalReturn.Add(rootId);
+            state.OptimalReturnSites[rootId] = new double2(10.0, 20.0);
+            t.Check("an unavailable optimal return is also cancellable",
+                ReferenceEquals(GuidanceWindow.UnlistedStageWithReturn(v, state, rootId), joint));
+            GuidanceWindow.ClearStageReturn(state, rootId);
+            t.Check("clearing optimal return removes its planned site",
+                !state.StageOptimalReturn.Contains(rootId) && !state.OptimalReturnSites.ContainsKey(rootId));
+        }
+        finally
+        {
+            while (records.Count > before)
+                records.RemoveAt(records.Count - 1);
+            GuidanceWindow.SetModActive(active);
+            VehicleAutopilotState.Remove(v);
+            v.Parts.SequenceList.SetActiveSequence(0);
+        }
+    }
+
     private static void CheckReturn(TestContext t, Vehicle v, Part joint, VehicleControl expected, string? reason = null)
     {
         FieldInfo ambient = typeof(GuidanceWindow).GetField("_s", PrivateStatic)!;
@@ -163,6 +289,12 @@ public sealed class ReturnableStageControlTest : AfcTest
             PartInstance probe = Instance(Probe, 7, -8.0);
             lower.Children.Add(probe);
             Connect(lower, 1, probe, 1);
+            PartInstance lowerPanel = Instance(Panel, 8, -6.0);
+            lower.Children.Add(lowerPanel);
+            (lowerPanel.Connectors ??= []).Add(new PartConnectorInstance { Index = 0, ConnectedLocalInstanceId = lower.LocalInstanceId });
+            PartInstance upperPanel = Instance(Panel, 9, 0.0);
+            upper.Children.Add(upperPanel);
+            (upperPanel.Connectors ??= []).Add(new PartConnectorInstance { Index = 0, ConnectedLocalInstanceId = upper.LocalInstanceId });
         }
         return new VehicleSaveData
         {
