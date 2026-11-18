@@ -1347,13 +1347,20 @@ public sealed class Ksa6DofGuidance
         //  LastDefectM stays the honest full-horizon max, so the logs and the readout keep meaning exactly what they previously and any analysis of them stays valid.
         // What the gate TESTS is the weighted figure: full strength over the intervals about to be flown, loosening to HorizonFarSlack at the end of the horizon.
         // See Scvx6DofSolver.WeightedDefect for why, and for why it is safe.
-        //  Computed on the accepted REFERENCE, which is the same trajectory the trace's last accepted iteration reported - one evaluation, so the magnitude and its location cannot come from different iterations.
+        // Anchor the published mass to the vehicle and integrate its burn. The virtual control may otherwise let the reference gain mass under thrust.
+        // Check every defect with that mass before publishing, including the change in acceleration.
+        double[] flightState = _solver.CopyReferenceWithMassBalance();
+        if (flightState == null)
+        {
+            Error = "plan has no physical mass history";
+            return false;
+        }
         double dtPlan = _solver.Sigma / Math.Max(_n - 1, 1);
         int commit = (int)Math.Floor(Math.Max(CommitHorizonS, 0.0) / Math.Max(dtPlan, 1e-6));
         LastCommitIntervals = commit;
 
         double[] tol = DefectTolerances(cold);
-        LastGatedRatio = _solver.WeightedDefect(tol, commit, HorizonFarSlack,
+        LastGatedRatio = _solver.WeightedDefect(flightState, tol, commit, HorizonFarSlack,
                                                 out int gCh, out int gNode, out double gRaw);
         LastGatedDefectChannel = gCh;
         LastGatedDefectNode = gNode;
@@ -1376,7 +1383,7 @@ public sealed class Ksa6DofGuidance
             return false;
         }
 
-        _planX = (double[])xNew.Clone();
+        _planX = flightState;
         _planU = (double[])_solver.ReferenceU.Clone();
         _planSigma = _solver.Sigma;
         _solveTime = simNow;

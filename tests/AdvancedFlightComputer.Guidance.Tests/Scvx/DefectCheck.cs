@@ -29,6 +29,8 @@ internal static class DefectCheck
 
     internal static int Run()
     {
+        if (!MassBalance())
+            return 1;
         Console.WriteLine("DEFECT GATE vs RANGE AND NODE COUNT");
         Console.WriteLine("  tolerance is 1e-3 of XScale, and XScale's length entry is the range to go,");
         Console.WriteLine("  so the ALLOWED defect in metres shrinks as the vehicle closes in");
@@ -87,6 +89,44 @@ internal static class DefectCheck
             ? "  Remaining rejections are genuinely under-resolved plans (metres of defect), not the ruler."
             : "  PASS - every case is inside the absolute gate");
         return anyFail ? 0 : 0;
+    }
+
+    private static bool MassBalance()
+    {
+        const int nodes = 3;
+        var dynamics = new Dynamics6Dof.Params { Isp = 10.0, G0 = 1.0, MassFlowOffset = 2.0 };
+        var solver = new Scvx6DofSolver(new Scvx6DofConfig { Nodes = nodes }, dynamics);
+        var initial = new double[NX];
+        initial[Dynamics6Dof.IQ] = 1.0;
+        initial[Dynamics6Dof.IM] = 100.0;
+        var reference = new double[nodes * NX];
+        var controls = new double[nodes * NU];
+        for (int i = 0; i < nodes; i++)
+        {
+            initial.CopyTo(reference, i * NX);
+            reference[i * NX + Dynamics6Dof.IM] += i * 4.0;
+            controls[i * NU + Dynamics6Dof.IT] = 30.0 + i * 40.0;
+        }
+        solver.Initialize(initial, initial, reference, controls, sigmaSeed: 2.0);
+
+        var tolerance = new double[NX];
+        tolerance[Dynamics6Dof.IM] = 0.01;
+        double unbalanced = solver.WeightedDefect(tolerance, 1, 1.0, out _, out _, out _);
+        double[]? corrected = solver.CopyReferenceWithMassBalance();
+        bool balanced = corrected != null
+            && corrected[Dynamics6Dof.IM] == 100.0
+            && Math.Abs(corrected[NX + Dynamics6Dof.IM] - 93.0) < 1e-9
+            && Math.Abs(corrected[2 * NX + Dynamics6Dof.IM] - 82.0) < 1e-9
+            && solver.ReferenceX[NX + Dynamics6Dof.IM] == 104.0
+            && solver.WeightedDefect(corrected, tolerance, 1, 1.0, out _, out _, out _) < 1e-9;
+        tolerance[Dynamics6Dof.IV + 2] = 0.1;
+        bool stillGated = corrected != null
+            && solver.WeightedDefect(corrected, tolerance, 1, 1.0, out int channel, out _, out _) > 1.0
+            && channel == Dynamics6Dof.IV + 2;
+        bool pass = unbalanced > 1.0 && balanced && stillGated;
+        Console.WriteLine(pass ? "PASS integrated mass preserves the remaining dynamics gate"
+                               : "FAIL integrated mass or the remaining dynamics gate");
+        return pass;
     }
 
     private static (double defect, double tol, double sigma, ScvxStatus status, double lScale)
