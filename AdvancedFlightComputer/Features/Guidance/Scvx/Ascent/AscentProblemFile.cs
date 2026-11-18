@@ -19,6 +19,7 @@ public static class AscentProblemFile
         public double[]? PressureGrid { get; set; }
         public double[]? ThrustAtPressure { get; set; }
         public double? ThrottleMin { get; set; }
+        public double PhysicalThrottleMin { get; set; }
         public double? FixedBurnTime { get; set; }
         public bool LiquidCarriesOver { get; set; }
         public double? SeedThrottle { get; set; }
@@ -117,6 +118,7 @@ public static class AscentProblemFile
                 PressureGrid = s.PressureGrid,
                 ThrustAtPressure = s.ThrustAtPressure,
                 ThrottleMin = double.IsNaN(s.ThrottleMin) ? null : s.ThrottleMin,
+                PhysicalThrottleMin = s.PhysicalThrottleMin,
                 FixedBurnTime = s.IsPinned ? s.FixedBurnTime : null,
                 LiquidCarriesOver = s.LiquidCarriesOver,
                 SeedThrottle = s.SeedThrottle < 1.0 ? s.SeedThrottle : null,
@@ -265,7 +267,8 @@ public static class AscentProblemFile
                                                                 ? new AscentSolidBurn(st, sm, sg, sf) : null,
                                                             s.FixedBurnTime ?? double.NaN, s.LiquidCarriesOver,
                                                             s.SeedThrottle ?? 1.0,
-                                                            s.AccelerationLimit ?? double.PositiveInfinity)).ToArray(),
+                                                            s.AccelerationLimit ?? double.PositiveInfinity,
+                                                            s.PhysicalThrottleMin)).ToArray(),
             Atmosphere = air,
             GroundRadius = dto.GroundRadius,
             TargetRadius = dto.TargetRadius,

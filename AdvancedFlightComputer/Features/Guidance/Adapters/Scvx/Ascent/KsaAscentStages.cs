@@ -46,39 +46,49 @@ internal static class KsaAscentStages
             parts ??= new HashSet<Part>();
             var solids = new List<int>();
             var liquids = new List<Part>();
+            double liquidFloor = parts.Count == 0 ? vehicle.GetMinThrottle() : 0.0;
             foreach (Part part in parts)
             {
                 bool solid = false;
+                double partFloor = 0.0;
                 foreach (EngineController engine in part.Modules.Get<EngineController>())
                 {
                     if (engine.Rockets == null)
                         continue;
                     foreach (Rocket rocket in engine.Rockets)
-                    foreach (RocketCore core in rocket.Cores)
                     {
-                        if (core is not SolidMotor motor)
-                            continue;
-                        solid = true;
-                        if (!motor.Stack.IsValid || motor.Rocket?.Nozzles == null)
-                            continue;
-                        if (!motorIndex.TryGetValue(motor, out int index))
+                        if (rocket is not SolidRocket)
+                            partFloor = Math.Max(partFloor, rocket.MinimumThrottle);
+                        foreach (RocketCore core in rocket.Cores)
                         {
-                            AscentSolidMotor burn = SimulateBurn(tree, motor, grid);
-                            if (burn == null)
+                            if (core is not SolidMotor motor)
                                 continue;
-                            index = result.Motors.Count;
-                            motorIndex[motor] = index;
-                            result.Motors.Add(burn);
-                            result.ProfileSeconds.Add(motor.VacuumThrustProfile.TotalBurnSeconds);
+                            solid = true;
+                            if (!motor.Stack.IsValid || motor.Rocket?.Nozzles == null)
+                                continue;
+                            if (!motorIndex.TryGetValue(motor, out int index))
+                            {
+                                AscentSolidMotor burn = SimulateBurn(tree, motor, grid);
+                                if (burn == null)
+                                    continue;
+                                index = result.Motors.Count;
+                                motorIndex[motor] = index;
+                                result.Motors.Add(burn);
+                                result.ProfileSeconds.Add(motor.VacuumThrustProfile.TotalBurnSeconds);
+                            }
+                            if (!solids.Contains(index))
+                                solids.Add(index);
                         }
-                        if (!solids.Contains(index))
-                            solids.Add(index);
                     }
                 }
                 if (!solid)
+                {
                     liquids.Add(part);
+                    liquidFloor = Math.Max(liquidFloor, partFloor);
+                }
             }
 
+            liquidFloor = st.DrainThrottle?.Minimum ?? liquidFloor;
             double stageFlow = st.Thrust / (st.Isp * G0);
             double duration = stageFlow > 0.0 ? (st.MassTotal - st.MassDry) / stageFlow : 0.0;
             var ids = liquids.Select(p => liquidIndex.TryGetValue(p, out int id) ? id : liquidIndex[p] = liquidIndex.Count).ToArray();
@@ -94,7 +104,9 @@ internal static class KsaAscentStages
                     LiquidThrust = st.Thrust,
                     LiquidMassFlow = stageFlow,
                     LiquidThrustAtPressure = st.ThrustAtPressure,
-                    Throttleable = st.Throttleable,
+                    LiquidThrottleMin = liquidFloor,
+                    Throttleable = st.DrainThrottle is { } drain
+                        ? drain.FollowsThrottle && !drain.HasSolids : st.Throttleable,
                     LiquidEngines = ids,
                 });
                 continue;
@@ -140,7 +152,8 @@ internal static class KsaAscentStages
                 LiquidThrust = liquidThrust,
                 LiquidMassFlow = liquidFlow,
                 LiquidThrustAtPressure = liquidTable,
-                Throttleable = true,
+                LiquidThrottleMin = liquidFloor,
+                Throttleable = st.DrainThrottle?.FollowsThrottle ?? true,
                 Solids = solids.ToArray(),
                 LiquidEngines = ids,
             });

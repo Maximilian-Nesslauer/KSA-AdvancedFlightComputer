@@ -22,6 +22,7 @@ public sealed class UpfgStage
 
     // False when a solid motor burns in this stage: its thrust follows the grain, not the throttle. Read by the convex ascent planner, which holds such a stage at full thrust; UPFG does not read it.
     public bool Throttleable = true;
+    internal StageThrottleLimits.Phase? DrainThrottle;
 }
 
 public sealed class UpfgVehicle

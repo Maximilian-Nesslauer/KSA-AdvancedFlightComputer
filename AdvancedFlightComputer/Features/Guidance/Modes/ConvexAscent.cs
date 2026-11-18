@@ -366,9 +366,8 @@ public static partial class GuidanceWindow
             return false;
         }
         float ambient = vehicle.PhysicsEnvironment.AtmosphericPressure;
-        performance.RecomputeForFlight(ambient);
         var stageParts = new Dictionary<UpfgStage, HashSet<Part>>();
-        UpfgVehicle model = KsaVehicleAdapter.Build(vehicle, ambient, grid, stageParts);
+        UpfgVehicle model = StageThrottleLimits.BuildForConvex(vehicle, ambient, grid, stageParts);
         if (model.Stages.Count == 0)
         {
             error = "NO STAGE WITH THRUST AND PROPELLANT";
@@ -376,8 +375,8 @@ public static partial class GuidanceWindow
         }
 
         // The stages. Each of the drain model's phases is one, with its solid motors' burns sampled from the game's own model and added on outside the throttle (#73), and a core that would run dry before its boosters throttled down to outlast them where it can (#32). Stage 0 starts at the LIVE mass, as UPFG reconciles it; whatever the model drops between one burnout and the next ignition is the jettison. The booster reserve comes off the first liquid load, as the ascent itself will fly it.
-        // The floor on the LAUNCH page, but never under what the engines can throttle to, and never at 100 %, which would freeze the thrust direction. A stage of solids alone, or one whose liquids are held at full thrust, keeps the script's 99 %.
-        double floor = Math.Clamp(Math.Max(_s.ConvexThrottleMinPct / 100.0, vehicle.GetMinThrottle()), 0.01, FullThrottleFloor);
+        // Each phase raises the requested floor to the minimum its liquid rockets can follow.
+        double floor = Math.Clamp(_s.ConvexThrottleMinPct / 100.0, 0.01, FullThrottleFloor);
         double m0 = vehicle.TotalMass;
         double dragArea = aero.ReferenceArea;
         // The acceleration limit of the stack on the pad goes to every stage that can hold it. The plan is solved once and flies its own throttle, so an upper stage on a smaller stack is flown under the pad limit even where stock would let it push harder (see EffectiveAccelLimitG).
@@ -635,8 +634,10 @@ public static partial class GuidanceWindow
         double qMaxKpa = qMax / 1000.0;
         double insAltKm = (rIns - bodyRadius) / 1000.0;
 
-        AscentPlan Publish(AscentSolution solved, int stages, double qUsed, string[] notes, double wall, AscentPlanJob.ThrottledKept kept)
+        AscentPlan Publish(AscentSolution solved, AscentProblem winningProblem, double qUsed, string[] notes, double wall, AscentPlanJob.ThrottledKept kept)
         {
+            AscentStage[] plannedStages = winningProblem.Stages;
+            int stages = plannedStages.Length;
             // A chosen launch time lifts off delay later, from where the spin has carried the pad: the same plan turned by omega delay, which is -PlaneTurn, and so back in the target's own plane. A chosen LAN flies now, in the plane turned by PlaneTurn.
             double delay = freeTime && solved.Nodes > 0 ? -solved.PlaneTurn / omega : 0.0;
             AscentSolution sol = freeTime ? solved.RotatedAboutSpin(-solved.PlaneTurn) : solved;
@@ -688,7 +689,7 @@ public static partial class GuidanceWindow
             ApKm = apKm,
             IncDeg = incDeg,
             LanDeg = lanPlanned,
-            ThrottleMinPct = floor * 100.0,
+            ThrottleMinPct = plannedStages.Min(st => Math.Max(st.ThrottleMin, st.PhysicalThrottleMin)) * 100.0,
             ThrottleMinRequestedPct = throttleRequestedPct,
             GLimitG = userGLimit,
             QCeilingKpa = qCeiling / 1000.0,
@@ -696,7 +697,10 @@ public static partial class GuidanceWindow
             StartsWithSolid = startsWithSolid,
             PlansPadRoll = plansPadRoll,
             CoreThrottledDown = stagePlan.CoreThrottledDown,
-            StageLines = stagePlan.Describe.Take(stages).Select((d, i) => d + (allStages[i].IsPinned ? $", PINNED TO {allStages[i].FixedBurnTime:F1} s" : "")).ToArray(),
+            StageLines = stagePlan.Describe.Take(stages).Select((d, i) => d
+                + (plannedStages[i].HasLiquid ? $", MIN {plannedStages[i].ThrottleMin:P0} OF AVAILABLE"
+                    + (plannedStages[i].PhysicalThrottleMin > 0.0 ? $", ENGINE MIN {plannedStages[i].PhysicalThrottleMin:P0}" : "") : "")
+                + (plannedStages[i].IsPinned ? $", PINNED TO {plannedStages[i].FixedBurnTime:F1} s" : "")).ToArray(),
             StageNotes = stagePlan.Notes.ToArray(),
             QMaxKpa = qUsed / 1000.0,
             QMaxRequestedKpa = qMaxKpa,

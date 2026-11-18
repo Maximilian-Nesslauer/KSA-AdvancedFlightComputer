@@ -265,15 +265,27 @@ internal sealed class AscentSubproblem
                 uz = verticalThrottle[k] * c.VerticalDirections[k][2];
             }
             double un = Math.Sqrt(ux * ux + uy * uy + uz * uz);
-            double floor = c.ThrottleMin[c.NodeStage[k]];
-            int row = ineq.NewRow(floorPerMass[k] > 0.0 ? 0.0 : -floor);
-            if (floorPerMass[k] > 0.0)
+            int stage = c.NodeStage[k];
+            double floor = c.ThrottleMin[stage], physicalFloor = c.PhysicalThrottleMin[stage];
+            bool scalesWithMass = floorPerMass[k] > 0.0 && floor > physicalFloor;
+            int row = ineq.NewRow(scalesWithMass ? 0.0 : -Math.Max(floorPerMass[k] > 0.0 ? 0.0 : floor, physicalFloor));
+            if (scalesWithMass)
                 ineq.Add(row, IX(k, AscentDynamics.IM), floor * floorPerMass[k]);
             if (un > 1e-12)
             {
                 ineq.Add(row, IU(k, 0), -ux / un);
                 ineq.Add(row, IU(k, 1), -uy / un);
                 ineq.Add(row, IU(k, 2), -uz / un);
+            }
+            if (scalesWithMass && physicalFloor > 0.0)
+            {
+                row = ineq.NewRow(-physicalFloor);
+                if (un > 1e-12)
+                {
+                    ineq.Add(row, IU(k, 0), -ux / un);
+                    ineq.Add(row, IU(k, 1), -uy / un);
+                    ineq.Add(row, IU(k, 2), -uz / un);
+                }
             }
 
             row = ineq.NewRow(-c.MFloor);
