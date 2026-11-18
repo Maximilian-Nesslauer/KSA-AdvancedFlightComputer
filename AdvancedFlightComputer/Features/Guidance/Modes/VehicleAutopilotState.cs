@@ -255,12 +255,14 @@ public sealed class VehicleAutopilotState
     // Returnable stage state.
 
     /// <summary>
-    /// The separable stages that carry a command pod, in staging order, with what it
+    /// The separable stages with usable control, in staging order, with what it
     /// would cost each to come home from here. Rebuilt with the stage model; see
     /// Guidance/ReturnableStages.cs.
     /// </summary>
     public readonly System.Collections.Generic.List<GuidanceWindow.ReturnableStage>
         ReturnableStages = new();
+
+    internal readonly List<(string Name, int Sequence, VehicleControl Reason)> ReturnControlRefusals = new();
 
     /// <summary>
     /// Each stage's own landing site, keyed by the detached subtree root's InstanceId

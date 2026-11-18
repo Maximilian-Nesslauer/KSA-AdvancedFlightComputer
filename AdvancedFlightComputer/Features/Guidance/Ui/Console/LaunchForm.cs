@@ -142,9 +142,12 @@ public static partial class GuidanceWindow
         ImGui.PushID(BoostersFoldId);
         try
         {
+            foreach (var (name, sequence, reason) in _s.ReturnControlRefusals)
+                ConsoleUi.MutedWrapped($"{name} in sequence {sequence} cannot return. {ReturnControlReason(reason)}");
             if (stages == 0 && _s.ReserveStagedRoots.Count == 0)
             {
-                ConsoleUi.MutedWrapped(PageText.BoostersNone);
+                if (_s.ReturnControlRefusals.Count == 0)
+                    ConsoleUi.MutedWrapped(PageText.BoostersNone);
                 return;
             }
             DrawReturnableStageRows();
@@ -158,4 +161,16 @@ public static partial class GuidanceWindow
             ImGui.PopID();
         }
     }
+
+    internal static string ReturnControlReason(VehicleControl reason) => reason switch
+    {
+        VehicleControl.NoCrew => "Its command pod has no crew.",
+        VehicleControl.CrewIncapacitated => "Its command pod has no able crew.",
+        VehicleControl.ProbeCoreUnpowered => "Its probe core has no power after separation.",
+        VehicleControl.ProbeCoreOff => "Its probe core is switched off.",
+        VehicleControl.ProbeCoreFailed => "Its probe core has failed.",
+        VehicleControl.ProbeCoreStormStandby => "Its probe core is in storm standby.",
+        VehicleControl.ProbeCoreRebooting => "Its probe core is rebooting.",
+        _ => "It has no usable control after separation."
+    };
 }

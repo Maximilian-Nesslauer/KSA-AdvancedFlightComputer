@@ -427,7 +427,7 @@ internal static class PageText
         => hasAir ? "Limits dynamic pressure and acceleration of the climb. The plan uses MAX Q." : "Limits acceleration of the climb. MAX Q has no effect without atmosphere.";
 
     public static string BoostersTip(int stages)
-        => "Sets a return site for a stage. The solved climb sizes the propellant the stage keeps for it." + (stages <= 0 ? " No stage can use it: no separating part carries a command pod." : "");
+        => "Sets a return site for a stage. The solved climb sizes the propellant the stage keeps for it." + (stages <= 0 ? " A returning stage needs able crew or a powered probe core." : "");
 
     public const string EngineDelaysTip = "Delay from the staging trigger to the ignition of each engine.";
 
@@ -469,7 +469,7 @@ internal static class PageText
         return string.Create(Inv, $"REUSE: {reused} REUSED, {expended} EXPENDED");
     }
 
-    public const string BoostersNone = "No stage can fly home: no separating part carries a command pod.";
+    public const string BoostersNone = "No separating stage can fly home.";
 
     /// <summary>
     /// Where a returnable stage goes, under its name in BOOSTERS: its site; for an optimal return the drone ship's point once a plan has found it, frozen from lift-off; or EXPENDABLE.
