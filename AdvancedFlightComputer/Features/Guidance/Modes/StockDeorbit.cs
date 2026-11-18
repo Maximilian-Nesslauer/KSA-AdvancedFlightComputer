@@ -23,10 +23,20 @@ public static partial class GuidanceWindow
 
     private static void StepStockDeorbitWarp(Vehicle vehicle)
     {
+        RetireEndedWarp(ref _s.DeorbitPowerWarp, _s.DeorbitWarpTime);
+        if (!_s.DeorbitWarpRequested && _s.DeorbitPowerWarp is ProbeWarpRetry.None or ProbeWarpRetry.Spent)
+            return;
+        double target = StockDeorbitWarpTime(_s.DeorbitTarget);
+        if (StepProbeWarpRetry(vehicle, ref _s.DeorbitPowerWarp, target))
+        {
+            _s.DeorbitWarpTime = target;
+            _s.LandingStatus = "STOCK AUTO ARMED. WARPING TO TURN BEFORE BURN.";
+        }
         if (!_s.DeorbitWarpRequested) return;
         _s.DeorbitWarpRequested = false;
-        double target = StockDeorbitWarpTime(_s.DeorbitTarget);
-        if (!ReferenceEquals(vehicle, Program.ControlledVehicle) || !double.IsFinite(target)
+        if (double.IsFinite(_s.DeorbitWarpTime) || Universe.IsAutoWarpActive)
+            return;
+        if (!ReferenceEquals(vehicle, Program.ControlledVehicle) || !vehicle.IsControllable || !double.IsFinite(target)
             || target <= SimNow() + 1)
         {
             _s.WarnLanding("STOCK AUTO ARMED. WARP NEEDS CRAFT IN FOCUS AND A FUTURE PREPARATION WINDOW.");
@@ -244,6 +254,7 @@ public static partial class GuidanceWindow
         _s.DeorbitAutoArmed = false;
         _s.DeorbitWarpRequested = false;
         _s.DeorbitWarpTime = double.NaN;
+        _s.DeorbitPowerWarp = ProbeWarpRetry.None;
         _s.DeorbitNodeClaimed = false;
         _s.DeorbitNodeDeltaV = default;
         _s.DeorbitNodeDeltaVCci = default;

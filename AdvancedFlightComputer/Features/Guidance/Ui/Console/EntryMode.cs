@@ -142,8 +142,11 @@ public static partial class GuidanceWindow
     // The engage request is taken by the next guidance step, ahead of the control claim (ApplyAutopilot), and the claim of Engage3Dof ends the mode it takes over. A deorbit that stock AUTO flies is the exception, because the step returns from StepStockDeorbit before it reads the request, so the request would wait for the end of the deorbit. The take-over ends that deorbit here, with the same abort as its stop. The landing turns AFC MAY USE ENGINES on, because entry guidance throttles the engine.
     private static void RequestEntryGuidance(Vehicle vehicle)
     {
-        if (IsStockDeorbitPhase(_s.LandingPhase))
-            StopGuidance(vehicle, StopTarget.Landing);
+        if (EntryWouldInterruptPoweredMode(vehicle))
+        {
+            RefuseEntry(vehicle, "ANOTHER MODE FLIES A LIT ENGINE.");
+            return;
+        }
         _s.AutoStage = true;
         _s.ThreeDofEngagePending = true;
     }

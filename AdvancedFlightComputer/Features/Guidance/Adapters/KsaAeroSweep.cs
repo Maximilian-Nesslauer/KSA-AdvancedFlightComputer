@@ -4,10 +4,12 @@ namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
 using System.Diagnostics;
+using System.Numerics;
 using System.Text;
 using Brutal.Logging;
 using Brutal.Numerics;
 using KSA;
+using KSA.Aero;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
 
@@ -205,7 +207,7 @@ public static class KsaAeroSweep
         //  Read through Vehicle's own accessor: the same box Props carries, and what the staleness check reads too, so the two cannot disagree about which box the table was built from.
         float3 half = vehicle.BoundingBoxHalfExtentsAsmb;
         return TryBuildFrom(vehicle, vehicle.Props, new double3(half.X * 2.0, half.Y * 2.0, half.Z * 2.0), vehicle.TotalMass,
-                            parent, simTime, out result, out error);
+                            vehicle.Parts, parent, simTime, out result, out error);
     }
 
     /// <summary>
@@ -222,11 +224,35 @@ public static class KsaAeroSweep
         result = null;
         if (!KsaBoosterGeometry.TryProperties(vehicle, root, parts, out VehicleProperties props, out double3 extents, out error))
             return false;
-        return TryBuildFrom(vehicle, props, extents, props.TotalMass, parent, simTime, out result, out error);
+        var clock = Stopwatch.StartNew();
+        PartTree aeroParts = null;
+        ulong geometryHash = 0;
+        try
+        {
+            if (parent?.GetPhysicalAtmosphere() is { Height: > 0.0 }
+                && !KsaBoosterAeroMesh.TryBuild(root, parts, out aeroParts, out geometryHash, out error))
+                return false;
+            if (!TryBuildFrom(vehicle, props, extents, props.TotalMass, aeroParts, parent, simTime, out result, out error))
+                return false;
+            if (result.MeshHash != geometryHash)
+            {
+                error = "the booster sweep did not use its selected aero mesh";
+                result = null;
+                return false;
+            }
+            result.SweepMillis = clock.Elapsed.TotalMilliseconds;
+            DefaultCategory.Log.Info(FormattableString.Invariant(
+                $"[AFC] Booster aero of '{root.DisplayName}': mesh and sweep {result.SweepMillis:F0} ms."));
+            return true;
+        }
+        finally
+        {
+            aeroParts?.Dispose();
+        }
     }
 
     /// <summary>The sweep of one set of vehicle properties, flown through <paramref name="vehicle"/>'s own physics state: <paramref name="extents"/> is the box those properties were built on, along the assembly axes.</summary>
-    private static bool TryBuildFrom(Vehicle vehicle, VehicleProperties props, double3 extents, double mass, IParentBody parent, double simTime,
+    private static bool TryBuildFrom(Vehicle vehicle, VehicleProperties props, double3 extents, double mass, PartTree parts, IParentBody parent, double simTime,
                                      out Result result, out string error)
     {
         result = null;
@@ -267,13 +293,13 @@ public static class KsaAeroSweep
             res.LiftTable = new double[nm * na];
             res.Table = new AeroTable(machGrid, alphaDeg, res.CdTable);
             res.Lift = new AeroTable(machGrid, alphaDeg, res.LiftTable);
+            res.MeshHash = parts?.Aerodynamics?.Source?.Hash ?? 0UL;
             res.Parent = parent;
             result = res;
             return true;
         }
 
         // PartTree.RefreshAerodynamics takes the mesh away when a build starts, and PartTree.AwaitAerodynamics blocks until the build ends. The vehicle's own step waits for the new mesh on its worker, and the sweep refuses instead of stalling the main thread, so the caller keeps its old table until then.
-        PartTree parts = vehicle.Parts;
         if (parts != null && parts.IsRebuildingAerodynamics)
         {
             error = RebuildingError;
@@ -287,8 +313,9 @@ public static class KsaAeroSweep
         double seaTemperature = physical.ComputeTemperatureAtAltitude(0.0);
         AtmosphericConditions sea = physical.ComputeConditionsAtAltitude(0.0);
         double speedOfSound = physical.Mixture.ComputeSpeedOfSound(seaTemperature);
-        if (!ForceProbe.TryCreate(vehicle, props, parts, sea.Density, sea.Pressure, seaTemperature, speedOfSound, out ForceProbe probe, out error))
+        if (!ForceProbe.TryCreate(vehicle, props, parts, parent, sea.Density, sea.Pressure, seaTemperature, speedOfSound, out ForceProbe probe, out error))
             return false;
+        using var flow = new SamplingFlow(vehicle, parts);
 
         // Every direction the grid uses, in body axes, with the force the game applies at a crawl in that direction. Subtracting it removes everything that does not depend on airspeed - buoyancy - and leaves the aerodynamics.
         //  RETROGRADE-FIRST: alpha = 0 means the wind comes at the TAIL, so the velocity in body axes points along -x. This is the sign that carries the whole convention - see AeroTable.AngleOfAttack.
@@ -322,6 +349,7 @@ public static class KsaAeroSweep
                 // The axis a positive rotation about which moves the engine end (-x) towards its tilt, further off the airflow: (-x) x tilt.
                 double3 offAxis = sa > 1e-9 ? double3.Cross(new double3(-1.0, 0.0, 0.0), tilt).NormalizeOrZero() : double3.Zero;
                 probe.Wrench(BaselineSpeed * u, out double3 baseline, out double3 baselineTorque);
+                flow.Prepare(u);
                 for (int i = 0; i < nm; i++)
                 {
                     probe.Wrench(speeds[i] * u, out double3 rawForce, out double3 rawTorque);
@@ -347,7 +375,7 @@ public static class KsaAeroSweep
         }
         res.SweepMillis = clock.Elapsed.TotalMilliseconds;
         // Read after the probe, because its first PartTree.AwaitAerodynamics publishes a mesh whose build has ended but was not taken yet.
-        res.MeshHash = LiveMeshHash(vehicle);
+        res.MeshHash = parts?.Aerodynamics?.Source?.Hash ?? 0UL;
         res.Parent = parent;
         DefaultCategory.Log.Info(FormattableString.Invariant(
             $"[AFC] Aero sweep of '{vehicle.Id}' over {(parent as Astronomical)?.Id}: {na * RollSamples} directions, {na * RollSamples * (nm + 1)} samples, {res.SweepMillis:F0} ms."));
@@ -472,9 +500,50 @@ public static class KsaAeroSweep
         return true;
     }
 
+    private sealed class SamplingFlow : IDisposable
+    {
+        private readonly PartTree _parts;
+        private readonly Aerodynamics _product;
+        private readonly AeroSurfaceFlow _flow;
+        private readonly Vector3? _restoreWind;
+
+        public SamplingFlow(Vehicle vehicle, PartTree parts)
+        {
+            _parts = parts;
+            _product = parts?.AwaitAerodynamics();
+            _flow = _product?.GetSurfaceFlow();
+            if (!ReferenceEquals(parts, vehicle.Parts))
+                return;
+            BubbleOrigin origin = vehicle.BubbleOrigin;
+            KinematicStates kinematic = vehicle.KinematicStates;
+            PhysicsEnvironment environment = vehicle.PhysicsEnvironment;
+            float3 air = PhysicsStates.ComputeAirVelocityBody(in origin, in kinematic, in environment);
+            var wind = new Vector3(-air.X, -air.Y, -air.Z);
+            float speedSquared = wind.LengthSquared();
+            if (speedSquared > 1e-6f && float.IsFinite(speedSquared))
+                _restoreWind = Vector3.Normalize(wind);
+        }
+
+        public void Prepare(double3 airDirection)
+        {
+            // Stock reuses geometry within one degree. An opposite wind forces fresh geometry for the next sample.
+            _flow?.Update(airDirection.ToBepu());
+        }
+
+        public void Dispose()
+        {
+            if (!_restoreWind.HasValue || _flow == null || _parts.IsRebuildingAerodynamics
+                || !ReferenceEquals(_parts.Aerodynamics, _product))
+                return;
+            Vector3 wind = _restoreWind.Value;
+            _flow.Update(-wind);
+            _flow.Update(wind);
+        }
+    }
+
     /// <summary>
     /// A copy of one vehicle's physics state, with the air set per probe. The force read back is the game's own, from the same ComputeDerivatives the integrator calls, so any mod that patches the forces there is measured with them.
-    ///  The part tree is the live one, because ComputeDerivatives reads the aero mesh from it. Its AeroSurfaceFlow keeps the flow of the last direction in buffers that the vehicle's physics step also writes, so the probe runs only where no worker steps the vehicle, as in the Vehicle.PrepareWorker prefix.
+    /// The tree supplies the aero mesh, either the live craft or a private booster mesh holder. A live tree's AeroSurfaceFlow shares buffers with the physics worker, so the probe runs at the Vehicle.PrepareWorker boundary.
     /// </summary>
     private sealed class ForceProbe
     {
@@ -487,7 +556,7 @@ public static class KsaAeroSweep
         /// <summary>The airspeed at zero physics velocity - the bubble's own motion against the turning air - in physics axes. Airspeed is this plus the physics velocity.</summary>
         private double3 _frameAirPhys;
 
-        public static bool TryCreate(Vehicle vehicle, VehicleProperties props, PartTree parts, double density, double pressure, double temperature, double speedOfSound, out ForceProbe probe, out string error)
+        public static bool TryCreate(Vehicle vehicle, VehicleProperties props, PartTree parts, IParentBody parent, double density, double pressure, double temperature, double speedOfSound, out ForceProbe probe, out string error)
         {
             probe = new ForceProbe
             {
@@ -500,18 +569,25 @@ public static class KsaAeroSweep
 
             // Air, no water, no spin: a probe in free air at this body's sea level. Anything this leaves set, like gravity, lands in AccelPhys or in the buoyancy the baseline removes.
             probe._environment.InPhysicsRadius = true;
+            probe._environment.ClosestParent = parent;
             probe._environment.AtmosphericDensity = (float)density;
             probe._environment.AtmosphericPressure = (float)pressure;
             probe._environment.AtmosphericTemperature = (float)temperature;
             probe._environment.SpeedOfSound = (float)speedOfSound;
             probe._environment.OceanVolume = 0.0;
             probe._environment.OceanSurfaceArea = 0.0;
-            probe._kinematic.AngularVelocityPhys = double3.Zero;
+            var state = new PhysicsStates
+            {
+                Origin = ref probe._origin,
+                Kinematic = ref probe._kinematic,
+                Props = ref probe._props,
+                Environment = ref probe._environment,
+            };
+            state.SetBodyRates(double3.Zero);
 
             // The game's own definition of airspeed, asked at zero physics velocity, gives the frame's share; every probe velocity is set relative to it.
             probe._kinematic.VelocityPhys = double3.Zero;
-            float3 frameAir = PhysicsStates.ComputeAirVelocityBody(in probe._origin, in probe._kinematic, in probe._environment);
-            probe._frameAirPhys = double3.Unpack(in frameAir).Transform(probe._kinematic.Body2Phys);
+            probe._frameAirPhys = PhysicsStates.ComputeSurfaceVelocityBub(in probe._origin, in probe._kinematic);
 
             // Check the airspeed lands where it was put, against the same game function. A frame this gets wrong would measure the drag of the wrong direction.
             var check = new double3(-100.0, 30.0, 10.0);

@@ -190,7 +190,7 @@ internal static partial class FlybyTargeting
 
         // OrbitalTransfers.SingleImpulseHyperbolicEscape throws on a hyperbolic parking orbit and nothing downstream would catch it.
         // Stock guards the same way at its own call sites.
-        if (isCross && source.Orbit.Eccentricity >= 1.0) return FlybyOutcome.Unavailable;
+        if (isCross && !source.Orbit.IsBound()) return FlybyOutcome.Unavailable;
 
         // The Lambert is solved in the CCI frame of the target's parent.
         // When the vehicle shares that parent the departure body is the vehicle.

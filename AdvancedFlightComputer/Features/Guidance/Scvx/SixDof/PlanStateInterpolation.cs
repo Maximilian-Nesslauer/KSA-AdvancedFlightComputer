@@ -9,6 +9,12 @@ public static class PlanStateInterpolation
     public static void SamplePositionVelocity(ReadOnlySpan<double> states, int left, int right,
                                               double fraction, double intervalSeconds,
                                               Span<double> position, Span<double> velocity)
+        => SamplePositionVelocity(states, left, right, fraction, intervalSeconds, position, velocity,
+            useNodeVelocities: false);
+
+    public static void SamplePositionVelocity(ReadOnlySpan<double> states, int left, int right,
+                                              double fraction, double intervalSeconds,
+                                              Span<double> position, Span<double> velocity, bool useNodeVelocities)
     {
         int a = left * Dynamics6Dof.NX;
         int b = right * Dynamics6Dof.NX;
@@ -38,7 +44,7 @@ public static class PlanStateInterpolation
             double v1 = states[b + Dynamics6Dof.IV + i];
             position[i] = h00 * p0 + h10 * intervalSeconds * v0
                 + h01 * p1 + h11 * intervalSeconds * v1;
-            velocity[i] = d00 * p0 + d10 * v0 + d01 * p1 + d11 * v1;
+            velocity[i] = useNodeVelocities ? v0 + t * (v1 - v0) : d00 * p0 + d10 * v0 + d01 * p1 + d11 * v1;
         }
     }
 }

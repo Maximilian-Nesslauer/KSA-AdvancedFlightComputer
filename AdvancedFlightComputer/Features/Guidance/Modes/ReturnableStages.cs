@@ -4,6 +4,8 @@ namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
 using System.Collections.Generic;
+using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.AutoStage;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
@@ -11,10 +13,7 @@ using AdvancedFlightComputer.Guidance.Numerics;
 
 // Which stages can return under guidance, and their estimated return cost.
 //
-// A stage can return only when its separating subtree has a Control module.
-// Vehicle.IsControllable and flight-computer attitude profiles use the same condition, Parts.Controls.NumModules > 0.
-// An interstage does not.
-// A booster with avionics does.
+// The parts that leave together need able crew in a command zone or a usable probe core.
 //
 // Why the Jacobian is computed once for every stage.
 // ImpactSteering.Correction needs an impact prediction and velocity Jacobian that depend on the vehicle state, not the landing target.
@@ -38,7 +37,7 @@ public static partial class GuidanceWindow
     private const long ReturnDvIntervalMs = 1000;
 
     /// <summary>
-    /// One separable stage that carries a command pod, and what returning would cost it.
+    /// One separable stage with usable control, and what returning would cost it.
     /// </summary>
     public sealed class ReturnableStage
     {
@@ -88,8 +87,7 @@ public static partial class GuidanceWindow
     /// <summary>
     /// Rebuild the list of stages that could fly themselves home.
     ///
-    /// Rides the stage-model tick: its input is the part tree, which only changes when
-    /// staging does, and StageModelDirty already marks exactly that.
+    /// Rides the stage-model tick so changes in crew or probe power reach the return list.
     /// </summary>
     private static void RefreshReturnableStages(Vehicle vehicle)
     {
@@ -99,6 +97,7 @@ public static partial class GuidanceWindow
         List<ReturnableStage> list = _s.ReturnableStages;
         Dictionary<uint, ReturnableStage> cache = _s.ReturnableStageCache;
         list.Clear();
+        _s.ReturnControlRefusals.Clear();
 
         PartTree tree = vehicle?.Parts;
         SequenceList sequenceList = tree?.SequenceList;
@@ -111,6 +110,7 @@ public static partial class GuidanceWindow
 
         Span<EngineController> engines = tree.Modules.Get<EngineController>();
         _returnDropsSoFar.Clear();
+        _returnExcludedRoots.Clear();
         bool first = true;
         ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
         for (int i = 0; i < sequences.Length; i++)
@@ -121,8 +121,12 @@ public static partial class GuidanceWindow
             SequenceRoots(sequences[i], _returnRoots);
             if (_returnRoots.Count == 0)
                 continue;   // an ignition-only sequence: it separates nothing
-            for (int r = 0; r < _returnRoots.Count; r++)
-                CollectSubtree(_returnRoots[r], _returnDropsSoFar);
+            foreach (Part root in _returnRoots)
+            {
+                CollectSubtree(root, _returnDropsSoFar);
+                if (!_returnExcludedRoots.Contains(root))
+                    _returnExcludedRoots.Add(root);
+            }
 
             // NOT ONE THAT REACHES ORBIT. A stage that separates once the climb is over - an upper stage leaving its payload, a capsule - is already going orbital speed, and no boostback brings that home, command pod or not. The climb is over when nothing left aboard lights at this sequence or later: the booster's own separation lights the stage above it, and a strap-on's leaves the core and the upper stage still to fire. Hot staging, an upper stage lit a sequence before the booster leaves, would read as orbital here.
             bool climbGoesOn = LightsLater(engines, i);
@@ -131,16 +135,18 @@ public static partial class GuidanceWindow
             for (int r = 0; r < _returnRoots.Count; r++)
             {
                 Part root = _returnRoots[r];
-                _returnDrops.Clear();
-                CollectOwnSubtree(root, root, _returnRoots, _returnDrops);
-
-                // THE TEST.
-                // A command pod on the side that leaves is what makes the thing that leaves a vehicle rather than debris.
-                bool controllable = false;
-                for (int c = 0; c < controls.Length && !controllable; c++)
-                    controllable = _returnDrops.Contains(controls[c].Parent.FullPart);
-                if (!controllable || !climbGoesOn)
+                if (!climbGoesOn)
                     continue;
+                _returnDrops.Clear();
+                CollectOwnSubtree(root, root, _returnExcludedRoots, _returnDrops);
+                string name = string.IsNullOrEmpty(root.DisplayName) ? "stage" : root.DisplayName;
+                VehicleControl? control = StageControl.Evaluate(vehicle, _returnDrops);
+                if (control != VehicleControl.Controllable)
+                {
+                    if (control.HasValue)
+                        _s.ReturnControlRefusals.Add((root.InstanceId, name, sequences[i].Number, control.Value));
+                    continue;
+                }
 
                 uint rootId = root.InstanceId;
                 if (!cache.TryGetValue(rootId, out ReturnableStage stage))
@@ -148,7 +154,7 @@ public static partial class GuidanceWindow
                     stage = new ReturnableStage { RootId = rootId };
                     cache[rootId] = stage;
                 }
-                stage.Name = string.IsNullOrEmpty(root.DisplayName) ? "stage" : root.DisplayName;
+                stage.Name = name;
                 stage.SequenceIndex = i;
                 stage.SequenceNumber = sequences[i].Number;
                 // Every craft the first separating row drops is next, and none of a later row's: a dumb interstage coming off first does not make the booster behind it next.
@@ -175,6 +181,8 @@ public static partial class GuidanceWindow
         }
         _returnDrops.Clear();
         _returnRoots.Clear();
+        _returnExcludedRoots.Clear();
+        _returnDropsSoFar.Clear();
     }
 
     /// <summary>The distinct roots of the subtrees that <paramref name="sequence"/> separates, in the order its decouplers come; empty for a row that separates nothing.</summary>
@@ -184,10 +192,11 @@ public static partial class GuidanceWindow
         ReadOnlySpan<Part> parts = sequence.Parts;
         for (int j = 0; j < parts.Length; j++)
         {
-            Span<Decoupler> decouplers = parts[j].SubtreeModules.Get<Decoupler>();
-            for (int k = 0; k < decouplers.Length; k++)
+            foreach (ISequenced module in parts[j].InSequence(sequence.Number))
             {
-                Part root = DetachedRoot(decouplers[k]);
+                if (module is not Decoupler decoupler || !StagingHooks.CanActivate(decoupler))
+                    continue;
+                Part root = DetachedRoot(decoupler);
                 if (root != null && !roots.Contains(root))
                     roots.Add(root);
             }
@@ -216,6 +225,33 @@ public static partial class GuidanceWindow
         return parts;
     }
 
+    private static HashSet<Part> PartsLeavingOnActivation(Vehicle vehicle, Part root, Decoupler decoupler)
+    {
+        var roots = new List<Part>();
+        // A delayed row is already activated. Its pending modules are the live batch.
+        if (StagingDetector.PendingDecouplersFor(vehicle, decoupler) is { } pending)
+        {
+            foreach (ISequenced module in pending)
+                if (module is Decoupler joint && ReferenceEquals(joint.Parent.FullPart.Tree, vehicle.Parts)
+                    && StagingHooks.CanActivate(joint) && DetachedRoot(joint) is Part departing)
+                    roots.Add(departing);
+        }
+        else
+        {
+            foreach (Sequence row in vehicle.Parts.SequenceList.Sequences)
+            {
+                if (row.Number != decoupler.Sequence)
+                    continue;
+                SequenceRoots(row, roots);
+                break;
+            }
+        }
+
+        var parts = new HashSet<Part>();
+        CollectOwnSubtree(root, root, roots, parts);
+        return parts;
+    }
+
     /// <summary>The parts that leave with <paramref name="root"/> itself: its subtree, short of any other separated root's, which leaves as a craft of its own.</summary>
     private static void CollectOwnSubtree(Part node, Part root, List<Part> roots, HashSet<Part> into)
     {
@@ -232,6 +268,8 @@ public static partial class GuidanceWindow
     private static readonly HashSet<Part> _returnDrops = new HashSet<Part>();
     // The roots one sequence separates.
     private static readonly List<Part> _returnRoots = new List<Part>();
+    // Use the same exclusions as PartsLeavingWith for the current and earlier rows.
+    private static readonly List<Part> _returnExcludedRoots = new List<Part>();
     // Everything the separations so far in the walk drop, this one included.
     private static readonly HashSet<Part> _returnDropsSoFar = new HashSet<Part>();
 

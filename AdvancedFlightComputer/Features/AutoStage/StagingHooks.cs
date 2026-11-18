@@ -3,25 +3,29 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.AutoStage;
 
-// Tells other features that a staging row is about to fire, whatever fired it: AutoStage's own triggers (a guidance request, a burnout, a spent drop) or the player's staging key.
-// Raised before the row's modules activate, while what it will separate is still attached and can be recorded.
+// Announces a decoupler being activated while its connection still identifies the departing subtree.
 internal static class StagingHooks
 {
-    internal static event Action<Vehicle, Sequence>? SequenceActivating;
+    internal static event Action<Vehicle, Decoupler>? DecouplerActivating;
 
-    internal static void RaiseSequenceActivating(Vehicle vehicle, Sequence sequence)
+    // Match Decoupler.SetIsActive so planning and activation agree on what can separate.
+    internal static bool CanActivate(Decoupler decoupler)
+        => decoupler.IsEnabled && !decoupler.IsActive
+           && decoupler.Connector?.Connection?.OtherPart(decoupler.Parent.FullPart) != null;
+
+    internal static void RaiseDecouplerActivating(Vehicle vehicle, Decoupler decoupler)
     {
-        Action<Vehicle, Sequence>? handlers = SequenceActivating;
-        if (handlers == null || vehicle == null || sequence == null)
+        if (!CanActivate(decoupler))
             return;
         // A listener's fault must never cost the staging itself.
         try
         {
-            handlers(vehicle, sequence);
+            StagingDetector.ObserveDecoupler(vehicle, decoupler);
+            DecouplerActivating?.Invoke(vehicle, decoupler);
         }
         catch (Exception e)
         {
-            DefaultCategory.Log.Error($"[AFC] A staging listener failed on '{vehicle.Id}', sequence {sequence.Number}: {e}");
+            DefaultCategory.Log.Error($"[AFC] A staging listener failed on '{vehicle.Id}', decoupler '{decoupler.TemplateId}': {e}");
         }
     }
 

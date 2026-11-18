@@ -4,6 +4,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.Ui.Canvas;
 using AdvancedFlightComputer.Features.Ui.Logic;
 using Brutal.ImGuiApi;
 using KSA;
@@ -72,7 +73,7 @@ public static partial class GuidanceWindow
 
     internal static void DrawLaunchPage(Vehicle vehicle, float innerW, bool foldsOpen)
     {
-        DrawLaunchBoosters(vehicle, foldsOpen);
+        DrawLaunchBoosters(vehicle);
         DrawLaunchLimits(vehicle, foldsOpen);
         DrawLaunchHow(vehicle, innerW, foldsOpen);
     }
@@ -87,12 +88,24 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>REUSE, the first fold under the picture: the returnable stages and their sites, above LIMITS.</summary>
-    internal static void DrawLaunchBoosters(Vehicle vehicle, bool foldsOpen)
+    internal static void DrawLaunchBoosters(Vehicle vehicle)
     {
-        if (vehicle.Orbit?.Parent == null)
+        if (vehicle.Orbit?.Parent == null || (_s.ReturnableStages.Count == 0 && _s.ReturnControlRefusals.Count == 0
+            && _s.ReserveStagedRoots.Count == 0 && _s.StageTargets.Count == 0 && _s.StageOptimalReturn.Count == 0))
             return;
         ConsoleUi.Gap();
-        DrawBoostersFold(vehicle, foldsOpen);
+        ConsoleUi.SectionHead("BOOSTER RETURN");
+        ImGui.PushID(BoostersFoldId);
+        try
+        {
+            DrawUnavailableReturns(vehicle);
+            DrawReturnableStageRows();
+            DrawBoosterReserve();
+        }
+        finally
+        {
+            ImGui.PopID();
+        }
     }
 
     internal static void DrawLaunchHow(Vehicle vehicle, float innerW, bool foldsOpen)
@@ -127,35 +140,65 @@ public static partial class GuidanceWindow
         }
     }
 
-    /// <summary>
-    /// REUSE (the BOOSTERS fold): the stages of this craft that can fly themselves home, each with its SITE, before launch. A site asks the calculated climb for a reserve, which it sizes for the boostback to that site and the landing, and the RESERVE row shows what the booster keeps. Its rows draw while the craft has a returnable stage, and also after a reserve was staged, so the RESERVE row stays readable. With none of these the fold says why. After separation the boostback is on LAND > BOOSTBACK.
-    /// </summary>
-    private static void DrawBoostersFold(Vehicle vehicle, bool openByDefault)
+    private static void DrawUnavailableReturns(Vehicle vehicle)
     {
-        int stages = _s.ReturnableStages.Count;
-        int reused = 0;
-        foreach (ReturnableStage stage in _s.ReturnableStages)
-            if (stage.ComesHome)
-                reused++;
-        if (!ConsoleUi.Fold(PageText.BoostersLabel(stages, reused), BoostersFoldId, openByDefault, PageText.BoostersTip(stages)))
-            return;
-        ImGui.PushID(BoostersFoldId);
-        try
+        uint? clear = null;
+        foreach (var (rootId, name, sequence, reason) in _s.ReturnControlRefusals)
+            Draw(rootId, $"{name} in sequence {sequence} cannot return. {ReturnControlReason(reason)}");
+        foreach (uint rootId in _s.StageTargets.Keys)
+            DrawSaved(rootId);
+        foreach (uint rootId in _s.StageOptimalReturn)
+            if (!_s.StageTargets.ContainsKey(rootId))
+                DrawSaved(rootId);
+        if (clear.HasValue)
+            ClearStageReturn(_s, clear.Value);
+
+        void DrawSaved(uint rootId)
         {
-            if (stages == 0 && _s.ReserveStagedRoots.Count == 0)
-            {
-                ConsoleUi.MutedWrapped(PageText.BoostersNone);
-                return;
-            }
-            DrawReturnableStageRows();
-            DrawBoosterReserve();
-            if (ConsoleUi.LinkRight("AFTER SEPARATION: LAND > BOOSTBACK", "AfcGoBoostback",
-                    "Opens LAND > BOOSTBACK. Shows and starts the boostback of a separated booster."))
-                PendingNavigation = ConsolePages.CueTarget(ConsolePage.Land, ConsolePages.EnumKey(LandWay.Boostback));
+            if (UnlistedStageWithReturn(vehicle, _s, rootId) is { } part
+                && !_s.ReturnControlRefusals.Exists(refusal => refusal.RootId == rootId))
+                Draw(rootId, $"{part.DisplayName} has a saved return target. Planning for this stage is unavailable.");
         }
-        finally
+
+        void Draw(uint rootId, string text)
         {
-            ImGui.PopID();
+            ConsoleUi.MutedWrapped(text);
+            if (HasStageReturn(_s, rootId)
+                && ConsoleWidgets.Button("CLEAR RETURN".AsSpan(), $"AfcUnavailableStageClear{rootId}".AsSpan(), default))
+                clear = rootId;
         }
     }
+
+    private static bool HasStageReturn(VehicleAutopilotState state, uint rootId)
+        => state.StageTargets.ContainsKey(rootId) || state.StageOptimalReturn.Contains(rootId);
+
+    internal static Part UnlistedStageWithReturn(Vehicle vehicle, VehicleAutopilotState state, uint rootId)
+        => HasStageReturn(state, rootId) && !state.ReturnableStages.Exists(stage => stage.RootId == rootId)
+            ? vehicle.Parts.Find(rootId)
+            : null;
+
+    internal static void ClearStageReturn(VehicleAutopilotState state, uint rootId)
+    {
+        state.StageTargets.Remove(rootId);
+        state.StageOptimalReturn.Remove(rootId);
+        state.OptimalReturnSites.Remove(rootId);
+        if (_retargetStageId == rootId)
+        {
+            _retargetStageId = 0;
+            _retargetArmed = false;
+        }
+        state.StageModelDirty = true;
+    }
+
+    internal static string ReturnControlReason(VehicleControl reason) => reason switch
+    {
+        VehicleControl.NoCrew => "Its command pod has no crew.",
+        VehicleControl.CrewIncapacitated => "Its command pod has no able crew.",
+        VehicleControl.ProbeCoreUnpowered => "Its probe core has no power after separation.",
+        VehicleControl.ProbeCoreOff => "Its probe core is switched off.",
+        VehicleControl.ProbeCoreFailed => "Its probe core has failed.",
+        VehicleControl.ProbeCoreStormStandby => "Its probe core is in storm standby.",
+        VehicleControl.ProbeCoreRebooting => "Its probe core is rebooting.",
+        _ => "It has no usable control after separation."
+    };
 }

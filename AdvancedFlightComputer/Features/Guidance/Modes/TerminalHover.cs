@@ -62,6 +62,7 @@ public static partial class GuidanceWindow
         // Continue the flown path when hover takes over from G-FOLD - it is the same descent - but start clean when it is engaged cold, so the plot is not showing a previous attempt.
         if (_s.LandingPhase != LandingPhase.GfoldDescent)
             ResetGfoldTrace();
+        _s.CancelGfoldSolve();
         _s.LandingPhase = LandingPhase.TerminalHover;
         _s.TermPidUp = _s.TermPidE = _s.TermPidN = default;
         _s.TermInit = false;

@@ -1,5 +1,6 @@
 using System.Reflection;
 using AdvancedFlightComputer.Features.Transfer;
+using AdvancedFlightComputer.Features.Ui.Console.Pages;
 using AdvancedFlightComputer.Features.Ui.Logic;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
@@ -52,6 +53,7 @@ public sealed class TransferSessionTest : AfcTest
             t.Info($"planning from {((Astronomical)home).Id} orbit to {((Astronomical)destination).Id}");
 
             TransferSession.SetSource(vehicle);
+            CheckMissionDefault(t, vehicle);
             TransferSession.SetDestination(destination);
             t.Check("the destination has transfer bounds", TransferSession.Info != null
                 && TransferSession.MinTofSec > 0.0 && TransferSession.MaxTofSec > TransferSession.MinTofSec,
@@ -80,6 +82,11 @@ public sealed class TransferSessionTest : AfcTest
             if (!t.Check("a best departure is found", bestValid, $"index {best.X}, {best.Y}"))
                 return;
             double bestDv = info.PorkChopData![best.X, best.Y].TransferData.TransferDvVlf.Length();
+            int propagated = info.PorkChopData.Cast<OrbitalTransfers.PorkChopEntry?>().Count(entry => entry != null);
+            t.Check("only a short list of selected candidates propagated", propagated is > 0 and <= 8,
+                $"{propagated} trajectories for {TransferSession.Size * TransferSession.Size} grid points");
+            t.Check("the selected cell costs agree with the full transfer",
+                TransferSession.ScoreAt(best.X, best.Y) is { } score && Math.Abs(score.DepartureDv - bestDv) < 0.001);
             t.Check("the best departure dV is finite and positive", double.IsFinite(bestDv) && bestDv > 0.0, $"{bestDv:F1} m/s");
             t.Check("the best entry is selected", TransferSession.Selected.X == best.X && TransferSession.Selected.Y == best.Y
                 && TransferSession.SelectedEntry != null);
@@ -106,6 +113,53 @@ public sealed class TransferSessionTest : AfcTest
             TransferSession.CancelAll();
             if (vehicle != null)
                 VehicleSpawner.Despawn(vehicle);
+        }
+    }
+
+    private static void CheckMissionDefault(TestContext t, Vehicle vehicle)
+    {
+        var choices = new List<TransferObject>();
+        TransferBounds.Destinations(vehicle, choices);
+        int mars = choices.FindIndex(choice => choice.GetKey() == "Mars");
+        int other = choices.FindIndex(choice => choice.GetKey() != "Mars" && choice.Body is IOrbiter);
+        if (mars < 0 || other < 0)
+        {
+            t.Skip("the source has no reachable Mars and alternative for the mission default");
+            return;
+        }
+
+        var alternatives = new List<TransferObject> { choices[mars], choices[other] };
+        var rules = Universe.Rules;
+        bool originalLifeSupport = rules.LifeSupport;
+        MissionPlan? originalMission = vehicle.Parts.Mission;
+        IOrbiter? originalTarget = vehicle.Target;
+        Part? originalTargetPart = vehicle.TargetPart;
+        string Choice() => TransferPage.DefaultDestination(vehicle, alternatives).GetKey();
+        string fallback = alternatives[1].GetKey();
+        try
+        {
+            rules.LifeSupport = true;
+            vehicle.SetTarget(alternatives[1].Body as IOrbiter);
+            vehicle.Parts.Mission = null;
+            t.Check("without a mission the craft's target remains the default", Choice() == fallback);
+            vehicle.Parts.Mission = new MissionPlan { Destination = MissionDestination.Body, BodyId = "Mars" };
+            t.Check("an active Mars mission takes priority over the craft's target", Choice() == "Mars");
+            rules.LifeSupport = false;
+            t.Check("with life support disabled the craft's target is used", Choice() == fallback);
+            rules.LifeSupport = true;
+            vehicle.Parts.Mission.Custom = true;
+            t.Check("a custom mission leaves the existing default in place", Choice() == fallback);
+            vehicle.Parts.Mission.Custom = false;
+            vehicle.Parts.Mission.BodyId = "AFC-Harness-Unavailable-Mission";
+            t.Check("an unavailable mission destination falls back to the craft's target", Choice() == fallback);
+            vehicle.SetTarget(null);
+            t.Check("without a reachable mission or target the first destination is selected", Choice() == "Mars");
+        }
+        finally
+        {
+            vehicle.SetTarget(originalTarget, originalTargetPart);
+            vehicle.Parts.Mission = originalMission;
+            rules.LifeSupport = originalLifeSupport;
         }
     }
 

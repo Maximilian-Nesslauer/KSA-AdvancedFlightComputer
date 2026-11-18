@@ -350,7 +350,7 @@ internal static class HohmannFlybyUI
     // FlightPlan.TryAddFiniteBurn and ComputeCompleteTrajectory provide the same propagation used by stock previews. Without engine thrust the burn stays impulsive through FlightPlan.CalculateBurnPatch.
     internal static FlybyPrediction BuildPreview(
         Vehicle source, IOrbiter targetOrbiter, IParentBody target,
-        FlybyTargeting.FlybyResult? result, out FlightPlan? preview)
+        FlybyTargeting.FlybyResult? result, out FlightPlan? preview, bool refineDeparture = true)
     {
         preview = null;
         if (result is not FlybyTargeting.FlybyResult departure)
@@ -364,7 +364,7 @@ internal static class HohmannFlybyUI
         {
             FlightPlan plan = FlightPlan.CreateUninitialized(source.Hash);
             plan.ImpactClearanceMargin = source.BoundingSphereRadiusBody;
-            double3 dvVlf = RefineDeparture(source, prePatch, departure);
+            double3 dvVlf = refineDeparture ? RefineDeparture(source, prePatch, departure) : departure.DvVlf;
             bool errors = false;
             if (FiniteBurns.TryAddFiniteBurn(plan, prePatch, departure.BurnTime, dvVlf,
                     FiniteBurns.FullThrottlePhases(source), out bool impacted) == null)

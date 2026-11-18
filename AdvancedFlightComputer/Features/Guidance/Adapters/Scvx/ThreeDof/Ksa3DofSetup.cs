@@ -20,12 +20,31 @@ public static class Ksa3DofSetup
     public const double TurnAccelShare = 0.75;
 
     /// <summary>
-    /// The turn acceleration the entry guidance plans to, rad/s^2: <see cref="TurnAccelShare"/> of what KSA's flight computer says the RCS gives about the weaker lateral control axis - the authority the vehicle has with its engines off, which is how it flies the glide, and a floor under the burn, where the gimbals add theirs. Not the gimbals': how the vehicle turns is not this solver's to model (see Scvx3DofConfig.AttitudeAccelMax). 0, no limit, when the flight computer reports none.
+    /// Fraction of the weaker lateral angular acceleration reported by stock, in rad/s^2.
+    /// Uses gimbal authority when RCS cannot steer the craft.
     /// </summary>
     public static double TurnAccelLimit(Vehicle vehicle)
     {
         FlightComputer fc = vehicle?.FlightComputer;
         if (fc == null) return 0.0;
+        double rcs = CoastTurnAccelLimit(vehicle);
+        if (rcs > 0.0)
+            return rcs;
+        double tvc = Math.Min(fc.TvcTorqueAuthority.Y, fc.TvcTorqueAuthority.Z);
+        if (!(tvc > 0.0) || !double.IsFinite(tvc))
+        {
+            // In the coast the live gimbal authority is zero until ignition.
+            Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out _);
+            double inertia = Math.Max(ixx, iyy);
+            double throttle = Math.Clamp(vehicle.GetMinThrottle(), 0.01, 1.0);
+            tvc = inertia > 0.0 ? Ksa6DofSetup.LateralTorqueLimit(vehicle) * throttle / inertia : 0.0;
+        }
+        return tvc > 0.0 && double.IsFinite(tvc) ? TurnAccelShare * tvc : 0.0;
+    }
+
+    internal static double CoastTurnAccelLimit(Vehicle vehicle)
+    {
+        var fc = vehicle.FlightComputer;
         double rcs = Math.Min(fc.RcsTorqueAuthority.Y, fc.RcsTorqueAuthority.Z);
         return rcs > 0.0 && double.IsFinite(rcs) ? TurnAccelShare * rcs : 0.0;
     }
@@ -110,7 +129,7 @@ public static class Ksa3DofSetup
     /// <param name="floorMargin">Throttle the plan keeps in hand above the engines' minimum, for the burn tracker; see VehicleAutopilotState.LandingPlanFloorMargin.</param>
     public static Scvx3DofConfig Config(Vehicle vehicle, int nodes, int glideIntervals, double alphaMaxDeg,
                                         double comFloorM = 0.0, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
-                                        double turnAccelRadS2 = 0.0)
+                                        double turnAccelRadS2 = 0.0, bool fixedGlideAttitude = false)
     {
         var min = new double[PointMass3Dof.NX];
         var max = new double[PointMass3Dof.NX];
@@ -126,6 +145,7 @@ public static class Ksa3DofSetup
         {
             Nodes = nodes,
             GlideIntervals = glideIntervals,
+            GlideAttitudeFixed = fixedGlideAttitude,
             ThrottleFloor = floor,
             AccelMax = accelMaxMs2 > 0.0 ? Math.Max(accelMaxMs2, 1.05 * minimumAccel) : 0.0,
             AlphaMaxDeg = Math.Clamp(alphaMaxDeg, 1.0, 45.0),

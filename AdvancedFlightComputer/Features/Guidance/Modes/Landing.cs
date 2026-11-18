@@ -41,14 +41,14 @@ public static partial class GuidanceWindow
         _s.AutoStage = true;
         _s.LandingPhase = LandingPhase.GfoldDescent;
         ResetGfoldTrace();   // fresh flown path and a fresh axis latch
+        _s.CancelGfoldSolve();
         _s.GfoldHandoffTime = now;
         _s.GfoldLastSolveTime = double.NegativeInfinity;
         _s.GfoldPlan = null;
         _s.GfoldFailStreak = 0;
         _s.GfoldTrackInit = false;
         _s.GfoldEngineOn = engineLit;
-        if (engineLit)
-            _s.GfoldThrottle = vehicle.GetManualThrottle();
+        _s.GfoldThrottle = engineLit ? vehicle.GetManualThrottle() : 0.0;
         _s.GfoldRelightRequestTime = double.NaN;
         _s.GfoldHoverRefused = false;
         _s.HasCommand = false;
@@ -58,6 +58,7 @@ public static partial class GuidanceWindow
     // An abort in the air hands the craft back with the engine as it is, because a cut there drops the craft. The coast and the deorbit burn keep the cut, which stops the burn and costs a coasting craft nothing.
     private static void AbortLanding()
     {
+        _s.CancelGfoldSolve();
         ResetLandingEngineWait();
         _s.DeorbitPlanner?.Dispose();
         _s.DeorbitPlanner = null;
@@ -371,9 +372,11 @@ public static partial class GuidanceWindow
             else
             {
                 StepSixDofStandby(vehicle, parent, siteCci, x, now, seed);
-                if (SixDofStandbyReady(now, BrakingStandbyMaxPlanAgeS))
+                // The plan can already be braking a turn that the vehicle has yet to make.
+                if (SixDofStandbyReady(now, BrakingStandbyMaxPlanAgeS, x))
                 {
-                    HandBrakingBurnToTouchdown(vehicle, "HANDOVER: TOUCHDOWN");
+                    _s.EngagePending = true;
+                    _s.SixDofFromBrakingBurn = true;
                     return;
                 }
                 if (!last)
@@ -385,6 +388,7 @@ public static partial class GuidanceWindow
                 // The last seconds of the burn with no plan from the standby.
                 if (!GfoldCanFly(vehicle, parent, out _))
                 {
+                    StopSixDofStandby();
                     HandBrakingBurnToTouchdown(vehicle, "HANDOVER: TOUCHDOWN, NO PLAN YET");
                     return;
                 }
@@ -396,6 +400,7 @@ public static partial class GuidanceWindow
         StopSixDofStandby();
         _s.LandingPhase = LandingPhase.GfoldDescent;
         ResetGfoldTrace();   // fresh flown path and a fresh axis latch
+        _s.CancelGfoldSolve();
         _s.GfoldHandoffTime = now;
         _s.GfoldLastSolveTime = double.NegativeInfinity;
         _s.GfoldPlan = null;
@@ -414,6 +419,21 @@ public static partial class GuidanceWindow
         if (sixDofRefusal != null)
             _s.WarnLanding(_s.LandingStatus);
         _s.GfoldCuePending = true;   // cue the LAND NOW way of LAND
+    }
+
+    private static void CheckPendingBrakingHandover(Vehicle vehicle, IParentBody parent)
+    {
+        if (!_s.EngagePending || !_s.SixDofFromBrakingBurn || _s.LandingPhase != LandingPhase.Burn)
+            return;
+
+        _s.EngagePending = false;
+        _s.SixDofFromBrakingBurn = false;
+        if (HasTouchedDown(vehicle))
+            return;
+        double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+        double[] x = KsaFrameBridge.ToModelState(vehicle, KsaFrameBridge.BuildSiteFrame(siteCci));
+        if (SixDofStandbyReady(SimNow(), BrakingStandbyMaxPlanAgeS, x))
+            HandBrakingBurnToTouchdown(vehicle, "HANDOVER: TOUCHDOWN");
     }
 
     // 6-DOF is exclusive, because it drives attitude through the TVC allocator and not the flight computer, so the landing machine lets go. Engage6Dof is that release (ClaimVehicle) and the request in one, and the next guidance step consumes the request. It is reached from the sim step, so the release at the end of the same step sees the queued request and keeps the craft for it (ApplyAutopilot), and the engine holds the burn's command until the engage runs. A standby that is running is promoted by that engage with the plan it has.

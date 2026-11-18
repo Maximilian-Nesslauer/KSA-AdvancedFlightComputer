@@ -52,14 +52,8 @@ public static partial class GuidanceWindow
         {
             // Side boosters: their own tanks, down to the reserve.
             cue = 1;
-            if (_s.ReserveTanks.Count > 0)
-            {
-                ReadOnlySpan<MoleState> moles = vehicle.Parts.Moles.States;
-                mass = 0.0;
-                foreach (Tank tank in _s.ReserveTanks)
-                    mass += tank.ComputeSubstanceMass(moles);
-                end = _s.ReserveKg;
-            }
+            mass = ReserveTankMass(vehicle);
+            end = _s.ReserveKg;
         }
         else if (stages >= 2)
         {

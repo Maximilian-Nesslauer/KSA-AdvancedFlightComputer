@@ -86,6 +86,7 @@ public static class KsaVehicleAdapter
                         GLim = 1e9,
                         Seq = sequences[i].Number,
                         Engines = phase.ActiveEngineCount,
+                        DrainThrottle = StageThrottleLimits.Read(phases, j),
                     };
                     if (pressureGrid != null)
                         SampleThrustVsPressure(tree, stage, PhaseParts(perf, j), ModelPressure(sequences[i].Environment), pressureGrid);
@@ -126,6 +127,8 @@ public static class KsaVehicleAdapter
         {
             UpfgStage a = stages[i], b = stages[i + 1];
             if (!Close(a.Thrust, b.Thrust) || !Close(a.Isp, b.Isp))
+                continue;
+            if (a.DrainThrottle != b.DrainThrottle)
                 continue;
             // Mass continuity: anything jettisoned between the two is a real stage boundary however alike the two burns look. The tolerance is loose enough to absorb the float arithmetic the game's masses arrive in (10 kg on a 100 t stack) and far tighter than any real separation.
             if (Math.Abs(a.MassDry - b.MassTotal) > 1e-4 * Math.Max(a.MassTotal, 1.0))

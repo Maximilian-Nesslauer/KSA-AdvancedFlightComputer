@@ -19,6 +19,7 @@ public static class AscentProblemFile
         public double[]? PressureGrid { get; set; }
         public double[]? ThrustAtPressure { get; set; }
         public double? ThrottleMin { get; set; }
+        public double PhysicalThrottleMin { get; set; }
         public double? FixedBurnTime { get; set; }
         public bool LiquidCarriesOver { get; set; }
         public double? SeedThrottle { get; set; }
@@ -65,6 +66,7 @@ public static class AscentProblemFile
         public double QAlphaMax { get; set; }
         public double? PlaneTurnMin { get; set; }
         public double? PlaneTurnMax { get; set; }
+        public AscentProblem.RollProgram? PadRoll { get; set; }
         // The first booster, for a reader older than Recoveries; a dump from before them has only this.
         public RecoveryDto? Recovery { get; set; }
         public RecoveryDto[]? Recoveries { get; set; }
@@ -116,6 +118,7 @@ public static class AscentProblemFile
                 PressureGrid = s.PressureGrid,
                 ThrustAtPressure = s.ThrustAtPressure,
                 ThrottleMin = double.IsNaN(s.ThrottleMin) ? null : s.ThrottleMin,
+                PhysicalThrottleMin = s.PhysicalThrottleMin,
                 FixedBurnTime = s.IsPinned ? s.FixedBurnTime : null,
                 LiquidCarriesOver = s.LiquidCarriesOver,
                 SeedThrottle = s.SeedThrottle < 1.0 ? s.SeedThrottle : null,
@@ -134,6 +137,7 @@ public static class AscentProblemFile
             QAlphaMax = p.QAlphaMax,
             PlaneTurnMin = p.PlaneTurnMin != 0.0 ? p.PlaneTurnMin : null,
             PlaneTurnMax = p.PlaneTurnMax != 0.0 ? p.PlaneTurnMax : null,
+            PadRoll = p.PadRoll,
         };
         if (p.Atmosphere is KsaAscentAtmosphere ksa)
         {
@@ -263,7 +267,8 @@ public static class AscentProblemFile
                                                                 ? new AscentSolidBurn(st, sm, sg, sf) : null,
                                                             s.FixedBurnTime ?? double.NaN, s.LiquidCarriesOver,
                                                             s.SeedThrottle ?? 1.0,
-                                                            s.AccelerationLimit ?? double.PositiveInfinity)).ToArray(),
+                                                            s.AccelerationLimit ?? double.PositiveInfinity,
+                                                            s.PhysicalThrottleMin)).ToArray(),
             Atmosphere = air,
             GroundRadius = dto.GroundRadius,
             TargetRadius = dto.TargetRadius,
@@ -274,6 +279,7 @@ public static class AscentProblemFile
             QAlphaMax = dto.QAlphaMax,
             PlaneTurnMin = dto.PlaneTurnMin ?? 0.0,
             PlaneTurnMax = dto.PlaneTurnMax ?? 0.0,
+            PadRoll = dto.PadRoll,
             Recoveries = recoveries,
         };
     }

@@ -62,13 +62,13 @@ internal static class TransferBounds
     public static void Destinations(Vehicle source, List<TransferObject> list)
     {
         list.Clear();
-        foreach (Vehicle vehicle in Program.VehiclesInFrame)
+        ReadOnlySpan<Astronomical> all = Universe.CurrentSystem!.All.AsSpan();
+        foreach (Astronomical body in all)
         {
-            if (vehicle.Id != source.Id && vehicle.Parent == source.Parent)
+            if (body is Vehicle vehicle && !vehicle.IsDisposed && vehicle.Id != source.Id && vehicle.Parent == source.Parent)
                 list.Add(new TransferObject(vehicle));
         }
 
-        ReadOnlySpan<Astronomical> all = Universe.CurrentSystem!.All.AsSpan();
         IParentBody? parent = source.Parent;
         if (parent == null)
             return;
@@ -81,7 +81,7 @@ internal static class TransferBounds
                 continue;
             if (!InSameNeighbourhood(astronomical, orbiter, parent))
                 continue;
-            if ((orbiter.Orbit != null && orbiter.Orbit.Eccentricity >= 1.0) || double.IsNaN(orbiter.SphereOfInfluence) || orbiter.SphereOfInfluence <= 0.0)
+            if ((orbiter.Orbit != null && !orbiter.Orbit.IsBound()) || double.IsNaN(orbiter.SphereOfInfluence) || orbiter.SphereOfInfluence <= 0.0)
                 continue;
             list.Add(new TransferObject(astronomical));
         }

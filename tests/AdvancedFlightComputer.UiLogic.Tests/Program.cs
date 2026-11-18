@@ -568,6 +568,17 @@ internal static class Program
         Check("a height near the ground has its tenth", Fmt.Height(8.34) == "8.3 m");
         Check("a height has one rule", Fmt.Height(8985.0) == "8985 m" && Fmt.Height(12400.0) == "12.4 km");
         Check("a time keeps its width", Fmt.Time(186.0) == "3m 06s" && Fmt.Time(3900.0) == "1h 05m");
+        Check("probe warning names the burn and the shortfall", PageText.ProbePowerWarning(840.0, 1020.0, "BURN")
+            .StartsWith($"PROBE POWER ENDS {Fmt.Time(180.0)} BEFORE BURN.", StringComparison.Ordinal));
+        Check("probe forecast at a coast includes the eclipse caveat", PageText.ProbePowerWarning(840.0, 2040.0, "END OF COAST")
+            .Contains("BEFORE END OF COAST. CURRENT GENERATION ONLY. SOLAR OUTPUT CAN DROP IN ECLIPSE.", StringComparison.Ordinal));
+        Check("probe warning needs a future milestone beyond the forecast",
+            PageText.ProbePowerWarning(300.0, 300.0, "BURN").Length == 0
+            && PageText.ProbePowerWarning(0.0, -1.0, "BURN").Length == 0
+            && PageText.ProbePowerWarning(0.0, double.NaN, "BURN").Length == 0);
+        Check("unlimited or unavailable probe forecasts are quiet",
+            PageText.ProbePowerWarning(double.PositiveInfinity, 1000.0, "BURN").Length == 0
+            && PageText.ProbePowerWarning(double.NaN, 1000.0, "BURN").Length == 0);
     }
 
     private static void LandingLegRules()
@@ -1997,6 +2008,9 @@ internal static class Program
         (double from, double to) = SketchMath.DrawableAnomaly(2.0);
         Check("hyperbola stays inside its asymptotes", to < Math.Acos(-0.5) && from == -to);
         Check("ellipse draws whole", SketchMath.DrawableAnomaly(0.3) == (-Math.PI, Math.PI));
+        (double parabolicFrom, double parabolicTo) = SketchMath.DrawableAnomaly(0.9999998, isBound: false);
+        Check("a near-parabolic open orbit clips its ends", double.IsFinite(parabolicFrom)
+            && parabolicFrom == -parabolicTo && parabolicTo > 0.0 && parabolicTo < Math.PI);
         P2 q = SketchMath.Project(1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0);
         Check("projection drops the normal", q == new P2(1.0, 2.0));
 
@@ -2914,7 +2928,7 @@ internal static class Program
         Check("the parts of TUNE have a card each", PageText.TuneLandingCards.Length == Enum.GetValues<TuneLanding>().Length && PageText.DiagViewCards.Length == Enum.GetValues<TuneDiagnostics>().Length
             && Enum.GetValues<TuneSet>().All(s => PageText.TuneSetCard(s).Length > 0));
         Check("the fold cards tell their case", PageText.LimitsTip(false).Contains("without atmosphere") && !PageText.LimitsTip(true).Contains("without atmosphere")
-            && PageText.BoostersTip(0).Contains("command pod") && !PageText.BoostersTip(2).Contains("command pod"));
+            && PageText.BoostersTip(0).Contains("powered probe core") && !PageText.BoostersTip(2).Contains("powered probe core"));
         Check("HOW IT FLIES says the kept rule once", PageText.HowItFliesTip.Contains(PageText.KeptRule));
         Check("the card words stay plain", !PageText.PlanTip.Contains("form of this page") && !PageText.SolverTip.Contains("card of a row") && !PageText.FlownByCard(Owner.Afc).Contains("in the head") && !PageText.FlyPassTip(false).StartsWith("Flies this pass now", StringComparison.Ordinal));
         Check("the card of FLY PASS says who burns it, as the row beside it does", PageText.FlyPassTip(false).Contains("STOCK AUTO") && PageText.FlyPassTip(true).Contains("RCS") && !PageText.FlyPassTip(true).Contains("STOCK AUTO"));

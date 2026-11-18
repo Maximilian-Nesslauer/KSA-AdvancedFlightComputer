@@ -149,6 +149,7 @@ public sealed class Guidance3Dof
     }
 
     private readonly Settings _set;
+    public double IgnitionLockLeadS => _set.LockSeconds;
     private readonly Scvx3DofSolver _two, _burn;
     private double[] _xf = new double[6];
     private bool _burnStarted;
@@ -340,7 +341,8 @@ public sealed class Guidance3Dof
         _burn.Model = Model;
         cfg.ThrottleCeiling = _set.BurnThrottleCeiling;
         // What the vehicle can turn to by ignition, closing onto the measured attitude as ignition arrives; and the turn it is predicted to have there, which the burn continues.
-        _burn.SetAttitudeAnchor(attitude, Math.Max(ReachableAngle(cfg, toGo), _set.AnchorFloor));
+        _burn.SetAttitudeAnchor(attitude, GlideConfig.GlideAttitudeFixed ? 0.0
+            : Math.Max(ReachableAngle(GlideConfig, toGo), _set.AnchorFloor));
         _burn.SetAttitudeRateAnchor(cfg.AttitudeAccelMax > 0.0 ? rateAtIgnition : null);
         bool first = !_burnStarted;
         _burnStarted = true;
@@ -515,8 +517,11 @@ public sealed class Guidance3Dof
         double[] x = (double[])x0.Clone();
         rateAtIgnition = rate0 != null && rate0.Length == 3 ? (double[])rate0.Clone() : new double[3];
         if (!(seconds > 0.0)) return x;
-        double rate = _burn.Config.AttitudeRateMax > 0.0 ? _burn.Config.AttitudeRateMax : 10.0;
-        double accel = _burn.Config.AttitudeAccelMax;
+        double rate = GlideConfig.AttitudeRateMax > 0.0 ? GlideConfig.AttitudeRateMax : 10.0;
+        double accel = GlideConfig.AttitudeAccelMax;
+        bool fixedAttitude = GlideConfig.GlideAttitudeFixed;
+        if (fixedAttitude)
+            Array.Clear(rateAtIgnition);
         int steps = Math.Max(1, (int)Math.Ceiling(seconds / _set.PredictionStep));
         double h = seconds / steps;
         double[] b = Normalise(attitude);
@@ -537,6 +542,8 @@ public sealed class Guidance3Dof
             for (int i = 0; i < NX; i++) tmp[i] = x[i] + h * k3[i];
             PointMass3Dof.Eval(Model, tmp, u, k4);
             for (int i = 0; i < NX; i++) x[i] += h / 6.0 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
+            if (fixedAttitude)
+                continue;
             if (accel > 0.0)
             {
                 // As fast as it can stop from, capped at the rate limit, and no faster a change than the acceleration allows.

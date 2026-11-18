@@ -20,30 +20,32 @@ using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 /// </summary>
 public sealed class ConvexAscentProfile
 {
-    // The plan by time: every node, one per instant (the second of each staging pair is kept, since it carries the new stage's thrust).
-    private readonly double[] _time, _pitch, _azimuth, _altitude, _speed, _throttle;
+    // The commands on both sides of a staging boundary share an instant.
+    private readonly double[] _time, _pitch, _altitude, _speed, _throttle;
+    private readonly double3[] _steering;
+    private readonly int[] _firstNode, _lastNode;
 
     // Per planned stage: the stretch of plan time it burns over; the mass it starts at and burns out at; the air speed it lights at; and speed gained since then to plan time over the nodes within it at which the plan had gained more than at any earlier node of the stage - monotone by construction.
-    private readonly double[] _stageStart, _stageEnd, _stageStartMass, _stageEndMass, _stageStartSpeed;
+    private readonly double[] _stageStart, _stageEnd, _stageStartMass, _stageEndMass;
     private readonly double[][] _recordSpeed, _recordTime;
 
     public int Count => _time.Length;
     public int Stages => _stageStart.Length;
     public double EndTime => _time[^1];
+    public double StageEndTime(int stage) => _stageEnd[stage];
     public ReadOnlySpan<double> Time => _time;
     public ReadOnlySpan<double> Speed => _speed;
     public ReadOnlySpan<double> PitchRad => _pitch;
     public ReadOnlySpan<double> Altitude => _altitude;
 
-    private ConvexAscentProfile(double[] time, double[] pitch, double[] azimuth, double[] altitude, double[] speed,
+    private ConvexAscentProfile(double[] time, double[] pitch, double3[] steering, double[] altitude, double[] speed,
                                 double[] throttle, double[] stageStart, double[] stageEnd,
-                                double[] stageStartMass, double[] stageEndMass, double[] stageStartSpeed,
-                                double[][] recordSpeed, double[][] recordTime)
+                                double[] stageStartMass, double[] stageEndMass,
+                                double[][] recordSpeed, double[][] recordTime, int[] firstNode, int[] lastNode)
     {
-        _stageStartSpeed = stageStartSpeed;
         _time = time;
         _pitch = pitch;
-        _azimuth = azimuth;
+        _steering = steering;
         _altitude = altitude;
         _speed = speed;
         _throttle = throttle;
@@ -53,6 +55,8 @@ public sealed class ConvexAscentProfile
         _stageEndMass = stageEndMass;
         _recordSpeed = recordSpeed;
         _recordTime = recordTime;
+        _firstNode = firstNode;
+        _lastNode = lastNode;
     }
 
     /// <param name="omega">The body's spin rate about CCI +z, rad/s: the air co-rotates.</param>
@@ -62,72 +66,34 @@ public sealed class ConvexAscentProfile
         int n = s.Nodes;
         var time = new List<double>(n);
         var pitch = new List<double>(n);
-        var az = new List<double>(n);
+        var steering = new List<double3>(n);
         var alt = new List<double>(n);
         var speed = new List<double>(n);
         var throttle = new List<double>(n);
-        var stage = new List<int>(n);
-        var hasAz = new List<bool>(n);
 
         for (int k = 0; k < n; k++)
         {
             var r = new double3(s.Position[k * 3], s.Position[k * 3 + 1], s.Position[k * 3 + 2]);
             var v = new double3(s.Velocity[k * 3], s.Velocity[k * 3 + 1], s.Velocity[k * 3 + 2]);
             var u = new double3(s.Throttle[k * 3], s.Throttle[k * 3 + 1], s.Throttle[k * 3 + 2]);
-            if (!(u.Length() > 1e-9))
-                continue;
-
             double3 up = double3.Normalize(r);
-            double3 dir = double3.Normalize(u);
+            double thrustFraction = u.Length();
+            double3 dir = thrustFraction > 1e-9 ? u / thrustFraction : up;
             double3 east = double3.Cross(new double3(0, 0, 1), up);
             east = east.Length() > 1e-9 ? double3.Normalize(east) : new double3(1, 0, 0);
             double3 north = double3.Cross(up, east);
-            double sinP = Math.Clamp(double3.Dot(dir, up), -1.0, 1.0);
-            double3 horiz = dir - sinP * up;
-            // Straight up has no azimuth; it is filled in from the first node that has one.
-            bool defined = horiz.Length() > 1e-4;
-            double a = defined ? Math.Atan2(double3.Dot(horiz, east), double3.Dot(horiz, north)) : 0.0;
+            var local = new double3(double3.Dot(dir, north), double3.Dot(dir, east), double3.Dot(dir, up));
             double sp = (v - double3.Cross(new double3(0, 0, omega), r)).Length();
 
-            // Two nodes share each staging instant: the later one - the new stage's first - replaces the earlier.
-            if (time.Count > 0 && !(s.Time[k] > time[^1] + 1e-9))
-            {
-                int last = time.Count - 1;
-                pitch[last] = Math.Asin(sinP);
-                az[last] = a;
-                hasAz[last] = defined;
-                alt[last] = r.Length() - bodyRadius;
-                speed[last] = sp;
-                throttle[last] = Math.Min(u.Length(), 1.0);
-                stage[last] = s.NodeStage[k];
-                continue;
-            }
             time.Add(s.Time[k]);
-            pitch.Add(Math.Asin(sinP));
-            az.Add(a);
-            hasAz.Add(defined);
+            pitch.Add(Math.Asin(Math.Clamp(local.Z, -1.0, 1.0)));
+            steering.Add(double3.Normalize(local));
             alt.Add(r.Length() - bodyRadius);
             speed.Add(sp);
-            throttle.Add(Math.Min(u.Length(), 1.0));
-            stage.Add(s.NodeStage[k]);
+            throttle.Add(Math.Min(thrustFraction, 1.0));
         }
         if (time.Count < 2)
             return null;
-
-        // Back-fill the undefined azimuths from the next defined one, then unwrap so interpolation never goes the long way round.
-        for (int k = 0; k < az.Count; k++)
-            if (!hasAz[k])
-            {
-                int next = k;
-                while (next < az.Count && !hasAz[next]) next++;
-                az[k] = next < az.Count ? az[next] : (k > 0 ? az[k - 1] : 0.0);
-            }
-        for (int k = 1; k < az.Count; k++)
-        {
-            double d = az[k] - az[k - 1];
-            while (d > Math.PI) { az[k] -= 2.0 * Math.PI; d -= 2.0 * Math.PI; }
-            while (d < -Math.PI) { az[k] += 2.0 * Math.PI; d += 2.0 * Math.PI; }
-        }
 
         // The stages: where each starts and ends in plan time, and in mass. Masses come from the solution's own nodes, both of each staging pair, so the burnout mass before a jettison is kept.
         int stages = s.BurnTime.Length;
@@ -135,44 +101,41 @@ public sealed class ConvexAscentProfile
         var stageEnd = new double[stages];
         var startMass = new double[stages];
         var endMass = new double[stages];
+        var firstNode = new int[stages];
+        var lastNode = new int[stages];
         for (int i = 0; i < stages; i++)
         {
-            int first = Array.IndexOf(s.NodeStage, i), lastNode = Array.LastIndexOf(s.NodeStage, i);
+            int first = Array.IndexOf(s.NodeStage, i), last = Array.LastIndexOf(s.NodeStage, i);
+            firstNode[i] = first;
+            lastNode[i] = last;
             stageStart[i] = s.Time[first];
-            stageEnd[i] = s.Time[lastNode];
+            stageEnd[i] = s.Time[last];
             startMass[i] = s.Mass[first];
-            endMass[i] = s.Mass[lastNode];
+            endMass[i] = s.Mass[last];
         }
-        stageEnd[stages - 1] = time[^1];
 
         var recordSpeed = new double[stages][];
         var recordTime = new double[stages][];
         var startSpeed = new double[stages];
         for (int i = 0; i < stages; i++)
         {
-            int first = stage.IndexOf(i);
             // The first stage's records are in speed itself (gained from nothing); the others' in speed gained since the stage lit.
-            startSpeed[i] = i == 0 || first < 0 ? 0.0 : speed[first];
+            startSpeed[i] = i == 0 ? 0.0 : speed[firstNode[i]];
             var rs = new List<double>();
             var rt = new List<double>();
-            for (int k = 0; k < speed.Count; k++)
-                if (stage[k] == i && (rs.Count == 0 || speed[k] - startSpeed[i] > rs[^1] + 1e-6))
+            for (int k = firstNode[i]; k <= lastNode[i]; k++)
+                if (rs.Count == 0 || speed[k] - startSpeed[i] > rs[^1] + 1e-6)
                 {
                     rs.Add(speed[k] - startSpeed[i]);
                     rt.Add(time[k]);
                 }
-            if (rs.Count == 0)
-            {
-                rs.Add(0.0);
-                rt.Add(stageStart[i]);
-            }
             recordSpeed[i] = rs.ToArray();
             recordTime[i] = rt.ToArray();
         }
 
-        return new ConvexAscentProfile(time.ToArray(), pitch.ToArray(), az.ToArray(), alt.ToArray(), speed.ToArray(),
-                                       throttle.ToArray(), stageStart, stageEnd, startMass, endMass, startSpeed,
-                                       recordSpeed, recordTime);
+        return new ConvexAscentProfile(time.ToArray(), pitch.ToArray(), steering.ToArray(), alt.ToArray(), speed.ToArray(),
+                                       throttle.ToArray(), stageStart, stageEnd, startMass, endMass,
+                                       recordSpeed, recordTime, firstNode, lastNode);
     }
 
     /// <summary>
@@ -208,7 +171,7 @@ public sealed class ConvexAscentProfile
             stage = now;
             stageSpeed = speed;
             fastest = 0.0;
-            planTime = Math.Max(planTime, _stageStart[stage]);
+            return _stageStart[stage];
         }
 
         double gained = speed - stageSpeed;
@@ -240,23 +203,29 @@ public sealed class ConvexAscentProfile
 
     /// <summary>Pitch (above the horizon) and azimuth (from north, toward east) at a plan time, radians. Held at the ends.</summary>
     public void Attitude(double planTime, out double pitch, out double azimuth)
+        => Attitude(planTime, StageAtTime(planTime), out pitch, out azimuth);
+
+    public void Attitude(double planTime, int stage, out double pitch, out double azimuth)
     {
-        Interpolate(planTime, out int lo, out int hi, out double f);
-        pitch = _pitch[lo] + f * (_pitch[hi] - _pitch[lo]);
-        azimuth = _azimuth[lo] + f * (_azimuth[hi] - _azimuth[lo]);
+        double3 dir = SteerLocal(planTime, stage);
+        pitch = Math.Asin(Math.Clamp(dir.Z, -1.0, 1.0));
+        azimuth = Math.Atan2(dir.Y, dir.X);
     }
 
     /// <summary>The plan's altitude at a plan time, m.</summary>
     public double AltitudeAt(double planTime)
     {
-        Interpolate(planTime, out int lo, out int hi, out double f);
+        Interpolate(planTime, StageAtTime(planTime), out int lo, out int hi, out double f);
         return _altitude[lo] + f * (_altitude[hi] - _altitude[lo]);
     }
 
     /// <summary>The plan's throttle at a plan time, a fraction of full thrust at the altitude flown.</summary>
     public double Throttle(double planTime)
+        => Throttle(planTime, StageAtTime(planTime));
+
+    public double Throttle(double planTime, int stage)
     {
-        Interpolate(planTime, out int lo, out int hi, out double f);
+        Interpolate(planTime, stage, out int lo, out int hi, out double f);
         return _throttle[lo] + f * (_throttle[hi] - _throttle[lo]);
     }
 
@@ -266,16 +235,22 @@ public sealed class ConvexAscentProfile
     /// <summary>The plan's air speed at a plan time, m/s.</summary>
     public double SpeedAt(double planTime)
     {
-        Interpolate(planTime, out int lo, out int hi, out double f);
+        Interpolate(planTime, StageAtTime(planTime), out int lo, out int hi, out double f);
         return _speed[lo] + f * (_speed[hi] - _speed[lo]);
     }
 
-    private void Interpolate(double t, out int lo, out int hi, out double f)
+    private int StageAtTime(double t)
     {
-        int n = _time.Length;
-        if (t <= _time[0]) { lo = hi = 0; f = 0.0; return; }
-        if (t >= _time[n - 1]) { lo = hi = n - 1; f = 0.0; return; }
-        hi = Array.BinarySearch(_time, t);
+        int stage = Array.BinarySearch(_stageStart, t);
+        return stage >= 0 ? stage : Math.Max(0, ~stage - 1);
+    }
+
+    private void Interpolate(double t, int stage, out int lo, out int hi, out double f)
+    {
+        int first = _firstNode[stage], last = _lastNode[stage];
+        if (t <= _time[first]) { lo = hi = first; f = 0.0; return; }
+        if (t >= _time[last]) { lo = hi = last; f = 0.0; return; }
+        hi = Array.BinarySearch(_time, first, last - first + 1, t);
         if (hi < 0) hi = ~hi;
         lo = hi - 1;
         f = (t - _time[lo]) / (_time[hi] - _time[lo]);
@@ -283,13 +258,39 @@ public sealed class ConvexAscentProfile
 
     /// <summary>The commanded thrust direction, CCI, at a position and a plan time.</summary>
     public double3 Direction(double3 position, double planTime)
+        => Direction(position, planTime, StageAtTime(planTime));
+
+    public double3 Direction(double3 position, double planTime, int stage)
     {
-        Attitude(planTime, out double pitch, out double azimuth);
+        double3 dir = SteerLocal(planTime, stage);
         double3 up = double3.Normalize(position);
         double3 east = double3.Cross(new double3(0, 0, 1), up);
         east = east.Length() > 1e-9 ? double3.Normalize(east) : new double3(1, 0, 0);
         double3 north = double3.Cross(up, east);
-        return Math.Sin(pitch) * up + Math.Cos(pitch) * (Math.Cos(azimuth) * north + Math.Sin(azimuth) * east);
+        return dir.X * north + dir.Y * east + dir.Z * up;
+    }
+
+    private double3 SteerLocal(double planTime, int stage)
+    {
+        Interpolate(planTime, stage, out int lo, out int hi, out double f);
+        double3 from = _steering[lo], to = _steering[hi];
+        if (f <= 0.0)
+            return from;
+        if (f >= 1.0)
+            return to;
+
+        // An azimuth sweep near vertical can take a longer arc than the angle between the commands.
+        double cos = Math.Clamp(double3.Dot(from, to), -1.0, 1.0);
+        double3 tangent = to - cos * from;
+        double sin = tangent.Length();
+        if (sin <= 1e-12)
+        {
+            if (cos >= 0.0)
+                return from;
+            tangent = double3.Cross(from, Math.Abs(from.Z) < 0.9 ? double3.UnitZ : double3.UnitX);
+        }
+        double angle = f * Math.Atan2(sin, cos);
+        return Math.Cos(angle) * from + Math.Sin(angle) * double3.Normalize(tangent);
     }
 }
 
@@ -358,13 +359,25 @@ public sealed class BoosterTrackView
     public double[] AltitudeKm { get; init; } = [];
     public double[] DownrangeKm { get; init; } = [];
     public BoosterReturnMode Mode => Track.Mode;
+    public string SiteKey { get; init; } = "";
+    public string SiteLabel { get; init; } = "";
+    public double SiteDownrangeKm { get; init; } = double.NaN;
 
     /// <summary>The track, its points turned about the spin axis by <paramref name="turn"/> (radians) into the frame the plan is published in, with altitude and downrange from <paramref name="pad"/>, the unit direction of the pad at lift-off.</summary>
-    public static BoosterTrackView From(uint rootId, string name, BoosterReturnTrack track, double turn, double3 pad, double bodyRadius)
+    public static BoosterTrackView From(uint rootId, string name, BoosterReturnTrack track, double turn, double3 pad, double bodyRadius,
+                                       string siteKey, string siteLabel, double[] selectedSite)
     {
-        if (!track.Ok)
-            return new BoosterTrackView { RootId = rootId, Name = name, Track = track };
         double c = Math.Cos(turn), s = Math.Sin(turn);
+        double[] site = track.Mode == BoosterReturnMode.OptimalReturn && track.Ok ? track.Impact : selectedSite;
+        double siteKm = double.NaN;
+        if (site is { Length: 3 })
+        {
+            var p = new double3(c * site[0] - s * site[1], s * site[0] + c * site[1], site[2]);
+            siteKm = bodyRadius * Math.Acos(Math.Clamp(double3.Dot(double3.NormalizeOrZero(p), pad), -1.0, 1.0)) / 1000.0;
+        }
+        if (!track.Ok)
+            return new BoosterTrackView { RootId = rootId, Name = name, Track = track, SiteKey = siteKey,
+                SiteLabel = siteLabel, SiteDownrangeKm = siteKm };
         double[] g = (double[])track.Ground.Clone();
         for (int i = 0; i + 2 < g.Length; i += 3)
         {
@@ -390,6 +403,9 @@ public sealed class BoosterTrackView
             Track = track with { Ground = g, Impact = impact },
             AltitudeKm = alt,
             DownrangeKm = down,
+            SiteKey = siteKey,
+            SiteLabel = siteLabel,
+            SiteDownrangeKm = siteKm,
         };
     }
 }
@@ -455,7 +471,7 @@ public sealed class AscentPlan
     public double QAlphaMax { get; init; }
     public double InsertionAltKm { get; init; }
 
-    /// <summary>The throttle floor the plan was solved to, percent, and how many planned stages have solid motors burning in them (#73).</summary>
+    /// <summary>The lowest nominal throttle floor across the planned stages before applying any acceleration cap, in percent.</summary>
     public double ThrottleMinPct { get; init; }
     /// <summary>The floor as the LAUNCH page asked for it, before the engines' own minimum and the 99 % cap.</summary>
     public double ThrottleMinRequestedPct { get; init; }
@@ -467,6 +483,8 @@ public sealed class AscentPlan
     public double PeakQKpa => Solution is { Nodes: > 0 } s ? s.DynamicPressure.Max() / 1000.0 : 0.0;
     public bool OverQCeiling => PeakQKpa >= QCeilingKpa;
     public int SolidStages { get; init; }
+    public bool StartsWithSolid { get; init; }
+    public bool PlansPadRoll { get; init; }
     /// <summary>A core that would have run dry before its boosters is planned throttled down to outlast them (#32).</summary>
     public bool CoreThrottledDown { get; init; }
     /// <summary>One line per planned stage, and what was decided about the solids: for the log and the tests.</summary>
@@ -523,7 +541,7 @@ public sealed class AscentPlanJob : IDisposable
     private readonly Func<AscentProblem, AscentSolution, bool[]> _toHold;
     private readonly int _available, _initial;
     private readonly double _qMax, _qCeiling;
-    private readonly Func<AscentSolution, int, double, string[], double, ThrottledKept, AscentPlan> _publish;
+    private readonly Func<AscentSolution, AscentProblem, double, string[], double, ThrottledKept, AscentPlan> _publish;
     private readonly object _gate = new();
     private string _progress = "starting";
     private string _retry = "";
@@ -536,10 +554,10 @@ public sealed class AscentPlanJob : IDisposable
     /// <param name="initial">Stages to try first.</param>
     /// <param name="qMax">The max-q asked for, Pa.</param>
     /// <param name="publish">Wraps the chosen solution, its stage count, the max-q it was planned to, the attempt notes, the wall time and the stages it throttles against a held solve that did not converge (null for none) in a plan; run on the worker, so it too must touch nothing of the game.</param>
-    /// <param name="toHold">From a converged problem and its solution, the stages to solve again held at full thrust, or null for none. Run on the worker.</param>
+    /// <param name="toHold">From the problem and its trajectory, the stages to solve again held at full thrust, or null for none. Run on the worker.</param>
     /// <param name="qCeiling">The ceiling on a retry's max-q, Pa. Positive infinity for none.</param>
     public AscentPlanJob(Func<int, double, bool[], AscentProblem> build, int available, int initial, double qMax,
-                         Func<AscentSolution, int, double, string[], double, ThrottledKept, AscentPlan> publish,
+                         Func<AscentSolution, AscentProblem, double, string[], double, ThrottledKept, AscentPlan> publish,
                          Func<AscentProblem, AscentSolution, bool[]> toHold = null,
                          double qCeiling = double.PositiveInfinity)
     {
@@ -668,6 +686,7 @@ public sealed class AscentPlanJob : IDisposable
                                      && (best.Nodes == 0 || TerminalMiss(sol) < TerminalMiss(best))))
                 {
                     best = sol;
+                    bestProblem = problem;
                     bestK = stages;
                     bestQ = qMax;
                 }
@@ -684,29 +703,35 @@ public sealed class AscentPlanJob : IDisposable
                 break;
             }
 
-            if (best != null && best.Usable && _toHold != null && !_cts.IsCancellationRequested)
+            // The held throttle can also give a rate-constrained solid launch a feasible trajectory.
+            if (best != null && (best.Usable || (bestProblem?.PadRoll != null && best.Nodes > 0))
+                && _toHold != null && !_cts.IsCancellationRequested)
             {
                 bool[] hold = _toHold(bestProblem, best);
                 if (hold != null && Array.IndexOf(hold, true) >= 0)
                 {
                     string which = string.Join(", ", Enumerable.Range(0, hold.Length).Where(i => hold[i]).Select(i => (i + 1).ToString()));
                     lock (_gate)
-                        _retry = $"Converged, but it throttles stage {which}, which is flown at full thrust after the hand-over: planning it held at full thrust.";
-                    AscentSolution held = SolveOne(_build(bestK, bestQ, hold), $"stage {which} held at full thrust", best);
+                        _retry = $"Stage {which} is flown at full thrust after the hand-over: planning it held at full thrust.";
+                    AscentProblem heldProblem = _build(bestK, bestQ, hold);
+                    AscentSolution held = SolveOne(heldProblem, $"stage {which} held at full thrust", best);
                     lock (_gate)
                         _notes.Add($"{bestK} of {_available} stages at {bestQ / 1000.0:F0} kPa, stage {which} held at full thrust: {held.Message}"
                                 + (held.Nodes > 0 ? $", {held.FinalMass / 1000.0:F2} t to orbit" : "")
-                                + (held.Usable ? "" : "; the throttled plan is kept"));
+                                + (!held.Usable && best.Usable ? "; the throttled plan is kept" : ""));
                     if (held.Usable)
+                    {
                         best = held;
-                    else if (held.Status != AscentStatus.Cancelled)
+                        bestProblem = heldProblem;
+                    }
+                    else if (best.Usable && held.Status != AscentStatus.Cancelled)
                         // The held solve starts from this plan, so until it accepts a step its mass is this plan's own.
                         kept = new ThrottledKept(which, held.Nodes > 0 && held.Accepted > 0 && held.FinalMass < best.FinalMass ? held.FinalMass : double.NaN);
                 }
             }
 
             if (best != null && !_cts.IsCancellationRequested)
-                plan = _publish(best, bestK, bestQ, Notes, ElapsedSeconds, kept);
+                plan = _publish(best, bestProblem, bestQ, Notes, ElapsedSeconds, kept);
         }
         catch (Exception e)
         {

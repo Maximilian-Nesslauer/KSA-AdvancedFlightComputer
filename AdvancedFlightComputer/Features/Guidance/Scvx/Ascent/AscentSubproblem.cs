@@ -128,12 +128,32 @@ internal sealed class AscentSubproblem
         // ---- lift-off: x_1 = x_0, and u_1 has no component across straight up.
         for (int i = 0; i < NX; i++)
             eq.Add(eq.NewRow(c.X0[i]), IX(0, i), 1.0);
-        Perpendiculars(c.LiftoffDir, out double[] p1, out double[] p2);
-        int r1 = eq.NewRow(0.0), r2 = eq.NewRow(0.0);
-        for (int j = 0; j < NU; j++)
+        var verticalThrottle = new double[c.VerticalDirections.Length];
+        for (int k = 0; k < c.VerticalDirections.Length; k++)
         {
-            eq.Add(r1, IU(0, j), p1[j]);
-            eq.Add(r2, IU(0, j), p2[j]);
+            Perpendiculars(c.VerticalDirections[k], out double[] p1, out double[] p2);
+            int r1 = eq.NewRow(0.0), r2 = eq.NewRow(0.0);
+            for (int j = 0; j < NU; j++)
+            {
+                eq.Add(r1, IU(k, j), p1[j]);
+                eq.Add(r2, IU(k, j), p2[j]);
+            }
+            verticalThrottle[k] = AscentCase.Norm3(ubar.AsSpan(k * NU, NU));
+        }
+
+        if (c.PadTurnStep > 0.0)
+        {
+            for (int k = 0; k < c.Ends[0]; k++)
+            {
+                soc.NewRow(c.PadTurnStep);
+                for (int j = 0; j < NU; j++)
+                {
+                    int r = soc.NewRow(0.0);
+                    soc.Add(r, IU(k, j), 1.0);
+                    soc.Add(r, IU(k + 1, j), -1.0);
+                }
+                socDims.Add(4);
+            }
         }
 
         // ---- collocation, with virtual control; staging links between the blocks.
@@ -234,25 +254,38 @@ internal sealed class AscentSubproblem
         }
 
         // ---- per-node: throttle floor (tangent halfspace), mass floor, ground (tangent halfspace).
-        // The lift-off rows pin u_1 straight up, so its floor and its trust box are taken about straight up too (LiftoffReference), not about the reference's own direction: see there.
-        double[] u0Ref = LiftoffReference(c, ubar);
+        // The thrust floor and trust box must use the same vertical direction as the equality rows.
         for (int k = 0; k < n; k++)
         {
             double ux = ubar[k * NU], uy = ubar[k * NU + 1], uz = ubar[k * NU + 2];
-            if (k == 0)
+            if (k < c.VerticalDirections.Length)
             {
-                ux = u0Ref[0]; uy = u0Ref[1]; uz = u0Ref[2];
+                ux = verticalThrottle[k] * c.VerticalDirections[k][0];
+                uy = verticalThrottle[k] * c.VerticalDirections[k][1];
+                uz = verticalThrottle[k] * c.VerticalDirections[k][2];
             }
             double un = Math.Sqrt(ux * ux + uy * uy + uz * uz);
-            double floor = c.ThrottleMin[c.NodeStage[k]];
-            int row = ineq.NewRow(floorPerMass[k] > 0.0 ? 0.0 : -floor);
-            if (floorPerMass[k] > 0.0)
+            int stage = c.NodeStage[k];
+            double floor = c.ThrottleMin[stage], physicalFloor = c.PhysicalThrottleMin[stage];
+            bool scalesWithMass = floorPerMass[k] > 0.0 && floor > physicalFloor;
+            int row = ineq.NewRow(scalesWithMass ? 0.0 : -Math.Max(floorPerMass[k] > 0.0 ? 0.0 : floor, physicalFloor));
+            if (scalesWithMass)
                 ineq.Add(row, IX(k, AscentDynamics.IM), floor * floorPerMass[k]);
             if (un > 1e-12)
             {
                 ineq.Add(row, IU(k, 0), -ux / un);
                 ineq.Add(row, IU(k, 1), -uy / un);
                 ineq.Add(row, IU(k, 2), -uz / un);
+            }
+            if (scalesWithMass && physicalFloor > 0.0)
+            {
+                row = ineq.NewRow(-physicalFloor);
+                if (un > 1e-12)
+                {
+                    ineq.Add(row, IU(k, 0), -ux / un);
+                    ineq.Add(row, IU(k, 1), -uy / un);
+                    ineq.Add(row, IU(k, 2), -uz / un);
+                }
             }
 
             row = ineq.NewRow(-c.MFloor);
@@ -408,7 +441,9 @@ internal sealed class AscentSubproblem
             }
             for (int j = 0; j < NU; j++)
             {
-                double ub = k == 0 ? u0Ref[j] : ubar[k * NU + j];
+                double ub = k < c.VerticalDirections.Length
+                    ? verticalThrottle[k] * c.VerticalDirections[k][j]
+                    : ubar[k * NU + j];
                 ineq.Add(ineq.NewRow(ub + tr), IU(k, j), 1.0);
                 ineq.Add(ineq.NewRow(-ub + tr), IU(k, j), -1.0);
             }
@@ -552,17 +587,6 @@ internal sealed class AscentSubproblem
             x[_oSig..(_oSig + c.S)], x[_oTerm..(_oTerm + 5)], x[_oSq..(_oSq + _nA)], x[_oSqa..(_oSqa + _nA)], x[_oSpro..(_oSpro + _nA)],
             x[_oSg..(_oSg + limited.Length)], res.Iterations, info.TotalMs, _turnFree ? x[_oPhi] : c.PlaneTurn0,
             x[_oDR..(_oDR + _nR)], x[_oSRec..(_oSRec + _nNeed)]);
-    }
-
-    /// <summary>
-    /// The lift-off thrust the floor and the trust box are taken about: the reference's throttle, turned straight up.
-    ///
-    /// THE LIFT-OFF ROWS PIN u_1 STRAIGHT UP, SO NOTHING ELSE MAY ASK FOR A u_1 THAT IS NOT. The seed's thrust is projected into the target plane (AscentSeed.Direction, as launch3dof.py's _tdir), so off the plane its u_1 leans away from straight up by the pad's angle to the plane. Taken about that leaning u_1, the box |u_1 - u_bar_1| &lt;= tr and the floor u_bar_hat . u_1 &gt;= floor both rule out every straight-up u_1 once the lean is more than a few degrees: about 6 deg for the box at the first iteration's tr of 0.1, and acos(floor) for the floor. The first subproblem was infeasible, and so was every retry, since each one only shrank the box (#90). Turned straight up at its own throttle, the reference is itself a u_1 the problem allows. From the second iteration on u_bar_1 is straight up already, so this changes nothing there, nor for a pad in the plane.
-    /// </summary>
-    private static double[] LiftoffReference(AscentCase c, double[] ubar)
-    {
-        double mag = Math.Sqrt(ubar[0] * ubar[0] + ubar[1] * ubar[1] + ubar[2] * ubar[2]);
-        return [mag * c.LiftoffDir[0], mag * c.LiftoffDir[1], mag * c.LiftoffDir[2]];
     }
 
     /// <summary>Two unit vectors perpendicular to d and to each other.</summary>

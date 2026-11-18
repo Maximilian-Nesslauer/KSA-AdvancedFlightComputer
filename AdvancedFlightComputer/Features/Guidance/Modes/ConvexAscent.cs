@@ -366,9 +366,8 @@ public static partial class GuidanceWindow
             return false;
         }
         float ambient = vehicle.PhysicsEnvironment.AtmosphericPressure;
-        performance.RecomputeForFlight(ambient);
         var stageParts = new Dictionary<UpfgStage, HashSet<Part>>();
-        UpfgVehicle model = KsaVehicleAdapter.Build(vehicle, ambient, grid, stageParts);
+        UpfgVehicle model = StageThrottleLimits.BuildForConvex(vehicle, ambient, grid, stageParts);
         if (model.Stages.Count == 0)
         {
             error = "NO STAGE WITH THRUST AND PROPELLANT";
@@ -376,8 +375,8 @@ public static partial class GuidanceWindow
         }
 
         // The stages. Each of the drain model's phases is one, with its solid motors' burns sampled from the game's own model and added on outside the throttle (#73), and a core that would run dry before its boosters throttled down to outlast them where it can (#32). Stage 0 starts at the LIVE mass, as UPFG reconciles it; whatever the model drops between one burnout and the next ignition is the jettison. The booster reserve comes off the first liquid load, as the ascent itself will fly it.
-        // The floor on the LAUNCH page, but never under what the engines can throttle to, and never at 100 %, which would freeze the thrust direction. A stage of solids alone, or one whose liquids are held at full thrust, keeps the script's 99 %.
-        double floor = Math.Clamp(Math.Max(_s.ConvexThrottleMinPct / 100.0, vehicle.GetMinThrottle()), 0.01, FullThrottleFloor);
+        // Each phase raises the requested floor to the minimum its liquid rockets can follow.
+        double floor = Math.Clamp(_s.ConvexThrottleMinPct / 100.0, 0.01, FullThrottleFloor);
         double m0 = vehicle.TotalMass;
         double dragArea = aero.ReferenceArea;
         // The acceleration limit of the stack on the pad goes to every stage that can hold it. The plan is solved once and flies its own throttle, so an upper stage on a smaller stack is flown under the pad limit even where stock would let it push harder (see EffectiveAccelLimitG).
@@ -437,6 +436,8 @@ public static partial class GuidanceWindow
         double3 v = orbit.StateVectors.VelocityCci;
         double3 spin = new double3(0, 0, omega);
         double3 up = double3.Normalize(r);
+        bool startsWithSolid = allStages[0] is { IsPinned: true, Solid: not null };
+        bool plansPadRoll = startsWithSolid && _s.ForceRoll && IsPadAscent(r, v, parent);
         bool atRest = (v - double3.Cross(spin, r)).Length() < 10.0;
         if (atRest)
             v = double3.Cross(spin, r) + 10.0 * up;
@@ -496,12 +497,13 @@ public static partial class GuidanceWindow
         // OPTIMAL RETURN (a drone ship): no site going in. The booster flies no boostback, so it keeps only its landing burn, and it lands where its coast from the plan's separation comes down (BoosterReturn). Its site here only gives the surface the coast ends at.
         // EVERY BOOSTER GETS A RETURN PATH for the pictures (AscentPlan.BoosterTracks): to its site, to its drone ship's point, or, expendable, its fall.
         var planned = new List<(AscentRecovery Recovery, uint RootId)>();
-        var tracks = new List<(AscentRecovery Recovery, uint RootId, string Name, BoosterReturnMode Mode)>();
+        var tracks = new List<(AscentRecovery Recovery, uint RootId, string Name, BoosterReturnMode Mode, string SiteKey, string SiteLabel)>();
         var recoveryNotes = new List<string>();
         string recoverySite = RecoverySitesKey();
         double3 padDir = double3.Normalize(new double3(r0[0], r0[1], r0[2]));
-        foreach (ReturnableStage booster in _s.ReturnableStages)
+        for (int boosterIndex = 0; boosterIndex < _s.ReturnableStages.Count; boosterIndex++)
         {
+            ReturnableStage booster = _s.ReturnableStages[boosterIndex];
             int boosterStage = BoosterPlanStage(vehicle, booster, model, stageParts, allStages, out double flowShare, out string note);
 
             if (boosterStage < 0 || aero.Table == null || aero.Atmosphere == null)
@@ -566,7 +568,8 @@ public static partial class GuidanceWindow
                 // An expendable booster falls empty.
                 LandingFactor = booster.ComesHome ? 1.3 : 0.0,
             };
-            tracks.Add((rec, booster.RootId, booster.Name, booster.Mode));
+            tracks.Add((rec, booster.RootId, booster.Name, booster.Mode, RecoverySiteKey(booster),
+                ReturnableStageIdText(_s.ReturnableStages, boosterIndex)));
             if (!booster.ComesHome)
                 continue;
             if (!AscentPhasePlan.CanKeepReserve(allStages, boosterStage))
@@ -607,6 +610,7 @@ public static partial class GuidanceWindow
                 PlaneNormal = n0,
                 QMax = qLimit,
                 QAlphaMax = qAlphaMax,
+                PadRoll = plansPadRoll ? new AscentProblem.RollProgram(PadClearM, RollProgramMaxS, MaxSlewDegS) : null,
                 PlaneTurnMin = turnMin,
                 PlaneTurnMax = turnMax,
                 // Only while a booster's stage is a lower stage: a stack planned on fewer stages carries it to the end. Sorted by stage, so what is kept is a head of the list.
@@ -632,8 +636,10 @@ public static partial class GuidanceWindow
         double qMaxKpa = qMax / 1000.0;
         double insAltKm = (rIns - bodyRadius) / 1000.0;
 
-        AscentPlan Publish(AscentSolution solved, int stages, double qUsed, string[] notes, double wall, AscentPlanJob.ThrottledKept kept)
+        AscentPlan Publish(AscentSolution solved, AscentProblem winningProblem, double qUsed, string[] notes, double wall, AscentPlanJob.ThrottledKept kept)
         {
+            AscentStage[] plannedStages = winningProblem.Stages;
+            int stages = plannedStages.Length;
             // A chosen launch time lifts off delay later, from where the spin has carried the pad: the same plan turned by omega delay, which is -PlaneTurn, and so back in the target's own plane. A chosen LAN flies now, in the plane turned by PlaneTurn.
             double delay = freeTime && solved.Nodes > 0 ? -solved.PlaneTurn / omega : 0.0;
             AscentSolution sol = freeTime ? solved.RotatedAboutSpin(-solved.PlaneTurn) : solved;
@@ -646,7 +652,7 @@ public static partial class GuidanceWindow
             {
                 double3 pad = double3.Normalize(new double3(sol.Position[0], sol.Position[1], sol.Position[2]));
                 double trackTurn = freeTime ? -solved.PlaneTurn : 0.0;
-                foreach ((AscentRecovery rec, uint rootId, string name, BoosterReturnMode mode) in tracks)
+                foreach (var (rec, rootId, name, mode, siteKey, siteLabel) in tracks)
                 {
                     BoosterReturnTrack track;
                     try
@@ -657,7 +663,8 @@ public static partial class GuidanceWindow
                     {
                         track = new BoosterReturnTrack(mode, false, "threw: " + e.Message, [], [], [], double.NaN, double.NaN);
                     }
-                    boosterTracks.Add(BoosterTrackView.From(rootId, name, track, trackTurn, pad, bodyRadius));
+                    boosterTracks.Add(BoosterTrackView.From(rootId, name, track, trackTurn, pad, bodyRadius,
+                        siteKey, siteLabel, mode == BoosterReturnMode.Site ? rec.SiteCci : null));
                 }
             }
 
@@ -685,13 +692,18 @@ public static partial class GuidanceWindow
             ApKm = apKm,
             IncDeg = incDeg,
             LanDeg = lanPlanned,
-            ThrottleMinPct = floor * 100.0,
+            ThrottleMinPct = plannedStages.Min(st => Math.Max(st.ThrottleMin, st.PhysicalThrottleMin)) * 100.0,
             ThrottleMinRequestedPct = throttleRequestedPct,
             GLimitG = userGLimit,
             QCeilingKpa = qCeiling / 1000.0,
             SolidStages = allStages.Take(stages).Count(st => st.Solid != null),
+            StartsWithSolid = startsWithSolid,
+            PlansPadRoll = plansPadRoll,
             CoreThrottledDown = stagePlan.CoreThrottledDown,
-            StageLines = stagePlan.Describe.Take(stages).Select((d, i) => d + (allStages[i].IsPinned ? $", PINNED TO {allStages[i].FixedBurnTime:F1} s" : "")).ToArray(),
+            StageLines = stagePlan.Describe.Take(stages).Select((d, i) => d
+                + (plannedStages[i].HasLiquid ? $", MIN {plannedStages[i].ThrottleMin:P0} OF AVAILABLE"
+                    + (plannedStages[i].PhysicalThrottleMin > 0.0 ? $", ENGINE MIN {plannedStages[i].PhysicalThrottleMin:P0}" : "") : "")
+                + (plannedStages[i].IsPinned ? $", PINNED TO {plannedStages[i].FixedBurnTime:F1} s" : "")).ToArray(),
             StageNotes = stagePlan.Notes.ToArray(),
             QMaxKpa = qUsed / 1000.0,
             QMaxRequestedKpa = qMaxKpa,
@@ -1044,6 +1056,12 @@ public static partial class GuidanceWindow
             why = "LIMITS CHANGED";
             return false;
         }
+        if (p.StartsWithSolid && p.PlansPadRoll != (_s.ForceRoll
+            && IsPadAscent(orbit.StateVectors.PositionCci, orbit.StateVectors.VelocityCci, parent)))
+        {
+            why = "PAD ROLL PROGRAM CHANGED";
+            return false;
+        }
         if (p.RecoverySite != RecoverySitesKey())
         {
             why = "BOOSTER LANDING TARGET CHANGED SINCE PLAN";
@@ -1072,28 +1090,54 @@ public static partial class GuidanceWindow
     /// <summary>
     /// The open-loop phase's command: the plan's attitude where the vehicle is on the plan, and the rate that command is turning at. See <see cref="ConvexProfileDirection"/> for where it is on the plan; the rate is the command's own, differenced step to step, so it includes the local horizon turning under the vehicle as well as the programme itself.
     /// </summary>
-    private static double3 ConvexProfileCommand(double3 r, double3 v, double mass, IParentBody parent, double stepDt,
+    private static double3 ConvexProfileCommand(Vehicle vehicle, double3 r, double3 v, IParentBody parent, double stepDt,
                                                 out double3 rate)
     {
-        double3 want = ConvexProfileDirection(r, v, mass, parent);
+        double3 want = ConvexProfileDirection(vehicle, r, v, parent);
         rate = DifferencedRate(ref _s.ConvexLastWant, want, stepDt);
         return want;
     }
 
     /// <summary>
-    /// The plan's attitude where the vehicle is on the plan, moving the plan on first. Where it is on the plan is a plan time, carried from step to step and moved on by the vehicle's air speed within the stage its mass says it is burning (see ConvexAscentProfile.Advance): pitch against speed while the vehicle is gaining speed it has never had in that stage, the plan's own clock while it is not, and back in step with the plan at each separation. The clock runs on SIM time since the last step, not the slew's clamped step, so a warped step moves the plan as far as it moved the vehicle.
+    /// A planned pad roll follows elapsed solid burn time in the first phase. After that, the profile advances by air speed within each mass band so a separation can bring it back in step with the vehicle.
     /// </summary>
-    private static double3 ConvexProfileDirection(double3 r, double3 v, double mass, IParentBody parent)
+    private static double3 ConvexProfileDirection(Vehicle vehicle, double3 r, double3 v, IParentBody parent)
     {
-        ConvexAscentProfile profile = _s.FlyingPlan?.Profile;
+        AscentPlan plan = _s.FlyingPlan;
+        ConvexAscentProfile profile = plan?.Profile;
         if (profile == null)
             return double3.Normalize(r);
         double now = SimNow();
         double dt = double.IsFinite(_s.ConvexLastTime) ? Math.Max(0.0, now - _s.ConvexLastTime) : 0.0;
         _s.ConvexLastTime = now;
-        _s.ConvexPlanTime = profile.Advance(_s.ConvexPlanTime, AirSpeed(r, v, parent), mass, dt,
-            ref _s.ConvexStage, ref _s.ConvexStageSpeed, ref _s.ConvexFastest);
-        return profile.Direction(r, _s.ConvexPlanTime);
+        double mass = vehicle.TotalMass;
+        if (plan.PlansPadRoll && _s.ConvexStage == 0 && profile.StageOfMass(mass) == 0)
+        {
+            // A solid grain burns during the vertical flight, but not while guidance waits for ignition.
+            if (!double.IsFinite(_s.ConvexSolidIgnitionTime) && HasBurningSolid(vehicle))
+                _s.ConvexSolidIgnitionTime = now - dt;
+            if (double.IsFinite(_s.ConvexSolidIgnitionTime))
+                _s.ConvexPlanTime = Math.Clamp(now - _s.ConvexSolidIgnitionTime, 0.0, profile.StageEndTime(0));
+        }
+        else
+        {
+            _s.ConvexPlanTime = profile.Advance(_s.ConvexPlanTime, AirSpeed(r, v, parent), mass, dt,
+                ref _s.ConvexStage, ref _s.ConvexStageSpeed, ref _s.ConvexFastest);
+        }
+        return profile.Direction(r, _s.ConvexPlanTime, _s.ConvexStage);
+    }
+
+    private static bool HasBurningSolid(Vehicle vehicle)
+    {
+        ReadOnlySpan<RocketState> states = RocketStates.Of(vehicle.Parts);
+        if (states.IsEmpty)
+            return false;
+        foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
+            foreach (Rocket rocket in engine.Rockets)
+                if (rocket is SolidRocket && (uint)rocket.StatesIdx < (uint)states.Length
+                    && states[rocket.StatesIdx].Throttle > 0f)
+                    return true;
+        return false;
     }
 
     /// <summary>The rotation rate that takes <paramref name="last"/> to <paramref name="want"/> in one step, rad/s about their common normal; and <paramref name="last"/> moved on to <paramref name="want"/>.</summary>
@@ -1130,10 +1174,10 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>The ClosedLoop command while the hand-over blend runs: the profile's attitude turned toward UPFG's by the blend weight, about their common normal.</summary>
-    private static double3 ConvexBlendCommand(double3 r, double3 v, double mass, IParentBody parent, double3 upfgDir,
+    private static double3 ConvexBlendCommand(Vehicle vehicle, double3 r, double3 v, IParentBody parent, double3 upfgDir,
                                               double weight, double stepDt, out double3 rate)
     {
-        double3 from = double3.Normalize(ConvexProfileDirection(r, v, mass, parent));
+        double3 from = double3.Normalize(ConvexProfileDirection(vehicle, r, v, parent));
         double3 to = double3.Normalize(upfgDir);
         double3 axis = double3.Cross(from, to);
         double3 want = axis.Length() > 1e-12
@@ -1155,7 +1199,7 @@ public static partial class GuidanceWindow
         ConvexAscentProfile profile = _s.FlyingPlan?.Profile;
         if (profile == null)
             return 1f;
-        double fraction = profile.Throttle(_s.ConvexPlanTime);
+        double fraction = profile.Throttle(_s.ConvexPlanTime, _s.ConvexStage);
         if (!(fraction < 0.995))
             return 1f;
         double altitude = vehicle.Orbit.StateVectors.PositionCci.Length() - parent.MeanRadius;
@@ -1191,7 +1235,9 @@ public static partial class GuidanceWindow
         }
         // HandoverAltKm is UPFG FROM, held under three quarters of the target periapsis: a target orbit below UPFG FROM, as on the Moon, would be reached without the altitude ever being crossed.
         double handoverKm = _s.HandoverAltKm;
-        if (alt >= handoverKm * 1000.0 && _s.Upfg.Converged)
+        // UPFG can throttle the core without slowing the solids, so preserve the planned mass schedule until the first phase ends.
+        bool finishingSolidLaunch = _s.FlyingPlan.PlansPadRoll && profile.Stages > 1 && _s.ConvexStage == 0;
+        if (alt >= handoverKm * 1000.0 && _s.Upfg.Converged && !finishingSolidLaunch)
         {
             why = AscentHandover.CappedByPe(_s.ConvexHandoverAltKm, _s.PeKm, _s.ApKm)
                 ? $"ABOVE {handoverKm:F1} km, 75 % OF PE"

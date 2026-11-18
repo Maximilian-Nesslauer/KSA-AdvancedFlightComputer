@@ -191,7 +191,7 @@ internal static class RcsPage
         Orbit? now = p.Vehicle.Orbit;
         Orbit? after = OrbitToolsPanel.OrbitAfter(p.Node);
         return now == null || after == null ? ""
-            : PageText.BurnGoal(now.PeriapsisAltitude / 1000.0, now.ApoapsisAltitude / 1000.0, after.PeriapsisAltitude / 1000.0, after.ApoapsisAltitude / 1000.0, after.Eccentricity < 1.0);
+            : PageText.BurnGoal(now.PeriapsisAltitude / 1000.0, now.ApoapsisAltitude / 1000.0, after.PeriapsisAltitude / 1000.0, after.ApoapsisAltitude / 1000.0, after.IsBound());
     }
 
     private static Picked ReadPicked(Vehicle vehicle, Burn node, bool isNext, RcsExecution? exec)
@@ -337,6 +337,18 @@ internal static class RcsPage
         }
         int picked = ConsoleUi.ChoiceTable("AfcRcsBurns", BurnList.Heads, cells, active, held, default, PageText.BurnListTip, default,
             CollectionsMarshal.AsSpan(_marks), CollectionsMarshal.AsSpan(_swatches));
+        double remaining = ProbePower.RemainingSeconds(vehicle);
+        for (int i = 0; i < _rows.Count; i++)
+        {
+            ListRow row = _rows[i];
+            double until = ReferenceEquals(row.Burn, next) && next != null ? ProbePower.UntilBurn(vehicle, next) : row.Seconds;
+            string milestone = row.Pass > 0 ? $"PASS {row.Pass}" : $"BURN {i + 1}";
+            string warning = PageText.ProbePowerWarning(remaining, until, milestone);
+            if (warning.Length == 0)
+                continue;
+            ConsoleUi.WarningWrapped(warning);
+            break;
+        }
         if (picked < 0 || _rows[picked].Burn is not Burn chosen)
             return;
         _focus = ReferenceEquals(chosen, next) ? null : chosen;

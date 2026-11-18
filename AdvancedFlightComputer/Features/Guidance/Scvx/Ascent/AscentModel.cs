@@ -104,11 +104,12 @@ public sealed class AscentStage
     /// <param name="liquidCarriesOver">The liquid engines keep burning the same load into the next stage.</param>
     /// <param name="seedThrottle">The liquid throttle the seed flies this stage at: below 1 for a core that has to outlast its boosters.</param>
     /// <param name="accelerationLimit">The highest thrust acceleration the plan may give this stage, m/s^2, as its thrust over its mass. Positive infinity for none. Only a stage of liquid engines alone can hold one, because solids follow their grain, not the throttle.</param>
+    /// <param name="physicalThrottleMin">The hardware floor as a fraction of full thrust, including where the acceleration limit binds.</param>
     public AscentStage(double thrust, double massFlow, double propellantMass, double jettisonMass,
                        double dragArea, double[]? pressureGrid = null, double[]? thrustAtPressure = null,
                        double throttleMin = double.NaN, AscentSolidBurn? solid = null,
                        double fixedBurnTime = double.NaN, bool liquidCarriesOver = false, double seedThrottle = 1.0,
-                       double accelerationLimit = double.PositiveInfinity)
+                       double accelerationLimit = double.PositiveInfinity, double physicalThrottleMin = 0.0)
     {
         bool liquid = thrust > 0.0 || massFlow > 0.0;
         if (liquid || solid == null)
@@ -140,6 +141,8 @@ public sealed class AscentStage
             throw new ArgumentOutOfRangeException(nameof(accelerationLimit), accelerationLimit, "The acceleration limit must be positive.");
         if (double.IsFinite(accelerationLimit) && (solid != null || !liquid))
             throw new ArgumentException("Only a stage of liquid engines alone can hold an acceleration limit.", nameof(accelerationLimit));
+        if (!(physicalThrottleMin >= 0.0 && physicalThrottleMin <= 1.0))
+            throw new ArgumentOutOfRangeException(nameof(physicalThrottleMin));
 
         Thrust = thrust;
         MassFlow = massFlow;
@@ -149,6 +152,7 @@ public sealed class AscentStage
         if (!double.IsNaN(throttleMin) && !(throttleMin > 0.0 && throttleMin <= 1.0))
             throw new ArgumentOutOfRangeException(nameof(throttleMin), throttleMin, "The throttle floor must be in (0, 1].");
         ThrottleMin = throttleMin;
+        PhysicalThrottleMin = physicalThrottleMin;
         Solid = solid;
         FixedBurnTime = fixedBurnTime;
         LiquidCarriesOver = liquidCarriesOver;
@@ -176,6 +180,7 @@ public sealed class AscentStage
     public double DragArea { get; }
     /// <summary>This stage's own throttle floor, or NaN for the problem's.</summary>
     public double ThrottleMin { get; }
+    public double PhysicalThrottleMin { get; }
     public double[]? PressureGrid { get; }
     public double[]? ThrustAtPressure { get; }
 
@@ -200,12 +205,12 @@ public sealed class AscentStage
     /// <summary>A copy with another jettison mass, propellant and carry-over: what the planner does to the last stage of a truncated stack.</summary>
     public AscentStage With(double propellantMass, double jettisonMass, bool liquidCarriesOver)
         => new(Thrust, MassFlow, propellantMass, jettisonMass, DragArea, PressureGrid, ThrustAtPressure,
-               ThrottleMin, Solid, FixedBurnTime, liquidCarriesOver, SeedThrottle, AccelerationLimit);
+               ThrottleMin, Solid, FixedBurnTime, liquidCarriesOver, SeedThrottle, AccelerationLimit, PhysicalThrottleMin);
 
     /// <summary>A copy with another throttle floor, a fraction of full thrust. The acceleration limit still scales it down where full thrust would pass the limit.</summary>
     public AscentStage WithThrottleMin(double throttleMin)
         => new(Thrust, MassFlow, PropellantMass, JettisonMass, DragArea, PressureGrid, ThrustAtPressure,
-               throttleMin, Solid, FixedBurnTime, LiquidCarriesOver, SeedThrottle, AccelerationLimit);
+               throttleMin, Solid, FixedBurnTime, LiquidCarriesOver, SeedThrottle, AccelerationLimit, PhysicalThrottleMin);
 
     /// <summary>Exhaust velocity at the reference thrust, m/s, solids at their mean over the stage - for the dV readout only.</summary>
     public double ExhaustVelocity
@@ -447,7 +452,7 @@ public sealed class AscentProblem
         Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
         Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
         TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-        PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, Settings = Settings,
+        PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, Settings = Settings,
         Recoveries = recoveries,
     };
 
@@ -469,7 +474,7 @@ public sealed class AscentProblem
             Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = stages,
             Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
             TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-            PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, Settings = Settings,
+            PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, Settings = Settings,
             Recoveries = Recoveries.Select(r => r.Stage == rec.Stage ? r.WithInitialReserve(reserveKg) : r).ToArray(),
         };
     }
@@ -480,13 +485,18 @@ public sealed class AscentProblem
         Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
         Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
         TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-        PlaneTurnMin = min, PlaneTurnMax = max, LiftoffDirection = LiftoffDirection, Settings = Settings, Recoveries = Recoveries,
+        PlaneTurnMin = min, PlaneTurnMax = max, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, Settings = Settings, Recoveries = Recoveries,
     };
 
     /// <summary>
     /// Straight up at lift-off: the first thrust is pinned parallel to this. Null takes the lift-off air-relative velocity, as the script does.
     /// </summary>
     public double[]? LiftoffDirection { get; init; }
+
+    /// <summary>The clearance height, roll timeout and steering rate of a solid launch with a pinned first burn.</summary>
+    public sealed record RollProgram(double ClearanceM, double MaxSeconds, double MaxTurnRateDegS = 5.0);
+
+    public RollProgram? PadRoll { get; init; }
 
     public AscentSettings Settings { get; init; } = new();
 
@@ -529,6 +539,11 @@ public sealed class AscentProblem
             return "the target orbit is not above the surface";
         if (!(QMax > 0.0) || !(QAlphaMax > 0.0))
             return "the structural limits must be positive";
+        if (PadRoll is { } roll && (!Stages[0].IsPinned || Stages[0].Solid == null
+            || !double.IsFinite(roll.ClearanceM) || !(roll.ClearanceM > 0.0)
+            || !double.IsFinite(roll.MaxSeconds) || !(roll.MaxSeconds > 0.0)
+            || !double.IsFinite(roll.MaxTurnRateDegS) || !(roll.MaxTurnRateDegS > 0.0)))
+            return "the pad roll program needs a fixed solid burn, clearance height, roll timeout and turn rate";
         if (!double.IsFinite(PlaneTurnMin) || !double.IsFinite(PlaneTurnMax) || PlaneTurnMin > PlaneTurnMax)
             return "the plane-turn bounds are not valid";
         for (int i = 0; i < Recoveries.Count; i++)

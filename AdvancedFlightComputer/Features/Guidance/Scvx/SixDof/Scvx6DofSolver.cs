@@ -422,7 +422,8 @@ public sealed class Scvx6DofSolver
         double sigma = _sub.SolutionSigma;
 
         // 3. Ratio test. Predicted reduction uses the subproblem's own defect proxy (the virtual control); actual reduction uses the true nonlinear defect at the new point.
-        double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * SumSquaresScaled(wv, _vcs);
+        double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * SumSquaresScaled(wv, _vcs)
+            + _sub.AccelerationSlackCost;
         (double jTrue, double defectNorm) = TrueCost(x, u, sigma,
                                                      out int defectChannel, out int defectNode);
 
@@ -512,7 +513,22 @@ public sealed class Scvx6DofSolver
             fk1.CopyTo(fk);
         }
 
-        return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq, worst);
+        return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq + AccelerationViolationCost(x, u), worst);
+    }
+
+    private double AccelerationViolationCost(double[] x, double[] u)
+    {
+        if (!_cfg.AccelLimitEnabled)
+            return 0.0;
+
+        double violation = 0.0;
+        for (int k = 0; k < _n; k++)
+        {
+            double thrust = u[k * NU + Dynamics6Dof.IT];
+            double mass = x[k * NX + Dynamics6Dof.IM];
+            violation += Math.Max(0.0, thrust - _cfg.AccelMax * mass);
+        }
+        return _cfg.AccelWeight * violation / _us[Dynamics6Dof.IT];
     }
 
     /// <summary>
@@ -565,11 +581,16 @@ public sealed class Scvx6DofSolver
     /// <param name="worstRaw">The offending defect in its OWN units, for the report.</param>
     public double WeightedDefect(ReadOnlySpan<double> tol, int commitIntervals, double farSlack,
                                  out int worstChannel, out int worstNode, out double worstRaw)
+        => WeightedDefect(_xbar, tol, commitIntervals, farSlack, out worstChannel, out worstNode, out worstRaw);
+
+    /// <summary>Check a candidate state against the current reference controls and burn duration.</summary>
+    public double WeightedDefect(ReadOnlySpan<double> state, ReadOnlySpan<double> tol, int commitIntervals,
+                                 double farSlack, out int worstChannel, out int worstNode, out double worstRaw)
     {
         worstChannel = -1;
         worstNode = -1;
         worstRaw = double.NaN;
-        if (_xbar.Length < _n * NX || _ubar.Length < _n * NU || tol.Length < NX)
+        if (state.Length < _n * NX || _ubar.Length < _n * NU || tol.Length < NX)
             return double.PositiveInfinity;
 
         int lastInterval = _n - 2;
@@ -582,10 +603,10 @@ public sealed class Scvx6DofSolver
         double half = 0.5 * _dtau * _sigBar;
         double worst = 0;
 
-        Dynamics6Dof.Eval(_xbar.AsSpan(0, NX), _ubar.AsSpan(0, NU), _dyn, fk);
+        Dynamics6Dof.Eval(state[..NX], _ubar.AsSpan(0, NU), _dyn, fk);
         for (int k = 0; k < _n - 1; k++)
         {
-            Dynamics6Dof.Eval(_xbar.AsSpan((k + 1) * NX, NX), _ubar.AsSpan((k + 1) * NU, NU), _dyn, fk1);
+            Dynamics6Dof.Eval(state.Slice((k + 1) * NX, NX), _ubar.AsSpan((k + 1) * NU, NU), _dyn, fk1);
 
             // Allowance is 1 across the commit window, then rises LINEARLY to slack at the last interval.
             // Linear in the ALLOWANCE rather than in its reciprocal, because the allowance is the half with a physical reading: "this interval may carry N times its tolerance".
@@ -594,11 +615,13 @@ public sealed class Scvx6DofSolver
 
             for (int i = 0; i < NX; i++)
             {
-                double d = _xbar[(k + 1) * NX + i] - _xbar[k * NX + i] - half * (fk[i] + fk1[i]);
+                double d = state[(k + 1) * NX + i] - state[k * NX + i] - half * (fk[i] + fk1[i]);
                 double t = tol[i];
                 if (!(t > 0.0))
                     continue;
                 double ratio = Math.Abs(d) / (t * allowance);
+                if (!double.IsFinite(ratio))
+                    ratio = double.PositiveInfinity;
                 if (ratio > worst)
                 {
                     worst = ratio;
@@ -610,6 +633,48 @@ public sealed class Scvx6DofSolver
             fk1.CopyTo(fk);
         }
         return worst;
+    }
+
+    /// <summary>Copy the reference with mass integrated from measured mass and the planned thrust.</summary>
+    public double[]? CopyReferenceWithMassBalance()
+    {
+        if (!_initialised)
+            return null;
+        double dt = _dtau * _sigBar;
+        double mass = _x0[Dynamics6Dof.IM];
+        if (!(dt > 0.0) || !double.IsFinite(dt) || !(mass > 0.0) || !double.IsFinite(mass))
+            return null;
+
+        double[] state = (double[])_xbar.Clone();
+        state[Dynamics6Dof.IM] = mass;
+        double thrust = _ubar[Dynamics6Dof.IT];
+        double flow = _dyn.MassFlowOffset + _dyn.Alpha * thrust;
+        double accelerationToleranceN = SubproblemEps * _us[Dynamics6Dof.IT];
+        if (!KeepsAccelerationAllowance(Dynamics6Dof.IM, thrust, mass, accelerationToleranceN))
+            return null;
+        for (int k = 1; k < _n; k++)
+        {
+            thrust = _ubar[k * NU + Dynamics6Dof.IT];
+            double nextFlow = _dyn.MassFlowOffset + _dyn.Alpha * thrust;
+            if (!(flow >= 0.0) || !(nextFlow >= 0.0))
+                return null;
+            mass -= 0.5 * dt * (flow + nextFlow);
+            int massIndex = k * NX + Dynamics6Dof.IM;
+            if (!(mass > 0.0) || !KeepsAccelerationAllowance(massIndex, thrust, mass, accelerationToleranceN))
+                return null;
+            state[massIndex] = mass;
+            flow = nextFlow;
+        }
+        return state;
+    }
+
+    private bool KeepsAccelerationAllowance(int massIndex, double thrust, double mass, double toleranceN)
+    {
+        if (!_cfg.AccelLimitEnabled)
+            return true;
+
+        double previousSlack = Math.Max(0.0, thrust - _cfg.AccelMax * _xbar[massIndex]);
+        return thrust - _cfg.AccelMax * mass <= previousSlack + toleranceN;
     }
 
     private double Fuel(double[] x)

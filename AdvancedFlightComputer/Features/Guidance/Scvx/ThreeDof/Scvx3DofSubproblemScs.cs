@@ -589,8 +589,11 @@ public sealed class Scvx3DofSubproblemScs
             for (int k = 0; k < _n - 1; k++)
             {
                 bool glide = k < _k;
-                AddA(row, glide ? _iSigG : _iSigB, -_cfg.AttitudeRateMax * (glide ? _dtauG : _dtauB));
-                if (_nSw > 0) AddA(row, _oSw + k, -1.0);
+                if (!glide || !_cfg.GlideAttitudeFixed)
+                {
+                    AddA(row, glide ? _iSigG : _iSigB, -_cfg.AttitudeRateMax * (glide ? _dtauG : _dtauB));
+                    if (_nSw > 0) AddA(row, _oSw + k, -1.0);
+                }
                 _b[row++] = 0.0;
                 for (int j = 0; j < 3; j++)
                 {

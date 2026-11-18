@@ -24,6 +24,10 @@ internal sealed class AscentCase
     // Canonical constants.
     public readonly double[] X0 = new double[NX];
     public readonly double[] LiftoffDir = new double[3];
+    public readonly double[][] VerticalDirections;
+    public readonly double PadVerticalTime;
+    public readonly bool PadRollFits = true;
+    public readonly double PadTurnStep;
     /// <summary>The target plane's normal at <see cref="PlaneTurn0"/>, the turn the solve starts from: what the seed flies into and kicks along.</summary>
     public readonly double[] Nhat = new double[3];
     /// <summary>The problem's own plane normal, unturned. <see cref="PlaneNormal"/> turns it.</summary>
@@ -38,6 +42,7 @@ internal sealed class AscentCase
     /// <summary>Canonical burn time of a stage whose duration is pinned, NaN where it is free.</summary>
     public readonly double[] SigFixed;
     public readonly double[] ThrottleMin;
+    public readonly double[] PhysicalThrottleMin;
     /// <summary>Each stage's thrust acceleration limit, canonical, positive infinity where it has none or where its full thrust cannot reach it.</summary>
     public readonly double[] AccC;
     /// <summary>The nodes of the stages with a finite <see cref="AccC"/>, in order.</summary>
@@ -128,8 +133,8 @@ internal sealed class AscentCase
         PlaneTurn0 = Math.Clamp(0.0, PlaneTurnMin, PlaneTurnMax);
         PlaneNormal(PlaneTurn0).CopyTo(Nhat, 0);
 
-        // Straight up: the script pins the first thrust along the lift-off AIR-RELATIVE velocity, not v0 itself, which on the pad is almost all co-rotation.
-        double[] up = p.LiftoffDirection ?? AirVelocity(X0);
+        // The pad roll follows the local vertical, which is also the usual direction of air-relative lift-off velocity.
+        double[] up = p.PadRoll != null ? X0[..3] : p.LiftoffDirection ?? AirVelocity(X0);
         double un = Norm3(up);
         for (int i = 0; i < 3; i++) LiftoffDir[i] = up[i] / un;
 
@@ -155,6 +160,7 @@ internal sealed class AscentCase
         SigMax = new double[S];
         SigFixed = new double[S];
         ThrottleMin = new double[S];
+        PhysicalThrottleMin = new double[S];
         SeedThrottle = new double[S];
         AccC = new double[S];
         for (int i = 0; i < S; i++)
@@ -164,7 +170,8 @@ internal sealed class AscentCase
             DryC[i] = i < S - 1 ? stg.JettisonMass / mu : 0.0;
             double full = stg.FullBurnTime;
             ThrottleMin[i] = double.IsNaN(stg.ThrottleMin) ? st.ThrottleMin : stg.ThrottleMin;
-            SeedThrottle[i] = Math.Max(stg.SeedThrottle, ThrottleMin[i]);
+            PhysicalThrottleMin[i] = stg.PhysicalThrottleMin;
+            SeedThrottle[i] = Math.Max(stg.SeedThrottle, Math.Max(ThrottleMin[i], PhysicalThrottleMin[i]));
             AccC[i] = stg.AccelerationLimit / Dyn.AU;
             SigFixed[i] = stg.IsPinned ? stg.FixedBurnTime / tu : double.NaN;
             if (stg.IsPinned)
@@ -286,6 +293,71 @@ internal sealed class AscentCase
 
         QMax = p.QMax;
         QAlphaMax = p.QAlphaMax;
+
+        int lastVertical = 0;
+        if (p.PadRoll is { } roll)
+        {
+            double dt = p.Stages[0].FixedBurnTime / (per - 1);
+            double clear = AscentSeed.TimeToClearPad(this, roll.ClearanceM);
+            double deadline = clear + roll.MaxSeconds;
+            PadRollFits = deadline <= p.Stages[0].FixedBurnTime;
+            if (PadRollFits)
+            {
+                // Include the first node at or after the deadline so interpolation stays vertical through the roll.
+                lastVertical = (int)Math.Min(Ends[0], Math.Ceiling(deadline / dt));
+                PadVerticalTime = lastVertical * dt / tu;
+                // The squared thrust difference includes four times the product of both throttles times the squared half-angle sine.
+                double turn = Math.Min(Math.PI, roll.MaxTurnRateDegS * (Math.PI / 180.0) * dt);
+                PadTurnStep = 2.0 * ThrottleMin[0] * Math.Sin(0.5 * turn);
+            }
+        }
+        VerticalDirections = new double[lastVertical + 1][];
+        VerticalDirections[0] = LiftoffDir;
+        for (int k = 1; k <= lastVertical; k++)
+        {
+            VerticalDirections[k] = new double[3];
+            PadVertical(k * PadVerticalTime / lastVertical, VerticalDirections[k]);
+        }
+    }
+
+    // The pad's zenith rotates in the inertial frame during the hold.
+    public void PadVertical(double t, Span<double> direction)
+    {
+        (double sin, double cos) = Math.SinCos(Dyn.OmegaC * t);
+        direction[0] = cos * LiftoffDir[0] - sin * LiftoffDir[1];
+        direction[1] = sin * LiftoffDir[0] + cos * LiftoffDir[1];
+        direction[2] = LiftoffDir[2];
+    }
+
+    public bool PadRollControlsMet(ReadOnlySpan<double> u)
+    {
+        if (Problem.PadRoll == null)
+            return true;
+        if (!PadRollFits || u.Length < N * NU)
+            return false;
+        const double tolerance = 1e-6;
+        for (int k = 0; k < VerticalDirections.Length; k++)
+        {
+            ReadOnlySpan<double> thrust = u.Slice(k * NU, NU);
+            double[] up = VerticalDirections[k];
+            double parallel = thrust[0] * up[0] + thrust[1] * up[1] + thrust[2] * up[2];
+            if (!(parallel > 0.0))
+                return false;
+            double x = thrust[0] - parallel * up[0];
+            double y = thrust[1] - parallel * up[1];
+            double z = thrust[2] - parallel * up[2];
+            if (!(x * x + y * y + z * z <= tolerance * tolerance * parallel * parallel))
+                return false;
+        }
+        double stepLimit = PadTurnStep + tolerance;
+        for (int k = 0; k < Ends[0]; k++)
+        {
+            int j = k * NU;
+            double x = u[j + NU] - u[j], y = u[j + NU + 1] - u[j + 1], z = u[j + NU + 2] - u[j + 2];
+            if (!(x * x + y * y + z * z <= stepLimit * stepLimit))
+                return false;
+        }
+        return true;
     }
 
     /// <summary>The most throttle a stage's acceleration limit leaves it at a state, held at the subproblem's back-off, and 1 for a stage with no limit or no liquid thrust.</summary>
@@ -301,16 +373,11 @@ internal sealed class AscentCase
     /// The liquid throttle the seed flies a stage at from a state. That is its seed throttle, or less where the seed throttle would push past the stage's acceleration limit, held at the same back-off the subproblem holds the limit to.
     /// </summary>
     public double SeedThrottleAt(int stage, ReadOnlySpan<double> x)
-    {
-        double throttle = SeedThrottle[stage];
-        if (!double.IsFinite(AccC[stage]))
-            return throttle;
-        double full = Dyn.LiquidThrustC(stage, x);
-        return full > 0.0 ? Math.Min(throttle, AccC[stage] * Settings.PathBackoff * x[AscentDynamics.IM] / full) : throttle;
-    }
+        => Math.Max(PhysicalThrottleMin[stage], Math.Min(SeedThrottle[stage], LimitedThrottle(stage, x)));
 
     /// <summary>
-    /// The seed's burn time for a stage's whole load from mass <paramref name="m0"/>, canonical. At its seed throttle the load lasts PropC / (mdot theta). Under an acceleration limit a stage at the seed throttle reaches it at mass m* = theta T / a, and from there the throttle falls with the mass, so the mass decays exponentially with time constant T / (mdot a): t = (m0 - m*) / (mdot theta) + T / (mdot a) ln(m* / m1). T is the reference thrust, exact for a stage whose thrust does not depend on back pressure.
+    /// The seed's burn time for a stage's whole load from mass <paramref name="m0"/>, canonical.
+    /// It integrates the full-throttle, acceleration-limited and hardware-floor portions using reference thrust.
     /// </summary>
     public double SeedBurnTime(int stage, double m0) => LimitedBurnTime(stage, m0, SeedThrottle[stage], Dyn.ThrustRefC(stage));
 
@@ -326,10 +393,15 @@ internal sealed class AscentCase
         double mStar = theta * thrust / a;
         if (!(m1 > 0.0) || mStar <= m1)
             return atFull;
+        double physical = PhysicalThrottleMin[stage];
+        double mFloorStart = physical * thrust / a;
+        if (mFloorStart >= m0)
+            return PropC[stage] / (flow * physical);
+        double mLimitedStart = Math.Min(mStar, m0);
+        double mLimitedEnd = Math.Max(mFloorStart, m1);
         double tau = thrust / (flow * a);
-        return mStar >= m0
-            ? tau * Math.Log(m0 / m1)
-            : (m0 - mStar) / (flow * theta) + tau * Math.Log(mStar / m1);
+        double tail = mLimitedEnd > m1 ? (mLimitedEnd - m1) / (flow * physical) : 0.0;
+        return (m0 - mLimitedStart) / (flow * theta) + tau * Math.Log(mLimitedStart / mLimitedEnd) + tail;
     }
 
     // The liquid engines' highest full thrust, canonical: the reference thrust or the most the pressure table gives.

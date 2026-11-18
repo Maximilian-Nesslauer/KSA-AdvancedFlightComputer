@@ -1,6 +1,8 @@
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
+using Brutal.Numerics;
+using HeadlessHarness.Harness;
 using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
@@ -31,6 +33,16 @@ public sealed class SetApoapsisTest : AfcTest
             OrbitManeuvers.ComputeSetApoapsis(
                 OrbitFixtures.HyperbolicAt(home, PeriapsisAltitudeM, now),
                 RaiseTargetAltitudeM, home.MeanRadius, now));
+
+        double radius = home.MeanRadius + PeriapsisAltitudeM;
+        double speed = Math.Sqrt(2.0 * home.Mu / radius * (1.0 - 1e-7));
+        Orbit nearParabolic = Orbit.CreateFromStateCci(home, now, new double3(radius, 0, 0),
+            new double3(-0.1, Math.Sqrt(0.99), 0) * speed, VehicleSpawner.OrbitLineColor);
+        t.Check("KSA classifies a slightly subunit eccentricity as unbound",
+            nearParabolic is Orbit.Parabolic && nearParabolic.Eccentricity < 1.0 && !nearParabolic.IsBound(),
+            $"type {nearParabolic.GetType().Name}, eccentricity {nearParabolic.Eccentricity:R}");
+        ManeuverAssertions.CheckNone(t, "near-parabolic orbit",
+            OrbitManeuvers.ComputeSetApoapsis(nearParabolic, RaiseTargetAltitudeM, home.MeanRadius, now));
     }
 
     private static void CheckReaches(

@@ -8,14 +8,14 @@ namespace AdvancedFlightComputer.HarnessTests.Fixtures;
 
 internal static class KfsFixtures
 {
-    internal static KfsVehicleHost QueuePilot(Vehicle vehicle)
+    internal static KfsVehicleHost QueuePilot(Vehicle vehicle, string? program = null)
     {
         var host = KfsVehicleHost.For(vehicle);
         var bench = new Workbench(KfsIntegration.Tables, Path.GetTempPath(), TextWriter.Null)
         {
             ActiveVehicle = () => host,
         };
-        const string program = "#pragma kfs tick_hz 10\n#pragma kfs task step rate_hz=10\nvoid step(void) {}\n";
+        program ??= "#pragma kfs tick_hz 10\n#pragma kfs task step rate_hz=10\nvoid step(void) {}\n";
         var build = bench.BuildText("afc-pilot.c", program, host.Computer.Part, host.Layout);
         if (!build.Ok)
             throw new InvalidOperationException("kFS pilot build failed: " + string.Join("; ", build.Diagnostics));

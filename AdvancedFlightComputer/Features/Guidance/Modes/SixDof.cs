@@ -295,6 +295,9 @@ public static partial class GuidanceWindow
     // Taken as the larger of this and 5% of altitude, so it scales with how much room there is: 20 m matters at 100 m and is noise at 2 km.
     private const double ColdRestartDriftM = 20.0;
 
+    private static double SixDofRestartDriftLimit(double heightM)
+        => Math.Max(ColdRestartDriftM, 0.05 * Math.Max(heightM, 1.0));
+
     // Seed the cold solve from a convex 3-DOF G-FOLD solve.
     //
     // OFF, because it was MEASURED not to help (Scvx.Console --seed).
@@ -797,6 +800,7 @@ public static partial class GuidanceWindow
     /// <param name="tookBurn">The caller is another mode handing over its lit burn; see VehicleAutopilotState.SixDofTookBurn.</param>
     private static void Engage6Dof(Vehicle vehicle, bool fromBrakingBurn = false, double sigmaSeed = double.NaN, bool tookBurn = false)
     {
+        _s.SixDofEntryBlendStart = double.NaN;
         _s.SixDofTookBurn = tookBurn || fromBrakingBurn;
         _s.UseSixDofLanding = true;
         _s.SixDofNoPlanLaw = false;
@@ -825,6 +829,7 @@ public static partial class GuidanceWindow
         _s.EngagePending = false;
         _s.Converging = false;
         _s.SixDofConvergingSince = double.NaN;
+        _s.SixDofEntryBlendStart = double.NaN;
         _s.SixDofRestartOpenLoop = false;
         _s.SixDofStandby = false;
         _s.SixDofFromBrakingBurn = false;
@@ -1044,7 +1049,7 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void FlyWithoutPlan(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x, string why)
     {
-        if (_s.SixDofLastPublishedPlan != null)
+        if (_s.SixDofLastPublishedPlan != null && !_s.SixDofToContact)
             KsaGimbalControl.SetLsq(vehicle, default);
 
         double3 position = vehicle.Orbit.StateVectors.PositionCci;
@@ -1130,7 +1135,6 @@ public static partial class GuidanceWindow
         manual.EngineOn = false;
         manual.EngineThrottle = 0f;
         _s.LastThrottle = 0.0;
-        KsaGimbalControl.SetLsq(vehicle, default);
         string why = FormattableString.Invariant($"TOUCHDOWN STOPPED SHORT {x[2] - _s.SixDofTargetComAltM:F1} m ABOVE PLAN END, ")
                    + FormattableString.Invariant($"RISING {x[5]:F1} m/s (TWR {minTwr:F2} AT MIN). ENGINE CUT, FLYING TO CONTACT.");
         SixDofLog.Event(_s, now, why);
@@ -1141,14 +1145,25 @@ public static partial class GuidanceWindow
     // The speed at the pad that a craft which cannot brake a climb may be left to reach in free fall, m/s. A drop that ends faster is flown by the no-plan law.
     private const double SixDofSafeDropMs = 3.0;
 
+    private static void HoldTouchdownAttitude(Vehicle vehicle, IParentBody parent)
+    {
+        // The plan has ended. Let stock TVC and RCS damp the turn until first contact.
+        KsaGimbalControl.Disengage(vehicle);
+        KsaAttitudeRate.Clear(vehicle);
+        GiveRcsBack(vehicle);
+        double3 up = double3.Normalize(vehicle.Orbit.StateVectors.PositionCci);
+        double3 heading = double3.UnitY.Transform(KsaFrameBridge.BodyToCci(vehicle));
+        CommandAttitude(vehicle, parent, up, !_s.WasEngaged, heading, FlightComputerRollMode.Decoupled);
+        _s.WasEngaged = true;
+    }
+
     /// <summary>
-    /// After the plan end or a climb cut: no solving and no gimbal torque until the craft touches down.
+    /// After the plan end or a climb cut, fly the sink or drop to first contact.
     ///  - A craft that can brake a climb (thrust-to-weight at the minimum throttle no more than SixDofHoverMaxMinTwr) sinks to contact on its engine (SinkToContact).
     ///  - One that cannot drops with the engine off while the fall from here ends at the pad no faster than SixDofSafeDropMs. The fall is measured to VehicleHeightM, the lowest height at which the craft meets the ground at the site, because the plan end is an upper bound of the first contact. From higher up the no-plan law flies the fall, which lights the engine again once the stop on the pad needs it.
     /// </summary>
     private static void StepSixDofToContact(Vehicle vehicle, IParentBody parent, double3 siteCci, double now, double[] x)
     {
-        KsaGimbalControl.SetLsq(vehicle, default);
         ref ManualControlInputs manual = ref ManualInputs(vehicle);
         if (vehicle.Situation.HasAnyContact())
         {
@@ -1250,12 +1265,16 @@ public static partial class GuidanceWindow
             return;
         }
 
+        bool firstBrakingCommand = false;
         if (_s.EngagePending)
         {
             _s.EngagePending = false;
             // A standby has been solving through the 3-DOF's burn, and takes over where it is.
             if (_s.SixDofStandby && _s.Guidance != null)
+            {
+                firstBrakingCommand = _s.SixDofFromBrakingBurn;
                 PromoteSixDofStandby(vehicle, now, x);
+            }
             else if (!Engage6Dof(vehicle, parent, siteCci, x, now))
                 return;
             double speed = Universe.GetSimulationSpeed();
@@ -1271,7 +1290,8 @@ public static partial class GuidanceWindow
         // Collect before a restart or node rebuild can change the source guidance.
         Ksa6DofSolveResult coldResult = null;
         if (_s.Worker != null && _s.Worker.TryCollect(out Ksa6DofSolveResult result)
-            && result.Matches(_s.Converging ? Ksa6DofJob.StepCold : Ksa6DofJob.Update, _s.Guidance))
+            && (result.Matches(_s.Converging ? Ksa6DofJob.StepCold : Ksa6DofJob.Update, _s.Guidance)
+                || (!_s.Converging && result.Matches(Ksa6DofJob.Track, _s.Guidance))))
         {
             if (result.Faulted)
             {
@@ -1289,7 +1309,7 @@ public static partial class GuidanceWindow
             {
                 coldResult = result;
             }
-            else if (result.Job == Ksa6DofJob.Update && !_s.Converging)
+            else if (!_s.Converging)
             {
                 _s.DidSolve = true;
                 if (result.Ok) OnSolveSucceeded(now, x);
@@ -1367,12 +1387,12 @@ public static partial class GuidanceWindow
         // When the loop is stuck, change the solve rather than the trajectory.
         // Reads the PUBLISHED plan, so it is safe while a solve is in flight - see Ksa6DofGuidance.MeasureDrift.
         double drift = _s.Guidance != null ? _s.Guidance.MeasureDrift(x, now) : 0.0;
-        double driftLimit = Math.Max(ColdRestartDriftM, 0.05 * Math.Max(x[2], 1.0));
+        double driftLimit = SixDofRestartDriftLimit(x[2]);
         bool driftedOff = _s.Guidance != null && _s.Guidance.HasPlan && drift > driftLimit;
 
         // GuidanceIdle: a cold restart calls BeginCold, which reinitialises the solver out from under anything using it.
         // While a solve is in flight the worker owns the guidance outright, so this waits - a cycle of delay on a restart that only fires after fifteen refusals is not a cost worth worrying about.
-        if (!_s.Converging && _s.Guidance != null && GuidanceIdle &&
+        if (!firstBrakingCommand && !_s.Converging && _s.Guidance != null && GuidanceIdle &&
             (driftedOff || _s.RefusalRun >= RefusalsBeforeRestart))
         {
             var xfR = PlanEndState(x);
@@ -1580,7 +1600,7 @@ public static partial class GuidanceWindow
         // Re-crossing a gate during a brief climb would rebuild twice for no benefit.
         // Same rule: StepNodeGates can call RebuildAt, which constructs a new guidance and assigns _s.Guidance.
         // Doing that while the worker holds a reference to the old one would leave a solve running on an object nothing is going to read.
-        if (_s.SixDofNodeGates && GuidanceIdle)
+        if (!firstBrakingCommand && _s.SixDofNodeGates && GuidanceIdle)
             StepNodeGates(vehicle, parent, siteCci, x, now);
 
         // THE MPC STEP: re-solve from the MEASURED state on a cadence.
@@ -1595,16 +1615,17 @@ public static partial class GuidanceWindow
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
         _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz);
 
-        if (_s.Worker != null)
+        // The first command after braking handover uses the plan the braking mode checked.
+        if (!firstBrakingCommand && now - _s.LastReplan >= cadence)
         {
-            if (now - _s.LastReplan >= cadence)
+            if (_s.Worker != null)
                 _s.Worker.TryDispatchUpdate(_s.Guidance, x, now, 5);
-        }
-        else if (now - _s.LastReplan >= cadence)
-        {
-            _s.DidSolve = true;
-            if (_s.Guidance.Update(x, now)) OnSolveSucceeded(now, x);
-            else OnSolveRefused(now, _s.Guidance.Error);
+            else
+            {
+                _s.DidSolve = true;
+                if (_s.Guidance.Update(x, now)) OnSolveSucceeded(now, x);
+                else OnSolveRefused(now, _s.Guidance.Error);
+            }
         }
 
         // Past the end of the plan the node index clamps, so Command would hold the terminal control indefinitely: a thrust of at least the minimum, which for a craft that cannot hover is a climb. Not guidance any more, so the craft flies the no-plan law until a re-solve lands.
@@ -1632,6 +1653,27 @@ public static partial class GuidanceWindow
         }
         : null;
 
+    private static double PlanThrottle(Vehicle vehicle, double thrustN, double ambientPa, double capability)
+    {
+        double throttle = KsaEnginePerf.ThrottleForThrust(vehicle, thrustN, ambientPa);
+        if (throttle < 0.0)
+            throttle = thrustN / (capability > 1.0 ? capability : _s.Guidance.Tmax);
+        return Math.Clamp(throttle, 0.0, 1.0);
+    }
+
+    private static bool EntryThrustMatches(Vehicle vehicle, IParentBody parent, double3 siteCci,
+        double[] x, double now, double carried)
+    {
+        if (_s.Guidance?.Published is not { } plan || plan.SolveTime + plan.Sigma - now < EntryHandoffBlendSeconds
+            || !_s.Guidance.Command(now, out _, out double thrustN, x, SixDofTracker()))
+            return false;
+        double pressure = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
+        double capability = KsaEnginePerf.ActiveThrustCapability(vehicle, pressure);
+        double planned = PlanThrottle(vehicle, thrustN, pressure, capability);
+        return EntryHandoffThrustCompatible(KsaEnginePerf.ThrustAtThrottle(vehicle, planned, pressure),
+            KsaEnginePerf.ThrustAtThrottle(vehicle, carried, pressure), vehicle.TotalMass);
+    }
+
     /// <summary>
     /// Turns one plan command into the throttle and the gimbal torque, and logs the cycle.
     /// </summary>
@@ -1653,13 +1695,19 @@ public static partial class GuidanceWindow
         // Thrust is not proportional to throttle in an atmosphere - see KsaEnginePerf.ThrustAtThrottle - so demand/capability under-delivers by a near-constant amount, worst at low throttle, which is precisely where a descent spends its time.
         //
         // Falling back to the linear estimate when there is nothing to invert is not a nicety: before ignition capability is 0 and dividing gives NaN.
-        double throttle = KsaEnginePerf.ThrottleForThrust(vehicle, thrustN, ambientPa);
-        if (throttle < 0.0)
+        double throttle = PlanThrottle(vehicle, thrustN, ambientPa, capability);
+        double blend = EntryHandoffThrottle(throttle, now - _s.SixDofEntryBlendStart, _s.SixDofEntryBlendThrottle);
+        if (blend != throttle)
         {
-            double denom = capability > 1.0 ? capability : _s.Guidance.Tmax;
-            throttle = thrustN / denom;
+            // A replan during the blend can change the thrust. Keep the executed
+            // command inside the same bound that admitted the handoff.
+            double plannedForce = KsaEnginePerf.ThrustAtThrottle(vehicle, throttle, ambientPa);
+            double blendedForce = KsaEnginePerf.ThrustAtThrottle(vehicle, blend, ambientPa);
+            if (EntryHandoffThrustCompatible(plannedForce, blendedForce, vehicle.TotalMass))
+                throttle = blend;
+            else
+                _s.SixDofEntryBlendStart = double.NaN;
         }
-        throttle = Math.Clamp(throttle, 0.0, 1.0);
 
         _s.CapabilityN = capability;
         // Saturation is the honest failure signal here: the plan is asking for more than the vehicle physically has, so the trajectory being flown is not the one that was planned, and no amount of feedback recovers it.
@@ -1687,6 +1735,24 @@ public static partial class GuidanceWindow
 
         LogCycle(vehicle, parent, siteCci, x, now, thrustN, capability, throttle,
                  torqueModel, ambientPa);
+    }
+
+    private const double EntryHandoffBlendSeconds = 0.4;
+
+    // Bound the velocity error even if the entire blend held its worst thrust difference.
+    internal static bool EntryHandoffThrustCompatible(double plannedN, double carriedN, double massKg)
+        => plannedN > 0.0 && carriedN > 0.0 && massKg > 0.0 && double.IsFinite(massKg)
+            && Math.Abs(plannedN - carriedN) * EntryHandoffBlendSeconds <= 0.25 * massKg;
+
+    // The first touchdown command carries the entry throttle. A short blend gives the new
+    // tracker a continuous command as it takes the remainder of the burn.
+    internal static double EntryHandoffThrottle(double planned, double elapsed, double carried)
+    {
+        if (!double.IsFinite(elapsed) || elapsed >= EntryHandoffBlendSeconds)
+            return planned;
+        double progress = Math.Clamp(elapsed / EntryHandoffBlendSeconds, 0.0, 1.0);
+        double weight = progress * progress * (3.0 - 2.0 * progress);
+        return carried + weight * (planned - carried);
     }
 
     /// <summary>
@@ -1841,7 +1907,10 @@ public static partial class GuidanceWindow
             return false;
         }
 
-        _s.Guidance = new Ksa6DofGuidance(cfg, dyn) { FixedTime = _s.SixDofFixedTime };
+        _s.Guidance = new Ksa6DofGuidance(cfg, dyn, Ksa6DofSetup.LateralTorqueLead(vehicle))
+        {
+            FixedTime = _s.SixDofFixedTime
+        };
 
         // SEED FROM G-FOLD.
         // SCvx refines a reference rather than searching for one, so the seed decides how many iterations the cold solve needs and which local solution it walks toward.

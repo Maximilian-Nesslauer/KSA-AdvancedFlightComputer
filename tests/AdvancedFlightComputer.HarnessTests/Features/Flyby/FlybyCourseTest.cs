@@ -46,6 +46,7 @@ public sealed class FlybyCourseTest : AfcTest
                 Vehicle onCourse = MoonTestWorld.Spawn(t, home, save, "FlybyCourseOnCourse", corrected, spawned);
                 driver.Step(1e-3, 2);
                 CheckOnCourse(t, onCourse, moon, driver, rp);
+                CheckSmallTrim(t, onCourse, moon, moonBody);
             }
             CheckPlayerStops(t, withBurn, moon, driver, rp);
             CheckNotFollowed(t, atMoon, withBurn, moon, rp);
@@ -57,6 +58,37 @@ public sealed class FlybyCourseTest : AfcTest
             FlybyCourse.Reset();
             MoonTestWorld.Despawn(spawned);
         }
+    }
+
+    private static void CheckSmallTrim(TestContext t, Vehicle vehicle, Celestial moon, IParentBody moonBody)
+    {
+        double now = Universe.GetElapsedSeconds();
+        double altitude = MoonInjectionPlanner.PredictedPeriapsisRadius(vehicle, moonBody) - moonBody.MeanRadius + 70_000.0;
+        if (!t.Check("small trim: the encounter has a time", MoonInjectionPlanner.SphereEntryTime(vehicle, moonBody) is not null))
+            return;
+        double entry = MoonInjectionPlanner.SphereEntryTime(vehicle, moonBody)!.Value.Seconds();
+        double early = now + 0.75 * (entry - now);
+        bool earlyPlanned = MoonInjectionPlanner.TryPlanCorrection(vehicle, moon, altitude, new UniverseTime(early), out var small, out string why);
+        if (!t.Check("small trim: the early plan is below one m/s", earlyPlanned && small.DvVlf.Length() < 1.0,
+                earlyPlanned ? $"{small.DvVlf.Length():F3} m/s" : why))
+            return;
+
+        string refusal = CourseCorrector.TryPlan(vehicle, moon, moonBody, altitude, now, out var late);
+        if (!t.Check("small trim: the later plan reaches one m/s and stays on target",
+            refusal.Length == 0 && late.BurnTime.Seconds() > early && late.DvVlf.Length() >= 1.0
+            && CourseCorrector.OnCourse(late.PredictedPeriapsisRadius, moonBody, altitude),
+            refusal.Length == 0 ? $"{late.DvVlf.Length():F3} m/s" : refusal))
+            return;
+
+        var departure = new FlybyTargeting.FlybyResult(late.DvVlf, default, late.BurnTime,
+            double.NaN, double.NaN, moonBody.MeanRadius + altitude, IsCrossParent: false,
+            PlannerVInfMs: double.NaN, PlannerApoTargetMeters: double.NaN);
+        HohmannFlybyUI.BuildPreview(vehicle, moon, moonBody, departure, out FlightPlan? plan, refineDeparture: false);
+        PatchedConic? moonPatch = plan?.Patches.FirstOrDefault(patch => ReferenceEquals(patch.PrimaryBody, moonBody));
+        UniverseTime? cutoff = plan == null ? null : FiniteBurns.LastBurnPiece(plan)?.BurnTrajectory?.Cutoff;
+        double margin = moonPatch == null || cutoff == null ? double.NaN : (moonPatch.StartTime - cutoff.Value).Seconds();
+        t.Check("small trim: the flown plan leaves thirty minutes from finite cutoff to corrected entry",
+            margin >= 1800.0, $"{margin:F0} s after the burn");
     }
 
     private static void CheckTolerance(TestContext t, IParentBody moonBody)

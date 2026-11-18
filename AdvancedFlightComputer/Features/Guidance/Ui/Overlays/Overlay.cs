@@ -189,6 +189,7 @@ public static partial class GuidanceWindow
 
         if (_s.LandingPhase == LandingPhase.GfoldDescent)
         {
+            _s.CancelGfoldSolve();
             _s.GfoldForceSearch = true;
             _s.GfoldLastSolveTime = double.NegativeInfinity;
             _s.GfoldArrivalTime = SimNow() + 120.0; // out of the terminal-freeze window so it re-solves

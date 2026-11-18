@@ -22,7 +22,7 @@ internal static class PlaneChangeBurnPlanner
         return MultiPassForwardChainPlanner.PlanForwardChain(source, allocations, now,
             (orbit, dvCap, earliestTime) =>
             {
-                if (orbit.Eccentricity >= 1.0) return null;
+                if (!orbit.IsBound()) return null;
                 double relInc = orbit.GetRelativeInclination(targetOrbit).Value();
                 if (relInc < 0.001) return null;
 
@@ -58,7 +58,7 @@ internal static class PlaneChangeBurnPlanner
         return MultiPassForwardChainPlanner.PlanForwardChain(source, allocations, now,
             (orbit, dvCap, earliestTime) =>
             {
-                if (orbit.Eccentricity >= 1.0) return null;
+                if (!orbit.IsBound()) return null;
 
                 double clampedTargetInc = Math.Clamp(targetInclinationRad, 0.0, Math.PI);
                 double currentInc = OrbitManeuvers.GetInclinationAgainst(orbit, reference);

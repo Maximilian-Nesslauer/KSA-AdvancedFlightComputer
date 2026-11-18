@@ -22,6 +22,7 @@ public static partial class GuidanceWindow
     private static void StartTerminalBurn(Vehicle vehicle, double now)
     {
         _s.LandingPhase = LandingPhase.TerminalCoast;
+        _s.CancelGfoldSolve();
         _s.GfoldPlan = null;
         _s.GfoldEngineOn = false;
         _s.GfoldThrottle = 0;

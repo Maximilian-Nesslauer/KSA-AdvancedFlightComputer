@@ -60,7 +60,8 @@ internal static class AscentSolidCheck
 
     private static double[] LiquidTable(double vac, double sea) => Grid.Select(p => vac + (sea - vac) * p / 101325.0).ToArray();
 
-    private static AscentProblem Problem(AscentStage[] stages, double m0)
+    private static AscentProblem Problem(AscentStage[] stages, double m0, AscentProblem.RollProgram? padRoll = null,
+                                          double qMax = 80000.0)
     {
         double rt = Re + 200e3;
         return new AscentProblem
@@ -77,8 +78,9 @@ internal static class AscentSolidCheck
             TargetRadius = rt,
             TargetSpeed = Math.Sqrt(Mu / rt),
             PlaneNormal = [-0.7762039895743317, 0.10808700950724297, 0.6211477802783103],
-            QMax = 80000.0,
+            QMax = qMax,
             QAlphaMax = 7000.0,
+            PadRoll = padRoll,
         };
     }
 
@@ -94,6 +96,7 @@ internal static class AscentSolidCheck
             Mu = p.Mu, BodyRadius = p.BodyRadius, Omega = p.Omega, R0 = p.R0, V0 = p.V0, M0 = p.M0, Stages = p.Stages,
             Atmosphere = p.Atmosphere, GroundRadius = p.GroundRadius, TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed,
             TargetRadialRate = p.TargetRadialRate, PlaneNormal = p.PlaneNormal, QMax = held, QAlphaMax = p.QAlphaMax,
+            PadRoll = p.PadRoll,
         }, verbose);
     }
 
@@ -145,11 +148,30 @@ internal static class AscentSolidCheck
         CoreOutlasts(verbose);
         CoreThrottledDown(verbose, 0.4);
         CoreThrottledDown(verbose, 0.9);
+        CheckPhaseThrottleFloors();
         RoundTrip();
 
         Console.WriteLine();
         Console.WriteLine(_fails == 0 ? "ALL PASS" : $"{_fails} FAILED");
         return _fails == 0 ? 0 : 1;
+    }
+
+    private static void CheckPhaseThrottleFloors()
+    {
+        AscentPhase[] phases =
+        [
+            new() { StartMass = 1000, EndMass = 800, Duration = 10, LiquidThrust = 30000, LiquidMassFlow = 20, LiquidThrottleMin = 0.1 },
+            new() { StartMass = 700, EndMass = 500, Duration = 10, LiquidThrust = 20000, LiquidMassFlow = 20, LiquidThrottleMin = 0.6 },
+            new() { StartMass = 400, EndMass = 300, Duration = 10, LiquidThrust = 10000, LiquidMassFlow = 10, LiquidThrottleMin = 1.0 }
+        ];
+        AscentStage[] stages = AscentPhasePlan.Build(phases, [], null, 1000, DragArea, 0.15, HeldFloor,
+            accelerationLimit: 30.0).Stages;
+        Check("the low-minimum first stage keeps the requested floor",
+            stages[0].ThrottleMin == 0.15 && stages[0].PhysicalThrottleMin == 0.10);
+        Check("the upper stage keeps the hardware floor independently of the requested floor",
+            stages[1].ThrottleMin == 0.15 && stages[1].PhysicalThrottleMin == 0.60);
+        Check("a phase with an unthrottleable engine uses the held floor",
+            stages[2].ThrottleMin == HeldFloor && double.IsPositiveInfinity(stages[2].AccelerationLimit));
     }
 
     // ---- 1. 2stage: boosters, then two liquid stages.
@@ -197,6 +219,65 @@ internal static class AscentSolidCheck
             Console.WriteLine($"  to orbit: {before.FinalMass / 1000.0:F2} t with the mean, {after.FinalMass / 1000.0:F2} t with the curve; "
                 + $"altitude at booster burnout {(Radius(before, 0) - Re) / 1000.0:F1} km against {(Radius(after, 0) - Re) / 1000.0:F1} km, "
                 + $"speed {Speed(before, 0):F0} against {Speed(after, 0):F0} m/s");
+        PadRoll(plan.Stages, m0, grain, burn, after);
+    }
+
+    private static void PadRoll(AscentStage[] stages, double m0, double grain, double burn, AscentSolution unrolled)
+    {
+        var roll = new AscentProblem.RollProgram(50.0, 10.0);
+        AscentProblem p = Problem(stages, m0, roll, qMax: 115000.0);
+        AscentProblem replay = AscentProblemFile.FromJson(AscentProblemFile.ToJson(p));
+        Check("pad roll parameters survive the problem file", replay.PadRoll == roll);
+        AscentProblem shortBurn = Problem(stages, m0, roll with { MaxSeconds = burn }, qMax: 115000.0);
+        AscentSolution refused = AscentScvx.Solve(shortBurn);
+        Check("the plan refuses a solid phase too short for clearance and roll",
+            refused.Nodes == 0 && refused.Message.Contains("first solid burn ends", StringComparison.Ordinal), refused.Message);
+        var phases = new List<string>();
+        AscentSolution s = AscentScvx.Solve(replay, onPhase: phases.Add, start: unrolled);
+        Check("a warm start that skips the vertical hold is rejected",
+            phases.Contains("the warm start does not meet the pad roll constraints"));
+        Check("the pad roll plan is usable", s.Usable, s.Message);
+        if (s.Nodes == 0)
+            return;
+
+        double startRadius = Math.Sqrt(p.R0.Sum(x => x * x));
+        double deadline = double.NaN, firstPitch = double.NaN;
+        int pitchNode = -1;
+        for (int k = 0; k < s.Nodes && s.NodeStage[k] == 0; k++)
+        {
+            int j = k * 3;
+            double rx = s.Position[j], ry = s.Position[j + 1], rz = s.Position[j + 2];
+            double ux = s.Throttle[j], uy = s.Throttle[j + 1], uz = s.Throttle[j + 2];
+            double radius = Math.Sqrt(rx * rx + ry * ry + rz * rz);
+            if (double.IsNaN(deadline) && radius - startRadius >= roll.ClearanceM)
+                deadline = s.Time[k] + roll.MaxSeconds;
+            double dot = (rx * ux + ry * uy + rz * uz) / (radius * Math.Sqrt(ux * ux + uy * uy + uz * uz));
+            if (dot < Math.Cos(0.25 * Math.PI / 180.0))
+            {
+                pitchNode = k;
+                firstPitch = s.Time[k];
+                break;
+            }
+        }
+        double nodeStep = s.Time[1] - s.Time[0];
+        Check("the plan holds vertical through clearance and the roll timeout",
+            double.IsFinite(deadline) && firstPitch >= deadline - nodeStep, $"pitch at {firstPitch:F2} s, roll deadline at {deadline:F2} s");
+        Check("the solid loses grain before pitch-over", pitchNode > 0 && s.Mass[pitchNode - 1] < s.Mass[0]);
+        Check("the roll does not extend the physical burn or change the grain",
+            Math.Abs(s.BurnTime[0] - burn) < 1e-6 && Math.Abs(Burned(s, 0) - grain) < 1e-4 * m0);
+
+        double maxRate = 0.0;
+        for (int k = 1; k < s.Nodes && s.NodeStage[k] == 0; k++)
+        {
+            ReadOnlySpan<double> a = s.Throttle.AsSpan((k - 1) * 3, 3), b = s.Throttle.AsSpan(k * 3, 3);
+            double a2 = a[0] * a[0] + a[1] * a[1] + a[2] * a[2];
+            double b2 = b[0] * b[0] + b[1] * b[1] + b[2] * b[2];
+            double cosine = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / Math.Sqrt(a2 * b2);
+            double rate = Math.Acos(Math.Clamp(cosine, -1.0, 1.0)) * 180.0 / Math.PI / (s.Time[k] - s.Time[k - 1]);
+            maxRate = Math.Max(maxRate, rate);
+        }
+        Check("the fixed solid phase stays within the flight steering rate",
+            maxRate <= roll.MaxTurnRateDegS + 1e-4, $"{maxRate:F3} deg/s");
     }
 
     // ---- 1b. 2stage as the game lays it out: the second stage's engine lit with the boosters and burning on after them, at 35 kPa and a 40 % floor. On 2026-09-25 the harness flew this and the plan converged at 35 kPa by pointing the thrust 44 deg below the horizon against the airflow to bleed off the boosters' speed - sin(alpha) is zero again at 180 deg - which no speed-indexed profile can fly. The plan must never thrust against the airflow; the planner then relaxes max-q as it should.

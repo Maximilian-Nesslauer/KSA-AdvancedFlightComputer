@@ -238,24 +238,38 @@ public static partial class GuidanceWindow
     #region Head warp offer
 
     /// <summary>Guidance asks for a time warp: to a launch window or a planned burn, or to the deorbit burn stock AUTO flies.</summary>
-    internal static bool HeadWarpPending => (_warpPromptActive && !Universe.IsAutoWarpActive) || StockDeorbitWarpOffered;
+    internal static bool HeadWarpPending => (_warpPromptActive && !Universe.IsAutoWarpActive)
+        || ProbePowerWarpOffered || StockDeorbitWarpOffered;
 
     private static bool StockDeorbitWarpOffered
         => _s.LandingPhase == LandingPhase.DeorbitBurn && _s.DeorbitAutoArmed && !Universe.IsAutoWarpActive
+            && !double.IsFinite(_s.DeorbitWarpTime)
             && (_s.DeorbitTarget == null || _s.DeorbitTarget.IgnitionTime.Seconds() > SimNow());
+
+    private static bool ProbePowerWarpOffered
+        => !Universe.IsAutoWarpActive && Universe.GetSimulationSpeed() == 1.0
+            && Program.ControlledVehicle is { IsControllable: true }
+            && (MoonProbePowerWarpOffered || _s.DeorbitPowerWarp == ProbeWarpRetry.Offered);
+
+    private static bool MoonProbePowerWarpOffered => _s.MoonChainPowerWarp == ProbeWarpRetry.Offered
+        && (_s.MoonChain != MoonChainStage.Coast || double.IsFinite(_s.MoonChainCoastEnd));
 
     internal static float HeadWarpWidth()
     {
         float gap = ImGui.GetStyle().ItemSpacing.X;
-        float w = ConsoleUi.OwnerChipWidth(Owner.Stock, "STOCK") + ConsoleUi.ChipToButtonGap + ConsoleWidgets.ButtonWidth("WARP".AsSpan());
+        bool retry = !_warpPromptActive && ProbePowerWarpOffered;
+        float w = ConsoleUi.OwnerChipWidth(Owner.Stock, "STOCK") + ConsoleUi.ChipToButtonGap
+            + ConsoleWidgets.ButtonWidth((retry ? "WARP AGAIN" : "WARP").AsSpan());
+        if (retry)
+            return w + gap + ConsoleWidgets.ButtonWidth("1X".AsSpan());
         if (!_warpPromptActive)
             return w;
         w += gap + ConsoleWidgets.ButtonWidth("1X".AsSpan());
         return _warpLabel == LaunchWindowWarpLabel && !_s.Running ? w + gap + ConsoleWidgets.ButtonWidth("NOW".AsSpan()) : w;
     }
 
-    private static bool HeadWarpButton(string id, bool lit)
-        => lit ? ConsoleWidgets.PrimaryButton("WARP".AsSpan(), id.AsSpan(), default) : ConsoleWidgets.Button("WARP".AsSpan(), id.AsSpan(), default);
+    private static bool HeadWarpButton(string id, bool lit, string label = "WARP")
+        => lit ? ConsoleWidgets.PrimaryButton(label.AsSpan(), id.AsSpan(), default) : ConsoleWidgets.Button(label.AsSpan(), id.AsSpan(), default);
 
     /// <summary>
     /// The one warp offer of the head, on one row: WARP, 1X and, for a launch window, NOW, then what it warps to and when, where <paramref name="room"/> has space for that. The deorbit burn that stock AUTO flies gets the same row, and its WARP sets the request the stock deorbit step answers (StepStockDeorbitWarp). With <paramref name="lit"/> WARP has the gold fill, because a wait of hours has no other action.
@@ -319,6 +333,23 @@ public static partial class GuidanceWindow
             return;
         }
 
+        if (ProbePowerWarpOffered && ReferenceEquals(vehicle, Program.ControlledVehicle))
+        {
+            ref ProbeWarpRetry retry = ref (MoonProbePowerWarpOffered
+                ? ref _s.MoonChainPowerWarp : ref _s.DeorbitPowerWarp);
+            ConsoleUi.OwnerChip(Owner.Stock, "STOCK");
+            ImGui.SameLine(0f, ConsoleUi.ChipToButtonGap);
+            if (HeadWarpButton("AfcHeadProbeWarpAgain", lit, "WARP AGAIN"))
+                retry = ProbeWarpRetry.Requested;
+            if (ImGui.IsItemHovered())
+                ConsoleUi.Tooltip("Stock stopped warp when probe power ran low. Check remaining power before continuing.".AsSpan());
+            ImGui.SameLine();
+            if (ConsoleWidgets.Button("1X".AsSpan(), "AfcHeadProbeWarpStay".AsSpan(), default))
+                retry = ProbeWarpRetry.Spent;
+            DrawWarpLine(origin.X + room, "PROBE POWER INTERRUPTED WARP");
+            return;
+        }
+
         if (StockDeorbitWarpOffered)
         {
             ConsoleUi.OwnerChip(Owner.Stock, "STOCK");
@@ -364,6 +395,22 @@ public static partial class GuidanceWindow
         AddEntryStatusLines(lines);
         AddStatusLine(lines, _s.ErrorSeverity, _s.Error);
         AddStatusLine(lines, NoThrustLasts() ? Severity.Warning : _s.StatusSeverity, _s.Status);
+        AddStatusLine(lines, Severity.Warning, ProbePowerPlanWarning(vehicle));
+    }
+
+    private static string ProbePowerPlanWarning(Vehicle vehicle)
+    {
+        if (_s.MoonChain != MoonChainStage.Idle && _s.MoonChainNode != null)
+            return PageText.ProbePowerWarning(ProbePower.RemainingSeconds(vehicle),
+                ProbePower.UntilBurn(vehicle, _s.MoonChainNode), "BURN");
+        if (_s.MoonChain == MoonChainStage.Coast && double.IsFinite(_s.MoonChainCoastEnd))
+            return PageText.ProbePowerWarning(ProbePower.RemainingSeconds(vehicle), _s.MoonChainCoastEnd - SimNow(), "END OF COAST");
+        if (_s.DeorbitPlan is not { } plan || !IsStockDeorbitPhase(_s.LandingPhase))
+            return "";
+        double remaining = ProbePower.RemainingSeconds(vehicle);
+        double toBurn = _s.DeorbitNode == null ? plan.DepartureTime - SimNow() : ProbePower.UntilBurn(vehicle, _s.DeorbitNode);
+        string warning = PageText.ProbePowerWarning(remaining, toBurn, "DEORBIT BURN");
+        return warning.Length > 0 ? warning : PageText.ProbePowerWarning(remaining, plan.ArrivalTime - SimNow(), "BRAKING");
     }
 
     // No thrust is normal for a moment at a staging, so the step writes it as a plain note. When it lasts, such as after the last stage, the pilot must see it.

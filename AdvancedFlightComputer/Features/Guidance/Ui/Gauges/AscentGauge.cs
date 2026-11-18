@@ -471,7 +471,7 @@ public static partial class GuidanceWindow
 
     /// <summary>
     /// The stages that can fly themselves home, one row each with its SITE.
-    ///  CONTROLLABILITY IS THE TEST, not size: a stage can be flown if the subtree that separates carries a command pod, which is the same thing Vehicle.IsControllable asks. An interstage does not qualify however large it is, and a stage that separates once the climb is over is going orbital speed and is not listed.
+    /// The separating parts must keep usable stock control. Stages that separate after ascent are outside boostback range.
     ///  A SITE ON A STAGE ASKS FOR ITS RESERVE: the calculated climb sizes what that booster keeps for the boostback and the landing, which the RESERVE row shows.
     /// </summary>
     private static void DrawReturnableStageRows()
@@ -494,7 +494,7 @@ public static partial class GuidanceWindow
             float buttonsW = ConsoleWidgets.ButtonWidth(pick.AsSpan()) + optimalW + clearW;
             // GREEN WHAT COMES HOME, AMBER WHAT IS THROWN AWAY: a square and the name in the colour, the same green and amber as everywhere else in the console.
             bool home = stage.ComesHome;
-            ConsoleUi.BeginRow(stage.Name.ToUpperInvariant() + SharedRowSuffix(list, i) + (stage.IsNext ? "  NEXT" : ""), buttonsW,
+            ConsoleUi.BeginRow(ReturnableStageIdText(list, i) + " " + stage.Name.ToUpperInvariant() + (stage.IsNext ? "  NEXT" : ""), buttonsW,
                 labelInk: home ? Palette.Good.U32 : Palette.Warn.U32, leadSwatch: home ? ColorRules.Good : ColorRules.Warn);
             ConsoleUi.RowRight(buttonsW);
             if (ConsoleWidgets.Button(pick.AsSpan(), $"AfcStageSet{stage.RootId}".AsSpan(), default))
@@ -517,17 +517,15 @@ public static partial class GuidanceWindow
             {
                 ImGui.SameLine();
                 if (ConsoleWidgets.Button("X".AsSpan(), $"AfcStageClear{stage.RootId}".AsSpan(), default))
-                {
-                    _s.StageTargets.Remove(stage.RootId);
-                    _s.StageOptimalReturn.Remove(stage.RootId);
-                    _s.OptimalReturnSites.Remove(stage.RootId);
-                    _s.StageModelDirty = true;
-                }
+                    ClearStageReturn(_s, stage.RootId);
             }
             ConsoleUi.EndRow();
 
-            GaugeRowText(home ? "REUSED" : "EXPENDED", PageText.StageReturn(stage.HasTarget, stage.OptimalReturn, stage.TargetLatDeg, stage.TargetLonDeg),
-                home ? Palette.Good.F4 : ConsoleUi.WarnInk);
+            string site = home ? PageText.StageReturn(stage.HasTarget, stage.OptimalReturn, stage.TargetLatDeg, stage.TargetLonDeg)
+                : "WILL NOT COME HOME. SET A SITE.";
+            bool pending = home && !_s.Running && _s.AscentPlan is { } plan && !PlanHasBoosterSite(plan, stage);
+            GaugeRowText(pending ? "PLAN NEEDED" : home ? "REUSED" : "EXPENDED", site,
+                home && !pending ? Palette.Good.F4 : ConsoleUi.WarnInk);
             if (home)
                 DrawStageReserve(stage);
         }
@@ -551,7 +549,7 @@ public static partial class GuidanceWindow
     }
 
     // Side boosters leaving on one row are usually the same parts with the same name, so each gets its place on that row: " 1", " 2". Empty for a stage that leaves alone.
-    private static string SharedRowSuffix(List<GuidanceWindow.ReturnableStage> list, int index)
+    private static string ReturnableStageIdText(List<ReturnableStage> list, int index)
     {
         int seq = list[index].SequenceIndex, place = 0, count = 0;
         for (int j = 0; j < list.Count; j++)
@@ -562,7 +560,8 @@ public static partial class GuidanceWindow
             if (j <= index)
                 place++;
         }
-        return count > 1 ? " " + place : "";
+        string number = FormattableString.Invariant($"S{list[index].SequenceNumber}");
+        return count > 1 ? FormattableString.Invariant($"{number}.{place}") : number;
     }
 
     private static void DrawAscentOptionsSection(double bodyRadius)

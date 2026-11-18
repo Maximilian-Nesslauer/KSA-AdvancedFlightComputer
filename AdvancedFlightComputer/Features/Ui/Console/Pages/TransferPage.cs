@@ -71,7 +71,8 @@ internal static class TransferPage
         ctx.ToPicture();
         DrawPicture(in ctx, source);
         DrawLegendLine(source);
-        DrawSelectionResult();
+        DrawSelectionResult(source);
+        DrawMissionSupply(source, ctx.Flying);
         CollectBars();
         _fuelFact = BurnBars.Draw(source, _bars);
         if (ctx.Flying && MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? running))
@@ -156,12 +157,7 @@ internal static class TransferPage
         }
         if (!found)
         {
-            // No destination yet, or one the source cannot reach any more: the craft's target first, else the first in the list.
-            selected = _destinations[0];
-            if (source.Target is Astronomical target)
-                foreach (TransferObject o in _destinations)
-                    if (o.GetKey() == target.Id)
-                        selected = o;
+            selected = DefaultDestination(source, _destinations);
             if (selected.Body is IOrbiter first)
                 TransferSession.SetDestination(first);
         }
@@ -173,6 +169,41 @@ internal static class TransferPage
             TransferSession.SetDestination(picked);
             if (_setTarget)
                 InputEvents.ChangeTargetBuffer.Add(new InputEvents.ChangeTargetData { Vehicle = source, Target = picked });
+        }
+    }
+
+    internal static TransferObject DefaultDestination(Vehicle source, IReadOnlyList<TransferObject> destinations)
+    {
+        string? mission = MissionTransfer.FindDestinationId(source);
+        string? target = (source.Target as Astronomical)?.Id;
+        TransferObject selected = destinations[0];
+        foreach (TransferObject option in destinations)
+        {
+            string key = option.GetKey();
+            if (mission != null && key == mission)
+                return option;
+            if (target != null && key == target)
+                selected = option;
+        }
+        return selected;
+    }
+
+    private static void DrawMissionSupply(Vehicle source, bool flying)
+    {
+        if (TransferSession.Destination is not Astronomical destination
+            || TransferSession.SelectedEntry?.TransferData is not OrbitalTransfers.TransferData transfer)
+            return;
+
+        Span<char> buffer = stackalloc char[512];
+        using var disabled = new ImGuiDisabledScope(flying);
+        ImGui.PushTextWrapPos(0.0f);
+        try
+        {
+            MissionTransfer.Draw(source, destination, transfer.Arrival, buffer);
+        }
+        finally
+        {
+            ImGui.PopTextWrapPos();
         }
     }
 
@@ -405,9 +436,11 @@ internal static class TransferPage
         float ringR = 7f * s;
         int2 sel = TransferSession.Selected;
         double ringEntries = (ringR + 5f * s) / unit;
-        if (TransferSession.BestDv.X != sel.X || TransferSession.BestDv.Y != sel.Y)
+        if (TransferSession.IsValidated(TransferSession.BestDv)
+            && (TransferSession.BestDv.X != sel.X || TransferSession.BestDv.Y != sel.Y))
             Marker(in f, min, size, unit, PorkchopRaster.MarkPlace(TransferSession.BestDv.X, TransferSession.BestDv.Y, sel.X, sel.Y, ringEntries, -1), Palette.Plan, 3.5f * s);
-        if (TransferSession.BestDvRel.X != sel.X || TransferSession.BestDvRel.Y != sel.Y)
+        if (TransferSession.IsValidated(TransferSession.BestDvRel)
+            && (TransferSession.BestDvRel.X != sel.X || TransferSession.BestDvRel.Y != sel.Y))
             Marker(in f, min, size, unit, PorkchopRaster.MarkPlace(TransferSession.BestDvRel.X, TransferSession.BestDvRel.Y, sel.X, sel.Y, ringEntries, 1), Palette.Good, 3.5f * s);
         if (sel.X >= 0)
         {
@@ -432,13 +465,13 @@ internal static class TransferPage
         }
         if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && !TransferSession.Refining)
             TransferSession.Select(new int2(row, col2));
-        OrbitalTransfers.PorkChopEntry? e = TransferSession.Info?.PorkChopData?[row, col2];
-        if (e?.TransferData != null && ConsoleUi.BeginPlacedCard("TRANSFER POINT", "TRANSFER POINT".AsSpan()))
+        if (TransferSession.ScoreAt(row, col2) is { } score
+            && ConsoleUi.BeginPlacedCard("TRANSFER POINT", "TRANSFER POINT".AsSpan()))
         {
-            ConsoleWidgets.Readout("DEPART IN".AsSpan(), FormatHelper.FormatDuration(Math.Max(0.0, (e.TransferData.Start - Universe.GetElapsedTime()).Seconds())).AsSpan());
-            ConsoleWidgets.Readout("FLIGHT TIME".AsSpan(), FormatHelper.FormatDuration(e.TransferData.Transit.Seconds()).AsSpan());
-            ConsoleWidgets.Readout("DEPARTURE DV".AsSpan(), Fmt.Dv(e.TransferData.TransferDvVlf.Length()).AsSpan());
-            ConsoleWidgets.Readout("ARRIVAL SPEED".AsSpan(), Fmt.Speed(e.TransferData.RelativeVelocityCci.Length()).AsSpan());
+            ConsoleWidgets.Readout("DEPART IN".AsSpan(), FormatHelper.FormatDuration(Math.Max(0.0, (score.Start - Universe.GetElapsedTime()).Seconds())).AsSpan());
+            ConsoleWidgets.Readout("FLIGHT TIME".AsSpan(), FormatHelper.FormatDuration(score.Transit.Seconds()).AsSpan());
+            ConsoleWidgets.Readout("DEPARTURE DV".AsSpan(), Fmt.Dv(score.DepartureDv).AsSpan());
+            ConsoleWidgets.Readout("ARRIVAL SPEED".AsSpan(), Fmt.Speed(score.ArrivalSpeed).AsSpan());
             ConsoleWidgets.EndTooltipCard();
         }
     }
@@ -571,10 +604,7 @@ internal static class TransferPage
             cards: PageText.TransferSelectCards, labelTip: PageText.TransferSelectTip, feedsPicture: true, marks: SelectMarks);
         // A click on the active segment also jumps back to its best cell, after a porkchop click or MOVE took the selection away.
         if (picked >= 0 && !TransferSession.Refining)
-        {
-            TransferSession.SelectBestRel = picked == 1;
-            TransferSession.Select(TransferSession.SelectBestRel && TransferSession.BestDvRel.X >= 0 ? TransferSession.BestDvRel : TransferSession.BestDv);
-        }
+            TransferSession.SelectBest(picked == 1);
 
         OrbitalTransfers.PorkChopEntry? entry = TransferSession.SelectedEntry;
         if (entry?.TransferData == null)
@@ -590,13 +620,22 @@ internal static class TransferPage
         }
     }
 
-    private static void DrawSelectionResult()
+    private static void DrawSelectionResult(Vehicle source)
     {
+        if (TransferSession.PresetUnavailable)
+            ConsoleUi.WarningWrapped("NO VERIFIED TRANSFER FOR THIS PRESET.");
         if (!TransferSession.Calculated || TransferSession.SelectedEntry?.TransferData is not OrbitalTransfers.TransferData t)
             return;
-        ConsoleUi.Readout("DEPART IN".AsSpan(), FormatHelper.FormatDuration(Math.Max(0.0, (t.Start - Universe.GetElapsedTime()).Seconds())).AsSpan());
+        double depart = (t.Start - Universe.GetElapsedTime()).Seconds();
+        ConsoleUi.Readout("DEPART IN".AsSpan(), FormatHelper.FormatDuration(Math.Max(0.0, depart)).AsSpan());
         ConsoleUi.Readout("FLIGHT TIME".AsSpan(), FormatHelper.FormatDuration(t.Transit.Seconds()).AsSpan());
         ConsoleUi.Readout("ARRIVAL SPEED".AsSpan(), Fmt.Speed(t.RelativeVelocityCci.Length()).AsSpan());
+        double remaining = ProbePower.RemainingSeconds(source);
+        string warning = PageText.ProbePowerWarning(remaining, depart, "DEPARTURE BURN");
+        if (warning.Length == 0)
+            warning = PageText.ProbePowerWarning(remaining, depart + t.Transit.Seconds(), "END OF COAST");
+        if (warning.Length > 0)
+            ConsoleUi.WarningWrapped(warning);
     }
 
     // A porkchop row is a departure time and a column a flight time (TransferTask.WorkerTask.CalculateAutomaticTransfer), so ^ and v move the departure and < and > the flight time, and each pair stands behind its name. A pane too narrow for the two pairs has them on two rows, under one column of names.

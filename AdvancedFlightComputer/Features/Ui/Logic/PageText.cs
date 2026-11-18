@@ -427,7 +427,7 @@ internal static class PageText
         => hasAir ? "Limits dynamic pressure and acceleration of the climb. The plan uses MAX Q." : "Limits acceleration of the climb. MAX Q has no effect without atmosphere.";
 
     public static string BoostersTip(int stages)
-        => "Sets a return site for a stage. The solved climb sizes the propellant the stage keeps for it." + (stages <= 0 ? " No stage can use it: no separating part carries a command pod." : "");
+        => "Sets a return site for a stage. The solved climb sizes the propellant the stage keeps for it." + (stages <= 0 ? " A returning stage needs able crew or a powered probe core." : "");
 
     public const string EngineDelaysTip = "Delay from the staging trigger to the ignition of each engine.";
 
@@ -469,7 +469,7 @@ internal static class PageText
         return string.Create(Inv, $"REUSE: {reused} REUSED, {expended} EXPENDED");
     }
 
-    public const string BoostersNone = "No stage can fly home: no separating part carries a command pod.";
+    public const string BoostersNone = "No separating stage can fly home.";
 
     /// <summary>
     /// Where a returnable stage goes, under its name in BOOSTERS: its site; for an optimal return the drone ship's point once a plan has found it, frozen from lift-off; or EXPENDABLE.
@@ -536,6 +536,12 @@ internal static class PageText
     public const string PassNotAddedYet = "AFC adds this pass when the previous pass ends. It has no options yet.";
 
     public const string BurnListTip = "Burns of the stock flight plan and the passes to come. A row selects the burn that BURN WITH sets, and options are kept per burn.";
+
+    public static string ProbePowerWarning(double remaining, double until, string milestone)
+        => double.IsFinite(remaining) && double.IsFinite(until) && until > Math.Max(0.0, remaining)
+            ? $"PROBE POWER ENDS {Fmt.Time(until - Math.Max(0.0, remaining))} BEFORE {milestone}. "
+              + "CURRENT GENERATION ONLY. SOLAR OUTPUT CAN DROP IN ECLIPSE."
+            : "";
 
     public const string RcsInUse = "IN USE";
 

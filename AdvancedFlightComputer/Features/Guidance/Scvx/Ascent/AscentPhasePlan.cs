@@ -29,6 +29,8 @@ public sealed class AscentPhase
     public double LiquidMassFlow { get; init; }
     /// <summary>Full-throttle liquid thrust at each grid pressure, N, or null for constant thrust.</summary>
     public double[]? LiquidThrustAtPressure { get; init; }
+    /// <summary>Lowest shared throttle at which every planned liquid rocket follows the command.</summary>
+    public double LiquidThrottleMin { get; init; }
     /// <summary>The liquid engines can throttle.</summary>
     public bool Throttleable { get; init; } = true;
     /// <summary>The solid motors burning through the phase, as indices into the motor list.</summary>
@@ -85,7 +87,7 @@ public static class AscentPhasePlan
     /// <param name="motors">Every solid motor the phases name.</param>
     /// <param name="pressureGrid">The back pressures the liquid and solid thrust tables are on, Pa, or null for an airless body (the solids' tables then have one column, at zero).</param>
     /// <param name="m0">The live mass, kg.</param>
-    /// <param name="throttleFloor">The liquid engines' throttle floor.</param>
+    /// <param name="throttleFloor">The requested throttle floor from the ascent settings.</param>
     /// <param name="heldFloor">The floor a stage that cannot throttle is held at: the script's 99 %.</param>
     /// <param name="reserveKg">Liquid kept back from the first load, kg: the booster reserve.</param>
     /// <param name="accelerationLimit">The thrust acceleration limit for the stages that can hold one, m/s^2, or positive infinity.</param>
@@ -113,16 +115,20 @@ public static class AscentPhasePlan
             AscentPhase ph = phases[i];
             AscentPhase? next = i + 1 < phases.Count ? phases[i + 1] : null;
             double jettison = next != null ? Math.Max(0.0, ph.EndMass - next.StartMass) : 0.0;
-            double floor = ph.Throttleable ? throttleFloor : heldFloor;
+            double physicalFloor = Math.Min(heldFloor, ph.LiquidThrottleMin);
+            double phaseFloor = Math.Max(throttleFloor, physicalFloor);
+            bool throttleable = ph.Throttleable && ph.LiquidThrottleMin < 1.0;
+            double floor = throttleable ? throttleFloor : heldFloor;
             double start = i == 0 ? m0 : ph.StartMass;
 
             if (ph.Solids.Length == 0)
             {
-                if (!ph.Throttleable)
+                if (!throttleable)
                     NoteUnheld(ph.LiquidThrust, ph.EndMass);
                 stages.Add(new AscentStage(ph.LiquidThrust, ph.LiquidMassFlow, start - ph.EndMass, jettison, dragArea,
                                            pressureGrid, ph.LiquidThrustAtPressure, floor,
-                                           accelerationLimit: ph.Throttleable ? accelerationLimit : double.PositiveInfinity));
+                                           accelerationLimit: throttleable ? accelerationLimit : double.PositiveInfinity,
+                                           physicalThrottleMin: physicalFloor));
                 describe.Add($"liquid {ph.LiquidThrust / 1000.0:F0} kN, {ph.LiquidMassFlow:F1} kg/s, {(start - ph.EndMass) / 1000.0:F2} t");
                 continue;
             }
@@ -149,7 +155,7 @@ public static class AscentPhasePlan
                     notes.Add($"stage {stages.Count + 1}: the solids burn {sigma:F1} s against the drain model's {ph.Duration:F1} s");
                 NoteUnheld(ph.LiquidThrust + VacuumThrustAtEnd(table), start - grain - liquid);
                 stages.Add(new AscentStage(ph.LiquidThrust, ph.LiquidMassFlow, grain + liquid, jettison, dragArea,
-                                           pressureGrid, ph.LiquidThrustAtPressure, ph.HasLiquid ? floor : heldFloor,
+                                           pressureGrid, ph.LiquidThrustAtPressure, ph.HasLiquid && throttleable ? phaseFloor : heldFloor,
                                            table, sigma, carries));
                 describe.Add(Describe(ph, table, sigma, grain, liquid, carries ? "burns on" : null));
                 Advance(ph.Solids, elapsed, sigma);
@@ -160,11 +166,11 @@ public static class AscentPhasePlan
             double load = ph.LiquidMassFlow * ph.Duration;
             bool boostersAlone = next != null && !next.HasLiquid && SameEngines(ph.Solids, next.Solids)
                                  && (i + 2 >= phases.Count || !phases[i + 2].Solids.Any(s => Array.IndexOf(ph.Solids, s) >= 0));
-            double lastsAtFloor = load / (ph.LiquidMassFlow * throttleFloor);
-            if (ph.Throttleable && boostersAlone && throttleFloor < heldFloor && lastsAtFloor >= OutlastMargin * solidsLeft)
+            double lastsAtFloor = load / (ph.LiquidMassFlow * phaseFloor);
+            if (throttleable && boostersAlone && phaseFloor < heldFloor && lastsAtFloor >= OutlastMargin * solidsLeft)
             {
                 double sigma = solidsLeft;
-                double seed = Math.Clamp(SeedLoadFraction * load / (ph.LiquidMassFlow * sigma), throttleFloor, 1.0);
+                double seed = Math.Clamp(SeedLoadFraction * load / (ph.LiquidMassFlow * sigma), phaseFloor, 1.0);
                 double burned = ph.LiquidMassFlow * seed * sigma;
                 AscentSolidBurn table = Table(ph.Solids, motors, elapsed, sigma, grid);
                 double grain = table.Propellant(0.0, sigma);
@@ -173,15 +179,15 @@ public static class AscentPhasePlan
                 double drop = Math.Max(0.0, ph.EndMass - next!.StartMass);
                 double after = i + 2 < phases.Count ? Math.Max(0.0, next.EndMass - phases[i + 2].StartMass) : 0.0;
                 stages.Add(new AscentStage(ph.LiquidThrust, ph.LiquidMassFlow, grain + burned, drop, dragArea,
-                                           pressureGrid, ph.LiquidThrustAtPressure, throttleFloor, table, sigma,
+                                           pressureGrid, ph.LiquidThrustAtPressure, phaseFloor, table, sigma,
                                            liquidCarriesOver: true, seedThrottle: seed));
                 describe.Add(Describe(ph, table, sigma, grain, burned, "throttled to outlast them"));
                 stages.Add(new AscentStage(ph.LiquidThrust, ph.LiquidMassFlow, load - burned, after, dragArea,
                                            pressureGrid, ph.LiquidThrustAtPressure, throttleFloor,
-                                           accelerationLimit: accelerationLimit));
+                                           accelerationLimit: accelerationLimit, physicalThrottleMin: physicalFloor));
                 describe.Add($"liquid {ph.LiquidThrust / 1000.0:F0} kN, {ph.LiquidMassFlow:F1} kg/s, {(load - burned) / 1000.0:F2} t left after the boosters");
                 notes.Add($"the core would run dry {solidsLeft - ph.Duration:F0} s before its boosters at full throttle, so it is throttled to outlast them "
-                        + $"(it can for {lastsAtFloor:F0} s at its {throttleFloor:P0} floor)");
+                        + $"(it can for {lastsAtFloor:F0} s at its {phaseFloor:P0} floor)");
                 throttledDown = true;
                 Advance(ph.Solids, elapsed, sigma);
                 i++;    // the boosters' phase alone is the stage just laid down
@@ -198,9 +204,9 @@ public static class AscentPhasePlan
                 stages.Add(new AscentStage(ph.LiquidThrust, ph.LiquidMassFlow, grain + liquid, jettison, dragArea,
                                            pressureGrid, ph.LiquidThrustAtPressure, heldFloor, table, sigma));
                 describe.Add(Describe(ph, table, sigma, grain, liquid, "held at full thrust, the solids burn on"));
-                if (ph.Throttleable)
+                if (throttleable)
                     notes.Add(boostersAlone
-                        ? $"the core runs dry {solidsLeft - ph.Duration:F0} s before its boosters and cannot outlast them at its {throttleFloor:P0} floor ({lastsAtFloor:F0} s), so it is held at full thrust"
+                        ? $"the core runs dry {solidsLeft - ph.Duration:F0} s before its boosters and cannot outlast them at its {phaseFloor:P0} floor ({lastsAtFloor:F0} s), so it is held at full thrust"
                         : "the core runs dry before its boosters, which burn on with other engines; it is held at full thrust");
                 Advance(ph.Solids, elapsed, sigma);
             }

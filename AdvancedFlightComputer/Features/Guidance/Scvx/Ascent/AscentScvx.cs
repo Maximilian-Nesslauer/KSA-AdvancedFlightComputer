@@ -159,6 +159,8 @@ public static class AscentScvx
             return Failed(problem, invalid);
 
         var c = new AscentCase(problem);
+        if (!c.PadRollFits)
+            return Failed(problem, "the first solid burn ends before the pad roll program can finish");
         AscentSettings st = c.Settings;
 
         // A BOOSTER BROUGHT HOME STARTS FROM THE PLAN WITH ITS RESERVE AS SET. SCvx is local, and the reserve and the separation feed each other - a booster that keeps more separates slower and needs less - so the plan it reaches depends on where it starts. From a gravity-turn seed far short of the need, the slack's price mends it in the most local way, bending the climb to cheapen the boostback: on the 2stage_new stack that reached 7.84 t to orbit where a fixed 7.06 t reserve that comes home reaches 8.01 t. Solved first with the reserve held where it was set - an efficient climb for that reserve - and freed from there, the solve only trades the reserve against that climb.
@@ -207,13 +209,22 @@ public static class AscentScvx
         {
             warm = start;
             fromStart = true;
-            onPhase?.Invoke($"starting from the plan given ({start.FinalMass / 1000.0:F2} t to orbit)");
         }
 
-        AscentSeed.Result seed;
-        if (warm != null)
+        AscentSeed.Result? warmSeed = warm != null ? WarmStart(c, warm) : null;
+        if (warmSeed != null && !c.PadRollControlsMet(warmSeed.U))
         {
-            seed = WarmStart(c, warm);
+            onPhase?.Invoke("the warm start does not meet the pad roll constraints");
+            warmSeed = null;
+            warm = null;
+            fromStart = false;
+        }
+        AscentSeed.Result seed;
+        if (warmSeed != null)
+        {
+            if (fromStart)
+                onPhase?.Invoke($"starting from the plan given ({start!.FinalMass / 1000.0:F2} t to orbit)");
+            seed = warmSeed;
         }
         else
         {
@@ -403,7 +414,7 @@ public static class AscentScvx
 
     private static bool GatesMet(AscentSettings st, Merit m)
         => m.DefectNorm < st.DefectTolerance && m.PathViolation < st.PathTolerance && m.TerminalViolation < st.TerminalTolerance
-           && m.RecoveryShort < st.RecoveryTolerance;
+           && m.RecoveryShort < st.RecoveryTolerance && m.PadRollMet;
 
     /// <summary>A stall that is flown anyway: its reference passes every gate, and the model's last promise is small. See <see cref="AscentSettings.StallAcceptGain"/>.</summary>
     private static bool StallAcceptable(AscentSettings st, Merit m, double lastPred)
@@ -419,7 +430,7 @@ public static class AscentScvx
 
     /// <summary>The merit and the reference's gates; with boosters brought home, how short the shortest-kept of them falls of its need (canonical), and each one's need.</summary>
     private readonly record struct Merit(double J, double DefectNorm, double PathViolation, double TerminalViolation,
-                                         double RecoveryShort = 0.0, BoostbackOracle.Need[]? Needs = null);
+                                         double RecoveryShort, BoostbackOracle.Need[]? Needs, bool PadRollMet);
 
     /// <summary>
     /// J = fuel + smoothing + virtual-control penalty + insertion penalty + path penalty, with the TRUE nonlinear dynamics and constraints, each term of the same form and weight as its linearised counterpart in the subproblem.
@@ -440,7 +451,9 @@ public static class AscentScvx
             }
             x[k * NX + 6] = w.Mass[k] / d.MU;
             // A plan solved to a lower floor can sit under this problem's floor, and a reference under its floor by more than the trust region leaves the first subproblem infeasible. The thrust direction is kept.
-            double floor = c.ThrottleMin[c.NodeStage[k]] * c.LimitedThrottle(c.NodeStage[k], x.AsSpan(k * NX, NX));
+            int stage = c.NodeStage[k];
+            double floor = Math.Max(c.PhysicalThrottleMin[stage],
+                                    c.ThrottleMin[stage] * c.LimitedThrottle(stage, x.AsSpan(k * NX, NX)));
             double un = Math.Sqrt(u[k * NU] * u[k * NU] + u[k * NU + 1] * u[k * NU + 1] + u[k * NU + 2] * u[k * NU + 2]);
             if (un > 1e-12 && un < floor)
                 for (int i = 0; i < 3; i++)
@@ -541,7 +554,7 @@ public static class AscentScvx
                 shortWorst = Math.Max(shortWorst, shortC);
             }
         }
-        return new Merit(j0, worst, pathWorst, termWorst, shortWorst, needs);
+        return new Merit(j0, worst, pathWorst, termWorst, shortWorst, needs, c.PadRollControlsMet(u));
     }
 
     /// <summary>The throttle vector's component along the air-relative velocity: |u| cos(alpha).</summary>

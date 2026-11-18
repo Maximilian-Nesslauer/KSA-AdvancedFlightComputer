@@ -224,7 +224,7 @@ public static partial class GuidanceWindow
         double floor = Math.Max(parent.MeanRadius, parent.GetAtmosphereRadius());
         if (moon == null)
             refusal = $"{moonName} DOES NOT ORBIT {parent.Id.ToUpperInvariant()}";
-        else if (orbit == null || !(orbit.Eccentricity < 1.0) || !(orbit.Periapsis > floor))
+        else if (orbit == null || !orbit.IsBound() || !(orbit.Periapsis > floor))
             refusal = "NO PARKING ORBIT ABOVE THE ATMOSPHERE";
         else if (CourseCorrector.BurnPlanned(vehicle))
             refusal = "A BURN IS ALREADY PLANNED";
@@ -295,6 +295,7 @@ public static partial class GuidanceWindow
         _s.MoonChainManualSince = double.NaN;
         _s.MoonChainCompleted = false;
         _s.MoonChainWarpAsked = false;
+        _s.MoonChainPowerWarp = ProbeWarpRetry.None;
         return "";
     }
 
@@ -349,8 +350,10 @@ public static partial class GuidanceWindow
         }
 
         // A new BurnTarget has an EndOfTime ignition until a vehicle worker has updated it. The warp ends before stock Auto starts its turn, as the warp to the stock deorbit burn does.
-        if (!_s.MoonChainWarpAsked && target.IgnitionTime != UniverseTime.EndOfTime && fc.BurnMode == FlightComputerBurnMode.Auto)
-            AskMoonWarp(vehicle, StockDeorbitWarpTime(target));
+        if (target.IgnitionTime != UniverseTime.EndOfTime && fc.BurnMode == FlightComputerBurnMode.Auto)
+            StepMoonWarp(vehicle, StockDeorbitWarpTime(target));
+        else if (_s.MoonChainPowerWarp != ProbeWarpRetry.None)
+            _s.MoonChainPowerWarp = ProbeWarpRetry.Spent;
     }
 
     private static void MoonBurnComplete(Vehicle vehicle, Orbit orbit, IParentBody moonBody)
@@ -372,9 +375,9 @@ public static partial class GuidanceWindow
         {
             double peKm = (orbit.Periapsis - moonBody.MeanRadius) / 1000.0;
             double apKm = (orbit.Apoapsis - moonBody.MeanRadius) / 1000.0;
-            EndMoonChain(vehicle, orbit.Eccentricity < 1.0
+            EndMoonChain(vehicle, orbit.IsBound()
                 ? $"IN ORBIT AT {moonBody.Id.ToUpperInvariant()}: {peKm:F0} x {apKm:F0} KM."
-                : $"CAPTURE BURN DONE, BUT THE ORBIT AT {moonBody.Id.ToUpperInvariant()} IS STILL OPEN.", warn: !(orbit.Eccentricity < 1.0));
+                : $"CAPTURE BURN DONE, BUT THE ORBIT AT {moonBody.Id.ToUpperInvariant()} IS STILL OPEN.", warn: !orbit.IsBound());
             return;
         }
         _s.MoonChain = MoonChainStage.Course;
@@ -454,6 +457,7 @@ public static partial class GuidanceWindow
         _s.MoonChain = MoonChainStage.Coast;
         _s.MoonChainAfter = double.NaN;
         _s.MoonChainWarpAsked = false;
+        _s.MoonChainPowerWarp = ProbeWarpRetry.None;
         _s.Status = $"TO {moonName}: {course}. THE CAPTURE BURN IS PLANNED IN ITS SPHERE.";
     }
 
@@ -467,6 +471,7 @@ public static partial class GuidanceWindow
             return;
         }
         double now = SimNow();
+        _s.MoonChainCoastEnd = double.NaN;
         if (orbit.Parent.Id != moonBody.Id)
         {
             if (MoonInjectionPlanner.SphereEntryTime(vehicle, moonBody) is not UniverseTime entry)
@@ -479,12 +484,14 @@ public static partial class GuidanceWindow
                 return;
             }
             _s.MoonChainAfter = double.NaN;
-            if (!_s.MoonChainWarpAsked)
-                AskMoonWarp(vehicle, entry.Seconds() + MoonSphereMarginS);
+            _s.MoonChainCoastEnd = entry.Seconds();
+            StepMoonWarp(vehicle, entry.Seconds() + MoonSphereMarginS);
             return;
         }
 
         // Inside the sphere. The settle time starts at the first step here.
+        if (_s.MoonChainPowerWarp != ProbeWarpRetry.None)
+            _s.MoonChainPowerWarp = ProbeWarpRetry.Spent;
         if (double.IsNaN(_s.MoonChainAfter) || _s.MoonChainAfter > now + MoonSettleS)
             _s.MoonChainAfter = now + MoonSettleS;
         if (now < _s.MoonChainAfter)
@@ -510,6 +517,18 @@ public static partial class GuidanceWindow
     private static string MoonWait(double seconds)
         => seconds < 7200.0 ? $"{seconds / 60.0:F0} MIN" : $"{seconds / 3600.0:F1} H";
 
+    private static void StepMoonWarp(Vehicle vehicle, double target)
+    {
+        if (!_s.MoonChainWarpAsked)
+        {
+            AskMoonWarp(vehicle, target);
+            return;
+        }
+        RetireEndedWarp(ref _s.MoonChainPowerWarp, _s.MoonChainWarpTime);
+        if (StepProbeWarpRetry(vehicle, ref _s.MoonChainPowerWarp, target))
+            _s.MoonChainWarpTime = target;
+    }
+
     // The chain asks for each warp once, and only for the craft in focus, because a warp moves the whole game. Universe.AutoWarpTo is the call the stock warp to the next burn ends in.
     // A warp of its own that still runs is replaced, and while any other warp runs the chain waits with its request.
     private static void AskMoonWarp(Vehicle vehicle, double toSimSec)
@@ -518,8 +537,12 @@ public static partial class GuidanceWindow
         if (Universe.IsAutoWarpActive && !ownWarpRuns)
             return;
         _s.MoonChainWarpAsked = true;
-        if (!ReferenceEquals(vehicle, Program.ControlledVehicle) || !double.IsFinite(toSimSec) || toSimSec <= SimNow() + WarpLeadTime)
+        if (!ReferenceEquals(vehicle, Program.ControlledVehicle) || !vehicle.IsControllable
+            || !double.IsFinite(toSimSec) || toSimSec <= SimNow() + WarpLeadTime)
+        {
+            _s.MoonChainPowerWarp = ProbeWarpRetry.Spent;
             return;
+        }
         Universe.AutoWarpTo(new UniverseTime(toSimSec));
         _s.MoonChainWarpTime = toSimSec;
     }
@@ -542,6 +565,8 @@ public static partial class GuidanceWindow
         _s.MoonChainCompleted = false;
         _s.MoonChainWarpAsked = false;
         _s.MoonChainWarpTime = double.NaN;
+        _s.MoonChainPowerWarp = ProbeWarpRetry.None;
+        _s.MoonChainCoastEnd = double.NaN;
     }
 
     // The player or another controller took over. The node and the engine stay as they are, because they are the player's, and so does the burn mode unless the stop asks for the disarm.

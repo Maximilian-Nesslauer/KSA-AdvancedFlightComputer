@@ -12,6 +12,7 @@ public sealed class SettingSpecDefaultsTest : AfcTest
     protected override void Execute(TestContext t)
     {
         var fresh = new VehicleAutopilotState();
+        t.Check("touchdown logging starts off on a fresh craft", !fresh.SixDofLogging);
 
         foreach (SettingSpec spec in GuidanceSettingSpecs.AllDoubles)
         {

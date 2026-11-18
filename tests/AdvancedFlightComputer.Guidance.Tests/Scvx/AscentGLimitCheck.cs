@@ -26,11 +26,11 @@ internal static class AscentGLimitCheck
     }
 
     /// <summary>The Saturn V with the same limit on every stage.</summary>
-    private static AscentProblem SaturnV(double limit)
+    private static AscentProblem SaturnV(double limit, double firstStageHardwareFloor = 0.0)
     {
         AscentProblem p = AscentCheck.SaturnV();
-        AscentStage[] stages = p.Stages.Select(s => new AscentStage(s.Thrust, s.MassFlow, s.PropellantMass, s.JettisonMass, s.DragArea,
-                                                                     accelerationLimit: limit)).ToArray();
+        AscentStage[] stages = p.Stages.Select((s, i) => new AscentStage(s.Thrust, s.MassFlow, s.PropellantMass, s.JettisonMass, s.DragArea,
+            accelerationLimit: limit, physicalThrottleMin: i == 0 ? firstStageHardwareFloor : 0.0)).ToArray();
         return new AscentProblem
         {
             Mu = p.Mu, BodyRadius = p.BodyRadius, Omega = p.Omega, R0 = p.R0, V0 = p.V0, M0 = p.M0, Stages = stages,
@@ -89,9 +89,36 @@ internal static class AscentGLimitCheck
         PhasePlan();
         LongStage(verbose);
         HeldAtLimit(verbose);
+        PhysicalFloorAtCap(verbose);
         Console.WriteLine();
         Console.WriteLine(_fails == 0 ? "ALL PASS" : $"{_fails} FAILED");
         return _fails == 0 ? 0 : 1;
+    }
+
+    private static void PhysicalFloorAtCap(bool verbose)
+    {
+        const double hardwareFloor = 0.69;
+        AscentProblem p = SaturnV(3.0 * G0, hardwareFloor);
+        p.Stages[0] = p.Stages[0].WithThrottleMin(0.8);
+        AscentSolution s = Solve("physical throttle floor with a binding g cap", p, verbose);
+        Check("the capped plan converges with a hardware floor", s.Converged, s.Message);
+        if (s.Nodes == 0)
+            return;
+        double lowest = double.PositiveInfinity, relativeAtLowest = 1.0;
+        for (int k = 0; k < s.Nodes && s.NodeStage[k] == 0; k++)
+        {
+            double throttle = ThrottleAt(s, k);
+            if (throttle >= lowest)
+                continue;
+            lowest = throttle;
+            relativeAtLowest = 0.8 * Math.Min(1.0,
+                p.Stages[0].AccelerationLimit * p.Settings.PathBackoff * s.Mass[k] / s.FullThrust[k]);
+        }
+        Check("hardware floor holds where the requested floor would be lower",
+            lowest >= hardwareFloor - 0.001 && relativeAtLowest < hardwareFloor - 0.01,
+            $"planned {lowest:P2}, hardware {hardwareFloor:P2}, requested after cap {relativeAtLowest:P2}");
+        Check("the problem file preserves the physical floor",
+            AscentProblemFile.FromJson(AscentProblemFile.ToJson(p)).Stages[0].PhysicalThrottleMin == hardwareFloor);
     }
 
     // ---- 6. S-IC held at full thrust under a limit that binds: the floor is 99 % of what the limit leaves, at each node's own mass.

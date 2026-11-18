@@ -255,12 +255,14 @@ public sealed class VehicleAutopilotState
     // Returnable stage state.
 
     /// <summary>
-    /// The separable stages that carry a command pod, in staging order, with what it
+    /// The separable stages with usable control, in staging order, with what it
     /// would cost each to come home from here. Rebuilt with the stage model; see
     /// Guidance/ReturnableStages.cs.
     /// </summary>
     public readonly System.Collections.Generic.List<GuidanceWindow.ReturnableStage>
         ReturnableStages = new();
+
+    internal readonly List<(uint RootId, string Name, int Sequence, VehicleControl Reason)> ReturnControlRefusals = new();
 
     /// <summary>
     /// Each stage's own landing site, keyed by the detached subtree root's InstanceId
@@ -279,7 +281,7 @@ public sealed class VehicleAutopilotState
     public readonly HashSet<uint> StageOptimalReturn = new();
 
     /// <summary>
-    /// Each optimal-return stage's landing point, lat/lon deg: where the plan's coast comes down. Taken from each plan adopted on the ground, and FROZEN FROM LIFT-OFF, so a ship placed there before launch is where the booster is sent (BoosterReturn, OnSequenceActivating).
+    /// Each optimal-return stage's landing point, lat/lon deg: where the plan's coast comes down. Taken from each plan adopted on the ground, and FROZEN FROM LIFT-OFF, so a ship placed there before launch is where the booster is sent (BoosterReturn, OnDecouplerActivating).
     /// </summary>
     public readonly Dictionary<uint, double2> OptimalReturnSites = new();
 
@@ -427,6 +429,8 @@ public sealed class VehicleAutopilotState
     public bool MoonChainWarpAsked;
     /// <summary>The sim time the chain's own warp runs to, s, or NaN.</summary>
     public double MoonChainWarpTime = double.NaN;
+    internal ProbeWarpRetry MoonChainPowerWarp;
+    internal double MoonChainCoastEnd = double.NaN;
     /// <summary>Correction burns the chain has flown since the injection.</summary>
     public int MoonChainCorrections;
     /// <summary>The player picked "Stay in orbit" while the chain ran. The step stops the chain.</summary>
@@ -554,6 +558,7 @@ public sealed class VehicleAutopilotState
     public double ConvexStageSpeed;
     public double ConvexFastest;
     public double ConvexLastTime = double.NaN;
+    public double ConvexSolidIgnitionTime = double.NaN;
 
     /// <summary>Sim time the profile handed over to UPFG, while the command is still blending from the one to the other; NaN otherwise.</summary>
     public double ConvexBlendStart = double.NaN;
@@ -593,6 +598,7 @@ public sealed class VehicleAutopilotState
     internal bool DeorbitAutoArmed;
     internal bool DeorbitWarpRequested;
     internal double DeorbitWarpTime = double.NaN;
+    internal ProbeWarpRetry DeorbitPowerWarp;
     internal float DeorbitSavedThrottle;
     internal float DeorbitPreviewThrottle;
     internal bool DeorbitThrottleHeld;
@@ -676,26 +682,10 @@ public sealed class VehicleAutopilotState
     public double GfoldIntervalS = 0.25;   // re-solve cadence
     public int GfoldNodes = 50;
 
-    /// <summary>
-    /// WALL-CLOCK CEILING PER SOLVE, seconds. The guard that stops a hard descent
-    /// state from hanging the game.
-    ///
-    /// SCS ships with no time limit and a 100000-iteration cap, so a state it converges
-    /// on slowly just runs - on the sim thread. And the caller's response to a failed
-    /// solve is to run a 35-solve search, twice, so one slow state became minutes of
-    /// frozen game, retried every GfoldIntervalS. A solve that exceeds this comes back
-    /// as MaxIterations, which reads as "this time of flight does not work" - the same
-    /// answer an infeasible one gives, and the search moves on instead of grinding.
-    ///
-    /// 40 ms is under three frames and roughly twice the 19.6 ms a converging solve
-    /// costs at eps 1e-4, so it bounds the pathological case without truncating the
-    /// normal one. It does NOT bound a search, which is tens of solves - that is the
-    /// argument for moving the solve off this thread, not something a per-solve limit
-    /// can fix.
-    /// </summary>
+    /// <summary>Wall-clock budget for one native solve on the descent worker, in seconds.</summary>
     public double GfoldSolveTimeLimitS = 0.040;
 
-    /// <summary>Wall-clock cost of the last descent solve, ms - the number the frame budget cares about.</summary>
+    /// <summary>Wall-clock cost of the last descent solve on the worker, in milliseconds.</summary>
     public double GfoldSolveMs;
 
     /// <summary>Sim time before which a re-plan skips the flight-time searches, set when a plan was refused for propellant.</summary>
@@ -803,6 +793,16 @@ public sealed class VehicleAutopilotState
 
     /// <summary>The committed descent plan and the tracker flying it.</summary>
     public GfoldTrajectory GfoldPlan;
+    internal GfoldSolveJob GfoldJob;
+    internal double3 GfoldPlanSiteCcf;
+    internal double3 GfoldJobSiteCcf;
+
+    internal void CancelGfoldSolve()
+    {
+        GfoldJob?.Dispose();
+        GfoldJob = null;
+    }
+
     public double GfoldPlanStart;          // sim time of plan node 0
     public double GfoldArrivalTime;        // sim time of planned touchdown
     public double GfoldThrustMax = 1.0;    // engine vac thrust at plan time, N
@@ -934,7 +934,7 @@ public sealed class VehicleAutopilotState
     /// a second owner rather than interleaving two craft into one CSV.
     /// On by default: per vehicle, so a booster separated in flight never had the box ticked, and the landings that needed diagnosing on 2026-10-08 all flew without a record.
     /// </summary>
-    public bool SixDofLogging = true;
+    public bool SixDofLogging;
 
     // Flown track state.
     //
@@ -1466,6 +1466,11 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Set once the burn is inside the hand-over time with 6-DOF not ready yet, so that is logged once.</summary>
     public bool ThreeDofSixDofWaiting;
+    internal Ksa6DofPlan ThreeDofRejectedTouchdownPlan;
+    public bool ThreeDofBurnSolveFault;
+    public (string Status, bool Warning) ThreeDofTouchdownHandoff;
+    public double SixDofEntryBlendStart = double.NaN;
+    public double SixDofEntryBlendThrottle;
 
     /// <summary>Hand over with this much of the 3-DOF burn plan left, s. By time rather than speed: a light booster falls slower than any useful hand-over speed, and 6-DOF, with no coast and no drag model, cannot fly a long burn (see ThreeDof.cs).</summary>
     public double ThreeDofSixDofTimeS = 5.0;
@@ -1473,6 +1478,12 @@ public sealed class VehicleAutopilotState
     /// <summary>The live guidance, its solver thread, its model corrections and its nominal model, or null before the first solve.</summary>
     public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Guidance3Dof ThreeDofGuidance;
     public Ksa3DofWorker ThreeDofWorker;
+
+    internal void CancelEntrySolve()
+    {
+        ThreeDofWorker?.Dispose();
+        ThreeDofWorker = null;
+    }
     public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.AeroScaleEstimator ThreeDofEstimator;
     public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.KsaPointMassModel ThreeDofNominal;
 
@@ -1569,7 +1580,19 @@ public sealed class VehicleAutopilotState
     internal void FailBoostback(string what, string text) { MarkFailure(what, text); BoostbackStatus = text; BoostbackSeverity = Severity.Error; }
 
     internal void WarnEntry(string text) { ThreeDofStatus = text; ThreeDofSeverity = Severity.Warning; }
-    internal void DiagEntry(string text) { ThreeDofStatus = text; ThreeDofSeverity = Severity.Diag; }
+    internal string ThreeDofHandoffRefusal = "";
+    internal bool ThreeDofCoastAttitudeFixed;
+    internal double ThreeDofCoastTurnAccel;
+    internal EngineController[] SixDofStandbyEngines;
+
+    internal void DiagEntry(string text)
+    {
+        if (ThreeDofHandoffRefusal.Length == 0)
+        {
+            ThreeDofStatus = text;
+            ThreeDofSeverity = Severity.Diag;
+        }
+    }
 
     internal string FailureWhat { get; private set; } = "";
 
