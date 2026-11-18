@@ -15,7 +15,8 @@ internal static class ProbePower
 
         tree.EnsureHabitatZones();
         UniverseTime now = Universe.GetElapsedTime();
-        double remaining = double.NaN;
+        var circuits = new Dictionary<int, (Part Representative, bool HasActiveCore, double StandbyWatts)>();
+        var seen = new HashSet<PowerConsumer>();
         foreach (Control control in controls)
         {
             Part part = control.Parent;
@@ -45,13 +46,24 @@ internal static class ProbePower
             if (consumer.Mode == PowerSwitchMode.Off || Universe.Rules.Radiation
                 && consumer.Hold is PowerHold.Failed or PowerHold.Rebooting or PowerHold.StormStandby)
                 continue;
+            if (!seen.Add(consumer))
+                continue;
 
-            PowerForecast estimate = PowerForecast.Compute(tree, part);
+            int index = tree.ElectricalCircuits.IndexFor(part.FullPart);
+            bool wanted = consumer.IsWanted(tree.PowerConsumers.States);
+            circuits.TryGetValue(index, out var prior);
+            circuits[index] = (part, prior.HasActiveCore || wanted, prior.StandbyWatts + (wanted ? 0.0 : consumer.Consumed.Value()));
+        }
+
+        double remaining = double.NaN;
+        foreach (var circuit in circuits.Values)
+        {
+            PowerForecast estimate = PowerForecast.Compute(tree, circuit.Representative);
             double seconds = estimate.Remaining.IsEndOfTime() ? double.PositiveInfinity : estimate.Remaining.Seconds();
-            // Stock excludes an Auto core on standby from demand. It needs its own draw when it takes over.
-            if (estimate.Drain != PowerDrain.NoBattery && !consumer.IsWanted(tree.PowerConsumers.States))
+            // When control is lost on the primary circuit, stock wakes its eligible backups together.
+            if (!circuit.HasActiveCore && estimate.Drain != PowerDrain.NoBattery)
             {
-                double drain = (estimate.Draw + consumer.Consumed - estimate.Supply).Value();
+                double drain = (estimate.Draw - estimate.Supply).Value() + circuit.StandbyWatts;
                 seconds = drain > 0.0 ? estimate.Charge.Value() / drain : double.PositiveInfinity;
             }
             remaining = double.IsNaN(remaining) ? seconds : Math.Max(remaining, seconds);

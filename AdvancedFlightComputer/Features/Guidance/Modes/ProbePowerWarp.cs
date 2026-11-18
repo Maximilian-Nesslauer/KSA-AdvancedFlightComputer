@@ -20,8 +20,7 @@ public static partial class GuidanceWindow
 
     internal static void ApplyProbePowerWarpPatch(Harmony harmony)
     {
-        var target = AccessTools.DeclaredMethod(typeof(Vehicle), "UpdateProbePowerWarning",
-            [typeof(int), typeof(ProbeCorePower), typeof(UniverseTime), typeof(UniverseTime)]);
+        var target = GameReflection.Vehicle_UpdateProbePowerWarning;
         if (target == null)
         {
             DefaultCategory.Log.Warning("[AFC] Probe power warp interruptions cannot be identified on this game version.");
@@ -30,6 +29,8 @@ public static partial class GuidanceWindow
         harmony.Patch(target,
             prefix: new HarmonyMethod(typeof(GuidanceWindow), nameof(BeforeProbePowerWarning)),
             postfix: new HarmonyMethod(typeof(GuidanceWindow), nameof(AfterProbePowerWarning)));
+        harmony.Patch(AccessTools.DeclaredMethod(typeof(Universe), nameof(Universe.ResetSimulationSpeed), Type.EmptyTypes),
+            postfix: new HarmonyMethod(typeof(GuidanceWindow), nameof(CancelQueuedProbeWarp)));
     }
 
     private static void BeforeProbePowerWarning(Vehicle __instance, out ProbeWarpStop? __state)
@@ -66,6 +67,16 @@ public static partial class GuidanceWindow
             stop.State.DeorbitPowerWarp = ProbeWarpRetry.Interrupted;
     }
 
+    private static void CancelQueuedProbeWarp()
+    {
+        if (Program.ControlledVehicle is not { } vehicle || !VehicleAutopilotState.TryGet(vehicle, out var state))
+            return;
+        if (state.MoonChainPowerWarp is ProbeWarpRetry.Offered or ProbeWarpRetry.Requested)
+            state.MoonChainPowerWarp = ProbeWarpRetry.Spent;
+        if (state.DeorbitPowerWarp is ProbeWarpRetry.Offered or ProbeWarpRetry.Requested)
+            state.DeorbitPowerWarp = ProbeWarpRetry.Spent;
+    }
+
     // Called only while the chain still owns the same wait. The console answers the offer on the main thread.
     private static bool StepProbeWarpRetry(Vehicle vehicle, ref ProbeWarpRetry retry, double target)
     {
@@ -73,8 +84,14 @@ public static partial class GuidanceWindow
             return false;
         if (!ReferenceEquals(vehicle, Program.ControlledVehicle) || !vehicle.IsControllable
             || Universe.IsAutoWarpActive || Universe.GetSimulationSpeed() != 1.0
-            || !double.IsFinite(target) || target <= SimNow() + 1.0
-            || !(ProbePower.RemainingSeconds(vehicle) > 0.0))
+            || !double.IsFinite(target) || target <= SimNow() + 1.0)
+        {
+            retry = ProbeWarpRetry.Spent;
+            return false;
+        }
+        if (retry == ProbeWarpRetry.Offered)
+            return false;
+        if (!(ProbePower.RemainingSeconds(vehicle) > 0.0))
         {
             retry = ProbeWarpRetry.Spent;
             return false;

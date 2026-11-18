@@ -104,8 +104,13 @@ public sealed class ProbePowerTest : AfcTest
         core.Hold = PowerHold.AutoStandby;
         t.Check("an Auto core on standby forecasts its draw when it wakes",
             Math.Abs(ProbePower.RemainingSeconds(vehicle) - remaining) < 0.001);
+        backup.Mode = PowerSwitchMode.Auto;
+        backup.Hold = PowerHold.AutoStandby;
+        t.Check("both standby cores on a shared circuit charge against the same battery",
+            Math.Abs(ProbePower.RemainingSeconds(vehicle) - remaining * 0.5) < 0.001);
         core.Hold = PowerHold.None;
         core.Mode = PowerSwitchMode.Off;
+        backup.Hold = PowerHold.None;
         backup.Mode = PowerSwitchMode.On;
         t.Check("another usable probe extends control when the primary is off",
             Math.Abs(ProbePower.RemainingSeconds(vehicle) - remaining) < 0.001);
@@ -165,6 +170,18 @@ public sealed class ProbePowerTest : AfcTest
             moon.Invoke(null, [v, target]);
             t.Check("the interruption offers warp while it remains at 1x",
                 !Universe.IsAutoWarpActive && state.MoonChainPowerWarp == ProbeWarpRetry.Offered);
+            state.MoonChainPowerWarp = ProbeWarpRetry.Requested;
+            Universe.ResetSimulationSpeed();
+            moon.Invoke(null, [v, target]);
+            t.Check("stock 1x cancels a retry before the guidance step consumes it",
+                !Universe.IsAutoWarpActive && state.MoonChainPowerWarp == ProbeWarpRetry.Spent);
+
+            state.MoonChainWarpAsked = false;
+            state.MoonChainPowerWarp = ProbeWarpRetry.None;
+            state.MoonChainWarpTime = double.NaN;
+            moon.Invoke(null, [v, target]);
+            WarnLow();
+            moon.Invoke(null, [v, target]);
             state.MoonChainPowerWarp = ProbeWarpRetry.Requested;
             moon.Invoke(null, [v, target]);
             t.Check("accepting the offer warps to the moon chain's next burn",
