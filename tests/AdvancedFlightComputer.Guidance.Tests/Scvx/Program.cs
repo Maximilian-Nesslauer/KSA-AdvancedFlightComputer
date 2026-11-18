@@ -48,6 +48,9 @@ if (args.Contains("--slope"))
 if (args.Contains("--3dof-model"))
     return ThreeDofModelCheck.Run();
 
+if (args.Contains("--ascent-fairing"))
+    return AscentFairingCheck.Run();
+
 if (args.Contains("--3dof-far"))
 {
     ThreeDofFarCheck.Sweep = args.Contains("--sweep");
@@ -88,6 +91,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --impact        RK4 impact prediction: convergence, and d(impact)/d(x0)
           --shoot         direct shooting on a boostback burn: is there an optimal pitch
           --ascent        the convex ascent against launch3dof.py's Saturn V result
+          --ascent-fairing  time a 100 kg independent mass-only drop on a solved ascent
           --ascent-solids solid motors' thrust curves, pinned burns and a core throttled to outlast its boosters
           --ascent-glimit a thrust acceleration limit that binds, one that does not, and which stages take it
           --ascent-aoa    drag that grows with the angle of attack, as KSA's does, on 2stage_new

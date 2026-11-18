@@ -1,4 +1,6 @@
 using AdvancedFlightComputer.Features.AutoStage;
+using AdvancedFlightComputer.Features.Guidance;
+using AdvancedFlightComputer.Features.Guidance.Upfg;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using HeadlessHarness.Harness;
@@ -63,6 +65,19 @@ public sealed class StockFairingReleaseTest : AfcTest
                     otherParts.Add(part);
             EngineController[] engines = craft.Parts.Modules.Get<EngineController>().ToArray();
             bool[] engineStates = engines.Select(engine => engine.IsActive).ToArray();
+            var fairing = FairingDrainSnapshot.Capture(craft, automatic: true, out _);
+            if (!mixed && t.Check("the live drain model can identify both attached shrouds", fairing is { Parts.Length: 2 }))
+            {
+                var attached = craft.Parts.Parts.ToArray().ToHashSet();
+                bool stockAlreadyCountsThem = fairing!.MassExcludedByStock(attached) == 0.0;
+                attached.ExceptWith(shrouds);
+                double restored = fairing.MassExcludedByStock(attached);
+                foreach (var leaf in fairing.Parts)
+                    attached.Remove(leaf.Mount);
+                t.Check("UPFG restores only shrouds omitted before their mounts stage",
+                    stockAlreadyCountsThem && Math.Abs(restored - row.MassKg) < 1e-6
+                    && fairing.MassExcludedByStock(attached) == 0.0);
+            }
 
             // Pressure and clearance are exercised independently. Here the real input drain
             // must detach only the two saved stock joints and preserve the next staging row.
@@ -85,6 +100,14 @@ public sealed class StockFairingReleaseTest : AfcTest
             t.Check("stock engine activations and sequence progress are untouched",
                 craft.Parts.SequenceList.ActiveSequence == oldSequence && engines.Select(e => e.IsActive).SequenceEqual(engineStates)
                 && craft.Parts.SequenceList.GetNextSequenceNumber() == 3);
+            var released = FairingDrainSnapshot.Capture(craft, automatic: true, out _);
+            float pressure = craft.PhysicsEnvironment.AtmosphericPressure;
+            craft.Parts.PerformanceSequences.RecomputeForFlight(pressure);
+            UpfgVehicle model = KsaVehicleAdapter.BuildWithFairing(craft, pressure, null, null, released);
+            UpfgVehicle stock = KsaVehicleAdapter.Build(craft, pressure);
+            t.Check("UPFG reads the live reduced stack after release", released == null
+                && model.Stages.Count > 0 && !model.FairingMassReconciled
+                && model.Stages.Select(stage => stage.MassTotal).SequenceEqual(stock.Stages.Select(stage => stage.MassTotal)));
         }
         finally
         {

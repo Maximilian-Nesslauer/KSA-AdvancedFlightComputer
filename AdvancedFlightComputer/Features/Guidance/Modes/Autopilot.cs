@@ -487,7 +487,8 @@ public static partial class GuidanceWindow
                 return;
             float ambientPressure = vehicle.PhysicsEnvironment.AtmosphericPressure;
             performance.RecomputeForFlight(ambientPressure);
-            _s.StageModel = KsaVehicleAdapter.Build(vehicle, ambientPressure);
+            var fairing = FairingDrainSnapshot.Capture(vehicle, _s.AutoStage || StagingDetector.IsArmed(vehicle), out _);
+            _s.StageModel = KsaVehicleAdapter.BuildWithFairing(vehicle, ambientPressure, null, null, fairing);
             // The game's own total for the same recompute, latched for the staging bar to check our stage list against. Both are "from here on" - its simulated mole masses are re-seeded from the live tanks every recompute - so a disagreement means the adapter is reading the sequence list wrongly, which is exactly the failure that is invisible in a plausible-looking stage table. TotalDeltaV is a Volatile.Read of a float, so the draw thread can have this even though the Lists behind it can tear.
             _s.StageModelKsaDv = performance.TotalDeltaV;
             _s.PadTwr = !_s.Running && vehicle.Orbit?.Parent is IParentBody body && TryLaunchSite(vehicle.Orbit, body, out _)

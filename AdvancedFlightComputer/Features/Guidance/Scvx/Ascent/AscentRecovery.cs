@@ -80,9 +80,13 @@ public sealed class AscentRecovery
     public double BurnDelayS { get; init; } = 15.0;
 
     /// <summary>The same booster, its reserve starting at <paramref name="initialReserveKg"/>.</summary>
-    public AscentRecovery WithInitialReserve(double initialReserveKg) => new()
+    public AscentRecovery WithInitialReserve(double initialReserveKg) => Copy(Stage, initialReserveKg);
+
+    public AscentRecovery WithStage(int stage) => Copy(stage, InitialReserveKg);
+
+    private AscentRecovery Copy(int stage, double initialReserveKg) => new()
     {
-        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, BoostersOnStage = BoostersOnStage, FlowShare = FlowShare, OptimalReturn = OptimalReturn, ExhaustVelocity = ExhaustVelocity, LandingExhaustVelocity = LandingExhaustVelocity, LandingAccel = LandingAccel, LandingMargin = LandingMargin, CorrectionDv = CorrectionDv, BurnDelayS = BurnDelayS,
+        Stage = stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, BoostersOnStage = BoostersOnStage, FlowShare = FlowShare, OptimalReturn = OptimalReturn, ExhaustVelocity = ExhaustVelocity, LandingExhaustVelocity = LandingExhaustVelocity, LandingAccel = LandingAccel, LandingMargin = LandingMargin, CorrectionDv = CorrectionDv, BurnDelayS = BurnDelayS,
         SiteCci = SiteCci, ReferenceArea = ReferenceArea, Drag = Drag, Lift = Lift, Alpha = Alpha, Air = Air,
         LandingFactor = LandingFactor, BoostbackMargin = BoostbackMargin,
     };

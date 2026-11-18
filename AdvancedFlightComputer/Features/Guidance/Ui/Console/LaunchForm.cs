@@ -117,29 +117,17 @@ public static partial class GuidanceWindow
         }
         else
             GaugeRowText("FAIRING GATE", "CLIMBING WITH 20 m TERRAIN CLEARANCE");
-        if (_s.AscentPlan is { Usable: true } plan)
+        if (_s.AscentPlan is { Usable: true } plan && ReferenceEquals(plan.Body, parent))
         {
-            var gate = new FairingReleaseGate();
-            var solution = plan.Solution;
-            double padRadius = plan.StartCcf.Length();
-            double previousHeight = double.NegativeInfinity;
-            for (int k = 0; k < solution.Nodes; k++)
-            {
-                int i = 3 * k;
-                double radius = new double3(solution.Position[i], solution.Position[i + 1], solution.Position[i + 2]).Length();
-                double height = radius - padRadius;
-                double clearance = height - vehicle.BoundingSphereRadiusBody;
-                if (gate.Sample(solution.Time[k], solution.DynamicPressure[k], clearance, height >= previousHeight, air,
-                    _s.FairingAltitudeKm * 1000.0, _s.FairingQKpa * 1000.0))
-                {
-                    GaugeRowText("GATE ESTIMATE", FormattableString.Invariant($"T+{solution.Time[k]:F0} s, {height / 1000.0:F1} km ABOVE PAD"),
-                        ConsoleStyle.TextMuted);
-                    break;
-                }
-                previousHeight = height;
-            }
+            if (plan.FairingRelease is { } release && plan.FairingRequest is { } request
+                && _s.AutoStage && Math.Abs(request.AltitudeFloorM - _s.FairingAltitudeKm * 1000.0) < 1e-6
+                && Math.Abs(request.QCeilingPa - _s.FairingQKpa * 1000.0) < 1e-6
+                && rows.Any(row => !row.Mixed && row.Number == release.Row))
+                GaugeRowText("PLANNED RELEASE", FormattableString.Invariant(
+                    $"ROW {release.Row}, {release.MassKg:F1} kg, T+{release.Time:F1} s, {(release.Radius - plan.BodyRadius) / 1000.0:F1} km, {release.Q / 1000.0:F2} kPa"));
+            else if (plan.FairingNote.Length > 0)
+                GaugeRowText("FAIRING PLAN", plan.FairingNote, ConsoleStyle.TextMuted);
         }
-        GaugeRowText("ASCENT MODEL", "STOCK SEQUENCE MASS MODEL", ConsoleStyle.TextMuted);
     }
 
     /// <summary>REUSE, the first fold under the picture: the returnable stages and their sites, above LIMITS.</summary>

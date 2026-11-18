@@ -61,7 +61,8 @@ public sealed class ConvexAscentProfile
 
     /// <param name="omega">The body's spin rate about CCI +z, rad/s: the air co-rotates.</param>
     /// <param name="bodyRadius">Mean radius, for the altitude column.</param>
-    public static ConvexAscentProfile FromSolution(AscentSolution s, double omega, double bodyRadius)
+    public static ConvexAscentProfile FromSolution(AscentSolution s, double omega, double bodyRadius,
+        PlannedFairingRelease fairing = null)
     {
         int n = s.Nodes;
         var time = new List<double>(n);
@@ -96,7 +97,7 @@ public sealed class ConvexAscentProfile
             return null;
 
         // The stages: where each starts and ends in plan time, and in mass. Masses come from the solution's own nodes, both of each staging pair, so the burnout mass before a jettison is kept.
-        int stages = s.BurnTime.Length;
+        int stages = s.BurnTime.Length - (fairing != null ? 1 : 0);
         var stageStart = new double[stages];
         var stageEnd = new double[stages];
         var startMass = new double[stages];
@@ -105,13 +106,22 @@ public sealed class ConvexAscentProfile
         var lastNode = new int[stages];
         for (int i = 0; i < stages; i++)
         {
-            int first = Array.IndexOf(s.NodeStage, i), last = Array.LastIndexOf(s.NodeStage, i);
+            int startPhase = fairing != null && i > fairing.Phase ? i + 1 : i;
+            int endPhase = fairing != null && i >= fairing.Phase ? i + 1 : i;
+            int first = Array.IndexOf(s.NodeStage, startPhase), last = Array.LastIndexOf(s.NodeStage, endPhase);
             firstNode[i] = first;
             lastNode[i] = last;
             stageStart[i] = s.Time[first];
             stageEnd[i] = s.Time[last];
             startMass[i] = s.Mass[first];
             endMass[i] = s.Mass[last];
+            if (fairing != null)
+            {
+                // Pick the real engine phase using a mass reference in which the shroud
+                // is already absent, regardless of when the live gate actually fires.
+                if (stageStart[i] < fairing.Time) startMass[i] -= fairing.MassKg;
+                if (stageEnd[i] < fairing.Time) endMass[i] -= fairing.MassKg;
+            }
         }
 
         var recordSpeed = new double[stages][];
@@ -251,7 +261,14 @@ public sealed class ConvexAscentProfile
         if (t <= _time[first]) { lo = hi = first; f = 0.0; return; }
         if (t >= _time[last]) { lo = hi = last; f = 0.0; return; }
         hi = Array.BinarySearch(_time, first, last - first + 1, t);
-        if (hi < 0) hi = ~hi;
+        if (hi >= 0)
+        {
+            while (hi < last && _time[hi + 1] == t) hi++;
+            lo = hi;
+            f = 0.0;
+            return;
+        }
+        hi = ~hi;
         lo = hi - 1;
         f = (t - _time[lo]) / (_time[hi] - _time[lo]);
     }
@@ -302,7 +319,8 @@ public sealed class AscentPlanSeries
     public int[] StagingNodes;
 
     /// <param name="omega">Body spin rate, rad/s: downrange is measured over the rotating ground.</param>
-    public static AscentPlanSeries Build(AscentSolution s, double omega, double bodyRadius, double qMax, double qAlphaMax)
+    public static AscentPlanSeries Build(AscentSolution s, double omega, double bodyRadius, double qMax, double qAlphaMax,
+        PlannedFairingRelease fairing = null)
     {
         int n = s.Nodes;
         var ser = new AscentPlanSeries
@@ -340,7 +358,7 @@ public sealed class AscentPlanSeries
             ser.QFraction[k] = s.DynamicPressure[k] / qMax;
             ser.QAlphaFraction[k] = s.QAlpha[k] / qAlphaMax;
             ser.ThrottlePct[k] = 100.0 * Math.Min(ul, 1.0);
-            if (k > 0 && s.NodeStage[k] != s.NodeStage[k - 1])
+            if (k > 0 && s.NodeStage[k] != s.NodeStage[k - 1] && s.NodeStage[k] != fairing?.Phase + 1)
                 staging.Add(k);
         }
         ser.StagingNodes = staging.ToArray();
@@ -402,6 +420,21 @@ public sealed class AscentPlan
 {
     public AscentSolution Solution { get; init; }
     public ConvexAscentProfile Profile { get; init; }
+    public AscentFairingRequest FairingRequest { get; init; }
+    public PlannedFairingRelease FairingRelease { get; init; }
+    public string FairingNote { get; init; } = "";
+
+    public double[] EngineBurnTimes
+    {
+        get
+        {
+            var burn = Solution.BurnTime;
+            if (FairingRelease is not { } release)
+                return burn;
+            int i = release.Phase;
+            return [.. burn[..i], burn[i] + burn[i + 1], .. burn[(i + 2)..]];
+        }
+    }
 
     /// <summary>Per-node series for the plots of the LAUNCH page.</summary>
     public AscentPlanSeries Series { get; init; }
@@ -526,13 +559,24 @@ public sealed class AscentPlanJob : IDisposable
     private readonly Func<AscentProblem, AscentSolution, bool[]> _toHold;
     private readonly int _available, _initial;
     private readonly double _qMax, _qCeiling;
-    private readonly Func<AscentSolution, AscentProblem, double, string[], double, ThrottledKept, AscentPlan> _publish;
+    private readonly Func<AscentSolution, AscentProblem, double, string[], double, ThrottledKept,
+        PlannedFairingRelease, string, AscentPlan> _publish;
+    private readonly AscentFairingRequest _fairing;
     private readonly object _gate = new();
     private string _progress = "starting";
     private string _retry = "";
     private AscentPlan _result;
     private bool _done;
     private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+
+    public AscentPlanJob(Func<int, double, bool[], AscentProblem> build, int available, int initial, double qMax,
+        Func<AscentSolution, AscentProblem, double, string[], double, ThrottledKept, AscentPlan> publish,
+        Func<AscentProblem, AscentSolution, bool[]> toHold = null, double qCeiling = double.PositiveInfinity)
+        : this(build, available, initial, qMax,
+            (solution, problem, q, notes, wall, kept, _, _) => publish(solution, problem, q, notes, wall, kept),
+            toHold, qCeiling, null)
+    {
+    }
 
     /// <param name="build">The problem for a number of stages, a max-q, Pa, and the stages held at full thrust (null for none). Must touch nothing of the game.</param>
     /// <param name="available">Stages the vehicle has.</param>
@@ -542,9 +586,10 @@ public sealed class AscentPlanJob : IDisposable
     /// <param name="toHold">From the problem and its trajectory, the stages to solve again held at full thrust, or null for none. Run on the worker.</param>
     /// <param name="qCeiling">The ceiling on a retry's max-q, Pa. Positive infinity for none.</param>
     public AscentPlanJob(Func<int, double, bool[], AscentProblem> build, int available, int initial, double qMax,
-                         Func<AscentSolution, AscentProblem, double, string[], double, ThrottledKept, AscentPlan> publish,
+                         Func<AscentSolution, AscentProblem, double, string[], double, ThrottledKept,
+                             PlannedFairingRelease, string, AscentPlan> publish,
                          Func<AscentProblem, AscentSolution, bool[]> toHold = null,
-                         double qCeiling = double.PositiveInfinity)
+                         double qCeiling = double.PositiveInfinity, AscentFairingRequest fairing = null)
     {
         _build = build;
         _toHold = toHold;
@@ -553,6 +598,7 @@ public sealed class AscentPlanJob : IDisposable
         _available = available;
         _initial = Math.Clamp(initial, 1, available);
         _publish = publish;
+        _fairing = fairing;
         _thread = new Thread(Run)
         {
             IsBackground = true,
@@ -715,8 +761,26 @@ public sealed class AscentPlanJob : IDisposable
                 }
             }
 
+            PlannedFairingRelease release = null;
+            string fairingNote = "";
+            if (_fairing != null && best?.Usable == true && !_cts.IsCancellationRequested)
+            {
+                release = AscentFairingPlanner.Refine(_fairing, bestProblem, best,
+                    (split, seed) => SolveOne(split, "timed fairing", seed),
+                    out AscentProblem timedProblem, out AscentSolution timed, out fairingNote);
+                if (release != null && timed.DynamicPressure.Max() < _qCeiling)
+                {
+                    best = timed;
+                    bestProblem = timedProblem;
+                }
+                else if (release != null)
+                {
+                    release = null;
+                    fairingNote = "The timed fairing solve exceeded the flight pressure ceiling.";
+                }
+            }
             if (best != null && !_cts.IsCancellationRequested)
-                plan = _publish(best, bestProblem, bestQ, Notes, ElapsedSeconds, kept);
+                plan = _publish(best, bestProblem, bestQ, Notes, ElapsedSeconds, kept, release, fairingNote);
         }
         catch (Exception e)
         {

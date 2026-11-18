@@ -34,6 +34,10 @@ public static class KsaVehicleAdapter
     // stageParts, when given, is filled with the engine parts each stage burns, merged as the stages are: the convex ascent planner splits a stage's solids from its liquids by them.
     public static UpfgVehicle Build(Vehicle vehicle, double ambientPressure, double[] pressureGrid = null,
                                     Dictionary<UpfgStage, HashSet<Part>> stageParts = null)
+        => BuildWithFairing(vehicle, ambientPressure, pressureGrid, stageParts, null);
+
+    internal static UpfgVehicle BuildWithFairing(Vehicle vehicle, double ambientPressure, double[] pressureGrid,
+        Dictionary<UpfgStage, HashSet<Part>> stageParts, FairingDrainSnapshot fairing)
     {
         var result = new UpfgVehicle();
 
@@ -49,6 +53,14 @@ public static class KsaVehicleAdapter
         if (count == 0)
             return result;
 
+        bool retainFairing = fairing != null && count == sequences.Length && count == performance.Length;
+        if (retainFairing)
+            for (int i = 0; i < count; i++)
+                if (performance[i].Phases is { Count: > 0 } && performance[i].AttachedParts == null)
+                    retainFairing = false;
+        result.FairingMassReconciled = retainFairing;
+        result.RetainsIndependentFairing = retainFairing;
+
         UpfgStage burningStage = null;
         HashSet<Part> burningPhaseParts = null;
         double burningModelPressure = 0.0;
@@ -59,9 +71,12 @@ public static class KsaVehicleAdapter
             List<SequencePhaseInfo> phases = perf.Phases;
             if (phases == null)
                 continue;
+            if (retainFairing && phases.Count > 0 && !fairing.MountsStay(perf.AttachedParts))
+                result.RetainsIndependentFairing = false;
 
             // Each sequence's WetMass already accounts for the burns and the jettisoned structure of every sequence before it, so the running mass is re-seeded here rather than carried across the boundary.
-            double mass = perf.WetMass;
+            double mass = perf.WetMass + (retainFairing && perf.AttachedParts != null
+                ? fairing.MassExcludedByStock(perf.AttachedParts) : 0.0);
             for (int j = 0; j < phases.Count; j++)
             {
                 SequencePhaseInfo phase = phases[j];

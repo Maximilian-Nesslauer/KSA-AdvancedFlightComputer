@@ -28,6 +28,8 @@ public sealed class UpfgStage
 public sealed class UpfgVehicle
 {
     public System.Collections.Generic.List<UpfgStage> Stages { get; } = new();
+    internal bool RetainsIndependentFairing { get; set; }
+    internal bool FairingMassReconciled { get; set; }
 
     /// <summary>
     /// The factor the burning stage's thrust and Isp were scaled by for ambient pressure,
