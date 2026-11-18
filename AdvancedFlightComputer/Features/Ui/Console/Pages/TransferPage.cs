@@ -72,7 +72,7 @@ internal static class TransferPage
         DrawPicture(in ctx, source);
         DrawLegendLine(source);
         DrawSelectionResult();
-        DrawMissionSupply(source);
+        DrawMissionSupply(source, ctx.Flying);
         CollectBars();
         _fuelFact = BurnBars.Draw(source, _bars);
         if (ctx.Flying && MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? running))
@@ -188,13 +188,14 @@ internal static class TransferPage
         return selected;
     }
 
-    private static void DrawMissionSupply(Vehicle source)
+    private static void DrawMissionSupply(Vehicle source, bool flying)
     {
         if (TransferSession.Destination is not Astronomical destination
             || TransferSession.SelectedEntry?.TransferData is not OrbitalTransfers.TransferData transfer)
             return;
 
         Span<char> buffer = stackalloc char[512];
+        using var disabled = new ImGuiDisabledScope(flying);
         MissionTransfer.Draw(source, destination, transfer.Arrival, buffer);
     }
 
