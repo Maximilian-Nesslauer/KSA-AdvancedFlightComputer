@@ -945,11 +945,6 @@ public sealed class VehicleAutopilotState
     public bool SixDofGimbalRateLimit = true;
 
     /// <summary>
-    /// Touchdown guidance's tilt limit tightens towards the pad by this many degrees per second of burn left, from 2 deg at the end (Scvx6DofConfig.TiltPerSDeg): 22 deg with 5 s left, 14 with 3, 6 with 1. 0 for the constant limit. In air only (GuidanceWindow.SixDofTiltPerSDeg).
-    /// </summary>
-    public double SixDofTiltPerSDeg = 4.0;
-
-    /// <summary>
     /// Touchdown guidance's standby starts in entry guidance's lock window, on the state predicted at the committed ignition, so its plan is converged when the engine lights (GuidanceWindow.StepEntryTouchdownPrepare). On. Off, it starts at ignition, as it did while a landing burn ran two seconds longer than the hand-over time.
     /// </summary>
     public bool ThreeDofTouchdownPrepare = true;

@@ -36,24 +36,6 @@ public sealed class Scvx6DofConfig
     /// </summary>
     public bool TerminalRollFree { get; init; }
     public double TiltMaxDeg { get; init; } = 30.0;
-
-    /// <summary>
-    /// THE TILT LIMIT TIGHTENS TOWARDS THE PAD: at a node with t seconds of the burn left the craft may lean no more than TiltFloorDeg + TiltPerSDeg * t off vertical (and never more than TiltMaxDeg). 0 for no tightening. A plan free to lean as it likes puts off killing its sideways speed, because nothing prices when: on 2026-11-18 a booster that arrived 18 deg off vertical with 31 m/s sideways was planned at 13.9 deg early and 17.6 deg with 2.9 s left, more than its gimbals could take off in that time, and the plan stopped fitting the descent. With the limit the lean has to come early, while it is allowed, and the last seconds are near upright - the shape the landings before KSA 5901 had on their own (15 deg at 4.8 s, 8 deg at 2.3 s).
-    ///  A HEURISTIC. A craft that starts beyond it is let down to it at TiltRecoverDegS, so the first node's measured attitude never makes the plan infeasible.
-    /// </summary>
-    public double TiltPerSDeg { get; init; }
-    public double TiltFloorDeg { get; init; } = 2.0;
-    public double TiltRecoverDegS { get; init; } = 3.0;
-
-    /// <summary>The tilt limit at a node, degrees: TiltMaxDeg, tightened by the time left as TiltPerSDeg says, from a first node tilted <paramref name="tiltNowDeg"/>, <paramref name="elapsedS"/> into a plan with <paramref name="leftS"/> to go.</summary>
-    public double TiltLimitDeg(double tiltNowDeg, double elapsedS, double leftS)
-    {
-        if (!(TiltPerSDeg > 0.0))
-            return TiltMaxDeg;
-        double scheduled = TiltFloorDeg + TiltPerSDeg * Math.Max(leftS, 0.0);
-        double recovering = tiltNowDeg + 0.5 - TiltRecoverDegS * Math.Max(elapsedS, 0.0);
-        return Math.Min(TiltMaxDeg, Math.Max(scheduled, recovering));
-    }
     public double GroundFloor { get; init; } = -1.0;            // X[n,2] >= this
 
     public double RhoVc { get; init; } = 1e5;                   // virtual-control penalty

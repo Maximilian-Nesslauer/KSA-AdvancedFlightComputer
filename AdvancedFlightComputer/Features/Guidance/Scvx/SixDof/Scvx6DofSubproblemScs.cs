@@ -644,14 +644,9 @@ public sealed class Scvx6DofSubproblemScs
         //
         // SOC rows are s = b - Ax with s[0] >= ||s[1:]||, so s[0] is the constant radius - a row with NO matrix entries at all - and s[1], s[2] are qx, qy.
         // The all-zero row is harmless: EquilibrateRows gives every row of a SOC block the block's shared scale, and rows 1 and 2 carry the quaternion scale, so nothing is divided by a vanishing norm.
-        // The radius is per node where the limit tightens towards the pad (Scvx6DofConfig.TiltPerSDeg): read at the reference burn time, so it is a constant of this subproblem like the rest of the cone.
-        double tiltNowDeg = 2.0 * Math.Asin(Math.Min(1.0, Math.Sqrt(xbar[Dynamics6Dof.IQ + 1] * xbar[Dynamics6Dof.IQ + 1] + xbar[Dynamics6Dof.IQ + 2] * xbar[Dynamics6Dof.IQ + 2]))) * 180.0 / Math.PI;
+        double tiltRadius = _cfg.SinHalfTilt;
         for (int k = 0; k < _n; k++)
         {
-            double elapsed = sigBar * k * _dtau;
-            double tiltRadius = _cfg.TiltPerSDeg > 0.0
-                ? Math.Sin(0.5 * _cfg.TiltLimitDeg(tiltNowDeg, elapsed, sigBar - elapsed) * Math.PI / 180.0)
-                : _cfg.SinHalfTilt;
             _b[row++] = tiltRadius;
 
             AddA(row, IX(k, Dynamics6Dof.IQ + 1), -1.0);

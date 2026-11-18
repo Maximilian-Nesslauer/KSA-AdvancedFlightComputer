@@ -295,10 +295,6 @@ public static partial class GuidanceWindow
     // Taken as the larger of this and 5% of altitude, so it scales with how much room there is: 20 m matters at 100 m and is noise at 2 km.
     private const double ColdRestartDriftM = 20.0;
 
-    /// <summary>The tightening of touchdown guidance's tilt limit towards the pad, deg per second of burn left (VehicleAutopilotState.SixDofTiltPerSDeg): only in air, where a booster's landing burn is seconds long and arrives leaning. A descent from orbit on an airless body brakes near the horizon for most of its burn and keeps the constant limit.</summary>
-    private static double SixDofTiltPerSDeg(IParentBody parent)
-        => HasPhysicalAtmosphere(parent) ? _s.SixDofTiltPerSDeg : 0.0;
-
     private static double SixDofRestartDriftLimit(double heightM)
         => Math.Max(ColdRestartDriftM, 0.05 * Math.Max(heightM, 1.0));
 
@@ -466,7 +462,7 @@ public static partial class GuidanceWindow
                                    out Dynamics6Dof.Params dyn, out _, LandingAccelLimitMs2,
                                    floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero,
                                    keptRollFree: _s.Guidance.TerminalRollFree, bodyAero: _s.SixDofBodyAero,
-                                   gimbalRateLimit: _s.SixDofGimbalRateLimit, tiltPerSDeg: SixDofTiltPerSDeg(parent)))
+                                   gimbalRateLimit: _s.SixDofGimbalRateLimit))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -1795,7 +1791,7 @@ public static partial class GuidanceWindow
                                      _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                      x, xf, out cfg, out dyn, out error, LandingAccelLimitMs2,
                                      floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero, bodyAero: _s.SixDofBodyAero,
-                                     gimbalRateLimit: _s.SixDofGimbalRateLimit, tiltPerSDeg: SixDofTiltPerSDeg(parent));
+                                     gimbalRateLimit: _s.SixDofGimbalRateLimit);
     }
 
     /// <summary>

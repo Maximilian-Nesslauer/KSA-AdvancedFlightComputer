@@ -308,7 +308,6 @@ public static class Ksa6DofSetup
     /// <param name="keptRollFree">The Scvx6DofConfig.TerminalRollFree of the plan this one replaces, or null for the first plan of a landing; see RollModel.</param>
     /// <param name="bodyAero">Plan with the body-axis force and moment (BodyAeroFor), or only the roll-averaged force on the thrust axis.</param>
     /// <param name="gimbalRateLimit">Hold the plan's lateral thrust to the gimbal's slew rate (GimbalSlewPerS).</param>
-    /// <param name="tiltPerSDeg">Tighten the tilt limit towards the pad by this many degrees per second of burn left (Scvx6DofConfig.TiltPerSDeg); 0 for a constant limit.</param>
     /// <summary>
     /// The body-axis force and moment for the plan's full attitude (BodyAero6Dof), from the sweep's tables, or null where it measured none: the model's axes in the game's body axes (KsaFrameBridge.BodyAxes), and the moment moved from the centre of mass the sweep saw to the one the craft has now.
     /// </summary>
@@ -341,7 +340,7 @@ public static class Ksa6DofSetup
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
                                 out string error, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
                                 KsaAeroSweep.Result aero = null, bool? keptRollFree = null, bool bodyAero = true,
-                                bool gimbalRateLimit = true, double tiltPerSDeg = 0.0)
+                                bool gimbalRateLimit = true)
     {
         cfg = null!;
         dyn = null!;
@@ -529,7 +528,6 @@ public static class Ksa6DofSetup
             //  A GUARD, NOT A DIAGNOSIS. The flight this was measured against had already been flown with the cap raised to 120, so it was feasible throughout - the trouble there was node spacing, not this. What this prevents is the case where someone leaves the cap at a value that sounds cautious and the vehicle simply cannot be planned for, with nothing in the failure text to say why.
             //  The margin is what makes it a starting point rather than a knife edge: a cap exactly at the current tilt leaves the first node with no slack at all.
             TiltMaxDeg = Math.Min(Math.Max(tiltMaxDeg, EntryTiltDeg(x0) + 5.0), 175.0),
-            TiltPerSDeg = Math.Max(tiltPerSDeg, 0.0),
             GroundFloor = -1.0,
             // Never under what the minimum throttle already gives at this mass: a limit below it could only ever be met through its slack.
             AccelMax = accelMaxMs2 > 0.0 ? Math.Max(accelMaxMs2, 1.05 * throttleFloor * thrust / vehicle.TotalMass) : 0.0,
