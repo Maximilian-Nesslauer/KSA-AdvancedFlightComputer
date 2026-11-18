@@ -27,6 +27,7 @@ internal static class SixDofAeroCheck
         ok &= Agreement();
         ok &= Landing(verbose);
         ok &= Slew(verbose);
+        ok &= TiltLimit(verbose);
         Console.WriteLine();
         Console.WriteLine(ok ? "PASS - touchdown guidance's body-axis aerodynamics" : "FAIL - see above");
         return ok ? 0 : 1;
@@ -279,7 +280,53 @@ internal static class SixDofAeroCheck
         return ok;
     }
 
-    private static bool Plan(Dynamics6Dof.Params dyn, double[] x0, double[] xf, bool verbose, out Scvx6DofSolver solver, out int iterations, double slewPerS = 0.0)
+    // ------------------------------------------------------------------- 5. the tilt limit that tightens towards the pad
+
+    /// <summary>The plan's tilt off vertical, degrees, at the node nearest <paramref name="leftS"/> seconds from its end.</summary>
+    private static double TiltAt(Scvx6DofSolver s, double leftS)
+    {
+        int n = s.ReferenceX.Length / NX;
+        int k = Math.Clamp((int)Math.Round((n - 1) * (1.0 - leftS / s.Sigma)), 0, n - 1);
+        double qx = s.ReferenceX[k * NX + 7], qy = s.ReferenceX[k * NX + 8];
+        return 2.0 * Math.Asin(Math.Min(1.0, Math.Sqrt(qx * qx + qy * qy))) * 180.0 / Math.PI;
+    }
+
+    private static bool TiltLimit(bool verbose)
+    {
+        Console.WriteLine();
+        Console.WriteLine("5. the tilt limit that tightens towards the pad: a landing arriving 18 deg off vertical, planned free and held to 2 deg + 4 deg per second left");
+        Dynamics6Dof.Params dyn = Params(Body(ThreeDofScenario.BodyTable(0.02, 0.0), null, GameAxes));
+        // On a slant, as the 2026-11-18 boosters arrived: a third of the speed sideways, pointing along the path.
+        double[] x0 = State(400, [30, -10, -92], 0, [0, 0, 0]);
+        double[] xf = new double[NX];
+        xf[2] = 5.0;
+        xf[6] = 1.0;
+        bool free = Plan(dyn, x0, xf, verbose, out Scvx6DofSolver a, out int ia);
+        bool held = Plan(dyn, x0, xf, verbose, out Scvx6DofSolver b, out int ib, tiltPerSDeg: 4.0);
+        string Row(Scvx6DofSolver s) => string.Create(CultureInfo.InvariantCulture, $"tilt with 3 / 2 / 1 s left {TiltAt(s, 3):F1} / {TiltAt(s, 2):F1} / {TiltAt(s, 1):F1} deg, {s.Sigma:F1} s");
+        Console.WriteLine($"  free: {(free ? $"plan in {ia} iterations, {Row(a)}" : "NO PLAN")}");
+        bool ok = held;
+        if (held)
+        {
+            int n = b.ReferenceX.Length / NX;
+            double worst = 0;
+            for (int k = 1; k < n; k++)
+            {
+                double left = b.Sigma * (1.0 - (double)k / (n - 1));
+                double qx = b.ReferenceX[k * NX + 7], qy = b.ReferenceX[k * NX + 8];
+                double tilt = 2.0 * Math.Asin(Math.Min(1.0, Math.Sqrt(qx * qx + qy * qy))) * 180.0 / Math.PI;
+                worst = Math.Max(worst, tilt - (2.0 + 4.0 * left));
+            }
+            // Where the craft starts over the limit it is let down to it; past that the limit holds, to the solver's tolerance.
+            ok = worst < 0.5 || TiltAt(b, 3) <= 14.5;
+            Console.WriteLine($"  held: plan in {ib} iterations, {Row(b)}  {(ok ? "ok" : "FAIL")}");
+        }
+        else
+            Console.WriteLine("  held: NO PLAN  FAIL");
+        return ok;
+    }
+
+    private static bool Plan(Dynamics6Dof.Params dyn, double[] x0, double[] xf, bool verbose, out Scvx6DofSolver solver, out int iterations, double slewPerS = 0.0, double tiltPerSDeg = 0.0)
     {
         const int n = 40;
         const double sigma = 9.0;
@@ -294,6 +341,7 @@ internal static class SixDofAeroCheck
             ThrottleFloor = Floor,
             GimbalMaxDeg = 8.0,
             GimbalSlewPerS = slewPerS,
+            TiltPerSDeg = tiltPerSDeg,
             TauRollMax = 5e4,
             TerminalRollFree = true,
             TiltMaxDeg = 60.0,

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Touchdown guidance's **tilt limit tightens towards the pad** in air: with t seconds of the burn left the booster may lean no more than 2 deg + 4 deg per second (22 deg with 5 s left, 14 with 3, 6 with 1). Since KSA 5901 boosters arrive about 18 deg off vertical with 31 m/s sideways, where they came at 10 deg and 18 m/s, and a plan free to lean as it liked put off killing that speed: it leaned 17.6 deg with 2.9 s left, more than the gimbals could take off in the time, stopped fitting the descent, and every re-solve below 56 m was refused. The lean now has to come early. A heuristic; a booster that starts beyond the limit is let down to it at 3 deg/s.
+
 - A converged touchdown plan is **never refused the hand-over**. The thrust-continuity check, which kept entry guidance flying until its thrust matched touchdown guidance's to half a percent of throttle, is reverted: it held the hand-over 1.6 s into a 5 s burn. The entry throttle is still carried into touchdown guidance's first command and blended to its plan over 0.4 s. The 3 g test on the plan's rebalanced mass is reverted too: it refused accurate plans for passing a soft limit by 0.1 %.
 
 - The hand-over time is **fixed when the engine lights**, AT BURN LEFT before the end of the burn as planned then. A burn that entry guidance stretches afterwards no longer pushes it back; it had waited 2.3 s into a 5 s burn.
