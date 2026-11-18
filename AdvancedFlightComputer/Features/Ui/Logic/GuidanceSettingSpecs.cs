@@ -136,7 +136,7 @@ internal static class GuidanceSettingSpecs
         "Height of the center of mass (COM) above the legs, the reference for on the ground in every landing. Measured while MEASURE COM ABOVE LEGS is on, switch it off to type a value.");
     public static readonly SettingSpec GfoldHoverHandoffAltM = new("GfoldHoverHandoffAltM", "HOVER FROM", "m", P, 10.0, 0.0, 1e5, "%.1f",
         "Height where G-FOLD hands the descent to the hover.");
-    public static readonly SettingSpec LandingAccelLimitG = new("LandingAccelLimitG", "MAX BURN ACCEL", "g", E, 3.0, 0.0, 100.0, "%.2f",
+    public static readonly SettingSpec LandingAccelLimitG = new("LandingAccelLimitG", "MAX BURN ACCEL", "g", E, 2.0, 0.0, 100.0, "%.2f",
         "Largest thrust acceleration in the ENTRY and TOUCHDOWN plans, one value for both. 0 switches the limit off.");
     public static readonly SettingSpec LegsDeployBufferS = new("LegsDeployBufferS", "BUFFER", "s", P, 1.0, 0.0, 60.0, "%.1f",
         "Time the legs are fully down before the touchdown. A landing deploys them when its time to the touchdown is DEPLOY TIME plus this: the time of the plan that flies the landing, or without a plan the fall time of the legs to the ground.");
