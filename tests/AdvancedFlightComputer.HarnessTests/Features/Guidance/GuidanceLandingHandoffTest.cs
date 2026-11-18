@@ -48,6 +48,10 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
     protected override void Execute(TestContext t)
     {
         CheckStandbyAttitude(t);
+        t.Check("entry retains a published ignition plan seven seconds before the burn",
+            !GuidanceWindow.CanRestartEntryGlide(7.0, 4.0));
+        t.Check("entry can restart when there is time for a cold retry before ignition lock",
+            GuidanceWindow.CanRestartEntryGlide(13.0, 4.0));
         if (!TestWorld.RequireHome(t, out IParentBody home))
             return;
         IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(RcsTestVehicles.Candidates);

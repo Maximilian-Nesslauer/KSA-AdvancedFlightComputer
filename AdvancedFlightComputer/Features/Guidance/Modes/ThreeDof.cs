@@ -51,6 +51,12 @@ public static partial class GuidanceWindow
     /// <summary>Wait between cold-solve attempts after one fails, s.</summary>
     private const double ThreeDofColdRetryS = 2.0;
 
+    internal static bool CanRestartEntryGlide(double ignitionInS, double lockLeadS)
+        => ignitionInS > lockLeadS + 2.0 * ThreeDofColdRetryS;
+
+    private static bool CanRestartEntryGlide(Guidance3Dof guidance, double now)
+        => guidance?.Published is not { } plan || CanRestartEntryGlide(plan.IgnitionTime - now, guidance.IgnitionLockLeadS);
+
     private static bool ThreeDofBusy => _s.ThreeDofWorker != null && _s.ThreeDofWorker.Busy;
 
     /// <summary>
@@ -137,7 +143,7 @@ public static partial class GuidanceWindow
             _s.ThreeDofWorker.LastError = "";
             if (burning)
                 _s.ThreeDofBurnSolveFault = true;
-            else
+            else if (CanRestartEntryGlide(_s.ThreeDofGuidance, now))
                 Drop3Dof(vehicle, "ENTRY SOLVE FAULT. PID GLIDE, COLD RETRY.", now);
         }
 
@@ -252,8 +258,10 @@ public static partial class GuidanceWindow
             _s.ThreeDofSolveText = $"{g.LastSolveMs,8:F0} ms, {g.LastIterations} IT, {g.ConsecutiveRefusals} REFUSED";
             _s.ThreeDofRefusing = g.ConsecutiveRefusals > 0;
             // Results are read only while the worker is idle: the guidance is the worker's while it solves.
+            // Allow time for one retry after a failed cold solve before the ignition lock. Keep the last accepted plan inside that window.
             if (!burning && (g.Phase == Phase3Dof.Idle
-                || (g.Phase == Phase3Dof.Glide && g.ConsecutiveRefusals >= ThreeDofGlideRefusalLimit)))
+                || (g.Phase == Phase3Dof.Glide && g.ConsecutiveRefusals >= ThreeDofGlideRefusalLimit
+                    && CanRestartEntryGlide(g, now))))
             {
                 Drop3Dof(vehicle, g.Phase == Phase3Dof.Idle
                     ? "ENTRY " + g.Error + ". PID GLIDE, COLD RETRY."

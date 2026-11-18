@@ -149,6 +149,7 @@ public sealed class Guidance3Dof
     }
 
     private readonly Settings _set;
+    public double IgnitionLockLeadS => _set.LockSeconds;
     private readonly Scvx3DofSolver _two, _burn;
     private double[] _xf = new double[6];
     private bool _burnStarted;
