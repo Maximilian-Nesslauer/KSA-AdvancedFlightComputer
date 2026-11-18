@@ -58,6 +58,9 @@ if (args.Contains("--3dof-far"))
     return ThreeDofFarCheck.Run();
 }
 
+if (args.Contains("--6dof-aero"))
+    return SixDofAeroCheck.Run(verbose);
+
 if (args.Contains("--3dof-mpc"))
     return ThreeDofMpcCheck.Run(verbose);
 
@@ -99,6 +102,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --3dof-model    the KSA point-mass model: AD slopes, the rotating frame against CCI, lift and thrust
           --3dof-ksa      glide-and-burn and burn-only solves of a returning booster on the KSA model
           --3dof-mpc      the glide-and-burn guidance flown closed loop against dispersed drag, lift, thrust and attitude lag
+          --6dof-aero     touchdown guidance's body-axis force and moment: slopes, agreement, a landing against a steady moment
           --boostback-replay <file> [--delay s] [--min-pitch deg]  the booster's own burn planner from where the plan separates it
           --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f] [--hold i,j]
                           solve an ascent problem the game dumped, with the full trace

@@ -288,14 +288,26 @@ public static class Ksa6DofSetup
     /// <param name="xf">Terminal model state, same reason.</param>
     /// <param name="accelMaxMs2">Largest thrust acceleration the plan may use, m/s^2, or 0 for none; see Scvx6DofConfig.AccelMax.</param>
     /// <param name="keptRollFree">The Scvx6DofConfig.TerminalRollFree of the plan this one replaces, or null for the first plan of a landing; see RollModel.</param>
-    /// <param name="bodyAero">Read the body-axis table (KsaAeroSweep.Result.BodyAero) at the roll the craft has now, in place of the roll-averaged tables: see BodyAeroRollRef.</param>
     /// <summary>
-    /// The roll touchdown guidance reads the body-axis table at, site frame (KsaPointMassModel.RollRef): the roll the craft has NOW, which entry guidance held it at and this plan does not turn it from. With w = -(body +z), the model's body +y, along b x w, is the body's own +y. Touchdown flies slow and short, so the roll a re-plan finds is the one it flies.
+    /// The body-axis force and moment for the plan's full attitude (BodyAero6Dof), from the sweep's tables, or null where it measured none: the model's axes in the game's body axes (KsaFrameBridge.BodyAxes), and the moment moved from the centre of mass the sweep saw to the one the craft has now.
     /// </summary>
-    private static double3 BodyAeroRollRef(Vehicle vehicle, double3 siteCci)
+    private static BodyAero6Dof BodyAeroFor(Vehicle vehicle, KsaAeroSweep.Result aero)
     {
-        double3 bodyZ = double3.UnitZ.Transform(KsaFrameBridge.BodyToCci(vehicle));
-        return KsaFrameBridge.BuildSiteFrame(siteCci).VecToLocal(-bodyZ).NormalizeOrZero();
+        if (aero?.BodyAero == null || aero.Atmosphere == null || !(aero.ReferenceArea > 0.0))
+            return null;
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        float3 com = vehicle.CenterOfMassAsmbF;
+        double3 shift = aero.BodyMoment != null ? aero.BodyMomentComAsmb - new double3(com.X, com.Y, com.Z) : double3.Zero;
+        return new BodyAero6Dof
+        {
+            Atmosphere = aero.Atmosphere,
+            Force = aero.BodyAero,
+            Moment = aero.BodyMoment,
+            ReferenceArea = aero.ReferenceArea,
+            ReferenceLength = aero.ReferenceLength,
+            ModelToTable = [mx.X, my.X, mz.X, mx.Y, my.Y, mz.Y, mx.Z, my.Z, mz.Z],
+            ComShiftX = shift.X, ComShiftY = shift.Y, ComShiftZ = shift.Z,
+        };
     }
 
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
@@ -307,7 +319,7 @@ public static class Ksa6DofSetup
                                 double[] x0, double[] xf,
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
                                 out string error, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
-                                KsaAeroSweep.Result aero = null, bool? keptRollFree = null, bool bodyAero = false)
+                                KsaAeroSweep.Result aero = null, bool? keptRollFree = null)
     {
         cfg = null!;
         dyn = null!;
@@ -427,7 +439,6 @@ public static class Ksa6DofSetup
         double g = parent.Mu / (r * r);
 
         const double G0 = 9.80665;
-        double3 rollRefLocal = bodyAero && aero?.BodyAero != null ? BodyAeroRollRef(vehicle, siteCci) : default;
         dyn = new Dynamics6Dof.Params
         {
             Gx = 0.0, Gy = 0.0, Gz = -g,
@@ -444,10 +455,10 @@ public static class Ksa6DofSetup
                         ? KsaPointMassModel.LiftSlopeTable(aero.MachGrid, aero.AlphaGridDeg, aero.LiftTable)
                         : null,
                     ReferenceArea = aero.ReferenceArea,
-                    BodyAero = rollRefLocal.Length() > 0.5 ? aero.BodyAero : null,
-                    RollRefX = rollRefLocal.X, RollRefY = rollRefLocal.Y, RollRefZ = rollRefLocal.Z,
                 }
                 : null,
+            // THE BODY-AXIS FORCE AND MOMENT for the plan's own attitude, where the sweep measured them: the gimbal then holds against the air's moment from the plan's start rather than finding it in flight (BodyAero6Dof). The tables above carry the share of the force these fade out of.
+            BodyAero = aero?.Table != null ? BodyAeroFor(vehicle, aero) : null,
             AeroAltitudeOffset = siteAltAsl,
             LArm = arm,
             Ixx = ixx, Iyy = iyy, Izz = izz,

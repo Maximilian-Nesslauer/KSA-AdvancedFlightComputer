@@ -461,7 +461,7 @@ public static partial class GuidanceWindow
                                    out Scvx6DofConfig cfg,
                                    out Dynamics6Dof.Params dyn, out _, LandingAccelLimitMs2,
                                    floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero,
-                                   keptRollFree: _s.Guidance.TerminalRollFree, bodyAero: _s.BoosterRollHold))
+                                   keptRollFree: _s.Guidance.TerminalRollFree))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -1814,7 +1814,7 @@ public static partial class GuidanceWindow
                                      _s.SixDofProximal,
                                      _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                      x, xf, out cfg, out dyn, out error, LandingAccelLimitMs2,
-                                     floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero, bodyAero: _s.BoosterRollHold);
+                                     floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero);
     }
 
     /// <summary>

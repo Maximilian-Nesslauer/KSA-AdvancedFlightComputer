@@ -163,25 +163,18 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public double3 ModelAeroAccel(double[] x)
     {
-        if (_dyn.Aero == null || x == null || x.Length < NX || !(x[Dynamics6Dof.IM] > 0.0))
+        if ((_dyn.Aero == null && _dyn.BodyAero == null) || x == null || x.Length < NX || !(x[Dynamics6Dof.IM] > 0.0))
             return default;
-        double qw = x[6], qx = x[7], qy = x[8], qz = x[9];
-        double n = Math.Sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
-        if (!(n > 0.0))
-            return default;
-        qw /= n; qx /= n; qy /= n; qz /= n;
-        _dyn.Aero.AeroForce(_dyn.AeroAltitudeOffset + x[2], x[3], x[4], x[5],
-                            2.0 * (qx * qz + qw * qy), 2.0 * (qy * qz - qw * qx), 1.0 - 2.0 * (qx * qx + qy * qy),
-                            out var fx, out var fy, out var fz);
+        Dynamics6Dof.AeroForce(x, _dyn, out double fx, out double fy, out double fz);
         double m = x[Dynamics6Dof.IM];
-        return new double3(fx.V / m, fy.V / m, fz.V / m);
+        return new double3(fx / m, fy / m, fz / m);
     }
 
     /// <summary>Lateral (pitch/yaw) torque the model allows per newton of axial thrust, N m/N: the gimbal arm times the cone's tangent.</summary>
     public double LateralTorquePerNewton => _dyn.LArm * _cfg.TanGimbal;
 
     /// <summary>Whether the model carries aerodynamics.</summary>
-    public bool HasAero => _dyn.Aero != null;
+    public bool HasAero => _dyn.Aero != null || _dyn.BodyAero != null;
 
     /// <summary>The bias actually IN the model, i.e. as of the last CommitInputs.</summary>
     public double3 AccelBias { get; private set; }
