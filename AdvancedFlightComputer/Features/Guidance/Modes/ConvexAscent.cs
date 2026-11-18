@@ -132,7 +132,7 @@ public static partial class GuidanceWindow
                     if (sol.Nodes > 0)
                     {
                         GuidanceLog.DebugWrapped(vehicle, "convex detail: ", FormattableString.Invariant(
-                            $"{sol.FinalMass / 1000.0:F2} t, burns {string.Join("/", Array.ConvertAll(sol.BurnTime, b => FormattableString.Invariant($"{b:F0}")))} s"));
+                            $"{sol.FinalMass / 1000.0:F2} t, burns {string.Join("/", Array.ConvertAll(plan.EngineBurnTimes, b => FormattableString.Invariant($"{b:F0}")))} s"));
                         GuidanceLog.DebugWrapped(vehicle, "convex detail: ", FormattableString.Invariant(
                             $"max q {Max(sol.DynamicPressure) / 1000.0:F1} kPa, max q-alpha {Max(sol.QAlpha):F0} Pa rad"));
                         GuidanceLog.DebugWrapped(vehicle, "convex detail: ", FormattableString.Invariant(
@@ -367,7 +367,22 @@ public static partial class GuidanceWindow
         }
         float ambient = vehicle.PhysicsEnvironment.AtmosphericPressure;
         var stageParts = new Dictionary<UpfgStage, HashSet<Part>>();
-        UpfgVehicle model = StageThrottleLimits.BuildForConvex(vehicle, ambient, grid, stageParts);
+        var fairingDrain = FairingDrainSnapshot.Capture(vehicle, _s.AutoStage, out string fairingCaptureNote);
+        UpfgVehicle model = StageThrottleLimits.BuildForConvex(vehicle, ambient, grid, stageParts, fairingDrain);
+        AscentFairingRequest fairingRequest = null;
+        if (fairingDrain != null)
+        {
+            // The live gate measures the terrain below the vehicle. The maximum radius
+            // bounds that clearance without assuming the terrain along a guessed path.
+            double terrainDatum = parent.MaxTerrainRadius + vehicle.BoundingSphereRadiusBody;
+            fairingRequest = new AscentFairingRequest(fairingDrain.Row,
+                fairingDrain.Parts.Select(leaf => (leaf.Part.InstanceId, leaf.Mass)).ToArray(), terrainDatum,
+                _s.FairingAltitudeKm * 1000.0, _s.FairingQKpa * 1000.0, atmosphere != null);
+            if (!model.RetainsIndependentFairing)
+                fairingCaptureNote = model.FairingMassReconciled
+                    ? "A fairing mount leaves during a propulsion phase. Using the live gate."
+                    : "The stock drain model had no complete attached-parts snapshot.";
+        }
         if (model.Stages.Count == 0)
         {
             error = "NO STAGE WITH THRUST AND PROPELLANT";
@@ -636,10 +651,16 @@ public static partial class GuidanceWindow
         double qMaxKpa = qMax / 1000.0;
         double insAltKm = (rIns - bodyRadius) / 1000.0;
 
-        AscentPlan Publish(AscentSolution solved, AscentProblem winningProblem, double qUsed, string[] notes, double wall, AscentPlanJob.ThrottledKept kept)
+        AscentPlan Publish(AscentSolution solved, AscentProblem winningProblem, double qUsed, string[] notes, double wall,
+            AscentPlanJob.ThrottledKept kept, PlannedFairingRelease release, string fairingNote)
         {
             AscentStage[] plannedStages = winningProblem.Stages;
-            int stages = plannedStages.Length;
+            int stages = plannedStages.Length - (release != null ? 1 : 0);
+            if (fairingNote.Length == 0)
+                fairingNote = fairingCaptureNote;
+            if (release == null && model.RetainsIndependentFairing && fairingNote.Length > 0)
+                fairingNote += " The plan carries the fairing mass.";
+            AscentStage ForView(int i) => plannedStages[release != null && i >= release.Phase ? i + 1 : i];
             // A chosen launch time lifts off delay later, from where the spin has carried the pad: the same plan turned by omega delay, which is -PlaneTurn, and so back in the target's own plane. A chosen LAN flies now, in the plane turned by PlaneTurn.
             double delay = freeTime && solved.Nodes > 0 ? -solved.PlaneTurn / omega : 0.0;
             AscentSolution sol = freeTime ? solved.RotatedAboutSpin(-solved.PlaneTurn) : solved;
@@ -657,7 +678,9 @@ public static partial class GuidanceWindow
                     BoosterReturnTrack track;
                     try
                     {
-                        track = BoosterReturn.Compute(mu, bodyRadius, omega, rec, mode, solved);
+                        AscentRecovery scheduled = release != null && rec.Stage >= release.Phase
+                            ? rec.WithStage(rec.Stage + 1) : rec;
+                        track = BoosterReturn.Compute(mu, bodyRadius, omega, scheduled, mode, solved);
                     }
                     catch (Exception e)
                     {
@@ -672,8 +695,11 @@ public static partial class GuidanceWindow
             {
             Solution = sol,
             BoosterTracks = boosterTracks.ToArray(),
-            Profile = sol.Nodes > 0 ? ConvexAscentProfile.FromSolution(sol, omega, bodyRadius) : null,
-            Series = AscentPlanSeries.Build(sol, omega, bodyRadius, qUsed, qAlphaMax),
+            Profile = sol.Nodes > 0 ? ConvexAscentProfile.FromSolution(sol, omega, bodyRadius, release) : null,
+            FairingRequest = fairingRequest,
+            FairingRelease = release,
+            FairingNote = fairingNote,
+            Series = AscentPlanSeries.Build(sol, omega, bodyRadius, qUsed, qAlphaMax, release),
             VehicleId = vehicleId,
             BodyName = bodyName,
             Body = parent,
@@ -700,16 +726,19 @@ public static partial class GuidanceWindow
             StartsWithSolid = startsWithSolid,
             PlansPadRoll = plansPadRoll,
             CoreThrottledDown = stagePlan.CoreThrottledDown,
-            StageLines = stagePlan.Describe.Take(stages).Select((d, i) => d
-                + (plannedStages[i].HasLiquid ? $", MIN {plannedStages[i].ThrottleMin:P0} OF AVAILABLE"
-                    + (plannedStages[i].PhysicalThrottleMin > 0.0 ? $", ENGINE MIN {plannedStages[i].PhysicalThrottleMin:P0}" : "") : "")
-                + (plannedStages[i].IsPinned ? $", PINNED TO {plannedStages[i].FixedBurnTime:F1} s" : "")).ToArray(),
+            StageLines = stagePlan.Describe.Take(stages).Select((d, i) =>
+            {
+                AscentStage stage = ForView(i);
+                return d + (stage.HasLiquid ? $", MIN {stage.ThrottleMin:P0} OF AVAILABLE"
+                    + (stage.PhysicalThrottleMin > 0.0 ? $", ENGINE MIN {stage.PhysicalThrottleMin:P0}" : "") : "")
+                    + (stage.IsPinned ? $", PINNED TO {stage.FixedBurnTime:F1} s" : "");
+            }).ToArray(),
             StageNotes = stagePlan.Notes.ToArray(),
             QMaxKpa = qUsed / 1000.0,
             QMaxRequestedKpa = qMaxKpa,
             QAlphaMax = qAlphaMax,
             InsertionAltKm = insAltKm,
-            FinalMassFloor = Build(stages, qUsed, null).FinalMassFloor,
+            FinalMassFloor = winningProblem.FinalMassFloor,
             StagesPlanned = stages,
             StagesAvailable = count,
             Notes = notes,
@@ -778,7 +807,8 @@ public static partial class GuidanceWindow
 
         double handoverRadius = bodyRadius + _s.HandoverAltKm * 1000.0;
         job = new AscentPlanJob(Build, count, initial, qMax, Publish,
-                                (problem, sol) => StagesUpfgFliesThrottled(problem, sol, handoverRadius), qCeiling);
+                                (problem, sol) => StagesUpfgFliesThrottled(problem, sol, handoverRadius), qCeiling,
+                                model.RetainsIndependentFairing ? fairingRequest : null);
         error = "";
         return true;
     }
@@ -1067,6 +1097,23 @@ public static partial class GuidanceWindow
             why = "BOOSTER LANDING TARGET CHANGED SINCE PLAN";
             return false;
         }
+        var currentFairing = FairingDrainSnapshot.Capture(vehicle, _s.AutoStage, out _);
+        if (p.FairingRequest is { } fairing)
+        {
+            if (currentFairing == null || currentFairing.Row != fairing.Row
+                || !currentFairing.Parts.Select(leaf => (leaf.Part.InstanceId, leaf.Mass)).SequenceEqual(fairing.Parts)
+                || Math.Abs(fairing.AltitudeFloorM - _s.FairingAltitudeKm * 1000.0) > 1e-6
+                || Math.Abs(fairing.QCeilingPa - _s.FairingQKpa * 1000.0) > 1e-6)
+            {
+                why = "FAIRING OR RELEASE LIMITS CHANGED";
+                return false;
+            }
+        }
+        else if (currentFairing != null)
+        {
+            why = "FAIRING CONFIGURATION CHANGED";
+            return false;
+        }
         double late = launchAt - p.SolvedAt;
         if (Math.Abs(late) > PlanLaunchToleranceS)
         {
@@ -1111,6 +1158,11 @@ public static partial class GuidanceWindow
         double dt = double.IsFinite(_s.ConvexLastTime) ? Math.Max(0.0, now - _s.ConvexLastTime) : 0.0;
         _s.ConvexLastTime = now;
         double mass = vehicle.TotalMass;
+        if (plan.FairingRelease != null && plan.FairingRequest is { } request)
+            foreach (Part part in vehicle.Parts.Parts)
+                foreach (var shroud in request.Parts)
+                    if (part.InstanceId == shroud.Id)
+                        mass -= shroud.Mass;
         if (plan.PlansPadRoll && _s.ConvexStage == 0 && profile.StageOfMass(mass) == 0)
         {
             // A solid grain burns during the vertical flight, but not while guidance waits for ignition.

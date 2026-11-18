@@ -162,7 +162,7 @@ public static partial class GuidanceWindow
             GaugeRowText(D, "STAGES PLANNED", $"{plan.StagesPlanned}/{plan.StagesAvailable} (REST AS PAYLOAD)");
         double propLeft = sol.FinalMass - plan.FinalMassFloor;
         GaugeRowText(D, "TO ORBIT", FormattableString.Invariant($"{sol.FinalMass / 1000.0:F2} t ({Math.Max(propLeft, 0.0) / 1000.0:F2} t PROPELLANT IN LAST STAGE)"));
-        DrawPlanBurnsRow(sol);
+        DrawPlanBurnsRow(plan);
         GaugeRowText(D, "", "Stage line counts all propellant on board. The plan leaves some.", CvxDim);
         double lowest = plan.Profile != null ? 100.0 * plan.Profile.MinThrottle : double.NaN;
         GaugeRowText(D, "THROTTLE", FormattableString.Invariant($"MIN {plan.ThrottleMinPct:F0} %, LOWEST PLANNED {lowest:F0} %")
@@ -187,16 +187,17 @@ public static partial class GuidanceWindow
     private static float4 LimitInk(double value, double limit)
         => value > limit * 1.002 ? CvxWarn : TuneRules.NearLimit(value, limit) ? Ui.Canvas.Palette.WarnDim.F4 : ConsoleStyle.TextPrimary;
 
-    private static void DrawPlanBurnsRow(AscentSolution sol)
+    private static void DrawPlanBurnsRow(AscentPlan plan)
     {
-        var times = new string[sol.BurnTime.Length];
-        var hues = new Rgb8[sol.BurnTime.Length];
+        double[] burn = plan.EngineBurnTimes;
+        var times = new string[burn.Length];
+        var hues = new Rgb8[burn.Length];
         for (int i = 0; i < times.Length; i++)
         {
-            times[i] = PageText.PlanBurn(sol.BurnTime[i]);
+            times[i] = PageText.PlanBurn(burn[i]);
             hues[i] = ColorRules.Stage(i);
         }
-        ConsoleUi.StageValues("PLAN BURNS", times, hues, PageText.PlanIdeal(sol.TotalDeltaV));
+        ConsoleUi.StageValues("PLAN BURNS", times, hues, PageText.PlanIdeal(plan.Solution.TotalDeltaV));
     }
 
     private static int ArgMax(double[] v)

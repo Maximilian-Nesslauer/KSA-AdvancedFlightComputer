@@ -18,14 +18,15 @@ internal static class StageThrottleLimits
     private static Dictionary<List<SequencePhaseInfo>, List<Phase>>? _capture;
 
     internal static UpfgVehicle BuildForConvex(Vehicle vehicle, float pressure, double[]? grid,
-                                              Dictionary<UpfgStage, HashSet<Part>> stageParts)
+                                              Dictionary<UpfgStage, HashSet<Part>> stageParts,
+                                              FairingDrainSnapshot? fairing = null)
     {
         var previous = _capture;
         _capture = new();
         try
         {
             vehicle.Parts.PerformanceSequences.RecomputeForFlight(pressure);
-            return KsaVehicleAdapter.Build(vehicle, pressure, grid, stageParts);
+            return KsaVehicleAdapter.BuildWithFairing(vehicle, pressure, grid, stageParts, fairing);
         }
         finally
         {

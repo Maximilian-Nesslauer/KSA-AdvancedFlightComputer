@@ -3,10 +3,12 @@
 namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
+using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Ui.Canvas;
 using AdvancedFlightComputer.Features.Ui.Logic;
 using Brutal.ImGuiApi;
+using Brutal.Numerics;
 using KSA;
 using Specs = AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs;
 
@@ -85,6 +87,47 @@ public static partial class GuidanceWindow
             return;
         if (CurrentAscentMethodUi().Id == AscentMethod.CatsUpfg)
             DrawLimitsFold(parent, foldsOpen);
+        DrawFairingRelease(vehicle, parent);
+    }
+
+    private static void DrawFairingRelease(Vehicle vehicle, IParentBody parent)
+    {
+        StagingState state = StagingDetector.StateOf(vehicle);
+        FairingJettison.Row[] rows = FairingJettison.Rows(vehicle, state);
+        bool automatic = false;
+        foreach (FairingJettison.Row row in rows)
+        {
+            if (row.Mixed)
+                GaugeRowText("FAIRING", $"ROW {row.Number}: RELEASES WITH NORMAL STAGING", ConsoleStyle.Danger);
+            else
+            {
+                automatic = true;
+                GaugeRowText("FAIRING", FormattableString.Invariant($"ROW {row.Number}, {row.MassKg:F1} kg, AUTOMATIC GATES"));
+            }
+        }
+        if (state.FairingLastRelease.Length > 0)
+            GaugeRowText("FAIRING", state.FairingLastRelease);
+        if (!automatic)
+            return;
+        bool air = HasPhysicalAtmosphere(parent);
+        if (air)
+        {
+            GaugeRow(Specs.FairingAltitudeKm, ref _s.FairingAltitudeKm);
+            GaugeRow(Specs.FairingQKpa, ref _s.FairingQKpa);
+        }
+        else
+            GaugeRowText("FAIRING GATE", "CLIMBING WITH 20 m TERRAIN CLEARANCE");
+        if (_s.AscentPlan is { Usable: true } plan && ReferenceEquals(plan.Body, parent))
+        {
+            if (plan.FairingRelease is { } release && plan.FairingRequest is { } request
+                && _s.AutoStage && Math.Abs(request.AltitudeFloorM - _s.FairingAltitudeKm * 1000.0) < 1e-6
+                && Math.Abs(request.QCeilingPa - _s.FairingQKpa * 1000.0) < 1e-6
+                && rows.Any(row => !row.Mixed && row.Number == release.Row))
+                GaugeRowText("PLANNED RELEASE", FormattableString.Invariant(
+                    $"ROW {release.Row}, {release.MassKg:F1} kg, T+{release.Time:F1} s, {(release.Radius - plan.BodyRadius) / 1000.0:F1} km, {release.Q / 1000.0:F2} kPa"));
+            else if (plan.FairingNote.Length > 0)
+                GaugeRowText("FAIRING PLAN", plan.FairingNote, ConsoleStyle.TextMuted);
+        }
     }
 
     /// <summary>REUSE, the first fold under the picture: the returnable stages and their sites, above LIMITS.</summary>
