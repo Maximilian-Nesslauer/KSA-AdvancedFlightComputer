@@ -14,10 +14,11 @@ namespace AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 ///
 /// AERODYNAMICS FROM THE GAME'S OWN FORCES. Drag and lift come from KsaAeroSweep's tables, alpha measured retrograde-first: the angle between the tail (-b) and the airflow, zero when flying engine first.
 ///   D = -q S Cd(M, alpha) v_hat
-///   L = q S k(M, alpha) (-p),      p = b - (b . v_hat) v_hat,   |p| = sin(alpha),   k = C_L / sin(alpha)
-/// The table's positive C_L is lift towards the side the engine end is tilted, and the engine end's tilt off the airflow is -p, so the lift is along -p; 3dof.py's retrograde sign s is the same thing. Written through k rather than C_L times a unit vector, the lift has no direction singularity at alpha = 0 and keeps its slope there: a seed flown at exactly alpha 0 still sees what tilting would buy.
+///   L = q S C_L(M, alpha) (-p) / sqrt(|p|^2 + e_L^2),      p = b - (b . v_hat) v_hat,   |p| = sin(alpha)
+/// The table's positive C_L is lift towards the side the engine end is tilted, and the engine end's tilt off the airflow is -p, so the lift is along -p; 3dof.py's retrograde sign s is the same thing. The lift's direction, -p / |p|, has no limit at alpha = 0, so |p| is rounded by e_L (<see cref="LiftRounding"/>): C_L(0) is zero, so the lift goes smoothly to zero there and keeps its slope, and at an alpha well above e_L it is C_L times the unit vector exactly.
+/// THE TABLE IS READ DIRECTLY. It was a slope table k = C_L / sin(alpha), with k at alpha 0 held at its value at the first breakpoint (2 deg). Exact above that breakpoint, but below it it made the lift grow from zero along the 2 deg slope, and the game's lift near alpha 0 is nothing like that: a booster's blunt engine end lifts the negative way in proportion to sin(alpha) and its sides the positive way in proportion to sin^2(alpha), so the net lift at 1-2 deg is a fraction of that line or the other way round. Gliding there (GLIDE PLAN AoA 0) the estimator measured half the lift or less (2026-11-18). The measured C_L, with breakpoints at 0, 1, 2, 3, 4 and 5 deg (KsaAeroSweep), is what the model now flies.
 ///
-/// THE CORNER AT alpha = 0. KSA's drag grows with |sin(alpha)|, which has a corner exactly where a booster flies, and a linearisation at the corner promises gains the true drag never pays. As the convex ascent does, the tables are read at an alpha whose |p| is rounded to |p|^2 / sqrt(|p|^2 + e^2): exact at zero, smooth, and about e^2 / 2|p| low elsewhere. Only the LOOKUP argument is rounded; the lift's direction comes from p itself.
+/// THE CORNER AT alpha = 0. KSA's drag grows with |sin(alpha)|, which has a corner exactly where a booster flies, and a linearisation at the corner promises gains the true drag never pays. As the convex ascent does, the drag table is read at an alpha whose |p| is rounded to |p|^2 / sqrt(|p|^2 + e^2): exact at zero, smooth, and about e^2 / 2|p| low elsewhere. The lift is read with its own, much smaller rounding e_L: the drag's e (0.02, about 1.1 deg) would read a booster flying 1 deg at about 0.66 deg, which for drag costs nothing and for lift is most of it.
 ///
 /// THRUST FOLLOWS THE NOZZLE. Throttle sets the chamber, not the thrust, and mass flow follows the throttle: 3dof.py's mdot proportional to T is wrong under back pressure. In flight both come from <see cref="Engine"/>, the game's own engines sampled over throttle and pressure, because the nozzle's loss to the air falls with the chamber pressure and no constant deficit fits. Without one - the offline checks - the law is T = throttle * F_vac - Pa(h) A_e and mdot = throttle * mdot_max, which is exact at full throttle and only there.
 ///
@@ -47,8 +48,8 @@ public sealed record KsaPointMassModel : IPointMassModel
     /// <summary>Cd(Mach, alpha), retrograde-first. Null with no air.</summary>
     public AeroTable? Drag { get; init; }
 
-    /// <summary>k(Mach, alpha) = C_L / sin(alpha), built by <see cref="LiftSlopeTable"/>. Null for no lift.</summary>
-    public AeroTable? LiftSlope { get; init; }
+    /// <summary>C_L(Mach, alpha), retrograde-first, signed as KsaAeroSweep's lift table: positive towards the side the engine end is tilted. Null for no lift.</summary>
+    public AeroTable? Lift { get; init; }
 
     /// <summary>The area both tables are referenced to, m^2.</summary>
     public double ReferenceArea { get; init; }
@@ -61,6 +62,9 @@ public sealed record KsaPointMassModel : IPointMassModel
 
     /// <summary>Rounding e of |p| in the table lookups, so the drag's |sin(alpha)| corner does not stall the linearisation. See the type summary.</summary>
     public double AlphaRounding { get; init; } = 0.02;
+
+    /// <summary>Rounding e_L of |p| for the lift, its lookup and its direction, about 0.3 deg. Small, because the lift at 1-2 deg is what a booster glides on: at 1 deg it reads 0.96 deg and scales the direction by 0.96. See the type summary.</summary>
+    public double LiftRounding { get; init; } = 0.005;
 
     /// <summary>Full-throttle vacuum thrust of the landing engines, N.</summary>
     public double VacuumThrust { get; init; }
@@ -168,9 +172,11 @@ public sealed record KsaPointMassModel : IPointMassModel
         fy -= drag * hy;
         fz -= drag * hz;
 
-        if (LiftSlope != null)
+        if (Lift != null)
         {
-            Dual lift = LiftScale * qs * LiftSlope.Cd(TableMach(Atmosphere.Mach(speed), LiftSlope), alpha);
+            Dual pNorm = Dual.Sqrt(pp + LiftRounding * LiftRounding);
+            Dual liftAlpha = Dual.Atan2(pp / pNorm, -bv);
+            Dual lift = LiftScale * qs * Lift.Cd(TableMach(Atmosphere.Mach(speed), Lift), liftAlpha) / pNorm;
             fx -= lift * px;
             fy -= lift * py;
             fz -= lift * pz;
@@ -243,33 +249,5 @@ public sealed record KsaPointMassModel : IPointMassModel
         if (mach.V < table.MachMin) return new Dual(table.MachMin);
         if (mach.V > table.MachMax) return new Dual(table.MachMax);
         return mach;
-    }
-
-    /// <summary>
-    /// k(Mach, alpha) = C_L / sin(alpha) from a measured C_L grid (row-major, Mach slowest - KsaAeroSweep's LiftTable), on the breakpoints up to 90 degrees, which is far past any angle a booster is flown at.
-    ///
-    /// At alpha = 0 the ratio is 0/0, and its limit is the lift slope. The first non-zero breakpoint's ratio stands in for it: a slender body's crossflow lift grows faster than sin(alpha), so the ratio rises from zero, and extrapolating that rise back to alpha 0 could go negative and flip the sign of the lift at small angles. Holding it flat keeps the small-angle lift the right way round and slightly generous, where it matters least.
-    /// </summary>
-    public static AeroTable LiftSlopeTable(double[] machGrid, double[] alphaGridDeg, double[] clTable)
-    {
-        int nm = machGrid.Length, na = alphaGridDeg.Length;
-        int keep = 0;
-        while (keep < na && alphaGridDeg[keep] <= 90.0 + 1e-9) keep++;
-        if (keep < 3) throw new ArgumentException("the alpha grid needs at least three breakpoints up to 90 degrees");
-
-        var alpha = alphaGridDeg[..keep];
-        var k = new double[nm * keep];
-        for (int i = 0; i < nm; i++)
-        {
-            for (int j = 0; j < keep; j++)
-            {
-                double s = Math.Sin(alpha[j] * Math.PI / 180.0);
-                k[i * keep + j] = s > 1e-6 ? clTable[i * na + j] / s : double.NaN;
-            }
-            for (int j = 0; j < keep; j++)
-                if (double.IsNaN(k[i * keep + j]))
-                    k[i * keep + j] = j + 1 < keep ? k[i * keep + j + 1] : 0.0;
-        }
-        return new AeroTable(machGrid, alpha, k);
     }
 }

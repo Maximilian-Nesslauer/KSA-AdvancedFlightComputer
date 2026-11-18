@@ -411,9 +411,7 @@ public static class Ksa6DofSetup
                 {
                     Atmosphere = aero.Atmosphere,
                     Drag = aero.Table,
-                    LiftSlope = aero.LiftTable != null
-                        ? KsaPointMassModel.LiftSlopeTable(aero.MachGrid, aero.AlphaGridDeg, aero.LiftTable)
-                        : null,
+                    Lift = aero.Lift,
                     ReferenceArea = aero.ReferenceArea,
                 }
                 : null,

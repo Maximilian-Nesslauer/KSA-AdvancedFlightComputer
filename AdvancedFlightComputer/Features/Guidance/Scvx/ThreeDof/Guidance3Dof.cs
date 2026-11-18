@@ -682,7 +682,7 @@ public sealed class AeroScaleEstimator
         Span<double> f0 = stackalloc double[PointMass3Dof.NX];
         double[] u = [b[0], b[1], b[2], 0.0];
         PointMass3Dof.Eval(model, x, u, f);
-        PointMass3Dof.Eval(model with { Drag = null, LiftSlope = null }, x, u, f0);
+        PointMass3Dof.Eval(model with { Drag = null, Lift = null }, x, u, f0);
         return [f[3] - f0[3], f[4] - f0[4], f[5] - f0[5]];
     }
 
@@ -692,7 +692,7 @@ public sealed class AeroScaleEstimator
         Span<double> f = stackalloc double[PointMass3Dof.NX];
         Span<double> f0 = stackalloc double[PointMass3Dof.NX];
         PointMass3Dof.Eval(model, x, [b[0], b[1], b[2], throttle], f);
-        PointMass3Dof.Eval(model with { Drag = null, LiftSlope = null }, x, [b[0], b[1], b[2], 0.0], f0);
+        PointMass3Dof.Eval(model with { Drag = null, Lift = null }, x, [b[0], b[1], b[2], 0.0], f0);
         return [f[3] - f0[3], f[4] - f0[4], f[5] - f0[5]];
     }
 }

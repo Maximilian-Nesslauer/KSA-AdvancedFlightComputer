@@ -697,7 +697,7 @@ public static partial class GuidanceWindow
 
         double3 a = (v - _s.ThreeDofAccelVelocity) / dt;
         Span<double> f = stackalloc double[PointMass3Dof.NX];
-        KsaPointMassModel bare = _s.ThreeDofNominal with { Drag = null, LiftSlope = null };
+        KsaPointMassModel bare = _s.ThreeDofNominal with { Drag = null, Lift = null };
         PointMass3Dof.Eval(bare, x, [att[0], att[1], att[2], 0.0], f);
         double[] measured = [a.X - f[3], a.Y - f[4], a.Z - f[5]];
         _s.ThreeDofEstimator.Update(_s.ThreeDofNominal, x, att, throttle, measured, dt);

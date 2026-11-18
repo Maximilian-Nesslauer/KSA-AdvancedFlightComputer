@@ -237,7 +237,7 @@ internal static class ThreeDofModelCheck
         Console.WriteLine();
         Console.WriteLine("forces: lift direction and size, and the nozzle law");
         KsaPointMassModel model = ThreeDofScenario.Model() with { AlphaRounding = 1e-9 };
-        KsaPointMassModel noAero = model with { Drag = null, LiftSlope = null };
+        KsaPointMassModel noAero = model with { Drag = null, Lift = null };
         double alt = 12_000, speed = 600;
         double[] x = [0, 0, alt, 0, 0, -speed, ThreeDofScenario.WetMass];
         double alphaDeg = 8;

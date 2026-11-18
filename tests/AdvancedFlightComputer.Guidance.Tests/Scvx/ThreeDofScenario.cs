@@ -66,7 +66,7 @@ internal static class ThreeDofScenario
             OmegaZ = Dot(w, ez),
             Atmosphere = ExponentialAtmosphere.Earth,
             Drag = new AeroTable(),
-            LiftSlope = lift ? KsaPointMassModel.LiftSlopeTable(mach, alpha, LiftTable(mach, alpha)) : null,
+            Lift = lift ? new AeroTable(mach, alpha, LiftTable(mach, alpha)) : null,
             ReferenceArea = Area,
             VacuumThrust = VacuumThrust,
             ExitArea = ExitArea,

@@ -36,7 +36,7 @@ internal static class ThreeDofKsaCheck
         Console.WriteLine();
         // Information, not a criterion: without lift this glide cannot slow enough for the propellant on board, and the solve is meant to say so by not converging rather than by inventing a plan.
         Console.WriteLine("3. the same glide with no lift (information only)");
-        KsaPointMassModel noLift = model with { LiftSlope = null };
+        KsaPointMassModel noLift = model with { Lift = null };
         (bool pass3, Scvx3DofSolver flat) = SolveCold(noLift, ThreeDofScenario.Config(), verbose);
         double propLift = X0[6] - plan.ReferenceX[^1];
         double propFlat = X0[6] - flat.ReferenceX[^1];

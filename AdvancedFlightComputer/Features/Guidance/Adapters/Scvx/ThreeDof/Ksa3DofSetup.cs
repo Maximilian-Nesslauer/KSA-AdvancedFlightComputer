@@ -49,9 +49,6 @@ public static class Ksa3DofSetup
 
         double3 centre = frame.PosToLocal(double3.Zero);
         double3 omega = frame.VecToLocal(parent.GetAngularVelocityCci());
-        AeroTable lift = aero.LiftTable != null
-            ? KsaPointMassModel.LiftSlopeTable(aero.MachGrid, aero.AlphaGridDeg, aero.LiftTable)
-            : null;
         return new KsaPointMassModel
         {
             Mu = parent.Mu,
@@ -60,7 +57,7 @@ public static class Ksa3DofSetup
             OmegaX = omega.X, OmegaY = omega.Y, OmegaZ = omega.Z,
             Atmosphere = aero.Atmosphere,
             Drag = aero.Table,
-            LiftSlope = lift,
+            Lift = aero.Lift,
             ReferenceArea = aero.ReferenceArea,
             VacuumThrust = vacuum,
             ExitArea = exitArea,

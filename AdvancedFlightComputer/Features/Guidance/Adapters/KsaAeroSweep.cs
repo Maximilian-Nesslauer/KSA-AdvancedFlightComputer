@@ -48,6 +48,19 @@ public static class KsaAeroSweep
     /// </summary>
     private static readonly double[] HypersonicMachBreakpoints = { 6.0, 7.0, 8.0, 10.0, 12.0, 15.0, 20.0, 25.0 };
 
+    /// <summary>
+    /// Alpha breakpoints added near zero, degrees, where a booster glides. The default grid goes 0, 2, 5, 8; a booster gliding at 1-2 deg sat between two of them, and the game's lift there is not a straight line - the blunt engine end lifts one way in proportion to sin(alpha), the sides the other way in proportion to sin^2(alpha) - so a spline through 0, 2 and 5 cannot show it.
+    /// </summary>
+    private static readonly double[] NearZeroAlphaBreakpointsDeg = { 1.0, 3.0, 4.0 };
+
+    private static double[] SweepAlphaBreakpoints()
+    {
+        var all = new SortedSet<double>(AeroTable.DefaultAlphaBreakpointsDeg);
+        foreach (double a in NearZeroAlphaBreakpointsDeg)
+            all.Add(a);
+        return all.ToArray();
+    }
+
     private static double[] SweepMachBreakpoints()
     {
         double[] grid = AeroTable.DefaultMachBreakpoints;
@@ -240,7 +253,7 @@ public static class KsaAeroSweep
         BuildAtmosphere(parent, res);
 
         double[] machGrid = SweepMachBreakpoints();
-        double[] alphaDeg = AeroTable.DefaultAlphaBreakpointsDeg;
+        double[] alphaDeg = SweepAlphaBreakpoints();
         int nm = machGrid.Length;
         int na = alphaDeg.Length;
 
@@ -449,6 +462,8 @@ public static class KsaAeroSweep
             return false;
         }
 
+        // The measured lift near alpha 0, the angles a booster glides at, so the shape of the curve there can be read off the game log.
+        DefaultCategory.Log.Info(FormattableString.Invariant($"[AFC] Lift near alpha 0 of '{vehicle.Id}' (C_L, roll-averaged, + towards the engine end's tilt): {NearZeroLiftText(res)}."));
         // Logged once the moment table exists, which BalanceText reads.
         if (double.IsFinite(worstCp))
             DefaultCategory.Log.Info(FormattableString.Invariant(
@@ -628,6 +643,32 @@ public static class KsaAeroSweep
         return Math.Abs(cp) < NeutralBalanceM ? "NEUTRAL ENGINE FIRST, " + where
             : cp > 0.0 ? "STABLE ENGINE FIRST, " + where
             : "UNSTABLE ENGINE FIRST, " + where;
+    }
+
+    /// <summary>Mach numbers the near-zero lift is logged at: the nearest row to each.</summary>
+    private static readonly double[] LiftLogMach = { 0.0, 0.4, 0.8, 1.2, 2.0, 4.0 };
+
+    /// <summary>Measured C_L up to 8 deg at a few Mach rows, "M0.4: 0 +0.0000, 1 +0.0012, ..." for the game log.</summary>
+    private static string NearZeroLiftText(Result r)
+    {
+        var sb = new StringBuilder();
+        int last = -1;
+        foreach (double target in LiftLogMach)
+        {
+            int row = 0;
+            for (int i = 1; i < r.MachCount; i++)
+                if (Math.Abs(r.MachGrid[i] - target) < Math.Abs(r.MachGrid[row] - target))
+                    row = i;
+            if (row == last)
+                continue;
+            last = row;
+            if (sb.Length > 0)
+                sb.Append("; ");
+            sb.Append(FormattableString.Invariant($"M{r.MachGrid[row]:0.##}:"));
+            for (int j = 0; j < r.AlphaCount && r.AlphaGridDeg[j] <= 8.0 + 1e-9; j++)
+                sb.Append(FormattableString.Invariant($" {r.AlphaGridDeg[j]:0} {r.LiftTable[row * r.AlphaCount + j]:+0.0000;-0.0000}"));
+        }
+        return sb.ToString();
     }
 
     /// <summary>The centre of pressure per Mach row, "M0.05 +2.1, M1 +1.8, ...", for the game log.</summary>
