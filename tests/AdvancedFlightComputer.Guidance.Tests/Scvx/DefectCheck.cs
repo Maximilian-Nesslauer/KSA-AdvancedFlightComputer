@@ -123,9 +123,17 @@ internal static class DefectCheck
         bool stillGated = corrected != null
             && solver.WeightedDefect(corrected, tolerance, 1, 1.0, out int channel, out _, out _) > 1.0
             && channel == Dynamics6Dof.IV + 2;
-        bool pass = unbalanced > 1.0 && balanced && stillGated;
-        Console.WriteLine(pass ? "PASS integrated mass preserves the remaining dynamics gate"
-                               : "FAIL integrated mass or the remaining dynamics gate");
+        var constrained = new Scvx6DofSolver(new Scvx6DofConfig
+        {
+            Nodes = nodes,
+            Tmax = 200.0,
+            AccelMax = 1.1
+        }, dynamics);
+        constrained.Initialize(initial, initial, reference, controls, sigmaSeed: 2.0);
+        bool keepsAccelerationAllowance = constrained.CopyReferenceWithMassBalance() == null;
+        bool pass = unbalanced > 1.0 && balanced && stillGated && keepsAccelerationAllowance;
+        Console.WriteLine(pass ? "PASS integrated mass preserves the dynamics and acceleration checks"
+                               : "FAIL integrated mass or the remaining physical checks");
         return pass;
     }
 
