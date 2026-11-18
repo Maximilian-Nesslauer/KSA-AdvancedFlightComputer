@@ -1093,12 +1093,12 @@ public sealed class Ksa6DofGuidance
                 }
             }
 
-            double merit = _solver.TrueCost(_planX, _planU, _planSigma).Cost;
+            double merit = _solver.Cost;
             SearchLog += $"{sigma:F1}s J={merit:F4}  ";
             if (merit < bestMerit)
             {
                 bestMerit = merit;
-                bestSigma = _planSigma;
+                bestSigma = sigma;
                 bestX = (double[])_planX.Clone();
                 bestU = (double[])_planU.Clone();
             }

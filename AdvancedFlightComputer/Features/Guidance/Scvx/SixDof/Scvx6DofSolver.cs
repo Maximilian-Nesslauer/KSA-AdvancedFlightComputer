@@ -647,34 +647,19 @@ public sealed class Scvx6DofSolver
 
         double[] state = (double[])_xbar.Clone();
         state[Dynamics6Dof.IM] = mass;
-        double thrust = _ubar[Dynamics6Dof.IT];
-        double flow = _dyn.MassFlowOffset + _dyn.Alpha * thrust;
-        double accelerationToleranceN = SubproblemEps * _us[Dynamics6Dof.IT];
-        if (!KeepsAccelerationAllowance(Dynamics6Dof.IM, thrust, mass, accelerationToleranceN))
-            return null;
+        double flow = _dyn.MassFlowOffset + _dyn.Alpha * _ubar[Dynamics6Dof.IT];
         for (int k = 1; k < _n; k++)
         {
-            thrust = _ubar[k * NU + Dynamics6Dof.IT];
-            double nextFlow = _dyn.MassFlowOffset + _dyn.Alpha * thrust;
+            double nextFlow = _dyn.MassFlowOffset + _dyn.Alpha * _ubar[k * NU + Dynamics6Dof.IT];
             if (!(flow >= 0.0) || !(nextFlow >= 0.0))
                 return null;
             mass -= 0.5 * dt * (flow + nextFlow);
-            int massIndex = k * NX + Dynamics6Dof.IM;
-            if (!(mass > 0.0) || !KeepsAccelerationAllowance(massIndex, thrust, mass, accelerationToleranceN))
+            if (!(mass > 0.0))
                 return null;
-            state[massIndex] = mass;
+            state[k * NX + Dynamics6Dof.IM] = mass;
             flow = nextFlow;
         }
         return state;
-    }
-
-    private bool KeepsAccelerationAllowance(int massIndex, double thrust, double mass, double toleranceN)
-    {
-        if (!_cfg.AccelLimitEnabled)
-            return true;
-
-        double previousSlack = Math.Max(0.0, thrust - _cfg.AccelMax * _xbar[massIndex]);
-        return thrust - _cfg.AccelMax * mass <= previousSlack + toleranceN;
     }
 
     private double Fuel(double[] x)
