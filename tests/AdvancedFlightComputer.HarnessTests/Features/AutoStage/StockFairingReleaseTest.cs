@@ -26,8 +26,17 @@ public sealed class StockFairingReleaseTest : AfcTest
         Vehicle craft;
         try
         {
-            craft = VehicleSpawner.SpawnFromSave(save, t.System, home, mixed ? "HarnessMixedFairing" : "HarnessFairing",
-                OrbitFixtures.CircularAt(home, 150_000, driver.Elapsed));
+            string name = mixed ? "HarnessMixedFairing" : "HarnessFairing";
+            Orbit orbit = OrbitFixtures.CircularAt(home, 150_000, driver.Elapsed);
+            string? fixtureDirectory = Environment.GetEnvironmentVariable("AFC_FAIRING_FIXTURES");
+            if (string.IsNullOrEmpty(fixtureDirectory))
+                craft = VehicleSpawner.SpawnFromSave(save, t.System, home, name, orbit);
+            else
+            {
+                VehicleSave fixture = UncompressedVehicleSave.FromDirectory(Path.Combine(fixtureDirectory, save))
+                    ?? throw new InvalidOperationException("The stock fairing fixture is absent.");
+                craft = VehicleSpawner.SpawnFromSaveData(fixture.VehicleSaveData, t.System, home, name, orbit);
+            }
         }
         catch (InvalidOperationException e)
         {
