@@ -120,6 +120,8 @@ public static partial class GuidanceWindow
         _s.DeorbitNodeDeltaVCci = plan.DeltaV;
         _s.DeorbitNode = Burn.Create(patch.Orbit.GetPointAt(new UniverseTime(plan.DepartureTime)),
             plan.DepartureTime, dvVlf, patch, vehicle);
+        if (_s.DeorbitRequest.Settings.EntryPeriapsis.HasValue)
+            _s.DeorbitNode.PlannedThrottle = Math.Max(fc.ActiveEnginePerformanceMax.MinThrottle, 0.001f);
         _s.DeorbitNodeTime = _s.DeorbitNode.ImpulseTime.Seconds();
         _s.DeorbitNode.IsGizmoActive = false;
         fc.AddBurn(_s.DeorbitNode);
@@ -130,7 +132,7 @@ public static partial class GuidanceWindow
         // Stock previews the burn at the throttle set here, so the minimum throttle bounds its ignition lead and duration.
         ref ManualControlInputs preview = ref ManualInputs(vehicle);
         _s.DeorbitSavedThrottle = preview.EngineThrottle;
-        _s.DeorbitPreviewThrottle = Math.Max(vehicle.GetMinThrottle(), 0.001f);
+        _s.DeorbitPreviewThrottle = _s.DeorbitNode.PlannedThrottle ?? Math.Max(vehicle.GetMinThrottle(), 0.001f);
         _s.DeorbitThrottleHeld = true;
         preview.EngineOn = false;
         preview.EngineThrottle = _s.DeorbitPreviewThrottle;
@@ -162,6 +164,30 @@ public static partial class GuidanceWindow
             || preparationStart < SimNow() || latestFinish >= plan.ArrivalTime - PrepLeadTime)
         { StopStockDeorbit(vehicle, "NO BOUNDED STOCK BURN WINDOW WITH ENOUGH PREPARATION TIME. BURN STAYS MANUAL.", keepNode: true); return; }
 
+        if (_s.DeorbitRequest.Settings.EntryPeriapsis is double target)
+        {
+            FiniteBurnResult? preview = null;
+            foreach (PatchedConic patch in _s.DeorbitNode.FlightPlan.Patches)
+                if (patch.BurnTrajectory is { } trajectory)
+                    preview = trajectory;
+            if (preview is not { } finite)
+                return;
+            IParentBody parent = _s.DeorbitRequest.Parent;
+            Orbit cutoff = Orbit.CreateFromStateCci(parent, finite.Cutoff, finite.PositionCci,
+                finite.VelocityCci, vehicle.Orbit.OrbitLineColor);
+            double crossing = EntryDeorbitPlanner.InterfaceTime(cutoff, finite.Cutoff, parent.GetAtmosphereRadius());
+            double periapsis = cutoff.GetPeriapsisPositionOrb().Length() - parent.MeanRadius;
+            if (finite.End != FiniteBurnEnd.DeltaV || finite.StagingCount > 0 || finite.NextParent != null
+                || Math.Abs(periapsis - target) > 2500.0 || !(crossing > finite.Cutoff.Seconds() + PrepLeadTime))
+            {
+                StopStockDeorbit(vehicle, "STOCK FINITE BURN MISSES THE ENTRY CORRIDOR. BURN STAYS MANUAL.", keepNode: true);
+                return;
+            }
+            StateVectors interfaceState = cutoff.GetStateVectorsAt(new UniverseTime(crossing));
+            _s.DeorbitPlan = plan with { ArrivalTime = crossing, ArrivalPosition = interfaceState.PositionCci,
+                ArrivalVelocity = interfaceState.VelocityCci };
+        }
+
         RestoreDeorbitPreviewThrottle(vehicle);
         if (!StockBurnMode.GiveBackAuto(vehicle, _s.DeorbitTarget))
         { StopStockDeorbit(vehicle, "STOCK COULD NOT ARM DEORBIT BURN. BURN STAYS MANUAL.", keepNode: true); return; }
@@ -182,6 +208,17 @@ public static partial class GuidanceWindow
             // Completion requires the stock residual reversal, which the kept BurnTarget still shows after FlightComputer.EndAutoBurn or AutoRemove has removed the node.
             // An empty burn plan alone also occurs after a player deletion and cannot prove completion.
             GuidanceLog.Info(vehicle, $"stock deorbit complete: residual {_s.DeorbitLastResidual:F3} m/s, altitude {(orbit.StateVectors.PositionCci.Length() - parent.MeanRadius) / 1000:F3} km.");
+            if (_s.DeorbitRequest.Settings.EntryPeriapsis.HasValue)
+            {
+                double residual = _s.DeorbitLastResidual;
+                ReleaseStockDeorbit(vehicle);
+                ClearDeorbitPlanState();
+                _s.DeorbitLastResidual = residual;
+                _s.HasCommand = false;
+                _s.LandingPhase = LandingPhase.Done;
+                _s.LandingStatus = "ENTRY BURN COMPLETE. CONTROL RELEASED.";
+                return;
+            }
             ReleaseStockDeorbit(vehicle, keepClaim: true);
             AcquireControl(vehicle);
             vehicle.SetEnum(VehicleEngine.MainShutdown);

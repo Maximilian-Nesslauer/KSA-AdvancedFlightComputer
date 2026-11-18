@@ -113,6 +113,7 @@ internal static class LandPage
             way = AfcConsole.LandWay;
             LandRead read = GuidanceWindow.ReadLandForm(ctx.Subject, way);
             ctx.ToInputs();
+            GuidanceWindow.DrawDeorbitFinishRows(way);
             GuidanceWindow.DrawLandSiteRows(ctx.Subject, way, in ctx.Frame.Situation, pickSite: true);
             ctx.ToPicture();
             GuidanceWindow.DrawLandMethodRows(ctx.Subject, way, in ctx.Frame.Situation, in read);

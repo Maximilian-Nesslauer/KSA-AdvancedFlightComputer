@@ -8,7 +8,8 @@ using KSA;
 namespace AdvancedFlightComputer.Features.Guidance;
 
 internal readonly record struct DeorbitSettings(double Latitude, double Longitude, double BrakingAltitude,
-    double GateAltitude, double GateUprange, double SinkRate, double DownrangeFactor, double? ArrivalDescentDeg = null)
+    double GateAltitude, double GateUprange, double SinkRate, double DownrangeFactor, double? ArrivalDescentDeg = null,
+    double? EntryPeriapsis = null)
 {
     internal bool IsValid => double.IsFinite(Latitude) && Math.Abs(Latitude) <= 90
         && double.IsFinite(Longitude) && Math.Abs(Longitude) <= 180
@@ -26,6 +27,108 @@ internal readonly record struct DeorbitEngine(double Throttle, double Thrust, do
 internal sealed record DeorbitPlan(double DepartureTime, double ArrivalTime, double3 DeparturePosition,
     double3 DepartureVelocity, double3 DeltaV, double3 ArrivalPosition, double3 ArrivalVelocity,
     double BrakingDistance, double Clearance, double CutoffMass);
+
+internal static class EntryDeorbitPlanner
+{
+    internal static string Refusal(IParentBody parent, double altitude)
+    {
+        double entryRadius = parent.GetAtmosphereRadius();
+        if (!(entryRadius > parent.MeanRadius))
+            return "DEORBIT ONLY NEEDS AN ATMOSPHERE.";
+        double periapsis = parent.MeanRadius + altitude;
+        if (!double.IsFinite(periapsis) || !(periapsis > 0.0 && periapsis < entryRadius))
+            return $"SET ENTRY PERIAPSIS BELOW {(entryRadius - parent.MeanRadius) / 1000.0:F1} km.";
+        return "";
+    }
+
+    internal static DeorbitPlan? Plan(DeorbitRequest request, out string refusal)
+    {
+        double periapsis = request.Parent.MeanRadius + request.Settings.EntryPeriapsis!.Value;
+        double entry = request.Parent.GetAtmosphereRadius();
+        double mu = request.Parent.Mu;
+        refusal = "DEORBIT ONLY NEEDS A BOUND PARKING ORBIT ABOVE THE ATMOSPHERE.";
+        if (!request.Source.IsBound())
+            return null;
+        StateVectors current = request.Source.GetStateVectorsAt(new UniverseTime(request.Epoch));
+        if (!(current.PositionCci.Length() > entry) || !(request.Source.GetPeriapsisPositionOrb().Length() > entry))
+            return null;
+        refusal = "NO SUPPLIED ENGINE FOR DEORBIT.";
+        if (request.Engines.Length == 0 || !(request.ExhaustVelocity > 0.0))
+            return null;
+
+        double soon = request.Epoch + request.StockPreparation + 20.0;
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            UniverseTime departure = new(soon);
+            if (request.Source.Eccentricity > 1e-6)
+            {
+                if (request.Source.GetNextApoapsisTime(departure) is not { } apoapsis)
+                {
+                    refusal = "NO FUTURE APOAPSIS FOR THE ENTRY BURN.";
+                    return null;
+                }
+                departure = apoapsis;
+            }
+            StateVectors state = request.Source.GetStateVectorsAt(departure);
+            double radius = state.PositionCci.Length();
+            double3 radial = state.PositionCci / radius;
+            double3 transverse = state.VelocityCci - double3.Dot(state.VelocityCci, radial) * radial;
+            double semiMajor = (radius + periapsis) * 0.5;
+            double speed = Math.Sqrt(mu * (2.0 / radius - 1.0 / semiMajor));
+            double3 velocity = transverse.NormalizeOrZero() * speed;
+            double3 dv = velocity - state.VelocityCci;
+            if (!(radius > entry) || !(speed < transverse.Length()) || !DeorbitPlanner.Finite(dv))
+            {
+                refusal = "NO RETROGRADE BURN TO THAT ENTRY PERIAPSIS.";
+                return null;
+            }
+            double cutoff = request.Mass * Math.Exp(-dv.Length() / request.ExhaustVelocity);
+            if (request.Model.Stages.Count == 0 || cutoff < request.Model.Stages[0].MassDry)
+            {
+                refusal = "INSUFFICIENT PROPELLANT FOR THE ENTRY BURN.";
+                return null;
+            }
+            double duration = (request.Mass - cutoff) / request.Engines[0].MassFlow;
+            if (departure.Seconds() - duration * 0.5 < request.Epoch + request.StockPreparation + 10.0)
+            {
+                soon += duration * 0.5;
+                continue;
+            }
+            Orbit lowered = Orbit.CreateFromStateCci(request.Parent, departure, state.PositionCci, velocity,
+                request.Source.OrbitLineColor);
+            double hi = InterfaceTime(lowered, departure, entry);
+            if (!(hi > departure.Seconds() + duration * 0.5 + request.StockPreparation))
+            {
+                refusal = "ENTRY STARTS TOO CLOSE TO THE STOCK BURN.";
+                return null;
+            }
+            StateVectors arrival = lowered.GetStateVectorsAt(new UniverseTime(hi));
+            refusal = "";
+            return new DeorbitPlan(departure.Seconds(), hi, state.PositionCci, velocity, dv,
+                arrival.PositionCci, arrival.VelocityCci, 0.0, entry - request.Parent.MeanRadius, cutoff);
+        }
+        refusal = "NO ENTRY BURN WITH TIME TO PREPARE.";
+        return null;
+    }
+
+    internal static double InterfaceTime(Orbit orbit, UniverseTime cutoff, double entry)
+    {
+        if (!orbit.IsBound() || !(orbit.GetPeriapsisPositionOrb().Length() < entry)
+            || !(orbit.GetStateVectorsAt(cutoff).PositionCci.Length() > entry)
+            || orbit.GetNextPeriapsisTime(cutoff) is not { } periapsis)
+            return double.NaN;
+        double lo = cutoff.Seconds(), hi = periapsis.Seconds();
+        for (int i = 0; i < 48; i++)
+        {
+            double mid = (lo + hi) * 0.5;
+            if (orbit.GetStateVectorsAt(new UniverseTime(mid)).PositionCci.Length() > entry)
+                lo = mid;
+            else
+                hi = mid;
+        }
+        return hi;
+    }
+}
 
 internal sealed record DirectBrakingPlan(double IgnitionTime, double3 Position, double3 Velocity,
     double Downrange, string Refusal);

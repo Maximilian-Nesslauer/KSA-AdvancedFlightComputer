@@ -16,7 +16,7 @@ internal readonly record struct CommitGates(
     CraftSituation Where = CraftSituation.Unknown, bool HasAir = false, bool BelowBrakingStart = false, bool GfoldChosen = false,
     string HoverProblem = "", string PageFact = "", string NoSiteNote = "", string FarSiteNote = "",
     ConsolePage? PageFactNext = null, LandSolver? PageFactSolver = null, bool PageFactCalm = false, bool NoStageHome = false,
-    string SiteRefusal = "");
+    string SiteRefusal = "", bool DeorbitOnly = false);
 
 /// <summary><see cref="PressEnds"/> says that the mode ends a press at once: StartTerminalHover refuses a craft with a hover problem before it claims anything, and PrepareLandingEngines ends G-FOLD on its first step on a body with air, after its start has claimed the craft.</summary>
 internal readonly record struct CommitView(string Verb, bool Enabled, string Reason, bool NeedsTakeOver, bool Live, string Detail = "", VerbFit Fit = default, bool PressEnds = false)
@@ -56,7 +56,7 @@ internal static class CommitResolver
             GuidanceModeId.Boostback => ("BOOSTBACK",
                 a.BoostbackPending ? "WAITING FOR AERO MESH" : a.BoostbackLive ? "AFC: BOOSTBACK" : "",
                 a.BoostbackLive || a.BoostbackPending),
-            GuidanceModeId.DeorbitLand => ("DEORBIT + LAND",
+            GuidanceModeId.DeorbitLand => (g.DeorbitOnly ? "DEORBIT ONLY" : "DEORBIT + LAND",
                 g.LandingSwitchesOff ? LandingSwitchesOffReason
                 : g.DeorbitRefusal.Length > 0 ? DeorbitSettingsReason
                 : !a.DescentLive && g.SiteRefusal.Length > 0 ? SiteTooSteepReason
