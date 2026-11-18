@@ -937,9 +937,9 @@ public sealed class VehicleAutopilotState
     public bool SixDofLogging = true;
 
     /// <summary>
-    /// Touchdown guidance plans with the body-axis force and moment for its full attitude (BodyAero6Dof) when on; off, with the roll-averaged drag and lift on the thrust axis it had before 2026-11-18. Off while the three landings since it was added (hand-overs troubled, then failed) are compared against one without it.
+    /// Touchdown guidance plans with the body-axis force and moment for its full attitude (BodyAero6Dof) when on; off, with the roll-averaged drag and lift on the thrust axis it had before 2026-11-18. On: the game's air pitches, yaws and rolls the booster through its landing burn, and a plan that leaves that out asks the gimbals for torque the air is already supplying or fighting.
     /// </summary>
-    public bool SixDofBodyAero = false;
+    public bool SixDofBodyAero = true;
 
     /// <summary>Touchdown guidance's plan holds its lateral thrust to the gimbal's slew rate (Scvx6DofConfig.GimbalSlewPerS). On; off flies the plan as before 2026-11-18, free to jump between nodes.</summary>
     public bool SixDofGimbalRateLimit = true;

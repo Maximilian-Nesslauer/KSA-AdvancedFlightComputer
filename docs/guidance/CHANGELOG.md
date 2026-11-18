@@ -14,7 +14,7 @@
 
 - Entry guidance **cuts the engine on any climb** in the landing burn, above 0.1 m/s, as touchdown guidance does, and judges whether it can stop on the thrust the engine is measured to give. Its rule was a modelled thrust-to-weight above 1.0 with no climb test; on 2026-11-18 the model said 1.00, the engine gave 10 % more, and a booster climbed from 10 m to 65 m before it was cut.
 
-- Touchdown guidance's body-axis force and moment (above) are **switched off** (`SixDofBodyAero`) until they can be flown against a landing without them: the three landings after they went in had worse hand-overs, and the one flown with them off handed over cleanly.
+- Touchdown guidance plans with the body-axis force and moment (above), `SixDofBodyAero`, on by default. It was off for a few flights on 2026-11-18 while hand-overs were troubled; the hand-over has been fixed separately since.
 
 - Touchdown guidance's log is on by default again, so a booster separated in flight, which never has the box ticked, is recorded. Like the entry log, it is taken over from a craft that has written nothing to it for 5 s.
 
