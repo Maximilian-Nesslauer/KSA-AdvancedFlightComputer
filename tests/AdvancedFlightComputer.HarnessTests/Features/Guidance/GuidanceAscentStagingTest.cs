@@ -316,9 +316,9 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         {
             if (!engine.IsActive || !jettison.Contains(engine.Parent.FullPart))
                 continue;
-            foreach (RocketCore core in engine.Cores)
+            foreach (Rocket rocket in engine.Rockets)
             {
-                if (core is not SolidMotor solid || solid.Rocket == null || !solid.Stack.IsValid)
+                if (rocket.Core is not SolidMotor solid || solid.Rocket == null || !solid.Stack.IsValid)
                     continue;
 
                 double liveFlow = 0.0;
@@ -375,8 +375,8 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         {
             if (!engine.IsActive || !jettison.Contains(engine.Parent.FullPart))
                 continue;
-            foreach (RocketCore core in engine.Cores)
-                if (core is SolidMotor solid && solid.Rocket?.Nozzles != null && solid.Stack.IsValid)
+            foreach (Rocket rocket in engine.Rockets)
+                if (rocket.Core is SolidMotor solid && solid.Rocket?.Nozzles != null && solid.Stack.IsValid)
                     return solid;
         }
         return null;

@@ -678,7 +678,7 @@ public static partial class GuidanceWindow
                     ExecuteAscent(vehicle, orbit, parent);
                 break;
             case GuidanceModeId.Boostback:
-                ExecuteBoostback(vehicle, orbit, parent);
+                _s.BoostbackEngagePending = true;
                 break;
             case GuidanceModeId.DeorbitLand:
                 ExecuteLanding(vehicle);
@@ -805,8 +805,9 @@ public static partial class GuidanceWindow
         if (vehicle == null)
             return;
         Use(vehicle);
-        // An entry guidance request waits for the next step, which the release would not stop.
+        // An entry guidance or boostback request waits for the next step, which the release would not stop.
         _s.ThreeDofEngagePending = false;
+        _s.BoostbackEngagePending = false;
         ResetFlightComputer();
     }
 

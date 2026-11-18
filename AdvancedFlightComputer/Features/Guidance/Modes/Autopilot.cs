@@ -150,7 +150,7 @@ public static partial class GuidanceWindow
         if (request != StagingDetector.StagingRequest.Queued)
             return;
 
-        // Each reserve belongs to one separation: every targeted booster on the row it stages is done with. The boosters themselves are handed over when the row fires (OnSequenceActivating), as any separation's are.
+        // Each reserve belongs to one separation. Handover is armed when the decouplers fire.
         if (reserveDone)
         {
             _s.ReserveStagedRoots.Add(_s.ReserveRootId);
@@ -196,15 +196,7 @@ public static partial class GuidanceWindow
 
         // SIDE BOOSTERS: counted in their own engines' tanks. The vehicle's mass against the stage model's burnout mixes in the core's propellant, which burns on, and would stage them with a third of their reserve on the heavy (#176).
         if (_s.ReserveFlowShare < 1.0)
-        {
-            if (_s.ReserveTanks.Count == 0)
-                return false;
-            ReadOnlySpan<MoleState> moles = vehicle.Parts.Moles.States;
-            double inBoosters = 0.0;
-            foreach (Tank tank in _s.ReserveTanks)
-                inBoosters += tank.ComputeSubstanceMass(moles);
-            return inBoosters <= _s.ReserveKg;
-        }
+            return ReserveTankMass(vehicle) <= _s.ReserveKg;
 
         UpfgVehicle model = _s.StageModel;
         if (model == null || model.Stages.Count < 2)
@@ -214,10 +206,33 @@ public static partial class GuidanceWindow
         return remaining <= _s.ReserveKg;
     }
 
+    private static double ReserveTankMass(Vehicle vehicle)
+    {
+        if (_s.ReserveTanks.Count == 0)
+            return double.NaN;
+
+        PartTree tree = vehicle.Parts;
+        ReadOnlySpan<MoleState> moles = tree.Moles.States;
+        double mass = 0.0;
+        foreach (Tank tank in _s.ReserveTanks)
+        {
+            if (!ReferenceEquals(tank.Parent.FullPart.Tree, tree))
+            {
+                // A split moves the tank and reindexes its moles against the new tree.
+                InvalidateStageModel(_s);
+                return double.NaN;
+            }
+            mass += tank.ComputeSubstanceMass(moles);
+        }
+        return mass;
+    }
+
     // Keep pending handovers outside vehicle state because the detached vehicles do not exist yet. Each separated root has its own landing target, so two boosters leaving on one sequence go to their own sites (#130).
     private sealed class BoosterHandover
     {
-        internal uint RootId;
+        internal Part AttachmentRoot;
+        internal Part.Connector Connector;
+        internal Part.Connection Connection;
         internal double SiteLatDeg;
         internal double SiteLonDeg;
         internal double ExpiresAt;
@@ -238,63 +253,52 @@ public static partial class GuidanceWindow
     private const double HandoverWindowS = 30.0;
 
     /// <summary>
-    /// Record what a staging row is about to throw overboard, so each craft it becomes can be recognised and handed its own landing site.
-    ///
-    /// ANY SEPARATION, not only the reserve cue's (#175). AutoStage raises this as a row fires, whatever fired it: the ascent's reserve cue, a burnout, the spent drop that sheds side boosters, or the player's staging key. Before, only the reserve cue armed a hand-over, so a booster dropped any other way came away with nothing to fly it home.
-    ///
-    /// ONLY A ROOT WITH A TARGET. A stage site (LAUNCH > BOOSTERS) is what asks for a booster to come home, and each root is sent to its own (#130): two side boosters leaving on one row go to their own pads. A root with no site of its own is not handed over at all, where it once followed the targeted booster beside it to the same pad.
+    /// Records a targeted booster while its decoupler still connects it to the stack.
     /// </summary>
-    internal static void OnSequenceActivating(Vehicle vehicle, Sequence sequence)
+    internal static void OnDecouplerActivating(Vehicle vehicle, Decoupler decoupler)
     {
-        if (!VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState s) || (s.StageTargets.Count == 0 && s.StageOptimalReturn.Count == 0))
+        if (!ModActive || !VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState s)
+            || (s.StageTargets.Count == 0 && s.StageOptimalReturn.Count == 0)
+            || vehicle.IsDisposed || VehicleControlOwnership.KfsOwns(vehicle) || !vehicle.IsControllable
+            || !ReferenceEquals(decoupler.Parent.FullPart.Tree, vehicle.Parts))
             return;
 
         double now = SimNow();
         DropExpiredHandovers(now);
-        SequenceRoots(sequence, _handoverRoots);
-        int armed = 0;
-        for (int i = 0; i < _handoverRoots.Count; i++)
+        Part root = DetachedRoot(decoupler);
+        if (root == null || AlreadyArmed(root, vehicle))
+            return;
+
+        // A drone ship's point comes from the ascent plan and stays fixed after lift-off.
+        bool glideOnly = false;
+        if (!s.StageTargets.TryGetValue(root.InstanceId, out double2 site)
+            && !(glideOnly = s.StageOptimalReturn.Contains(root.InstanceId) && s.OptimalReturnSites.TryGetValue(root.InstanceId, out site)))
         {
-            Part root = _handoverRoots[i];
-            // Nested separations have overlapping subtrees but distinct roots. Matching the root keeps the inner vehicle from claiming the outer vehicle's record.
-            if (AlreadyArmed(root.InstanceId, vehicle))
-                continue;
-            // A site set by the player, or an optimal return's drone-ship point, frozen from the plan at lift-off. An optimal return with no plan behind it has nowhere known to go, and is not handed over.
-            bool glideOnly = false;
-            if (!s.StageTargets.TryGetValue(root.InstanceId, out double2 site)
-                && !(glideOnly = s.StageOptimalReturn.Contains(root.InstanceId) && s.OptimalReturnSites.TryGetValue(root.InstanceId, out site)))
-            {
-                if (s.StageOptimalReturn.Contains(root.InstanceId))
-                    GuidanceLog.Info(vehicle, $"'{root.DisplayName}' is set to optimal return but no plan found its landing point: not handed over.");
-                continue;
-            }
-            _handovers.Add(new BoosterHandover
-            {
-                RootId = root.InstanceId,
-                SiteLatDeg = site.X,
-                SiteLonDeg = site.Y,
-                ExpiresAt = now + HandoverWindowS,
-                From = vehicle,
-                GlideOnly = glideOnly,
-            });
-            armed++;
-            GuidanceLog.Info(vehicle, FormattableString.Invariant(
-                $"booster hand-over armed for '{root.DisplayName}' on sequence {sequence.Number}, site lat {site.X:F3} lon {site.Y:F3}."));
+            if (s.StageOptimalReturn.Contains(root.InstanceId))
+                GuidanceLog.Info(vehicle, $"'{root.DisplayName}' is set to optimal return but no plan found its landing point: not handed over.");
+            return;
         }
-        _handoverRoots.Clear();
-        if (armed == 0)
-            GuidanceLog.Debug(vehicle, $"sequence {sequence.Number} fires with no targeted booster to hand over.");
+        _handovers.Add(new BoosterHandover
+        {
+            AttachmentRoot = root,
+            Connector = decoupler.Connector,
+            Connection = decoupler.Connector.Connection,
+            SiteLatDeg = site.X,
+            SiteLonDeg = site.Y,
+            ExpiresAt = now + HandoverWindowS,
+            From = vehicle,
+            GlideOnly = glideOnly,
+        });
+        GuidanceLog.Info(vehicle, FormattableString.Invariant(
+            $"booster hand-over armed for '{root.DisplayName}' on sequence {decoupler.Sequence}, site lat {site.X:F3} lon {site.Y:F3}."));
     }
 
-    // The roots one firing row separates, filled and consumed inside OnSequenceActivating.
-    private static readonly List<Part> _handoverRoots = new List<Part>();
-
     // The player's staging key and AutoStage can both announce one row, so a root already recorded from this stack is not recorded twice.
-    private static bool AlreadyArmed(uint rootId, Vehicle from)
+    private static bool AlreadyArmed(Part root, Vehicle from)
     {
         for (int i = 0; i < _handovers.Count; i++)
         {
-            if (_handovers[i].RootId == rootId && ReferenceEquals(_handovers[i].From, from))
+            if (ReferenceEquals(_handovers[i].AttachmentRoot, root) && ReferenceEquals(_handovers[i].From, from))
                 return true;
         }
         return false;
@@ -324,23 +328,35 @@ public static partial class GuidanceWindow
         if (tree == null)
             return false;
 
-        BoosterHandover mine = null;
-        ReadOnlySpan<Part> parts = tree.Parts;
-        for (int i = 0; i < _handovers.Count && mine == null; i++)
-        {
-            for (int j = 0; j < parts.Length; j++)
-            {
-                if (parts[j].InstanceId != _handovers[i].RootId)
-                    continue;
-                mine = _handovers[i];
-                break;
-            }
-        }
+        // Vehicle.Split can restore the pre-dock root. The attachment part still belongs to the child,
+        // but a nested booster cannot claim its record while its own joint remains connected.
+        BoosterHandover mine = _handovers.Find(record => ReferenceEquals(record.AttachmentRoot.Tree, tree)
+            && !ReferenceEquals(record.From, vehicle)
+            && !ReferenceEquals(record.Connector.Connection, record.Connection));
         if (mine == null)
             return false;
 
         // Consume only this match so other boosters can still claim their records.
         _handovers.Remove(mine);
+
+        if (VehicleControlOwnership.KfsOwns(vehicle))
+            return false;
+
+        bool alreadyClaimed = VehicleControlOwnership.Holds(vehicle, ControlClaimant.Guidance);
+        if (!VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.Guidance, out _))
+            return false;
+
+        // The child inherits the stack's engine command and can drive back into it. Cut now,
+        // then give up this claim until the boostback is ready to fly.
+        try
+        {
+            ManualInputs(vehicle).EngineOn = false;
+        }
+        finally
+        {
+            if (!alreadyClaimed)
+                VehicleControlOwnership.Release(vehicle, ControlClaimant.Guidance);
+        }
 
         _s = VehicleAutopilotState.For(vehicle);
         _s.SiteLatDeg = mine.SiteLatDeg;
@@ -348,9 +364,6 @@ public static partial class GuidanceWindow
         _s.BoostbackGlideOnly = mine.GlideOnly;
         GuidanceLog.Info(vehicle, $"adopted as a separated booster, boostback engages within {HandoverWindowS:F0} s.");
 
-        // ENGINE OFF ON THIS FRAME, and the settling burn held until the two are clear. A split vehicle inherits the stack's control inputs, so a booster dropped under the reserve comes away still burning - and from below the stage it let go of, that thrust drives it straight back into it, whose engine is usually held for a few seconds yet. KSA breaks the parts that hit: the first flights lost the booster's interstage, which took this vehicle and its boostback with it and left the rest of the booster as a new craft nothing was flying. The engage below can take seconds to stick, so the cut cannot wait for it. Written before any claim, but the inputs are the ascent's, inherited, not the player's.
-        ref ManualControlInputs inputs = ref ManualInputs(vehicle);
-        inputs.EngineOn = false;
         if (mine.From is { IsDisposed: false } stage)
         {
             _s.BoostbackClearOf = stage;
@@ -435,6 +448,16 @@ public static partial class GuidanceWindow
     // The game's recompute can run on a vehicle worker thread while the UI reads the stage list. The PrepareWorker prefix runs after JobSystems.VehicleSolver.Wait(), so the recompute and copy-out are safe there. UPFG reconciles stage 0 against the live mass on every step.
     private const long StageModelIntervalMs = 250;
     private const long HousekeepingRetryMs = 1000;
+
+    internal static void InvalidateStageModel(VehicleAutopilotState state)
+    {
+        state.StageModelDirty = true;
+        state.ReserveArmed = false;
+        state.ReserveTanks.Clear();
+        state.SeparationInS = double.NaN;
+        state.SeparationTakenAt = double.NegativeInfinity;
+        state.SeparationDrain.Reset();
+    }
 
     private static void RefreshStageModel(Vehicle vehicle)
     {
@@ -628,10 +651,11 @@ public static partial class GuidanceWindow
             ReadOnlySpan<Part> parts = sequences[s].Parts;
             for (int i = 0; i < parts.Length; i++)
             {
-                Span<Decoupler> decouplers = parts[i].SubtreeModules.Get<Decoupler>();
-                for (int j = 0; j < decouplers.Length; j++)
+                foreach (ISequenced module in parts[i].InSequence(sequences[s].Number))
                 {
-                    Part root = DetachedRoot(decouplers[j]);
+                    if (module is not Decoupler decoupler || !StagingHooks.CanActivate(decoupler))
+                        continue;
+                    Part root = DetachedRoot(decoupler);
                     if (root != null)
                         CollectSubtree(root, _separationDrops);
                 }
@@ -639,8 +663,9 @@ public static partial class GuidanceWindow
             // An ignition-only sequence: what it lights is burning by the time a later one separates. The separating sequence's own engines are not, since they light as it fires.
             if (_separationDrops.Count == 0)
                 for (int i = 0; i < parts.Length; i++)
-                    foreach (EngineController e in parts[i].SubtreeModules.Get<EngineController>())
-                        _pendingIgnition.Add(e);
+                    foreach (ISequenced module in parts[i].InSequence(sequences[s].Number))
+                        if (module is EngineController engine)
+                            _pendingIgnition.Add(engine);
         }
         if (!anySequence)
         {
@@ -707,9 +732,10 @@ public static partial class GuidanceWindow
         _leavingCores.Clear();
         foreach (Part part in _separationDrops)
             foreach (EngineController engine in part.SubtreeModules.Get<EngineController>())
-                if (engine.Cores != null)
-                    foreach (RocketCore core in engine.Cores)
-                        _leavingCores.Add(core);
+                if (engine.Rockets != null)
+                    foreach (Rocket rocket in engine.Rockets)
+                        foreach (RocketCore core in rocket.Cores)
+                            _leavingCores.Add(core);
         foreach (Part part in _separationDrops)
         {
             Span<Tank> tanks = part.SubtreeModules.Get<Tank>();
@@ -996,7 +1022,10 @@ public static partial class GuidanceWindow
             _s.LandingPhase = LandingPhase.Idle;
 
         if (mode != GuidanceMode.Boostback)
+        {
+            _s.BoostbackEngagePending = false;
             _s.BoostbackPhase = BoostbackPhase.Idle;
+        }
 
         // The 6-DOF standby the 3-DOF's burn keeps is for 6-DOF only; anything else taking the craft ends it.
         if (mode != GuidanceMode.SixDof)
@@ -1078,6 +1107,13 @@ public static partial class GuidanceWindow
         // Ahead of the returns below, so a craft whose planning ends releases its hold also when it is not in focus and flies nothing.
         StepRealSpeedHold(vehicle, focused);
 
+        if ((!vehicle.IsControllable || VehicleControlOwnership.KfsOwns(vehicle))
+            && (HoldsReleasableState(_s) || _s.MoonChain != MoonChainStage.Idle))
+        {
+            StopForControlLoss(vehicle);
+            return;
+        }
+
         if (_s.FcResetPending)
         {
             RetryRelease(vehicle);
@@ -1094,7 +1130,7 @@ public static partial class GuidanceWindow
         bool landingActive = _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done;
         // LaunchArmed counts as flying because a vehicle waiting for its launch window must update the window and fire the commit. A booster adopted at separation also counts as flying until boostback engages.
         bool handingOver = _s.HandoverPendingUntil > SimNow();
-        bool flying = sixDof || _s.Running || landingActive || BoostbackLive || ThreeDofLive || _s.ThreeDofEngagePending
+        bool flying = sixDof || _s.Running || landingActive || BoostbackLive || ThreeDofLive || _s.ThreeDofEngagePending || _s.BoostbackEngagePending
                    || _s.WasEngaged || _s.LandingCutPending || _s.LaunchArmed || handingOver || _s.MoonChain != MoonChainStage.Idle;
 
         // Check ownership per actuator before mode steps can overwrite a changed command. The attitude is compared by value. The engine belongs to whoever arms stock Auto, because Vehicle.PrepareWorker then clears EngineOn on every step after this prefix and stock's own burn logic never writes Auto by itself. Keep cleanup ahead of the idle return so unfocused vehicles can release control too.
@@ -1175,6 +1211,9 @@ public static partial class GuidanceWindow
         // Planning waits without control, and the stock node takes its claim before Auto is armed.
         // A direct braking coast enters Prep before the manual control claim below.
         StepDeorbitPlanning(vehicle, orbit, parent);
+        // Check the takeover while stock still owns the burn, because its step returns while it is active.
+        if (IsStockDeorbitPhase(_s.LandingPhase))
+            StepPendingBoostback(vehicle, orbit, parent);
         if (StepStockDeorbit(vehicle, orbit, parent)) return;
         StepLandingCoast();
 
@@ -1185,6 +1224,10 @@ public static partial class GuidanceWindow
             Engage3Dof(vehicle, SimNow());
         }
 
+        StepPendingBoostback(vehicle, orbit, parent);
+
+        CheckPendingBrakingHandover(vehicle, parent);
+        CheckPendingEntryTouchdownHandoff(vehicle, parent);
         sixDof = _s.Active || _s.EngagePending;
         // Active, not EngagePending: a setup that Engage6Dof rejects never writes control, and must not leave the craft owned. A coast owns nothing either, see StepLandingCoast.
         if (_s.Active || (_s.Engage && (_s.Running || LandingCommands(_s.LandingPhase) || BoostbackLive || ThreeDofLive)))
@@ -1219,6 +1262,8 @@ public static partial class GuidanceWindow
             {
                 if (!_s.Active)
                     ReleaseAttitude(vehicle);
+                else if (_s.SixDofToContact)
+                    HoldTouchdownAttitude(vehicle, parent);
                 else if (!_s.Converging && _s.Guidance?.Published != null)
                     HoldManualAttitude(vehicle);
             }
@@ -1543,6 +1588,8 @@ public static partial class GuidanceWindow
     // Takes the shared claim for guidance, or says who holds the craft. With acquire, the flight computer settings guidance writes are taken as well.
     private static bool TryTakeCraft(Vehicle vehicle, bool acquire)
     {
+        if (!ControlAvailable(vehicle))
+            return false;
         if (!VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.Guidance, out ControlClaimant holder))
         {
             _s.WarnStatus($"GUIDANCE HELD BY {VehicleControlOwnership.Describe(holder)}.");
@@ -1565,6 +1612,42 @@ public static partial class GuidanceWindow
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static bool HandBackVehicle(Vehicle vehicle) => ReleaseVehicle(vehicle, keepWaitingCoast: false);
 
+    /// <summary>
+    /// Stops all guidance of a craft that is not controllable, with an engine cut when guidance held it. A craft guidance never acquired keeps its engine, and the stop says the claim was refused.
+    /// </summary>
+    private static void StopForControlLoss(Vehicle vehicle)
+    {
+        bool kfs = vehicle.IsControllable && VehicleControlOwnership.KfsOwns(vehicle);
+        string reason = kfs ? "GUIDANCE STOPPED: KFS CONTROLS THE VEHICLE."
+            : ControlLostReason(vehicle, _s.ControlAcquired ? "GUIDANCE STOPPED" : "GUIDANCE REFUSED");
+        GuidanceLog.Info(vehicle, "control lost: " + reason);
+        if (_s.MoonChain != MoonChainStage.Idle)
+            StopMoonChain(vehicle, kfs ? "KFS CONTROLS THE VEHICLE" : "CONTROL LOST", disarm: !kfs);
+        _s.TakeoverStop = true;
+        _s.TakeoverReason = reason;
+        _s.ReleaseWithoutEngineCut = kfs;
+        _s.ShutdownRequested = !kfs;
+        HandBackVehicle(vehicle);
+        _s.WarnStatus(reason);
+    }
+
+    private static bool ControlAvailable(Vehicle vehicle)
+    {
+        if (vehicle.IsControllable && !VehicleControlOwnership.KfsOwns(vehicle))
+            return true;
+        StopForControlLoss(vehicle);
+        return false;
+    }
+
+    /// <summary>The status line for a craft out of control, with the game's own reason (Vehicle.NoControlTooltip).</summary>
+    internal static string ControlLostReason(Vehicle vehicle, string head)
+    {
+        string why = vehicle.NoControlTooltip.Format();
+        return string.IsNullOrWhiteSpace(why)
+            ? head + ": VEHICLE OUT OF CONTROL."
+            : head + ": VEHICLE OUT OF CONTROL. " + why.Trim().ToUpperInvariant();
+    }
+
     // A failed release is retried with the intent it had, and a release the player or a save load asked for drops the coast.
     private static bool RetryRelease(Vehicle vehicle) => ReleaseVehicle(vehicle, _s.ReleaseRetryKeepsCoast);
 
@@ -1572,7 +1655,8 @@ public static partial class GuidanceWindow
     internal static bool HoldsReleasableState(VehicleAutopilotState s)
         => s.ControlAcquired || s.DeorbitNodeClaimed || s.FcResetPending || s.Worker != null
             || s.Active || s.EngagePending || s.Converging || s.Running
-            || s.LaunchArmed || s.LandingCutPending
+            || s.LaunchArmed || s.ConvexLaunchPending || s.LandingCutPending
+            || s.ThreeDofEngagePending || s.BoostbackEngagePending
             || s.HasCommand || s.Guidance != null
             || s.HandoverPendingUntil != double.NegativeInfinity
             || ReferenceEquals(SixDofLog.Owner, s)
@@ -1599,6 +1683,21 @@ public static partial class GuidanceWindow
         }
 
         bool coastWaits = keepWaitingCoast && LandingWaits(_s.LandingPhase);
+        // kFS can own actuator allocation without changing the C# attitude fields first.
+        // Drop saved settings so cleanup cannot overwrite its command or restore stock Auto.
+        if (VehicleControlOwnership.KfsOwns(vehicle) && vehicle.IsControllable)
+        {
+            _s.AttitudeOwnership.Forget();
+            _s.RcsHeldOff = false;
+            _s.ForcedBurnManual = false;
+            _s.DeorbitThrottleHeld = false;
+            _s.ReleaseWithoutEngineCut = true;
+            _s.ShutdownRequested = false;
+            _s.LandingCutPending = false;
+        }
+        CancelPendingLaunch();
+        _s.ThreeDofEngagePending = false;
+        _s.BoostbackEngagePending = false;
         _s.Running = false;
         if (!coastWaits)
         {
@@ -1642,8 +1741,9 @@ public static partial class GuidanceWindow
         {
             if (cutEngine)
                 Attempt(() => vehicle.SetEnum(VehicleEngine.MainShutdown));
-            bool onGround = cutEngine && vehicle.Situation.HasAnyContact();
-            Attempt(() => _s.AttitudeOwnership.Release(vehicle.FlightComputer, leaveManual: onGround));
+            // A craft out of control keeps Manual, because the flight computer steers in Auto whether or not the craft is controllable.
+            bool leaveManual = (cutEngine && vehicle.Situation.HasAnyContact()) || !vehicle.IsControllable;
+            Attempt(() => _s.AttitudeOwnership.Release(vehicle.FlightComputer, leaveManual: leaveManual));
         }
         Attempt(() =>
         {
@@ -1655,7 +1755,7 @@ public static partial class GuidanceWindow
 
         // Stock Auto comes back last, once nothing of guidance still commands the craft, and only with a cut. A no-cut release leaves the engine as the flight left it, and a restored Auto would have Vehicle.PrepareWorker switch it off on the same step.
         if (failure.Length == 0 && _s.ControlAcquired)
-            Attempt(() => RestoreBurnMode(vehicle, giveBack: cutEngine));
+            Attempt(() => RestoreBurnMode(vehicle, giveBack: cutEngine && vehicle.IsControllable));
 
         if (failure.Length > 0)
         {
@@ -1711,7 +1811,7 @@ public static partial class GuidanceWindow
     //
     // fullEngage=true additionally switches the FC into Custom/Auto tracking - done once on engage, exactly like clicking "Apply Euler Target" in the attitude tab.
     private static void CommandAttitude(Vehicle vehicle, IParentBody parent, double3 dir,
-                                        bool fullEngage, double3? rollRef = null)
+                                        bool fullEngage, double3? rollRef = null, FlightComputerRollMode? rollMode = null)
     {
         double3 r = vehicle.Orbit.StateVectors.PositionCci;
 
@@ -1738,7 +1838,9 @@ public static partial class GuidanceWindow
         // Also decoupled below ForceRollMinAltM even with the box ticked: right off the pad is exactly where the vehicle has the least authority to fight a commanded roll and the least room to recover if it can't, so a forced roll waits for some clearance first.
         //
         // Written every step, not only on engagement: the box can be ticked mid-ascent, and un-ticking it has to give the roll freedom back.
-        if (_s.Running)
+        if (rollMode is { } requestedRollMode)
+            fc.RollMode = requestedRollMode;
+        else if (_s.Running)
         {
             double altM = r.Length() - parent.MeanRadius;
             // An ascent engaged on the pad rolls as soon as it is clear of it (PadHold), while it still climbs straight up: the roll program (RollProgramHolds) holds the pitch-over until the roll is done. ForceRollMinAltM, above the mean radius, only gates an ascent engaged in flight, which has no pad to clear; on a pad near sea level it came 150 m after the pitch-over had begun.
@@ -1753,7 +1855,7 @@ public static partial class GuidanceWindow
             fc.AttitudeFrame = VehicleReferenceFrame.EclBody;
             fc.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
         }
-        _s.AttitudeOwnership.EndWrite(fc, writesRoll: _s.Running);
+        _s.AttitudeOwnership.EndWrite(fc, writesRoll: _s.Running || rollMode.HasValue);
     }
 
     /// <summary>

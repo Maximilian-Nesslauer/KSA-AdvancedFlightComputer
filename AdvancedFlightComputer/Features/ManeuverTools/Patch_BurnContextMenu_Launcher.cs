@@ -75,16 +75,16 @@ internal static class Patch_BurnContextMenu_Launcher
         // Insert the main group first so it does not change later submenu indices.
         InsertBefore(code, anchorIndex, new CodeInstruction(OpCodes.Call, injectTarget));
 
-        var beginMenu = AccessTools.Method(typeof(ImGui), nameof(ImGui.BeginMenu),
-            new[] { typeof(ImString), typeof(bool) });
+        // BurnContextMenu.Draw opens its submenus through ImGuiHelper.BeginMenu, which limits the menu to the viewport and then calls ImGui.BeginMenu. Both forms count, so a submenu matches whichever one the game uses.
+        MethodInfo[] beginMenus = BeginMenuMethods();
         var endMenu = AccessTools.Method(typeof(ImGui), nameof(ImGui.EndMenu), Type.EmptyTypes);
         var apsisTarget = AccessTools.Method(typeof(BurnMenuLauncher),
             nameof(BurnMenuLauncher.DrawApsisEntry));
-        if (beginMenu == null || endMenu == null || apsisTarget == null)
+        if (beginMenus.Length == 0 || endMenu == null || apsisTarget == null)
         {
             LogHelper.WarnOnce("transpiler-burn-menu-no-apses",
-                "[AFC] BurnMenuLauncher transpiler: apse anchoring needs ImGui.BeginMenu " +
-                "(anchor=" + (beginMenu != null ? "ok" : "MISSING") + "), ImGui.EndMenu " +
+                "[AFC] BurnMenuLauncher transpiler: apse anchoring needs ImGuiHelper.BeginMenu or ImGui.BeginMenu " +
+                "(anchor=" + (beginMenus.Length > 0 ? "ok" : "MISSING") + "), ImGui.EndMenu " +
                 "(anchor=" + (endMenu != null ? "ok" : "MISSING") + ") and DrawApsisEntry " +
                 "(inject=" + (apsisTarget != null ? "ok" : "MISSING") +
                 "); the apse submenus get no AFC entry.");
@@ -95,8 +95,8 @@ internal static class Patch_BurnContextMenu_Launcher
         var insertions = new List<(int End, int Submenu)>();
         foreach ((string heading, int submenu) in ApseSubmenus)
         {
-            int begin = FindSubmenu(code, beginMenu, heading);
-            int end = begin < 0 ? -1 : FindSubmenuEnd(code, beginMenu, endMenu, begin);
+            int begin = FindSubmenu(code, beginMenus, heading);
+            int end = begin < 0 ? -1 : FindSubmenuEnd(code, beginMenus, endMenu, begin);
             if (end < 0)
             {
                 LogHelper.WarnOnce("transpiler-burn-menu-heading-" + heading,
@@ -127,25 +127,47 @@ internal static class Patch_BurnContextMenu_Launcher
                 (bothApses ? " and both apse shortcuts." : "; some apse shortcuts are unavailable."));
     }
 
+    /// <summary>The <c>BeginMenu(ImString, bool)</c> overloads of ImGuiHelper and ImGui that this build has.</summary>
+    internal static MethodInfo[] BeginMenuMethods()
+    {
+        var methods = new List<MethodInfo>(2);
+        foreach (Type owner in new[] { typeof(ImGuiHelper), typeof(ImGui) })
+        {
+            MethodInfo? method = AccessTools.Method(owner, nameof(ImGui.BeginMenu),
+                new[] { typeof(ImString), typeof(bool) });
+            if (method != null)
+                methods.Add(method);
+        }
+        return methods.ToArray();
+    }
+
+    private static bool CallsAny(CodeInstruction instruction, MethodInfo[] methods)
+    {
+        foreach (MethodInfo method in methods)
+            if (instruction.Calls(method))
+                return true;
+        return false;
+    }
+
     /// <summary>Finds the submenu with the specified heading.</summary>
-    private static int FindSubmenu(List<CodeInstruction> code, MethodInfo beginMenu, string heading)
+    private static int FindSubmenu(List<CodeInstruction> code, MethodInfo[] beginMenus, string heading)
     {
         for (int i = 0; i < code.Count; i++)
         {
-            if (code[i].Calls(beginMenu) && ReadMenuHeading(code, i) == heading)
+            if (CallsAny(code[i], beginMenus) && ReadMenuHeading(code, i) == heading)
                 return i;
         }
         return -1;
     }
 
     /// <summary>Finds the matching end of a submenu, including nested menus.</summary>
-    private static int FindSubmenuEnd(List<CodeInstruction> code, MethodInfo beginMenu,
+    private static int FindSubmenuEnd(List<CodeInstruction> code, MethodInfo[] beginMenus,
         MethodInfo endMenu, int beginIndex)
     {
         int depth = 0;
         for (int i = beginIndex + 1; i < code.Count; i++)
         {
-            if (code[i].Calls(beginMenu))
+            if (CallsAny(code[i], beginMenus))
                 depth++;
             else if (code[i].Calls(endMenu))
             {

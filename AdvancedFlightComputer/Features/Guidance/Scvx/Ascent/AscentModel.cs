@@ -44,9 +44,9 @@ public sealed class VacuumAscentAtmosphere : AscentAtmosphere
 /// <summary>
 /// KSA's air: the game's layered atmosphere as KsaAeroSweep samples it, and the drag table sampled off the vehicle.
 ///
-/// DRAG DEPENDS ON THE ANGLE OF ATTACK. launch3dof.py's drag depends on Mach alone, and the port kept that, reading the table nose-first on the grounds that KSA's isotropic skin term dominates (see KsaAeroSweep). It doesn't dominate enough. KSA's drag is a six-face box plus the skin term, blended by |v_body|, so the flank faces add drag in proportion to |sin alpha| from the first degree: on 2stage_new about 4 % per degree. With the attitude free of charge, the planner flew 2 to 13 deg off the airflow from max q down, wherever q-alpha allowed it, and the vehicle met 40 to 60 % more drag than planned there, a shortfall of up to 5 m/s^2 that left it 8 km low and 370 m/s slow at staging. So the table is read at the flown angle: alpha from nose-first, which is pi minus the table's retrograde-first angle. The drag still acts straight against the relative wind, as in the game, which has no lift.
+/// DRAG DEPENDS ON THE ANGLE OF ATTACK. launch3dof.py's drag depends on Mach alone. The game integrates pressure and skin friction over the surface of the craft, so the flanks add drag as soon as the body turns off the airflow, and a planner that treats the attitude as free flies degrees off the airflow wherever q-alpha allows it and meets much more drag there than it planned. So the table is read at the flown angle: alpha from nose-first, which is pi minus the table's retrograde-first angle. The drag acts straight against the relative wind. The lift the game also applies at an angle of attack is not modelled here, and the q-alpha limit is what keeps it small.
 ///
-/// Under stock aero the table is flat in Mach, because KSA models no compressibility, so the transonic rise launch3dof.py has is absent. The Mach axis is still read, so a table measured off a drag model that has one, such as an aero mod's, is picked up without any change.
+/// The Mach axis carries what the game's pressure law does with the Mach number. The sweep measures every Mach row at sea level density and temperature, and the Mach number of a lookup is the airspeed over the sea level speed of sound (see AtmosphereModel), so the Reynolds number and the lower speed of sound at altitude are not modelled.
 /// </summary>
 public sealed class KsaAscentAtmosphere : AscentAtmosphere
 {
@@ -447,7 +447,7 @@ public sealed class AscentProblem
         Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
         Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
         TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-        PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, Settings = Settings,
+        PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, Settings = Settings,
         Recoveries = recoveries,
     };
 
@@ -469,7 +469,7 @@ public sealed class AscentProblem
             Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = stages,
             Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
             TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-            PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, Settings = Settings,
+            PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, Settings = Settings,
             Recoveries = Recoveries.Select(r => r.Stage == rec.Stage ? r.WithInitialReserve(reserveKg) : r).ToArray(),
         };
     }
@@ -480,13 +480,18 @@ public sealed class AscentProblem
         Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
         Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
         TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-        PlaneTurnMin = min, PlaneTurnMax = max, LiftoffDirection = LiftoffDirection, Settings = Settings, Recoveries = Recoveries,
+        PlaneTurnMin = min, PlaneTurnMax = max, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, Settings = Settings, Recoveries = Recoveries,
     };
 
     /// <summary>
     /// Straight up at lift-off: the first thrust is pinned parallel to this. Null takes the lift-off air-relative velocity, as the script does.
     /// </summary>
     public double[]? LiftoffDirection { get; init; }
+
+    /// <summary>The clearance height, roll timeout and steering rate of a solid launch with a pinned first burn.</summary>
+    public sealed record RollProgram(double ClearanceM, double MaxSeconds, double MaxTurnRateDegS = 5.0);
+
+    public RollProgram? PadRoll { get; init; }
 
     public AscentSettings Settings { get; init; } = new();
 
@@ -529,6 +534,11 @@ public sealed class AscentProblem
             return "the target orbit is not above the surface";
         if (!(QMax > 0.0) || !(QAlphaMax > 0.0))
             return "the structural limits must be positive";
+        if (PadRoll is { } roll && (!Stages[0].IsPinned || Stages[0].Solid == null
+            || !double.IsFinite(roll.ClearanceM) || !(roll.ClearanceM > 0.0)
+            || !double.IsFinite(roll.MaxSeconds) || !(roll.MaxSeconds > 0.0)
+            || !double.IsFinite(roll.MaxTurnRateDegS) || !(roll.MaxTurnRateDegS > 0.0)))
+            return "the pad roll program needs a fixed solid burn, clearance height, roll timeout and turn rate";
         if (!double.IsFinite(PlaneTurnMin) || !double.IsFinite(PlaneTurnMax) || PlaneTurnMin > PlaneTurnMax)
             return "the plane-turn bounds are not valid";
         for (int i = 0; i < Recoveries.Count; i++)

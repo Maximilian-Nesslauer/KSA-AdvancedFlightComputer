@@ -101,6 +101,8 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void ExecuteAscent(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         bool window = HasLaunchTarget && !double.IsNaN(_s.LaunchTargetTime);
         _s.ConvexLaunchFailure = "";
         _s.BackupAscent = false;
@@ -116,6 +118,8 @@ public static partial class GuidanceWindow
     /// <summary>The commit itself: arm for the window, or start now.</summary>
     private static void LaunchAscent(Vehicle vehicle, Orbit orbit, IParentBody parent, bool atWindow)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         if (atWindow && HasLaunchTarget && !double.IsNaN(_s.LaunchTargetTime))
         {
             // ARMING TAKES THE VEHICLE TOO. It is a commit - the craft is now waiting to launch and will fire itself at the window - so leaving another mode running underneath it would have that mode flying right up to the moment StepLaunchWindow claimed it out from under itself.
@@ -133,6 +137,8 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void LaunchNowAscent(Vehicle vehicle, Orbit orbit, IParentBody parent, in ChasePlan plan)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         if (_s.Running)
             return;
         // The gravity turn cannot fly the plane change of a lift-off off the window, so it is refused before the armed countdown and its warp are dropped.
@@ -180,13 +186,7 @@ public static partial class GuidanceWindow
             GuidanceLog.Info(vehicle, $"ascent {(status.Length > 0 ? "ended: " + status : "stopped by the player")}"
                 + $" (phase {PhaseName(_s.Phase)}, tgo {_s.Upfg.Tgo:F1} s, vgo {_s.Upfg.VgoMag:F0} m/s).");
         // A launch still waiting on its plan goes too, and its calculation with it; a plan calculated only to look at is left to finish.
-        if (_s.ConvexLaunchPending)
-        {
-            GuidanceLog.Info(vehicle, "launch cancelled while its convex plan was calculating.");
-            _s.AscentPlanJob?.Cancel();
-            _s.AscentPlanRequested = false;
-        }
-        _s.ConvexLaunchPending = false;
+        CancelPendingLaunch();
         _s.ConvexLaunchFailure = "";
         _s.BackupAscent = false;
         // The shutdown for this path comes from the release itself, so record the intent. Nothing here queues a one-shot cut that a later takeover could preserve on its own.
@@ -333,6 +333,8 @@ public static partial class GuidanceWindow
 
     private static void StartGuidance(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
+        if (!ControlAvailable(vehicle))
+            return;
         OrderApsides();
 
         // A target orbit wholly inside the atmosphere has nowhere the insertion floor allows (see UpfgTarget.InsideFloor): refused here rather than flown to a cutoff in the air.
@@ -385,6 +387,7 @@ public static partial class GuidanceWindow
         _s.ConvexStage = 0;
         _s.ConvexStageSpeed = 0.0;
         _s.ConvexLastTime = double.NaN;
+        _s.ConvexSolidIgnitionTime = double.NaN;
         _s.ConvexBlendStart = double.NaN;
         string convexWhy = "";
         if (_s.FlyConvexAscent && !_s.BackupAscent && ConvexPlanFlyable(vehicle, orbit, parent, SimNow(), out convexWhy))
@@ -402,8 +405,7 @@ public static partial class GuidanceWindow
         {
             double3 r0 = vehicle.Orbit.StateVectors.PositionCci;
             double3 v0 = vehicle.Orbit.StateVectors.VelocityCci;
-            double3 surface = v0 - double3.Cross(new double3(0, 0, parent.GetAngularVelocity()), r0);
-            _s.LiftoffRadius = surface.Length() < PadHoldMaxSpeedMs ? r0.Length() : double.NaN;
+            _s.LiftoffRadius = IsPadAscent(r0, v0, parent) ? r0.Length() : double.NaN;
         }
         _s.RollProgramStart = double.NaN;
         _s.RollProgramDone = false;
@@ -678,10 +680,11 @@ public static partial class GuidanceWindow
     /// <summary>The surface speed under which an engagement counts as standing on the pad, m/s: a vehicle engaged in flight gets no pad hold.</summary>
     private const double PadHoldMaxSpeedMs = 30.0;
 
+    private static bool IsPadAscent(double3 r, double3 v, IParentBody parent)
+        => AirSpeed(r, v, parent) < PadHoldMaxSpeedMs;
+
     /// <summary>
     /// Whether the ascent is still clearing the pad: engaged on the pad and not yet <see cref="PadClearM"/> above where it engaged. Until then the command is straight up and the flight computer's roll stays decoupled, whatever the solved profile or the forced roll asks for.
-    ///
-    /// WHY. A high-TWR stack's solved profile turns 5 deg in its first second and 16 deg in five, and the forced roll waited only for 200 m above the mean radius, which a pad on high ground is already over: the vehicle pitched and rolled before it was clear of the tower (#171). The plan is unchanged; the hold only delays following it, and the command then slews onto it at the usual rate.
     /// </summary>
     internal static bool PadHold(double3 r)
         => double.IsFinite(_s.LiftoffRadius) && r.Length() - _s.LiftoffRadius < PadClearM;
@@ -716,8 +719,8 @@ public static partial class GuidanceWindow
             return true;
         _s.RollProgramDone = true;
         GuidanceLog.Debug(vehicle, rolled
-            ? FormattableString.Invariant($"roll program done in {held:F1} s ({errorDeg:F1} deg off): pitching over.")
-            : FormattableString.Invariant($"roll program out of time after {held:F0} s, {errorDeg:F1} deg off the roll: pitching over anyway."));
+            ? FormattableString.Invariant($"roll program done in {held:F1} s ({errorDeg:F1} deg off).")
+            : FormattableString.Invariant($"roll program out of time after {held:F0} s, {errorDeg:F1} deg off the roll."));
         return false;
     }
 
@@ -822,7 +825,7 @@ public static partial class GuidanceWindow
                 break;
 
             case AscentPhase.Profile:
-                want = ConvexProfileCommand(r, v, vehicle.TotalMass, parent, stepDt, out wantRate);
+                want = ConvexProfileCommand(vehicle, r, v, parent, stepDt, out wantRate);
                 break;
 
             case AscentPhase.ClosedLoop:
@@ -832,7 +835,7 @@ public static partial class GuidanceWindow
                 // Straight after a convex profile, turned onto that law over ConvexBlendSeconds.
                 double blend = ConvexBlendWeight();
                 if (blend < 1.0)
-                    want = ConvexBlendCommand(r, v, vehicle.TotalMass, parent, steerNow, blend, stepDt, out wantRate);
+                    want = ConvexBlendCommand(vehicle, r, v, parent, steerNow, blend, stepDt, out wantRate);
                 break;
 
             case AscentPhase.Terminal:
@@ -856,7 +859,7 @@ public static partial class GuidanceWindow
                 break;
         }
 
-        // Off the pad: straight up until the tower is cleared, whatever the phase wants (PadHold), and then until the roll program has rolled the vehicle (RollProgramHolds): roll, then pitch. The phase's own command above still runs, so a solved profile's clock keeps pace with the climb, and the slew takes the command onto it once the hold lets go.
+        // The clearance and roll checks protect the live craft even when its planned vertical segment ends earlier.
         if ((PadHold(r) || RollProgramHolds(vehicle, r)) && want.Length() > 0.5)
         {
             want = up;

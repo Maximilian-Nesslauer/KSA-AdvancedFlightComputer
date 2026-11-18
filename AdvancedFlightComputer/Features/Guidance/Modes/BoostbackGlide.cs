@@ -10,7 +10,7 @@ using AdvancedFlightComputer.Guidance.Numerics;
 
 // The glide: from boostback cutoff to the ground, a PID on the coast impact point steers the angle of attack.
 //
-// WHAT IS STEERED ON. The prediction the overlay draws - where the vehicle lands if it glides from here engine-first at the planned angle of attack (GlideNominalAoaDeg, 7.5 degrees) with its lift up the trajectory - and its miss from the site, a vector on the ground. The boostback burn aims this same prediction at the site, so the glide's lift buys range the burn no longer has to; at a planned angle of 0 it is the engine-first ballistic coast.
+// WHAT IS STEERED ON. The prediction the overlay draws - where the vehicle lands if it glides from here engine-first at the planned angle of attack (GlideNominalAoaDeg) with its lift up the trajectory - and its miss from the site, a vector on the ground. The boostback burn aims this same prediction at the site, so the glide's lift buys range the burn no longer has to; at a planned angle of 0 it is the engine-first ballistic coast.
 // The PID's lift is a correction ON TOP OF the planned glide's: flying other than the planned angle moves the vehicle off the path that prediction assumes, which is the point - the lift walks the trajectory, the next prediction sees where it has walked to, and the loop closes on that. As the miss goes to zero the command goes back to the planned angle and the prediction comes true.
 //
 // WHAT THE PID ASKS FOR IS A RATE: the impact should move back towards the site at (Kp miss + Ki integral + Kd rate) / tgo, with tgo the prediction's own time to impact. Which lift does that is not assumed but MEASURED: one velocity Jacobian of the coast prediction says how far the impact moves per m/s of push along each lift axis, and a damped two-by-two least squares picks the lift that moves it at the asked-for rate. The Jacobian grows like the time to go, so the lift asked for is Kp miss / tgo^2 - the zero-effort-miss guidance law, Kp 3 its textbook gain - and one set of gains is right from cutoff to the ground.
@@ -18,7 +18,7 @@ using AdvancedFlightComputer.Guidance.Numerics;
 //
 // THE ACCELERATION BECOMES AN ANGLE THROUGH THE MEASURED LIFT CURVE. Lift coefficient = a m / (q A), and the AoA that makes it is read off KsaAeroSweep's C_L(Mach, alpha) at the current Mach. That curve is not linear - crossflow lift grows with the square of the angle, and the tilted axial force works against it - and commanding degrees straight from a PID left the miss stalled in exactly the thick air where the authority is; inverting the curve gives the loop the lift it asked for, whatever shape the active model's curve has. Should a model have a dead band near alpha 0, tiny requests ramp the angle up from zero rather than jumping to its edge, so the command stays continuous as the miss crosses zero.
 //
-// AND WHICH WAY TO TILT FOR IT IS MEASURED TOO. A slender body leading with its engine lifts towards the side the engine end is tilted, from attached flow and crossflow along its flanks; a capsule leading with its heat shield lifts the other way, from its tilted axial force; stock's box makes none at all. The sign comes off the same table every update, so the loop points the right way under whatever aero is active - and holds alpha 0 under a model with no lift, rather than wagging the vehicle for drag it cannot aim. It is a property of the shape and the Mach number, never of the air's density, so thin air does not read as "no lift".
+// AND WHICH WAY TO TILT FOR IT IS MEASURED TOO. A slender body leading with its engine lifts towards the side the engine end is tilted, from attached flow and crossflow along its flanks; a capsule leading with its heat shield lifts the other way, from its tilted axial force. The sign comes off the same table every update, so the loop points the right way under whatever aero is active - and holds alpha 0 under a model with no lift, rather than wagging the vehicle for drag it cannot aim. It is a property of the shape and the Mach number, never of the air's density, so thin air does not read as "no lift".
 //
 // STEERING STARTS AT CUTOFF, in any air at all. A dispersion is cheapest to fix early, while there is the most time for a small push to grow; up high the lift asked for just exceeds what the thin air gives, so the command sits at the AoA limit and does what it can until the air thickens.
 //
@@ -28,7 +28,7 @@ using AdvancedFlightComputer.Guidance.Numerics;
 //
 // THE INTEGRAL DEFAULTS OFF. A glide is minutes long and the miss starts kilometres out, so the integral of an ordinary, shrinking miss grows into a large stale bias that then drives the vehicle past the site. Kd bought nothing either - the overshoot it was meant to damp turned out to be the attitude lag, which the trim removes. Both are left on the TUNE page to tune against the real thing.
 //
-// Closed-loop flat-earth runs through KSAero's aero, from descending and from still-climbing cutoffs between 40 and 90 km, boosters of fineness 6 to 13 and a capsule, with up to 5 s of attitude lag: every case within 2 m of the site, at most 11 m of wrong-way motion and 4 m of overshoot.
+// Closed-loop flat-earth runs through a lifting aero model, from descending and from still-climbing cutoffs between 40 and 90 km, boosters of fineness 6 to 13 and a capsule, with up to 5 s of attitude lag: every case within 2 m of the site, at most 11 m of wrong-way motion and 4 m of overshoot.
 public static partial class GuidanceWindow
 {
     /// <summary>Floor on the time to go the gains are divided by, s, so the last seconds ask for the airframe's limit rather than for infinity.</summary>
@@ -40,33 +40,12 @@ public static partial class GuidanceWindow
     /// <summary>Least lift-to-drag at the maximum AoA that counts as lift worth steering with. Low on purpose: a little lift early is worth more than a lot of it late.</summary>
     private const double GlideMinLiftToDrag = 0.02;
 
-    // Whether the KSAero mod is loaded, rechecked every few seconds until it is: mods load in an order this cannot rely on.
-    private static bool _ksaeroLoaded;
-    private static double _ksaeroCheckedAt = double.NegativeInfinity;
-
-    private static bool KsaeroLoaded
-    {
-        get
-        {
-            double wall = Environment.TickCount64 / 1000.0;
-            if (!_ksaeroLoaded && wall - _ksaeroCheckedAt > 5.0)
-            {
-                _ksaeroCheckedAt = wall;
-                foreach (System.Reflection.Assembly a in AppDomain.CurrentDomain.GetAssemblies())
-                    if (a.GetName().Name == "KSAero") { _ksaeroLoaded = true; break; }
-            }
-            return _ksaeroLoaded;
-        }
-    }
-
     /// <summary>
-    /// Why the air cannot steer this craft, or "" when it can. Boostback steering and entry guidance's glide both steer with LIFT; KSA's stock aero is a box that makes none, so without KSAero - or on an airframe whose measured lift is too small to steer with (the sweep's L/D below what the glide steers on) - neither can move the impact point. They still fly: the glide holds alpha 0, falling ballistic, and entry guidance plans the fall and the landing burn on drag alone. Only the steering is lost.
+    /// Why the air cannot steer this craft, or "" when it can. Boostback steering and entry guidance's glide both steer with LIFT, so on an airframe whose measured lift is too small to steer with (the sweep's L/D below what the glide steers on) neither can move the impact point. They still fly: the glide holds alpha 0, falling ballistic, and entry guidance plans the fall and the landing burn on drag alone. Only the steering is lost.
     /// </summary>
     internal static string AeroLiftWarning()
     {
         const string lost = "GLIDE STEERING OFF FOR BOOSTBACK AND ENTRY. GLIDE HOLDS RETROGRADE. ENTRY PLANS A BALLISTIC FALL AND BURN ON DRAG ALONE. BURN ABSORBS ANY MISS.";
-        if (!KsaeroLoaded)
-            return "KSAERO NOT LOADED: STOCK AERO MAKES NO LIFT. " + lost;
         KsaAeroSweep.Result aero = _s.Aero;
         if (aero?.Table != null && aero.Atmosphere != null && aero.LiftToDragMax < GlideMinLiftToDrag)
             return FormattableString.Invariant($"AIRFRAME MAKES NO USABLE LIFT (L/D UP TO {aero.LiftToDragMax:F3}). ") + lost;
@@ -77,7 +56,7 @@ public static partial class GuidanceWindow
     {
         if (!HasPhysicalAtmosphere(parent) || AeroLiftWarning().Length == 0)
             return "";
-        return KsaeroLoaded ? Ui.Logic.PageText.NoLiftAirframe : Ui.Logic.PageText.NoLiftModel;
+        return Ui.Logic.PageText.NoLiftAirframe;
     }
 
     /// <summary>

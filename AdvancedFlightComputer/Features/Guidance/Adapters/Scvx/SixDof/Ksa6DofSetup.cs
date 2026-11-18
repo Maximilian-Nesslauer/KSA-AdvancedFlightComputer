@@ -136,6 +136,24 @@ public static class Ksa6DofSetup
         return total;
     }
 
+    internal static double LateralTorqueLead(Vehicle vehicle)
+    {
+        double thrust = 0.0;
+        double frequency = 0.0;
+        foreach (GimbalController controller in KsaGimbalControl.PlanningGimbals(vehicle))
+        {
+            Gimbal gimbal = controller.Gimbal;
+            if (!(controller.Data.MaximumThrust > thrust)
+                || Math.Max(gimbal.AxisY.MaxAngle, gimbal.AxisZ.MaxAngle) <= 0.0)
+                continue;
+            thrust = controller.Data.MaximumThrust;
+            frequency = gimbal.NaturalFrequency;
+        }
+
+        // Use the ramp delay of the dominant gimbal's critically damped response.
+        return double.IsFinite(frequency) && frequency > 0.0 ? Math.Min(2.0 / frequency, 0.2) : 0.0;
+    }
+
     /// <summary>
     /// The thrust of every engine the plan runs, at the conditions PlanningThrust is taken at: the planning gimbals' Data.MaximumThrust plus the engines that sit on no gimbal, through the same nozzle evaluation (GimbalController.RecomputeStaticData, a throttle of 2 in vacuum). The model's Tmax is the thrust of all activated engines, and only the part of it that goes through a gimbal makes torque, so the capability per newton of the model's thrust is the allocator's capability over this figure. Over PlanningThrust alone, a craft with one gimballed engine among seven planned with the gimbal range of that engine on the thrust of all seven, about 3.7 times the torque its gimbal gives.
     /// An engine without a gimbal counts when it is activated, or when no gimballed engine is activated, as KsaGimbalControl.CountsForPlanning counts the gimbals. RCS thrusters are rockets too and are left out by their controller type.
@@ -158,11 +176,11 @@ public static class Ksa6DofSetup
         foreach (RocketNozzle nozzle in vehicle.Parts.Modules.Get<RocketNozzle>())
         {
             Rocket rocket = nozzle.Rocket;
-            if (rocket?.Core?.Controller is not EngineController engine || onGimbal.Contains(nozzle))
+            if (rocket?.Controller is not EngineController engine || nozzle.Core == null || onGimbal.Contains(nozzle))
                 continue;
             if (anyActive && !engine.IsActive)
                 continue;
-            RocketCoreConditions combustion = rocket.Core.ComputeConditions(2f);
+            RocketCoreConditions combustion = rocket.ComputeCoreConditions(nozzle.Core, 2f);
             double thrust = nozzle.ComputePerformance(in combustion, 0f).GetTotalThrust();
             if (double.IsFinite(thrust) && thrust > 0.0)
                 total += thrust;
@@ -405,7 +423,7 @@ public static class Ksa6DofSetup
             G0 = G0,
             Isp = 1.0 / (alpha * G0),
             MassFlowOffset = flowOffset,
-            // THE AERODYNAMICS, from the same KSAero-sampled tables the 3-DOF flies (Ksa3DofSetup.BuildModel), read at the site's altitude plus the model's height. Without them the model had none, and the bias estimate stood in: a constant acceleration measured at the hand-over's ~90 m/s - several m/s^2 of drag and lift - that the plan leaned on to brake, and that fell away as the booster slowed (2026-10-08: it crossed the site still moving 13 m/s sideways).
+            // THE AERODYNAMICS, from the same sweep-measured tables the 3-DOF flies (Ksa3DofSetup.BuildModel), read at the site's altitude plus the model's height. Without them the model had none, and the bias estimate stood in: a constant acceleration measured at the hand-over's ~90 m/s - several m/s^2 of drag and lift - that the plan leaned on to brake, and that fell away as the booster slowed (2026-10-08: it crossed the site still moving 13 m/s sideways).
             Aero = aero?.Table != null
                 ? new KsaPointMassModel
                 {

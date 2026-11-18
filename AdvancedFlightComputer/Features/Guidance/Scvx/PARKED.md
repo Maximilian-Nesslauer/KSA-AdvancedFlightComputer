@@ -22,5 +22,5 @@ Status as of `feature/3dof_aero` at c58e171 (2026-10-14).
 ## Performance and logging
 
 - **The synchronous cold solve fails on a mass defect.** It reports −2640 kg at interval 0. Flight uses the spread cold solve, which does not.
-- **Engaging stalls the main thread for about 0.78 s.** This is the KSAero sweep.
+- **Engaging stalls the main thread for about 0.78 s.** This is the aero sweep.
 - **The cycle log's `twrMin` uses linear thrust.** It reads the throttle floor × capability, not the engine's thrust curve.

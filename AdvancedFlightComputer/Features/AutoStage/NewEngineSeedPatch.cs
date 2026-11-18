@@ -38,7 +38,7 @@ internal static class NewEngineSeedPatch
                 tree.EnsureDerived(DerivedData.SolidMotorStacks);
                 derived = true;
             }
-            bool fueled = VehiclePropellant.IsFueled(engine.Module, tree.Moles.States, tree.RocketCores.States, out _, out _);
+            bool fueled = VehiclePropellant.IsFueled(engine.Module, tree.Moles.States, RocketStates.Of(tree), out _, out _);
             if (fueled == engine.State.IsPropellantAvailable)
                 continue;
             engines.GetModuleAndAllMutableStatesForInitialization(engine.Module).State.IsPropellantAvailable = fueled;

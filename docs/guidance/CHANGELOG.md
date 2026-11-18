@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+- **LARGE BOOSTBACK FROM** defaults to 20 km, down from 100 km. A return to the launch site misses by tens of km at separation, and under 100 km it counted as a small correction: a booster still climbing waited for the apex and burned there, 887 m/s in one flight, about 70 s later than it should have. A miss over 20 km now starts the settling and powered-turn sequence after separation clearance, instead of waiting for the apex.
+
+- A booster glides at a smaller angle of attack: **GLIDE MAX AoA** defaults to 7.5 deg, down from 15, and **GLIDE PLAN AoA** to 0, down from 7.5, so the boostback plans an engine-first ballistic coast and the glide steers within 7.5 deg of it. On KSA 2026.11.16.5901 the air pushes a booster with a turning moment, so a booster has to be aerodynamically balanced to glide: one whose centre of pressure sits ahead of its centre of mass can turn further than its controls hold, at any angle these settings allow. **GLIDE MAX AoA** also limits entry guidance. Values that differ from the current defaults stay.
+
+- AFC works on KSA 2026.11.16.5901. The game moved the throttle, the burn timers and the propellant state from the rocket core to the rocket, and AFC now reads them there.
+
+- The aero sweep measures the new aerodynamics of KSA 2026.11.16.5901, pressure and skin friction on the surface of the craft, in place of the old box model. The solved climb, the impact prediction, boostback and entry guidance plan with the forces the game flies.
+  - While the game builds the aero mesh of a craft, for example after staging, the sweep waits and the old table stays in use. A CALCULATE request waits for the mesh too.
+  - On a body without air, such as the Moon, the sweep measures nothing and the solved climb plans in vacuum.
+  - Boostback and entry guidance steer with the lift the sweep measures on any aero model. The warning that stock aerodynamics make no lift is gone.
+  - The game log gives the time of each sweep. It is about one second on the stock Rocket.
+
+- Guidance stops when the craft loses control: no kitten in the command pod can fly it, or the probe core is out of power, switched off, failed or rebooting. It cuts the engine, because the game blocks the engine keys of a craft out of control, and the status line gives the reason. Guidance does not start on a craft out of control.
+
+- The burn right-click menu shows the AFC apse shortcuts under At Periapsis and At Apoapsis again.
 - On Luna, the target orbit defaults to a low one, 30 km PERIAPSIS and 50 km APOAPSIS, in place of the 200 x 420 km of the home body. Like UPFG FROM, a craft takes these when it is at Luna, and a value you changed stays.
 
 - A booster that glides with no burn while still climbing flies **nose first to its apex**, then turns to its glide attitude there, where the air is thin. This covers a miss within GLIDE ONLY WITHIN and a small correction waiting for the apex. It keeps the attitude it separated in, the least drag it has. Turning round low down, side-on to thick air, threw a booster 7 to 10 km short and cost it its landing. After a boostback burn a booster glides as before.

@@ -24,6 +24,10 @@ internal sealed class AscentCase
     // Canonical constants.
     public readonly double[] X0 = new double[NX];
     public readonly double[] LiftoffDir = new double[3];
+    public readonly double[][] VerticalDirections;
+    public readonly double PadVerticalTime;
+    public readonly bool PadRollFits = true;
+    public readonly double PadTurnStep;
     /// <summary>The target plane's normal at <see cref="PlaneTurn0"/>, the turn the solve starts from: what the seed flies into and kicks along.</summary>
     public readonly double[] Nhat = new double[3];
     /// <summary>The problem's own plane normal, unturned. <see cref="PlaneNormal"/> turns it.</summary>
@@ -128,8 +132,8 @@ internal sealed class AscentCase
         PlaneTurn0 = Math.Clamp(0.0, PlaneTurnMin, PlaneTurnMax);
         PlaneNormal(PlaneTurn0).CopyTo(Nhat, 0);
 
-        // Straight up: the script pins the first thrust along the lift-off AIR-RELATIVE velocity, not v0 itself, which on the pad is almost all co-rotation.
-        double[] up = p.LiftoffDirection ?? AirVelocity(X0);
+        // The pad roll follows the local vertical, which is also the usual direction of air-relative lift-off velocity.
+        double[] up = p.PadRoll != null ? X0[..3] : p.LiftoffDirection ?? AirVelocity(X0);
         double un = Norm3(up);
         for (int i = 0; i < 3; i++) LiftoffDir[i] = up[i] / un;
 
@@ -286,6 +290,71 @@ internal sealed class AscentCase
 
         QMax = p.QMax;
         QAlphaMax = p.QAlphaMax;
+
+        int lastVertical = 0;
+        if (p.PadRoll is { } roll)
+        {
+            double dt = p.Stages[0].FixedBurnTime / (per - 1);
+            double clear = AscentSeed.TimeToClearPad(this, roll.ClearanceM);
+            double deadline = clear + roll.MaxSeconds;
+            PadRollFits = deadline <= p.Stages[0].FixedBurnTime;
+            if (PadRollFits)
+            {
+                // Include the first node at or after the deadline so interpolation stays vertical through the roll.
+                lastVertical = (int)Math.Min(Ends[0], Math.Ceiling(deadline / dt));
+                PadVerticalTime = lastVertical * dt / tu;
+                // The squared thrust difference includes four times the product of both throttles times the squared half-angle sine.
+                double turn = Math.Min(Math.PI, roll.MaxTurnRateDegS * (Math.PI / 180.0) * dt);
+                PadTurnStep = 2.0 * ThrottleMin[0] * Math.Sin(0.5 * turn);
+            }
+        }
+        VerticalDirections = new double[lastVertical + 1][];
+        VerticalDirections[0] = LiftoffDir;
+        for (int k = 1; k <= lastVertical; k++)
+        {
+            VerticalDirections[k] = new double[3];
+            PadVertical(k * PadVerticalTime / lastVertical, VerticalDirections[k]);
+        }
+    }
+
+    // The pad's zenith rotates in the inertial frame during the hold.
+    public void PadVertical(double t, Span<double> direction)
+    {
+        (double sin, double cos) = Math.SinCos(Dyn.OmegaC * t);
+        direction[0] = cos * LiftoffDir[0] - sin * LiftoffDir[1];
+        direction[1] = sin * LiftoffDir[0] + cos * LiftoffDir[1];
+        direction[2] = LiftoffDir[2];
+    }
+
+    public bool PadRollControlsMet(ReadOnlySpan<double> u)
+    {
+        if (Problem.PadRoll == null)
+            return true;
+        if (!PadRollFits || u.Length < N * NU)
+            return false;
+        const double tolerance = 1e-6;
+        for (int k = 0; k < VerticalDirections.Length; k++)
+        {
+            ReadOnlySpan<double> thrust = u.Slice(k * NU, NU);
+            double[] up = VerticalDirections[k];
+            double parallel = thrust[0] * up[0] + thrust[1] * up[1] + thrust[2] * up[2];
+            if (!(parallel > 0.0))
+                return false;
+            double x = thrust[0] - parallel * up[0];
+            double y = thrust[1] - parallel * up[1];
+            double z = thrust[2] - parallel * up[2];
+            if (!(x * x + y * y + z * z <= tolerance * tolerance * parallel * parallel))
+                return false;
+        }
+        double stepLimit = PadTurnStep + tolerance;
+        for (int k = 0; k < Ends[0]; k++)
+        {
+            int j = k * NU;
+            double x = u[j + NU] - u[j], y = u[j + NU + 1] - u[j + 1], z = u[j + NU + 2] - u[j + 2];
+            if (!(x * x + y * y + z * z <= stepLimit * stepLimit))
+                return false;
+        }
+        return true;
     }
 
     /// <summary>The most throttle a stage's acceleration limit leaves it at a state, held at the subproblem's back-off, and 1 for a stage with no limit or no liquid thrust.</summary>

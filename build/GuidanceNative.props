@@ -5,7 +5,7 @@
   <PropertyGroup>
     <GuidanceNativeDir>$(MSBuildThisFileDirectory)native/</GuidanceNativeDir>
 
-    <GuidanceHostRid Condition="'$(GuidanceHostRid)' == '' and '$(OS)' == 'Windows_NT'">win-x64</GuidanceHostRid>
+    <GuidanceHostRid Condition="'$(GuidanceHostRid)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">win-x64</GuidanceHostRid>
     <GuidanceHostRid Condition="'$(GuidanceHostRid)' == '' and $([MSBuild]::IsOSPlatform('OSX'))">osx-arm64</GuidanceHostRid>
     <GuidanceHostRid Condition="'$(GuidanceHostRid)' == ''">linux-x64</GuidanceHostRid>
 

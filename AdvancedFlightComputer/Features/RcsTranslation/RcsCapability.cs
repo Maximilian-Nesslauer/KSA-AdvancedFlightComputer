@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Runtime.CompilerServices;
 using Brutal.Numerics;
+using AdvancedFlightComputer.Core;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
@@ -151,7 +152,7 @@ internal static class RcsCapability
                 .TryGetFrom(vehicle.Parts.States, out var stateList))
             return snap;
 
-        ReadOnlySpan<RocketCoreState> coreStates = vehicle.Parts.RocketCores.States;
+        ReadOnlySpan<RocketState> rocketStates = RocketStates.Of(vehicle.Parts);
         float3 com = vehicle.TotalMassPropsAsmb.Offset;
         float ambientPressure = vehicle.PhysicsEnvironment.AtmosphericPressure;
         RcsCtrlFrame ctrl = new(stateList.GlobalState.CachedCtrl2Body);
@@ -161,7 +162,8 @@ internal static class RcsCapability
         Span<ThrusterController> thrusters = stateList.Modules;
         int contributionCapacity = 0;
         for (int i = 0; i < thrusters.Length; i++)
-            contributionCapacity += thrusters[i].Cores.Length * 3;
+            foreach (Rocket rocket in thrusters[i].Rockets)
+                contributionCapacity += rocket.Cores.Length * 3;
         RcsPulseContribution[] contributionBuffer =
             ArrayPool<RcsPulseContribution>.Shared.Rent(contributionCapacity);
         int contributionCount = 0;
@@ -182,18 +184,21 @@ internal static class RcsCapability
                 float3 forceAsmb = float3.Zero;
                 float3 torqueAsmb = float3.Zero;
                 float massFlow = 0f;
-                foreach (RocketCore core in thruster.Cores)
+                foreach (Rocket rocket in thruster.Rockets)
                 {
-                    if (!coreStates[core.StatesIdx].IsPropellantAvailable)
+                    if (!rocketStates[rocket.StatesIdx].IsPropellantAvailable)
                         continue;
-                    RcsWrenchTable.ComputeLiveCoreAsmb(core, com, ambientPressure,
-                        out float3 coreForce, out float3 coreTorque, out float coreMassFlow);
-                    forceAsmb += coreForce;
-                    torqueAsmb += coreTorque;
-                    massFlow += coreMassFlow;
-                    AddCorePulseContributions(
-                        contributionBuffer, ref contributionCount,
-                        ctrl.ToCtrl(coreForce), core.MinimumPulseTime);
+                    foreach (RocketCore core in rocket.Cores)
+                    {
+                        RcsWrenchTable.ComputeLiveCoreAsmb(rocket, core, com, ambientPressure,
+                            out float3 coreForce, out float3 coreTorque, out float coreMassFlow);
+                        forceAsmb += coreForce;
+                        torqueAsmb += coreTorque;
+                        massFlow += coreMassFlow;
+                        AddCorePulseContributions(
+                            contributionBuffer, ref contributionCount,
+                            ctrl.ToCtrl(coreForce), rocket.MinimumPulseTime);
+                    }
                 }
                 if (massFlow <= 0f)
                 {

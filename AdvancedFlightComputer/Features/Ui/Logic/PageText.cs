@@ -880,8 +880,6 @@ internal static class PageText
 
     public static string PickRowTip(LandSolver solver) => "Selects " + LandSolvers.Label(solver) + " in the table.";
 
-    public const string NoLiftModel = "NO LIFT DATA. GLIDE HOLDS RETROGRADE.";
-
     public const string NoLiftAirframe = "NO USABLE LIFT. GLIDE HOLDS RETROGRADE.";
 
     public const string LegsStowed = "LEGS STOWED. DEPLOY IN EACH LEG WINDOW.";

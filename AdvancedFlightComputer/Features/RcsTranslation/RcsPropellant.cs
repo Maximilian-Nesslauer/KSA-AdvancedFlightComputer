@@ -15,7 +15,8 @@ internal static class RcsPropellant
         {
             if (!thruster.IsActive)
                 continue;
-            foreach (RocketCore core in thruster.Cores)
+            foreach (Rocket rocket in thruster.Rockets)
+            foreach (RocketCore core in rocket.Cores)
             {
                 // This estimate covers tank-fed cores. Solid cores have no tank graph.
                 if (core is not PlumbedCore plumbed)

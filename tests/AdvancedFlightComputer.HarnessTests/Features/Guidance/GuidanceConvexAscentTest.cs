@@ -15,8 +15,7 @@ namespace AdvancedFlightComputer.HarnessTests;
 // The convex ascent end to end, on a real vehicle: plan it through the production planner, fly the plan open
 // loop, hand over to UPFG, and reach orbit.
 //
-// The harness cannot spawn a craft on the ground, so the pad is a spawn a few hundred metres above the terrain,
-// co-rotating and climbing - which is where launch3dof.py starts its own vehicle, 100 m up and rising at 10 m/s.
+// The vehicle starts a few hundred metres above the terrain, upright, co-rotating and climbing.
 //
 // What it proves: Calculate builds the problem from the live part tree on the sim step and the worker converges
 // it; EXECUTE flies the profile in place of the gravity turn, from lift-off to the hand-over altitude, with the
@@ -158,25 +157,35 @@ public abstract class ConvexAscentFlightTest : AfcTest
             GuidanceFeature.ApplyDriverPatches(harmony);
             SharedVehicleHooks.GuidanceEnabled = true;
             GuidanceWindow.SetModActive(true);
-            // The bodies turn, and two steps first: Celestial.UpdatePerFrameData takes the body's rotation from its orbit's state time, which stands still until the orbit solvers run, and SimDriver.Step applies the vehicle solvers, which refresh that rotation, before the orbit solvers, so the rotation trails the orbit state by one step. The pad, read through that rotation, would otherwise be up to hundreds of kilometres from the site, on ground that can be higher than the spawn.
+            // Refresh the body's frame before building the launch state.
             driver.StepOrbits = true;
             driver.Step(0.02, 2);
 
-            // The pad: over the site, a few hundred metres above its terrain, turning with the ground and climbing.
+            // The orbit spawn needs the attitude and spin of a surface launch at the same epoch.
+            UniverseTime spawnTime = Universe.GetElapsedTime();
             double lat = SiteLatDeg * Math.PI / 180.0, lon = SiteLonDeg * Math.PI / 180.0;
             var dirCcf = new double3(Math.Cos(lat) * Math.Cos(lon), Math.Cos(lat) * Math.Sin(lon), Math.Sin(lat));
             double terrain = body.GetTerrainHeightFromDirCcf(dirCcf);
             if (!double.IsFinite(terrain) || terrain < 0.0)
                 terrain = 0.0;
-            double3 dirCci = double3.Normalize(dirCcf.Transform(home.GetCcf2Cci()));
+            double3 dirCci = double3.Normalize(dirCcf.Transform(body.GetCcf2Cci(spawnTime)));
             double3 r = dirCci * (home.MeanRadius + terrain + PadHeightM);
-            double3 v = double3.Cross(new double3(0, 0, home.GetAngularVelocity()), r) + SpawnClimbMs * dirCci;
-            Orbit pad = Orbit.CreateFromStateCci(home, Universe.GetElapsedTime(), r, v, VehicleSpawner.OrbitLineColor);
+            double3 spin = home.GetAngularVelocityCci();
+            double3 v = double3.Cross(spin, r) + SpawnClimbMs * dirCci;
+            Orbit pad = Orbit.CreateFromStateCci(home, spawnTime, r, v, VehicleSpawner.OrbitLineColor);
+            doubleQuat cci2Cce = home.GetCci2Cce();
+            double3 south = double3.Cross(double3.Cross(double3.UnitZ, dirCci), dirCci).Normalized();
+            doubleQuat body2Cce = Vehicle.ComputeBody2Cce(dirCci.Transform(cci2Cce), south.Transform(cci2Cce));
+            var spawn = new SpawnOptions
+            {
+                Body2Cce = body2Cce,
+                BodyRates = spin.Transform(cci2Cce).Transform(body2Cce.Inverse()),
+            };
 
             Vehicle vehicle;
             try
             {
-                vehicle = VehicleSpawner.SpawnFromSave(saves[0], t.System, home, "HarnessConvexAscent", pad);
+                vehicle = VehicleSpawner.SpawnFromSave(saves[0], t.System, home, "HarnessConvexAscent", pad, spawn);
             }
             catch (InvalidOperationException e)
             {
@@ -185,6 +194,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
             }
             t.Info($"'{saves[0]}' spawned {terrain + PadHeightM:F0} m above the mean radius at lat {SiteLatDeg:F1}, lon {SiteLonDeg:F1} "
                  + $"(terrain {terrain:F0} m), {vehicle.TotalMass / 1000.0:F1} t, id '{vehicle.Id}', hash {vehicle.Hash.Code}");
+            t.CheckAbs("the launch vehicle starts upright", AngleDeg(dirCci, KsaFrameBridge.BodyNoseCci(vehicle)), 0.0, 0.001);
 
             Program.ControlledVehicle = vehicle;
             PhysicsBubble._forceOffRails = true;
@@ -270,6 +280,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
             return;
         }
         AscentSolution sol = plan!.Solution;
+        if (RequiresSolids)
+            CheckStageBoundary(t, sol, home);
         for (int i = 0; i < plan.StageLines.Count; i++)
             t.Info($"stage {i + 1}: {plan.StageLines[i]}");
         foreach (string note in plan.StageNotes)
@@ -317,9 +329,19 @@ public abstract class ConvexAscentFlightTest : AfcTest
         double3 lastCommand = state.CommandDir;
         int lastStage = state.ConvexStage;
         int lastActivations = StagingDetector.ActivationsOf(vehicle);
-        double worstStagingAltKm = 0.0;
+        int firstPlannedSplit = 0;
+        if (RequiresSolids)
+            for (int k = 1; k < sol.Nodes; k++)
+                if (sol.NodeStage[k] != sol.NodeStage[k - 1] && sol.Mass[k - 1] - sol.Mass[k] > 1.0)
+                {
+                    firstPlannedSplit = k;
+                    break;
+                }
+        double firstSplitBurnTime = double.NaN;
+        double worstStagingAltKm = double.NaN;
         double3 lastSampleR = double3.Zero;
         bool frozenReported = false, cutoffLogged = false;
+        bool pitchOverObserved = false;
         double3 lastR = vehicle.Orbit.StateVectors.PositionCci, lastV = vehicle.Orbit.StateVectors.VelocityCci;
         double nextThrustLog = 0.0;
         // The solves before the hand-over are only known to be before it once it happens, so they wait here and are logged then.
@@ -341,12 +363,24 @@ public abstract class ConvexAscentFlightTest : AfcTest
                      + $"{vehicle.Parts.Count} parts, delays {StagingConfig.EngineDelays.Count}/{StagingConfig.DecouplerDelays.Count}");
                 lastActivations = activations;
             }
-            DespawnJettisoned(t.System, preexisting, vehicle);
+            if (DespawnJettisoned(t.System, preexisting, vehicle)
+                && double.IsNaN(firstSplitBurnTime) && double.IsFinite(state.ConvexSolidIgnitionTime))
+                firstSplitBurnTime = Universe.GetElapsedSeconds() - state.ConvexSolidIgnitionTime;
             double3 r = vehicle.Orbit.StateVectors.PositionCci;
             double3 v = vehicle.Orbit.StateVectors.VelocityCci;
             double altKm = (r.Length() - home.MeanRadius) / 1000.0;
             double air = (v - double3.Cross(new double3(0, 0, home.GetAngularVelocity()), r)).Length();
             upfgConverged |= state.Upfg.Converged;
+            if (RequiresSolids && !pitchOverObserved && state.Phase == GuidanceWindow.AscentPhase.Profile
+                && AngleDeg(r, state.CommandDir) > 1.0)
+            {
+                pitchOverObserved = true;
+                t.Check("the solid burn advances while the roll program holds pitch",
+                    plan.PlansPadRoll && double.IsFinite(state.RollProgramStart) && state.RollProgramDone
+                    && state.ConvexPlanTime > 0.0 && vehicle.TotalMass < plan.Mass0,
+                    $"pitch-over at t={time:F2} s, plan t={state.ConvexPlanTime:F2} s, "
+                    + $"{(plan.Mass0 - vehicle.TotalMass) / 1000.0:F2} t burned");
+            }
 
             // How fast the command turns through the hand-over blend.
             // UPFG's steering law where the command reads it this step (see Ascent.UpdatePhase), and how far it turned since the last one.
@@ -412,8 +446,9 @@ public abstract class ConvexAscentFlightTest : AfcTest
                      + $"thrust accel {KsaEnginePerf.ActiveThrustCapability(vehicle, 0.0) / vehicle.TotalMass / 9.80665:F2} g at full, mass {vehicle.TotalMass / 1000.0:F2} t");
             }
 
-            // Each staging against the plan's own: where the profile moved on to the next planned stage, against where the plan has it.
-            if (state.Phase == GuidanceWindow.AscentPhase.Profile && state.ConvexStage != lastStage)
+            // The profile still supplies steering during the hand-over blend.
+            if ((state.Phase == GuidanceWindow.AscentPhase.Profile || double.IsFinite(state.ConvexBlendStart))
+                && state.ConvexStage != lastStage)
             {
                 lastStage = state.ConvexStage;
                 int first = Array.IndexOf(sol.NodeStage, lastStage);
@@ -423,7 +458,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
                     var pv = new double3(sol.Velocity[first * 3], sol.Velocity[first * 3 + 1], sol.Velocity[first * 3 + 2]);
                     double planAlt = (pr.Length() - home.MeanRadius) / 1000.0;
                     double planAir = (pv - double3.Cross(new double3(0, 0, home.GetAngularVelocity()), pr)).Length();
-                    if (Math.Abs(altKm - planAlt) > Math.Abs(worstStagingAltKm))
+                    if (double.IsNaN(worstStagingAltKm) || Math.Abs(altKm - planAlt) > Math.Abs(worstStagingAltKm))
                         worstStagingAltKm = altKm - planAlt;
                     t.Info($"into plan stage {lastStage + 1} at t={time:F1} s, {altKm:F1} km, air {air:F0} m/s, {vehicle.TotalMass / 1000.0:F1} t; "
                          + $"the plan at t={sol.Time[first]:F1} s, {planAlt:F1} km, {planAir:F0} m/s, {sol.Mass[first] / 1000.0:F1} t");
@@ -433,7 +468,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
             if (state.Phase == GuidanceWindow.AscentPhase.Profile)
             {
                 lowestCommand = Math.Min(lowestCommand, (float)ConvexThrottle.Invoke(null, new object[] { vehicle, home })!);
-                lowestPlanned = Math.Min(lowestPlanned, profile.Throttle(state.ConvexPlanTime));
+                lowestPlanned = Math.Min(lowestPlanned, profile.Throttle(state.ConvexPlanTime, state.ConvexStage));
                 double planKm = profile.AltitudeAt(state.ConvexPlanTime) / 1000.0;
                 if (Math.Abs(altKm - planKm) > Math.Abs(worstDevKm))
                 {
@@ -457,7 +492,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
             // How far apart the two ends of the blend are, from the hand-over to the end of the blend.
             if (double.IsFinite(handoverTime) && time - handoverTime <= ConvexBlendSeconds)
             {
-                double apart = AngleDeg(profile.Direction(r, state.ConvexPlanTime), steerNow);
+                double apart = AngleDeg(profile.Direction(r, state.ConvexPlanTime, state.ConvexStage), steerNow);
                 if (double.IsNaN(handoverApartDeg))
                     handoverApartDeg = apart;
                 if (apart > blendApartDeg)
@@ -472,7 +507,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 if (!afterHandover || time - handoverTime <= BlendWatchS)
                 {
                     double3 up = double3.Normalize(r);
-                    profile.Attitude(state.ConvexPlanTime, out double planPitchRad, out _);
+                    profile.Attitude(state.ConvexPlanTime, state.ConvexStage, out double planPitchRad, out _);
                     double liveThrustKn = KsaEnginePerf.ActiveThrustCapability(vehicle, KsaEnginePerf.AmbientPressureAt(home, altKm * 1000.0)) / 1000.0;
                     string line = $"UPFG solve t={time:F2}s {state.Phase} tgo {state.Upfg.Tgo:F1} s vgo {state.Upfg.VgoMag:F0} m/s converged {state.Upfg.Converged}  "
                                 + $"steer pitch {PitchDeg(up, state.Upfg.Steering):F1} cmd pitch {PitchDeg(up, state.CommandDir):F1} plan pitch {planPitchRad * 180.0 / Math.PI:F1}  "
@@ -511,13 +546,13 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 double3 up = double3.Normalize(r);
                 // The release at the cutoff clears the command, and double3.Normalize throws on a zero vector.
                 double pitch = PitchDeg(up, state.CommandDir);
-                profile.Attitude(state.ConvexPlanTime, out double planPitch, out _);
+                profile.Attitude(state.ConvexPlanTime, state.ConvexStage, out double planPitch, out _);
                 // Full thrust against the plan's at the same point, so a model that over- or under-states the engines shows up here rather than only as drift.
                 double pressure = KsaEnginePerf.AmbientPressureAt(home, altKm * 1000.0);
                 double thrustKn = KsaEnginePerf.ActiveThrustCapability(vehicle, pressure) / 1000.0;
                 double planThrustKn = PlanThrustAt(sol, profile, state.ConvexPlanTime) / 1000.0;
                 t.Info($"t={time,6:F1}s {state.Phase,-10} alt {altKm,6:F1} km  air {air,6:F0} m/s  plan stage {state.ConvexStage + 1} t {state.ConvexPlanTime,6:F1} s alt {profile.AltitudeAt(state.ConvexPlanTime) / 1000.0,6:F1} km {profile.SpeedAt(state.ConvexPlanTime),6:F0} m/s  "
-                     + $"cmd pitch {pitch,5:F1} (plan {planPitch * 180.0 / Math.PI,5:F1})  plan throttle {100.0 * profile.Throttle(state.ConvexPlanTime),3:F0} %  "
+                     + $"cmd pitch {pitch,5:F1} (plan {planPitch * 180.0 / Math.PI,5:F1})  plan throttle {100.0 * profile.Throttle(state.ConvexPlanTime, state.ConvexStage),3:F0} %  "
                      + $"thrust {thrustKn,6:F0} kN (plan {planThrustKn,6:F0})  tgo {state.Upfg.Tgo,6:F1}s  mass {vehicle.TotalMass / 1000.0,7:F1} t  '{state.Status}'");
             }
         }
@@ -531,7 +566,21 @@ public abstract class ConvexAscentFlightTest : AfcTest
         else
             t.Info($"climb tracking not checked here (#81): {worstDevKm:F2} km off the plan's altitude at worst, against {ProfileAltitudeTolKm:F0} km elsewhere");
         if (!double.IsNaN(StagingAltitudeTolKm))
-            t.CheckAbs("each staging lands where the plan stages, km off the plan's altitude", worstStagingAltKm, 0.0, StagingAltitudeTolKm);
+        {
+            if (double.IsNaN(worstStagingAltKm))
+                t.Fail("staging altitude", "the vehicle did not reach a planned staging while following the profile.");
+            else
+                t.CheckAbs("each staging lands where the plan stages, km off the plan's altitude", worstStagingAltKm, 0.0, StagingAltitudeTolKm);
+        }
+        if (RequiresSolids && !pitchOverObserved)
+            t.Fail("pitch-over", "the vehicle did not pitch over while following the profile.");
+        if (RequiresSolids && t.Check("the first planned jettison creates a separate vehicle",
+            firstPlannedSplit > 0 && double.IsFinite(firstSplitBurnTime)))
+        {
+            // AutoStage queues the split, and the harness drains the command and observes the new vehicle in sim steps.
+            t.CheckAbs("the first physical split follows the planned solid burn clock, s",
+                firstSplitBurnTime, sol.Time[firstPlannedSplit], 2 * StepDt);
+        }
         t.Info($"worst altitude deviation {worstDevKm:F2} km at {worstDevSpeed:F0} m/s air speed; worst at a staging {worstStagingAltKm:F2} km");
         t.Check("the hand-over blends onto UPFG's steering", blended);
         t.Info($"the plan's attitude and UPFG's steering are {handoverApartDeg:F1} deg apart at the hand-over and {blendApartDeg:F1} deg at most through the blend"
@@ -592,7 +641,54 @@ public abstract class ConvexAscentFlightTest : AfcTest
         return sol.FullThrust.Length > best ? sol.FullThrust[best] : double.NaN;
     }
 
-    private static void DespawnJettisoned(CelestialSystem system, HashSet<string> preexisting, Vehicle flying)
+    private static void CheckStageBoundary(TestContext t, AscentSolution sol, IParentBody home)
+    {
+        AscentSolution sample = sol.RotatedAboutSpin(Math.PI / 2.0);
+        int ignition = Array.IndexOf(sample.NodeStage, 1);
+        if (!t.Check("the profile has a first phase boundary", ignition > 1))
+            return;
+        int burnout = ignition - 1;
+        var r = new double3(sample.Position[3 * burnout], sample.Position[3 * burnout + 1], sample.Position[3 * burnout + 2]);
+        double3 up = double3.Normalize(r);
+        double3 east = double3.Normalize(double3.Cross(double3.UnitZ, up));
+        const double endThrottle = 0.42, startThrottle = 0.87;
+        SetThrottle(burnout - 1, endThrottle * up);
+        SetThrottle(burnout, endThrottle * up);
+        SetThrottle(ignition, startThrottle * east);
+        const double zenithOffsetDeg = 0.95;
+        (double sinTilt, double cosTilt) = Math.SinCos(zenithOffsetDeg * Math.PI / 180.0);
+        double3 ZenithDirection(int node, double side)
+        {
+            var position = new double3(sample.Position[3 * node], sample.Position[3 * node + 1], sample.Position[3 * node + 2]);
+            double3 zenith = double3.Normalize(position);
+            double3 nodeEast = double3.Normalize(double3.Cross(double3.UnitZ, zenith));
+            return cosTilt * zenith + side * sinTilt * nodeEast;
+        }
+        SetThrottle(0, ZenithDirection(0, 1.0));
+        SetThrottle(1, ZenithDirection(1, -1.0));
+        void SetThrottle(int node, double3 u)
+        {
+            sample.Throttle[3 * node] = u.X;
+            sample.Throttle[3 * node + 1] = u.Y;
+            sample.Throttle[3 * node + 2] = u.Z;
+        }
+
+        ConvexAscentProfile profile = ConvexAscentProfile.FromSolution(sample, home.GetAngularVelocity(), home.MeanRadius);
+        double boundary = sample.Time[ignition];
+        double before = 0.5 * (sample.Time[burnout - 1] + boundary);
+        t.CheckAbs("the final interval still samples the active phase", profile.Throttle(before, 0), endThrottle, 1e-9);
+        t.CheckAbs("a delayed staging holds the burnout throttle", profile.Throttle(boundary + 1.0, 0), endThrottle, 1e-9);
+        t.CheckAbs("a delayed staging holds the burnout direction", AngleDeg(profile.Direction(r, boundary + 1.0, 0), up), 0.0, 1e-5);
+        t.CheckAbs("the next phase starts at its ignition throttle", profile.Throttle(boundary, 1), startThrottle, 1e-9);
+        t.CheckAbs("the next phase starts at its ignition direction", AngleDeg(profile.Direction(r, boundary, 1), east), 0.0, 1e-5);
+        double mid = 0.5 * (sample.Time[0] + sample.Time[1]);
+        double3 middle = profile.Direction(r, mid, 0);
+        t.CheckAbs("opposite azimuths near vertical interpolate through the zenith", AngleDeg(middle, up), 0.0, 1e-5);
+        t.CheckAbs("the steering midpoint travels half the shortest arc",
+            AngleDeg(profile.Direction(r, sample.Time[0], 0), middle), zenithOffsetDeg, 1e-5);
+    }
+
+    private static bool DespawnJettisoned(CelestialSystem system, HashSet<string> preexisting, Vehicle flying)
     {
         List<Vehicle>? spent = null;
         for (int i = 0; i < system.Count; i++)
@@ -601,6 +697,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
         if (spent != null)
             foreach (Vehicle v in spent)
                 VehicleSpawner.Despawn(v);
+        return spent != null;
     }
 }
 

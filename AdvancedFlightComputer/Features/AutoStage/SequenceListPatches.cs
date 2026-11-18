@@ -5,7 +5,7 @@ namespace AdvancedFlightComputer.Features.AutoStage;
 
 internal static class SequenceListPatches
 {
-    // AutoStage's own staging does not run this method, so a call here is the player's staging key.
+    // The staging key and kFS use this stock path. AutoStage fires its modules separately.
     // The row's engines are read before stock marks the row activated, so a row that lights engines during an Auto burn can hold that burn, see StagingDetector.OnPlayerStaged.
     [HarmonyPatch(typeof(SequenceList), nameof(SequenceList.ActivateNextSequence), new[] { typeof(Vehicle) })]
     internal static class ActivateNextSequencePatch
@@ -16,9 +16,15 @@ internal static class SequenceListPatches
                 vehicle?.FlightComputer.BurnMode == FlightComputerBurnMode.Auto
                     ? StagingHelpers.EnginesLitByNextRow(__instance)
                     : null);
-            // Before stock fires the row, so what it separates is still attached. A row stock then declines to fire leaves only a record that expires.
-            if (vehicle != null && StagingHooks.NextRowToFire(__instance) is Sequence next)
-                StagingHooks.RaiseSequenceActivating(vehicle, next);
+            if (vehicle == null || StagingHooks.NextRowToFire(__instance) is not Sequence next
+                || next.Number == __state.ActiveSequence)
+                return;
+
+            ReadOnlySpan<Part> parts = next.Parts;
+            for (int i = parts.Length - 1; i >= 0; i--)
+                foreach (ISequenced module in parts[i].InSequence(next.Number))
+                    if (module is Decoupler decoupler)
+                        StagingHooks.RaiseDecouplerActivating(vehicle, decoupler);
         }
 
         // Stock activates a row only when that changes ActiveSequence.

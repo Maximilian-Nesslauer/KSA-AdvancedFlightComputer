@@ -14,6 +14,9 @@ internal sealed class RcsWorkerCommand
     /// <summary>The driver has taken over and translation pulses should fire once the ignition time and attitude gate allow.</summary>
     public required bool Active { get; init; }
 
+    /// <summary>The vehicle of the burn. The worker reads Vehicle.IsControllable through it, which Vehicle.UpdateControl writes on the main thread while no worker runs.</summary>
+    public Vehicle? Owner { get; init; }
+
     /// <summary>Construct the ignition time on the main thread because UniverseTime rejects NaN. A conversion failure inside the worker would interrupt the physics step.</summary>
     public UniverseTime IgnitionTime { get; init; }
 

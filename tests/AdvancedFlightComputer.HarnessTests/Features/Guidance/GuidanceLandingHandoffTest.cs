@@ -3,6 +3,8 @@ using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
+using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
@@ -41,9 +43,15 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
     private static bool _sixDofCanTake;
     private static bool _standbyReady;
     private static bool _gfoldCanFly;
+    private static bool _contact;
 
     protected override void Execute(TestContext t)
     {
+        CheckStandbyAttitude(t);
+        t.Check("entry retains a published ignition plan seven seconds before the burn",
+            !GuidanceWindow.CanRestartEntryGlide(7.0, 4.0));
+        t.Check("entry can restart when there is time for a cold retry before ignition lock",
+            GuidanceWindow.CanRestartEntryGlide(13.0, 4.0));
         if (!TestWorld.RequireHome(t, out IParentBody home))
             return;
         IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(RcsTestVehicles.Candidates);
@@ -91,11 +99,15 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             harmony.Patch(Method("StepSixDofStandby"), prefix: Prefix(nameof(NotForFixture)));
             harmony.Patch(Method("SixDofStandbyReady"), prefix: Prefix(nameof(AnswerStandbyReady)));
             harmony.Patch(Method("GfoldCanFly"), prefix: Prefix(nameof(AnswerGfoldCanFly)));
+            harmony.Patch(Method("HasTouchedDown"), prefix: Prefix(nameof(AnswerContact)));
 
             TheBurnHandsOverToSixDof(t, craft);
             TheBurnHandsOverToGfold(t, craft);
             ACraftSixDofRefusesGoesToGfold(t, craft);
             AStandbyWithNoPlanGoesToGfold(t, craft);
+            ContactCancelsHandoff(t, craft);
+            EntryFaultWaitsForAReadyPlan(t, craft, home, ambient);
+            TouchdownCoastUsesAvailableRcs(t, craft, home, ambient);
         }
         finally
         {
@@ -105,6 +117,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             _sixDofCanTake = false;
             _standbyReady = false;
             _gfoldCanFly = false;
+            _contact = false;
             if (craft != null)
             {
                 StagingDetector.Arm(craft, false);
@@ -115,6 +128,157 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             ambient.SetValue(null, previousAmbient);
             TestSupport.DespawnNewVehicles(t.System, preexisting);
         }
+    }
+
+    private static bool AnswerContact(Vehicle vehicle, ref bool __result)
+    {
+        if (!ReferenceEquals(vehicle, _fixture))
+            return true;
+        __result = _contact;
+        return false;
+    }
+
+    private static void ContactCancelsHandoff(TestContext t, Vehicle craft)
+    {
+        VehicleAutopilotState state = BurnAtHandoff(craft, sixDof: true);
+        _sixDofSteps = 0;
+        _sixDofCanTake = true;
+        _standbyReady = true;
+        GuidanceWindow.ApplyAutopilot(craft);
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("the airborne vehicle queued a standby handoff", state.EngagePending && state.LandingTouchdownArmed);
+
+        _contact = true;
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("ground contact cancels the pending handoff and cuts the engine",
+            !state.EngagePending && _sixDofSteps == 0 && !Inputs(craft).EngineOn);
+        _contact = false;
+        state.SixDofStandby = false;
+        VehicleControlOwnership.ReleaseAll(craft);
+        VehicleAutopilotState.Remove(craft);
+    }
+
+    private static void EntryFaultWaitsForAReadyPlan(TestContext t, Vehicle craft, IParentBody home, FieldInfo ambient)
+    {
+        VehicleAutopilotState state = VehicleAutopilotState.For(craft);
+        ambient.SetValue(null, state);
+        state.ThreeDofPhase = GuidanceWindow.ThreeDofPhase.Burn;
+        state.ThreeDofEngineOn = true;
+        state.ThreeDofThrottle = BurnThrottle;
+        state.SixDofStandby = true;
+        state.ThreeDofBurnSolveFault = true;
+        Inputs(craft).EngineOn = true;
+        Inputs(craft).EngineThrottle = BurnThrottle;
+        object[] args = [craft, home, double3.UnitZ * home.MeanRadius, new double[Dynamics6Dof.NX],
+            Universe.GetElapsedSeconds()];
+        MethodInfo step = Method("StepEntryTouchdownHandoff");
+        MethodInfo take = Method("CheckPendingEntryTouchdownHandoff");
+
+        _standbyReady = false;
+        step.Invoke(null, args);
+        t.Check("an entry solve fault keeps the lit burn while touchdown guidance is cold",
+            state.ThreeDofTouchdownHandoff.Status == null && !state.EngagePending
+            && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn
+            && state.ThreeDofEngineOn && state.ThreeDofThrottle == BurnThrottle);
+
+        _standbyReady = true;
+        step.Invoke(null, args);
+        t.Check("a retained fault requests handover after the standby becomes ready",
+            state.ThreeDofTouchdownHandoff.Status != null && !state.EngagePending
+            && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn);
+        _standbyReady = false;
+        take.Invoke(null, [craft, home]);
+        t.Check("a changed standby leaves the entry burn in control on the command step",
+            state.ThreeDofTouchdownHandoff.Status == null && !state.EngagePending
+            && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn && Inputs(craft).EngineOn);
+
+        _standbyReady = true;
+        step.Invoke(null, args);
+        _contact = true;
+        take.Invoke(null, [craft, home]);
+        t.Check("contact cancels the entry handover before touchdown guidance can command",
+            state.ThreeDofTouchdownHandoff.Status == null && !state.EngagePending);
+
+        _contact = false;
+        step.Invoke(null, args);
+        var model = new KsaPointMassModel();
+        var guidance = new Guidance3Dof(new Scvx3DofConfig { Nodes = 3, GlideIntervals = 1 },
+            new Scvx3DofConfig { Nodes = 3, GlideIntervals = 0, AttitudeAnchor = true }, model);
+        double now = Universe.GetElapsedSeconds();
+        var recovered = new Plan3Dof([], [], 3, 0, 0.0, 20.0, now, now, Phase3Dof.Burn, 0.0);
+        AccessTools.Field(typeof(Guidance3Dof), "_published").SetValue(guidance, recovered);
+        state.ThreeDofGuidance = guidance;
+        take.Invoke(null, [craft, home]);
+        t.Check("a plan published during a pending fault handoff keeps entry in control",
+            state.ThreeDofTouchdownHandoff.Status == null && !state.EngagePending
+            && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn);
+        state.ThreeDofGuidance = null;
+
+        step.Invoke(null, args);
+        take.Invoke(null, [craft, home]);
+        t.Check("a ready standby takes the entry burn without cutting its engine",
+            state.EngagePending && state.SixDofStandby
+            && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Idle
+            && Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle);
+        _standbyReady = false;
+        state.SixDofStandby = false;
+        VehicleAutopilotState.Remove(craft);
+    }
+
+    private static void TouchdownCoastUsesAvailableRcs(TestContext t, Vehicle craft, IParentBody home, FieldInfo ambient)
+    {
+        VehicleAutopilotState state = VehicleAutopilotState.For(craft);
+        ambient.SetValue(null, state);
+        FlightComputer computer = craft.FlightComputer;
+        computer.RollMode = FlightComputerRollMode.Down;
+        computer.RCSMode = FlightComputerRCSMode.Disabled;
+        state.RcsHeldOff = true;
+        Inputs(craft).EngineOn = false;
+        MethodInfo hold = Method("HoldTouchdownAttitude");
+        hold.Invoke(null, [craft, home]);
+        t.Check("the touchdown coast uses stock pointing and restores guidance-held RCS",
+            computer.AttitudeMode == FlightComputerAttitudeMode.Auto
+            && computer.AttitudeTrackTarget == FlightComputerAttitudeTrackTarget.Custom
+            && computer.RollMode == FlightComputerRollMode.Decoupled
+            && computer.RCSMode == FlightComputerRCSMode.Enabled && !Inputs(craft).EngineOn);
+
+        Method("ReleaseAttitude").Invoke(null, [craft]);
+        t.Check("touchdown attitude release restores the player's roll mode",
+            computer.RollMode == FlightComputerRollMode.Down);
+        computer.RCSMode = FlightComputerRCSMode.Disabled;
+        hold.Invoke(null, [craft, home]);
+        t.Check("the touchdown coast respects disabled player RCS",
+            computer.RCSMode == FlightComputerRCSMode.Disabled && !state.RcsHeldOff);
+        Method("ReleaseAttitude").Invoke(null, [craft]);
+        VehicleControlOwnership.ReleaseAll(craft);
+        VehicleAutopilotState.Remove(craft);
+    }
+
+    private static void CheckStandbyAttitude(TestContext t)
+    {
+        int stride = Dynamics6Dof.NX;
+        int q = Dynamics6Dof.IQ;
+        int w = Dynamics6Dof.IW;
+        var nodes = new double[2 * stride];
+        nodes[q] = 1.0;
+        nodes[stride + q] = -Math.Cos(Math.PI / 18.0);
+        nodes[stride + q + 1] = -Math.Sin(Math.PI / 18.0);
+        nodes[stride + w] = 0.2;
+        var plan = new Ksa6DofPlan(nodes, [], 2.0, 10.0, 2);
+        var live = new double[stride];
+        live[q] = Math.Cos(Math.PI / 36.0);
+        live[q + 1] = Math.Sin(Math.PI / 36.0);
+        live[w] = 0.1;
+        bool CanTake(double time) => Ksa6DofGuidance.MatchesHandoffAttitude(
+            plan, live, time, Math.PI / 36.0, Math.PI / 60.0);
+        t.Check("a standby plan can take a craft matching its time-indexed turn", CanTake(11.0));
+        live[w] = 0.0;
+        t.Check("a standby plan waits for a craft that has not started the planned turn", !CanTake(11.0));
+        live[w] = 0.1;
+        live[q] = 1.0;
+        live[q + 1] = 0.0;
+        t.Check("matching rate alone cannot hand over to a plan already turned away", !CanTake(11.0));
+        t.Check("a plan that reached its end cannot take the burn", !CanTake(12.0));
     }
 
     // Inside the handoff time the burn keeps the craft while touchdown guidance plans on standby. With
@@ -139,9 +303,8 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
 
         _standbyReady = true;
         GuidanceWindow.ApplyAutopilot(craft);
-        t.Check("6-DOF: the handoff ends the burn",
-            state.LandingPhase == GuidanceWindow.LandingPhase.Idle, state.LandingStatus);
-        t.Check("6-DOF: the engage is still queued when the step ends", state.EngagePending);
+        t.Check("6-DOF: the pending handoff leaves the braking burn in control",
+            state.LandingPhase == GuidanceWindow.LandingPhase.Burn && state.EngagePending, state.LandingStatus);
         t.Check("6-DOF: the standby is kept for the engage to promote", state.SixDofStandby);
         t.Check("6-DOF: the handoff keeps the craft",
             state.ControlAcquired && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance);
@@ -153,8 +316,17 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         t.Check("6-DOF: AutoStage stays armed through the handoff",
             StagingDetector.IsArmed(craft) && state.ArmedStaging);
 
+        _standbyReady = false;
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("6-DOF: a plan that no longer matches leaves the burn flying",
+            state.LandingPhase == GuidanceWindow.LandingPhase.Burn && !state.EngagePending && _sixDofSteps == 0);
+        t.Check("6-DOF: refusing a pending handoff keeps the braking engine lit", Inputs(craft).EngineOn);
+        _standbyReady = true;
+        GuidanceWindow.ApplyAutopilot(craft);
         GuidanceWindow.ApplyAutopilot(craft);
         t.Check("6-DOF: the next step dispatches the queued engage", _sixDofSteps == 1, $"{_sixDofSteps} dispatches");
+        t.Check("6-DOF: the accepted handoff ends the braking mode",
+            state.LandingPhase == GuidanceWindow.LandingPhase.Idle, state.LandingStatus);
         t.Check("6-DOF: the engaged descent keeps the craft",
             state.Active && state.ControlAcquired
             && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance);

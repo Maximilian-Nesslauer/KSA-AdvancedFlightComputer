@@ -101,8 +101,7 @@ internal static class AscentCheck
         {
             var stages = p.Stages.Take(k).ToArray();
             AscentStage last = stages[^1];
-            stages[^1] = new AscentStage(last.Thrust, last.MassFlow, last.PropellantMass, 0.0, last.DragArea,
-                                         last.PressureGrid, last.ThrustAtPressure);
+            stages[^1] = last.With(last.PropellantMass, 0.0, liquidCarriesOver: false);
             p = new AscentProblem
             {
                 Mu = p.Mu, BodyRadius = p.BodyRadius, Omega = p.Omega, R0 = p.R0, V0 = p.V0, M0 = p.M0,
@@ -110,6 +109,7 @@ internal static class AscentCheck
                 TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed, TargetRadialRate = p.TargetRadialRate,
                 PlaneNormal = p.PlaneNormal, QMax = p.QMax, QAlphaMax = p.QAlphaMax,
                 PlaneTurnMin = p.PlaneTurnMin, PlaneTurnMax = p.PlaneTurnMax,
+                PadRoll = p.PadRoll,
                 Recovery = p.Recovery is { } rc && rc.Stage < stages.Length - 1 ? rc : null,
             };
         }
@@ -128,6 +128,7 @@ internal static class AscentCheck
                 TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed, TargetRadialRate = p.TargetRadialRate,
                 PlaneNormal = p.PlaneNormal, QMax = qMax, QAlphaMax = qaMax,
                 PlaneTurnMin = p.PlaneTurnMin, PlaneTurnMax = p.PlaneTurnMax,
+                PadRoll = p.PadRoll,
                 Recovery = p.Recovery,
             };
         // --turn S: free the launch time within S seconds either way, as a plane turn of Omega S (AscentProblem.PlaneTurnMin).
@@ -146,6 +147,7 @@ internal static class AscentCheck
                 Atmosphere = p.Atmosphere, GroundRadius = p.GroundRadius, TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed,
                 TargetRadialRate = p.TargetRadialRate, PlaneNormal = p.PlaneNormal, QMax = p.QMax, QAlphaMax = p.QAlphaMax,
                 PlaneTurnMin = p.PlaneTurnMin, PlaneTurnMax = p.PlaneTurnMax, LiftoffDirection = p.LiftoffDirection, Settings = p.Settings,
+                PadRoll = p.PadRoll,
                 Recovery = p.Recovery,
             };
         }
@@ -162,6 +164,7 @@ internal static class AscentCheck
                 Atmosphere = p.Atmosphere, GroundRadius = p.GroundRadius, TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed,
                 TargetRadialRate = p.TargetRadialRate, PlaneNormal = p.PlaneNormal, QMax = p.QMax, QAlphaMax = p.QAlphaMax,
                 PlaneTurnMin = p.PlaneTurnMin, PlaneTurnMax = p.PlaneTurnMax, LiftoffDirection = p.LiftoffDirection, Settings = p.Settings,
+                PadRoll = p.PadRoll,
                 Recovery = p.Recovery,
             };
         }

@@ -3,6 +3,7 @@
 namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
+using AdvancedFlightComputer.Core;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
@@ -199,8 +200,8 @@ public static partial class GuidanceWindow
     /// <summary>The correction left, m/s, at which a burn that is flying is done early: the targeting tolerance a boostback burns to. Whether to burn at all is judged on the miss instead (VehicleAutopilotState.BoostbackGlideMissKm).</summary>
     private const double BoostbackCutoffDvMs = 5.0;
 
-    /// <summary>How long a small boostback may turn with the engine off before it lights the engine to turn on its gimbal, s (VehicleAutopilotState.BoostbackSmall).</summary>
-    private const double BoostbackSmallTurnTimeoutS = 60.0;
+    /// <summary>Maximum time in the rotation phase before proceeding to descent, s.</summary>
+    private const double BoostbackTurnTimeoutS = 60.0;
 
     /// <summary>
     /// Time constant for the low-pass on the TARGET's own turning rate, s.
@@ -231,21 +232,36 @@ public static partial class GuidanceWindow
 
     // ------------------------------------------------------------------ commit
 
+    private static void StepPendingBoostback(Vehicle vehicle, Orbit orbit, IParentBody parent)
+    {
+        if (!_s.BoostbackEngagePending || KsaAeroSweep.MeshRebuilding(vehicle))
+            return;
+        _s.BoostbackEngagePending = false;
+        ExecuteBoostback(vehicle, orbit, parent);
+    }
+
     /// <summary>
     /// The BOOSTBACK verb on LAND > BOOSTBACK: start the machine at separation, from whatever
     /// attitude and state the vehicle is in right now.
     ///
-    /// The aero sweep is FORCED here rather than left to the staleness check. The
-    /// check compares bounding boxes, and a booster that has just separated has a new
-    /// one - but this is pressed within seconds of that separation, sometimes on the
-    /// frame the part tree is still settling, and a table fitted to the stack that
-    /// included the upper stage would give the prediction several times the drag area
-    /// the booster actually has.
+    /// The aero sweep is FORCED here rather than left to the staleness check, because
+    /// this is pressed within seconds of the separation, sometimes on the frame the part
+    /// tree is still settling, and a table fitted to the stack that included the upper
+    /// stage would give the prediction several times the drag area the booster actually
+    /// has. While the game rebuilds the aero mesh the sweep refuses, and so does this, so
+    /// the old stack's table never flies the booster; the hand-over tries again.
+    /// Runs in the PrepareWorker prefix only, because the sweep writes the aero flow
+    /// buffers that the vehicle's worker also writes.
     /// </summary>
     private static void ExecuteBoostback(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
         ResampleBoostbackAero(vehicle, parent);
-        if (_s.Aero?.Table == null)
+        if (_s.AeroError == KsaAeroSweep.RebuildingError)
+        {
+            _s.WarnBoostback("AERO MESH REBUILDING. BOOSTBACK WAITS FOR IT.");
+            return;
+        }
+        if (_s.Aero?.Table == null || (IsStockDeorbitPhase(_s.LandingPhase) && _s.AeroError.Length > 0))
         {
             _s.WarnBoostback(_s.AeroError.Length > 0
                 ? "NO AERO SURROGATE: " + _s.AeroError
@@ -253,14 +269,32 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // Boostback owns the vehicle now.
-        // Every mode drives the same flight-computer command path, and two of them writing it would fight.
-        ClaimVehicle(GuidanceMode.Boostback, vehicle);
-        StartBoostbackRun(vehicle);
+        bool alreadyClaimed = VehicleControlOwnership.Holds(vehicle, ControlClaimant.Guidance);
+        if (!TryTakeCraft(vehicle, acquire: false))
+        {
+            _s.HandoverPendingUntil = double.NegativeInfinity;
+            return;
+        }
 
-        // Only a booster adopted at separation has a stage alongside to clear, see TryAdoptBooster. A manual engage, or one after the hand-over window, settles at once.
-        if (!(_s.HandoverPendingUntil > SimNow()))
-            _s.BoostbackClearOf = null;
+        bool started = false;
+        try
+        {
+            // Keep the claim while giving up the stock burn and publishing the incoming mode.
+            ReleaseStockDeorbit(vehicle, keepClaim: true);
+            ClaimVehicle(GuidanceMode.Boostback, vehicle);
+            StartBoostbackRun(vehicle);
+            started = true;
+
+            // A manual start has no departing stage to clear.
+            if (!(_s.HandoverPendingUntil > SimNow()))
+                _s.BoostbackClearOf = null;
+        }
+        finally
+        {
+            // A failed start returns its provisional claim. A successful preview commands nothing.
+            if ((!started && !alreadyClaimed) || (started && !_s.Engage && !_s.ControlAcquired))
+                VehicleControlOwnership.Release(vehicle, ControlClaimant.Guidance);
+        }
     }
 
     /// <summary>
@@ -310,6 +344,7 @@ public static partial class GuidanceWindow
     /// <summary>ABORT: stop steering, cut the engine, leave the vehicle where it is.</summary>
     private static void AbortBoostback()
     {
+        _s.BoostbackEngagePending = false;
         _s.BoostbackPhase = BoostbackPhase.Done;
         _s.BoostbackHasPlan = false;
         _s.BoostbackTerminal = false;
@@ -453,8 +488,10 @@ public static partial class GuidanceWindow
                     if (!_s.HasSteer && now - _s.BoostbackPhaseStart < BoostbackDecideTimeoutS)
                         break;
                     // SMALL BOOSTBACK (#197): a miss up to BoostbackLargeMissKm flies no settle and turns with the engine off. A lit flip lays down dV of its own, as big as a small correction, which then moves under the booster as it turns.
-                    // A SMALL CORRECTION WAITS FOR THE APEX while the booster still climbs: separated in the air, it drifts while it turns round, so a burn now is followed by a second at the apex recheck. Gliding up and burning once at the top does it in one. A booster already falling has no apex to wait for, and a large miss burns at once.
-                    if (_s.HasSteer && missKm <= _s.BoostbackLargeMissKm && vUp > 0.0)
+                    // Waiting for the apex avoids a second correction if there is still time to turn, burn and land.
+                    bool smallMiss = _s.HasSteer && missKm <= _s.BoostbackLargeMissKm;
+                    double gravity = parent.Mu / r.LengthSquared();
+                    if (smallMiss && vUp > 0.0 && CanCoastBeforeSmallBoostback(vehicle, vUp / gravity))
                     {
                         _s.BoostbackStatus = FormattableString.Invariant($"MISS {missKm:F1} km: SMALL CORRECTION AT THE APEX.");
                         GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, small correction (miss {missKm:F1} km, {missDv:F0} m/s) while climbing: no burn now, it burns once at the apex."));
@@ -464,13 +501,15 @@ public static partial class GuidanceWindow
                         _s.BoostbackClimbHold = true;
                         break;
                     }
-                    if (_s.HasSteer && missKm <= _s.BoostbackLargeMissKm)
+                    if (smallMiss && (CanCoastBeforeSmallBoostback(vehicle, 0.0) || !CanPowerBoostbackTurn(vehicle)))
                     {
                         _s.BoostbackSmall = true;
                         GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, small boostback (miss {missKm:F1} km, {missDv:F0} m/s): no settle, turning engine-off."));
                         EnterBoostbackPhase(BoostbackPhase.Rotation, now);
                         break;
                     }
+                    if (smallMiss)
+                        GuidanceLog.Info(vehicle, "Small boostback: using a powered turn to keep time for the burn and descent.");
                     _s.BoostbackSettleFrom = now;
                 }
                 if (now - _s.BoostbackSettleFrom >= Math.Max(_s.BoostbackSeparationS, 0.0))
@@ -479,9 +518,14 @@ public static partial class GuidanceWindow
 
             case BoostbackPhase.Rotation:
             {
+                bool turnTimedOut = now - _s.BoostbackPhaseStart > BoostbackTurnTimeoutS;
+                bool descentDue = _s.HasImpact && _s.Impact.TimeOfFlight.V <= BoostbackDescentLead();
                 if (!_s.HasSteer)
                 {
-                    _s.WarnBoostback("NO STEERING SOLUTION. HOLDING ATTITUDE.");
+                    if (descentDue || turnTimedOut)
+                        SkipBoostbackForDescent(vehicle, now, "STEERING SOLUTION LOST");
+                    else
+                        _s.WarnBoostback("NO STEERING SOLUTION. HOLDING ATTITUDE.");
                     break;
                 }
                 if (_s.SteerMissM / 1000.0 <= _s.BoostbackGlideMissKm)
@@ -494,38 +538,36 @@ public static partial class GuidanceWindow
                     break;
                 }
                 _s.BoostbackStatus = _s.BoostbackSmall ? "SMALL BOOSTBACK: TURNING ENGINE-OFF, THEN BURN." : "";
+                bool canPowerTurn = CanPowerBoostbackTurn(vehicle);
+                double cmdErr = planDir.Length() > 0.5 ? AngleBetween(_s.CommandDir, planDir) * 180.0 / Math.PI : double.NaN;
+                double craftErr = planDir.Length() > 0.5
+                    ? AngleBetween(KsaFrameBridge.ThrustAxisCci(vehicle), planDir) * 180.0 / Math.PI
+                    : double.NaN;
 
                 // A turn that takes long says why, every few seconds: the burn waits on a plan and on both the command and the craft lining up with it.
                 if (now - _s.BoostbackPhaseStart > BoostbackWaitLogS && now - _s.BoostbackWaitLogAt >= BoostbackWaitLogS)
                 {
                     _s.BoostbackWaitLogAt = now;
-                    double cmdOff = planDir.Length() > 0.5 ? AngleBetween(_s.CommandDir, planDir) * 180.0 / Math.PI : double.NaN;
-                    double craftOff = vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI;
                     GuidanceLog.Debug(vehicle, FormattableString.Invariant(
-                        $"turning for {now - _s.BoostbackPhaseStart:F0} s: plan {(_s.BoostbackHasPlan ? "ready" : "none (" + (_s.BoostbackPlanError.Length > 0 ? _s.BoostbackPlanError : "solving") + ")")}, command {cmdOff:F1} deg and craft {craftOff:F1} deg off (lights within {BoostbackAlignDeg:F0}), {(_s.BoostbackSmall ? "small, engine off" : "large, engine lit")}, miss {_s.SteerMissM / 1000.0:F1} km."));
-                }
-
-                // An engine-off turn that never lines up - too little RCS to turn the booster - lights the engine at the settling throttle and turns on its gimbal, as a large boostback does. There is time for a small correction, but not for ever.
-                if (_s.BoostbackSmall && now - _s.BoostbackPhaseStart > BoostbackSmallTurnTimeoutS)
-                {
-                    _s.BoostbackSmall = false;
-                    GuidanceLog.Info(vehicle, FormattableString.Invariant($"small boostback: no line-up after {BoostbackSmallTurnTimeoutS:F0} s engine-off, turning on the lit engine."));
+                        $"turning for {now - _s.BoostbackPhaseStart:F0} s: plan {(_s.BoostbackHasPlan ? "ready" : "none (" + (_s.BoostbackPlanError.Length > 0 ? _s.BoostbackPlanError : "solving") + ")")}, command {cmdErr:F1} deg and craft {craftErr:F1} deg off (lights within {BoostbackAlignDeg:F0}), {(_s.BoostbackEngineOn ? "engine lit" : "engine off")}, miss {_s.SteerMissM / 1000.0:F1} km."));
                 }
 
                 if (!_s.BoostbackHasPlan)
                 {
-                    _s.DiagBoostback(_s.BoostbackPlanError.Length > 0
-                        ? "No burn plan: " + _s.BoostbackPlanError
-                        : "Solving the burn plan...");
+                    if (descentDue || turnTimedOut)
+                        SkipBoostbackForDescent(vehicle, now, "NO BURN PLAN");
+                    else
+                        _s.DiagBoostback(_s.BoostbackPlanError.Length > 0
+                            ? "No burn plan: " + _s.BoostbackPlanError
+                            : "Solving the burn plan...");
                     break;
                 }
 
                 // BOTH the command and the vehicle.
                 // The command reaching the target only says the slew has finished issuing; the flight computer is still some way behind it, and lighting the engine there points the thrust at the last of the turn instead of at the target.
-                double cmdErr = AngleBetween(_s.CommandDir, planDir) * 180.0 / Math.PI;
-                double fcErr = vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI;
-                if (cmdErr <= BoostbackAlignDeg && fcErr <= BoostbackAlignDeg)
+                if (cmdErr <= BoostbackAlignDeg && craftErr <= BoostbackAlignDeg)
                 {
+                    _s.BoostbackPlanTime = now;
                     EnterBoostbackPhase(BoostbackPhase.Boostback, now);
 
                     // A FRESH PLAN AT THE INSTANT THE ENGINE LIGHTS, off the interval.
@@ -539,6 +581,16 @@ public static partial class GuidanceWindow
                     _s.BoostbackBurnLimit = now + (double.IsFinite(planTgo)
                         ? Math.Max(planTgo * BoostbackBurnLimitFactor, 30.0)
                         : 120.0);
+                    break;
+                }
+
+                if (descentDue || turnTimedOut)
+                    SkipBoostbackForDescent(vehicle, now, "TURN NOT COMPLETE");
+                else if (_s.BoostbackSmall && canPowerTurn && !CanCoastBeforeSmallBoostback(vehicle, 0.0))
+                {
+                    _s.BoostbackSmall = false;
+                    GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                        $"Small boostback: using gimbals after {now - _s.BoostbackPhaseStart:F1} s of engine-off rotation."));
                 }
                 break;
             }
@@ -689,6 +741,48 @@ public static partial class GuidanceWindow
         ApplyBoostbackActuation(vehicle, now);
     }
 
+    private static void SkipBoostbackForDescent(Vehicle vehicle, double now, string reason)
+    {
+        EnterBoostbackPhase(BoostbackPhase.Glide, now);
+        _s.BoostbackApexCheckPending = false;
+        _s.BoostbackClimbHold = false;
+        string status = $"BOOSTBACK SKIPPED: {reason}. STARTING DESCENT.";
+        _s.WarnBoostback(status);
+        GuidanceLog.Info(vehicle, status);
+    }
+
+    private static double BoostbackDescentLead() => _s.ThreeDofFromGlide ? _s.ThreeDofEngageTgoS : 0.0;
+
+    private static bool CanCoastBeforeSmallBoostback(Vehicle vehicle, double waitS)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        return _s.HasImpact && HasBoostbackTurnAuthority(fc.RcsTorqueAuthority)
+            && HasSmallBoostbackCoastTime(_s.Impact.TimeOfFlight.V, waitS, fc.ConservativeFlipTime,
+                _s.BoostbackSlewDegS, _s.BoostbackTgo, BoostbackDescentLead());
+    }
+
+    private static bool CanPowerBoostbackTurn(Vehicle vehicle)
+        => double.IsFinite(_s.BoostbackTgo) && _s.BoostbackTgo > 0.0
+            && HasBoostbackTurnAuthority(vehicle.FlightComputer.TvcTorqueAuthorityMax);
+
+    // KSA reports angular acceleration in the control frame. Both lateral axes must be available because the target changes through the turn.
+    internal static bool HasBoostbackTurnAuthority(float3 authority)
+        => float.IsFinite(authority.Y) && authority.Y > 0f
+            && float.IsFinite(authority.Z) && authority.Z > 0f;
+
+    internal static bool HasSmallBoostbackCoastTime(double impactS, double waitS, double rcsFlipS,
+        double slewDegS, double burnS, double descentLeadS)
+    {
+        if (!double.IsFinite(rcsFlipS) || !double.IsFinite(impactS) || !double.IsFinite(burnS))
+            return false;
+
+        // Give both the slew command and the RCS turn time to finish before the burn and the descent handover.
+        double slewS = slewDegS > 0.0 ? 180.0 / slewDegS : 0.0;
+        double requiredS = Math.Max(0.0, waitS) + Math.Max(slewS, rcsFlipS)
+            + Math.Max(0.0, burnS) + Math.Max(0.0, descentLeadS);
+        return impactS > requiredS;
+    }
+
     // ------------------------------------------------------------------ the plan
 
     /// <summary>
@@ -794,10 +888,8 @@ public static partial class GuidanceWindow
             };
         if (warm)
         {
-            // THE SEED HAS TO MOVE WITH THE CLOCK.
-            // The stored duration was measured from the moment that plan was SOLVED, so handing it over unchanged seeds the inner Newton a whole re-plan interval too long - every single time, in the one direction.
-            // Measured on --shoot: 1701 shots against 1584 with the seed advanced, for the same answer.
-            double elapsed = Math.Max(now - _s.BoostbackPlanTime, 0.0);
+            // Advance the seed by the time already flown on this burn plan.
+            double elapsed = BoostbackPlanElapsed(now);
             guess.Duration = Math.Max(guess.Duration - elapsed, 0.1);
             guess.PitchDeg += guess.PitchRateDegS * elapsed;
             guess.YawDeg += guess.YawRateDegS * elapsed;
@@ -849,15 +941,15 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// Where the plan says to point right now: the steering law evaluated at the time
-    /// elapsed since the solve. Zero when there is no plan.
+    /// The first direction while turning, then the steering law evaluated at the
+    /// elapsed burn time. Zero when there is no plan.
     /// </summary>
     private static double3 BoostbackPlanDirection(double now)
     {
         if (!_s.BoostbackHasPlan)
             return default;
         BoostbackShooter.SteeringAt(in _s.BoostbackPlanFrame, in _s.BoostbackPlan,
-                                    Math.Max(now - _s.BoostbackPlanTime, 0.0),
+                                    BoostbackPlanElapsed(now),
                                     out double dx, out double dy, out double dz);
         return new double3(dx, dy, dz);
     }
@@ -865,8 +957,11 @@ public static partial class GuidanceWindow
     /// <summary>Seconds of burn the plan has left; NaN when there is no plan.</summary>
     private static double BoostbackPlanTgo(double now)
         => _s.BoostbackHasPlan
-            ? Math.Max(_s.BoostbackPlan.Duration - (now - _s.BoostbackPlanTime), 0.0)
+            ? Math.Max(_s.BoostbackPlan.Duration - BoostbackPlanElapsed(now), 0.0)
             : double.NaN;
+
+    private static double BoostbackPlanElapsed(double now)
+        => _s.BoostbackPhase == BoostbackPhase.Boostback ? Math.Max(now - _s.BoostbackPlanTime, 0.0) : 0.0;
 
     /// <summary>
     /// The dV the plan has left to impart, m/s - the rocket equation over its remaining
@@ -903,7 +998,8 @@ public static partial class GuidanceWindow
         {
             case BoostbackPhase.Separation:
                 // Still alongside the stage it left, or not yet decided whether a burn is coming: coasting, see TryAdoptBooster and the Separation transition.
-                if (_s.BoostbackClearOf != null || double.IsNaN(_s.BoostbackSettleFrom))
+                if (_s.BoostbackClearOf != null || double.IsNaN(_s.BoostbackSettleFrom)
+                    || !CanPowerBoostbackTurn(vehicle))
                 {
                     _s.BoostbackThrottle = 0.0;
                     _s.BoostbackEngineOn = false;
@@ -915,7 +1011,7 @@ public static partial class GuidanceWindow
 
             case BoostbackPhase.Rotation:
                 // A small boostback turns with the engine off (VehicleAutopilotState.BoostbackSmall, #197): its correction is too small to spend a lit flip on.
-                if (_s.BoostbackSmall)
+                if (_s.BoostbackSmall || !_s.HasSteer || !_s.BoostbackHasPlan || !CanPowerBoostbackTurn(vehicle))
                 {
                     _s.BoostbackThrottle = 0.0;
                     _s.BoostbackEngineOn = false;
@@ -1092,17 +1188,17 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// Make sure this vehicle has an aero surrogate, resampling only when its bounding
-    /// box says the old one describes a different stack.
+    /// Make sure this vehicle has an aero surrogate, resampling only when its aero mesh
+    /// or bounding box says the old one describes a different stack.
     ///
     /// Shared by the page (which needs it to draw) and the guidance step (which needs it
     /// to predict), so a boostback flown with the console shut is fitted to the same
-    /// table a watched one is. KSA only recomputes AerodynamicCdABody on a part-tree
-    /// modification, so the box is exactly as stale as the table is.
+    /// table a watched one is. A sweep refused while the game rebuilds the mesh keeps the
+    /// old table, and the next frame asks again.
     /// </summary>
     private static void EnsureBoostbackAero(Vehicle vehicle, IParentBody parent)
     {
-        if (_s.AeroStale(LiveBoxExtents(vehicle)))
+        if (_s.AeroStale(LiveBoxExtents(vehicle), KsaAeroSweep.LiveMeshHash(vehicle), parent))
             ResampleBoostbackAero(vehicle, parent);
     }
 

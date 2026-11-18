@@ -7,7 +7,7 @@ namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 ///
 /// Altitude is geometric, above the MEAN radius, and is clamped to zero below it, as KSA's PhysicsEnvironment.RecomputePositionalValues does: a site below mean radius sees sea level air. The solvers must not reference the game, so the mod builds a <see cref="SampledAtmosphere"/> from the game's own pressure and density functions, and the offline checks use the analytic <see cref="ExponentialAtmosphere"/>.
 ///
-/// The game has no Mach number in its aerodynamics. The drag surrogate is parameterised on Mach, so a Mach axis needs a speed of sound even while the table is flat along it. <see cref="SpeedOfSound"/> is one reference value per atmosphere, not a function of altitude, so that the Mach axis stays a fixed scaling of airspeed.
+/// The drag surrogate is parameterised on Mach. <see cref="SpeedOfSound"/> is one reference value per atmosphere, the speed of sound at sea level, not a function of altitude, so that the Mach axis stays a fixed scaling of airspeed. The game computes the speed of sound from the local temperature, so above sea level the Mach number of a table lookup differs from the one the game flies at.
 /// </summary>
 public abstract class AtmosphereModel
 {

@@ -87,15 +87,15 @@ internal static class GuidanceSettingSpecs
         "Duration of the settling burn after separation, before the turn.");
     public static readonly SettingSpec BoostbackPitchDeg = new("BoostbackPitchDeg", "MIN PITCH", "deg", E, 0.0, -180.0, 90.0, "%.1f",
         "Lowest pitch of the burn against the horizon. A very negative value switches the shaping off.");
-    public static readonly SettingSpec GlideMaxAoaDeg = new("GlideMaxAoaDeg", "GLIDE MAX AoA", "deg", E, 15.0, 0.0, 60.0, "%.1f",
+    public static readonly SettingSpec GlideMaxAoaDeg = new("GlideMaxAoaDeg", "GLIDE MAX AoA", "deg", E, 7.5, 0.0, 60.0, "%.1f",
         "Largest angle of attack (AoA) the glide may fly to steer the impact point.");
-    public static readonly SettingSpec GlideNominalAoaDeg = new("GlideNominalAoaDeg", "GLIDE PLAN AoA", "deg", E, 7.5, 0.0, 60.0, "%.1f",
+    public static readonly SettingSpec GlideNominalAoaDeg = new("GlideNominalAoaDeg", "GLIDE PLAN AoA", "deg", E, 0.0, 0.0, 60.0, "%.1f",
         "Angle of attack that every impact prediction assumes for the glide, with the lift pointed up the trajectory. 0 plans an engine-first ballistic coast.");
     public static readonly SettingSpec BoostbackGlideMissKm = new("BoostbackGlideMissKm", "GLIDE ONLY WITHIN", "km", E, 3.0, 0.0, 1e4, "%.1f",
         "A booster whose predicted impact misses its site by no more than this flies no boostback: the glide's lift corrects it. A booster that is still climbing is judged again once it starts to fall, and burns then if its miss has grown past this.");
     public static readonly SettingSpec BoosterCorrectionDvMs = new("BoosterCorrectionDvMs", "BOOSTER CORRECTION", "m/s", E, 100.0, 0.0, 1000.0, "%.0f",
         "Reserve every returning booster keeps for small corrections, on top of its boostback and landing burn, sized into the calculated climb.");
-    public static readonly SettingSpec BoostbackLargeMissKm = new("BoostbackLargeMissKm", "LARGE BOOSTBACK FROM", "km", E, 100.0, 0.0, 1e5, "%.0f",
+    public static readonly SettingSpec BoostbackLargeMissKm = new("BoostbackLargeMissKm", "LARGE BOOSTBACK FROM", "km", E, 20.0, 0.0, 1e5, "%.0f",
         "A miss beyond this is a large boostback: it settles and turns on the lit engine's gimbal. Between the two it is a small one: no settle, a turn with the engine off, then the burn.");
     public static readonly SettingSpec BoostbackClearanceM = new("BoostbackClearanceM", "CLEARANCE AT SEPARATION", "m", E, 30.0, 0.0, 1e4, "%.1f",
         "Distance the booster coasts, engine off, away from the stage before the settling burn lights.");

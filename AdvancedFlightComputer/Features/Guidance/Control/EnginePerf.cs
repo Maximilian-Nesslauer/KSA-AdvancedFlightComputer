@@ -5,6 +5,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 using System;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Core;
 
 // FlightComputer.VehicleConfigInfo has no main-engine totals, so this adapter calculates them.
 internal static class KsaEnginePerf
@@ -79,20 +80,20 @@ internal static class KsaEnginePerf
         double pulse = 0;
         foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
             if (engine.IsActive)
-                foreach (RocketCore core in engine.Cores)
-                    pulse = Math.Max(pulse, core.MinimumPulseTime);
+                foreach (Rocket rocket in engine.Rockets)
+                    pulse = Math.Max(pulse, rocket.MinimumPulseTime);
         return pulse;
     }
 
-    // RocketCore.UpdateState can keep a started minimum pulse burning after the engine-off command.
+    // Rocket.UpdateState can keep a started minimum pulse burning after the engine-off command.
     internal static double RemainingMinimumPulse(Vehicle vehicle)
     {
-        if (!ModuleStateful<RocketCore, RocketCoreState, RocketCoreGlobalState, EmptyStruct>
-            .TryGetFrom(vehicle.Parts.States, out var states)) return 0;
+        ReadOnlySpan<RocketState> states = RocketStates.Of(vehicle.Parts);
+        if (states.IsEmpty) return 0;
         double remaining = 0;
         foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
-            foreach (RocketCore core in engine.Cores)
-                remaining = Math.Max(remaining, states.States[core.StatesIdx].MinThrustTimeRemaining);
+            foreach (Rocket rocket in engine.Rockets)
+                remaining = Math.Max(remaining, states[rocket.StatesIdx].MinThrustTimeRemaining);
         return remaining;
     }
 
@@ -129,9 +130,17 @@ internal static class KsaEnginePerf
         return cap;
     }
 
-    // A combustion or thermal core sets its chamber pressure from the throttle, which is what RocketControllerData.ComputeFromCores models.
+    // A combustion or thermal core sets its chamber pressure from the throttle, which is what RocketControllerData.ComputeFromRockets models.
     // A solid motor ignores the throttle, and an AntimatterRamCore delivers what its ram speed and jet power allow rather than what ComputeConditions reports, so neither can follow a guidance command.
     internal static bool FollowsThrottle(RocketCore core) => core is Combustor or ThermalCore;
+
+    internal static bool FollowsThrottle(Rocket rocket)
+    {
+        foreach (RocketCore core in rocket.Cores)
+            if (!FollowsThrottle(core))
+                return false;
+        return true;
+    }
 
     // Uncapped performance at a commanded throttle.
     // liquidOnly leaves out every engine with a core that does not follow the throttle.
@@ -141,41 +150,41 @@ internal static class KsaEnginePerf
         if (vehicle?.Parts?.States == null || !double.IsFinite(throttle) || !double.IsFinite(ambientPressure)
             || !ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
                 .TryGetFrom(vehicle.Parts.States, out var states)
-            || !ModuleStateful<RocketCore, RocketCoreState, RocketCoreGlobalState, EmptyStruct>
-                .TryGetFrom(vehicle.Parts.States, out var coreStates))
+            || !ModuleStateful<Rocket, RocketState, EmptyStruct, EmptyStruct>
+                .TryGetFrom(vehicle.Parts.States, out var rocketStates))
             return (0.0, 0.0);
 
-        // Vehicle.PrepareWorker applies the vehicle floor. ComputeActivePerformance then applies each core's floor through RocketControllerData.ComputeFromCores.
+        // Vehicle.PrepareWorker applies the vehicle floor. ComputeActivePerformance then applies each rocket's floor through RocketControllerData.ComputeFromRockets.
         float command = (float)Math.Clamp(throttle, vehicle.GetMinThrottle(), 1.0);
         float pressure = (float)Math.Clamp(ambientPressure, 0.0, float.MaxValue);
         double thrust = 0.0, massFlow = 0.0;
         foreach (var engine in states.ModulesAndStates)
         {
             if (!engine.Module.IsActive || !engine.State.IsPropellantAvailable
-                || engine.Module.Cores == null || engine.Module.Cores.Length == 0)
+                || engine.Module.Rockets == null || engine.Module.Rockets.Length == 0)
                 continue;
-            RocketCore[] cores = engine.Module.Cores;
-            if (liquidOnly && Array.Exists(cores, core => !FollowsThrottle(core)))
+            Rocket[] rockets = engine.Module.Rockets;
+            if (liquidOnly && Array.Exists(rockets, rocket => !FollowsThrottle(rocket)))
                 continue;
             bool allSupplied = true;
-            foreach (RocketCore core in cores)
-                allSupplied &= coreStates.States[core.StatesIdx].IsPropellantAvailable;
+            foreach (Rocket rocket in rockets)
+                allSupplied &= rocketStates.States[rocket.StatesIdx].IsPropellantAvailable;
             RocketControllerData data;
             if (allSupplied)
                 data = engine.Module.ComputeActivePerformance(in engine.State, vehicle.TotalMassPropsAsmb.Offset, pressure, command);
             else
             {
-                // Rocket.UpdateRockets marks a controller supplied when any core has fuel.
-                // Sum only supplied cores, while preserving the controller's vector sum.
+                // Rocket.UpdateRockets marks a controller supplied when any rocket has fuel.
+                // Sum only supplied rockets, while preserving the controller's vector sum.
                 data = RocketControllerData.Zero;
-                for (int i = 0; i < cores.Length; i++)
+                for (int i = 0; i < rockets.Length; i++)
                 {
-                    if (!coreStates.States[cores[i].StatesIdx].IsPropellantAvailable)
+                    if (!rocketStates.States[rockets[i].StatesIdx].IsPropellantAvailable)
                         continue;
-                    RocketControllerData coreData = RocketControllerData.ComputeFromCores(
-                        cores.AsSpan(i, 1), pressure, command);
-                    data.ThrustMax += coreData.ThrustMax;
-                    data.MassFlowRateMax += coreData.MassFlowRateMax;
+                    RocketControllerData rocketData = RocketControllerData.ComputeFromRockets(
+                        rockets.AsSpan(i, 1), pressure, command);
+                    data.ThrustMax += rocketData.ThrustMax;
+                    data.MassFlowRateMax += rocketData.MassFlowRateMax;
                 }
             }
             double force = data.ThrustMax.Length();
@@ -195,32 +204,32 @@ internal static class KsaEnginePerf
         if (vehicle?.Parts?.States == null
             || !ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
                 .TryGetFrom(vehicle.Parts.States, out var states)
-            || !ModuleStateful<RocketCore, RocketCoreState, RocketCoreGlobalState, EmptyStruct>
-                .TryGetFrom(vehicle.Parts.States, out var coreStates))
+            || !ModuleStateful<Rocket, RocketState, EmptyStruct, EmptyStruct>
+                .TryGetFrom(vehicle.Parts.States, out var rocketStates))
             return ThrustStatus.NoAuthority;
         bool any = false;
         foreach (var engine in states.ModulesAndStates)
         {
             bool supplied = engine.Module.IsActive && engine.State.IsPropellantAvailable;
-            if (engine.Module.Cores == null || engine.Module.Cores.Length == 0)
+            if (engine.Module.Rockets == null || engine.Module.Rockets.Length == 0)
             {
                 if (supplied)
                     return ThrustStatus.NoAuthority;
                 continue;
             }
-            foreach (RocketCore core in engine.Module.Cores)
+            foreach (Rocket rocket in engine.Module.Rockets)
             {
-                if (!FollowsThrottle(core))
+                RocketState state = rocketStates.States[rocket.StatesIdx];
+                if (!FollowsThrottle(rocket))
                 {
-                    // SolidMotor.UpdateState can keep a motor burning after its controller is disabled.
+                    // SolidRocket.UpdateState can keep a motor burning after its controller is disabled.
                     // IsNonzero also covers ignition and shutdown transitions.
                     // An inactive, unignited motor does not block liquid control.
-                    if (coreStates.States[core.StatesIdx].IsNonzero()
-                        || (supplied && coreStates.States[core.StatesIdx].IsPropellantAvailable))
+                    if (state.IsNonzero() || (supplied && state.IsPropellantAvailable))
                         return ThrustStatus.UnsupportedEngine;
                     continue;
                 }
-                if (supplied && coreStates.States[core.StatesIdx].IsPropellantAvailable)
+                if (supplied && state.IsPropellantAvailable)
                     any = true;
             }
         }

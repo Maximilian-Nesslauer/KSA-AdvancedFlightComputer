@@ -28,6 +28,7 @@ public sealed class Ksa6DofGuidance
     private readonly Dynamics6Dof.Params _dyn;
     private readonly Scvx6DofSolver _solver;
     private readonly int _n;
+    private readonly double _lateralTorqueLeadS;
 
     /// <summary>
     /// The plan as the SIM THREAD sees it - the only guidance state that crosses a thread boundary. Written by one reference assignment at the end of a successful solve, so a reader gets a whole plan or the previous whole plan, never a mixture. See Ksa6DofPlan.
@@ -444,11 +445,12 @@ public sealed class Ksa6DofGuidance
     public ReadOnlySpan<double> PlanState => _planX;
     public ReadOnlySpan<double> PlanControl => _planU;
 
-    public Ksa6DofGuidance(Scvx6DofConfig cfg, Dynamics6Dof.Params dyn)
+    public Ksa6DofGuidance(Scvx6DofConfig cfg, Dynamics6Dof.Params dyn, double lateralTorqueLeadS = 0.0)
     {
         _cfg = cfg;
         _dyn = dyn;
         _n = cfg.Nodes;
+        _lateralTorqueLeadS = lateralTorqueLeadS;
         // The price the config asks for is where pricing ends up, not where it starts; see PricingStage.
         _vcTarget = cfg.VirtualControlScale is { } target ? (double[])target.Clone() : null;
         _solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
@@ -858,6 +860,41 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public double PlanDriftM { get; private set; }
 
+    internal static bool MatchesHandoffAttitude(Ksa6DofPlan plan, double[] state, double now,
+                                                double maxAngleRad, double maxRateRadS)
+    {
+        double elapsed = now - plan.SolveTime;
+        if (!(elapsed >= 0.0 && elapsed < plan.Sigma) || plan.Nodes < 2)
+            return false;
+
+        double node = elapsed * (plan.Nodes - 1) / plan.Sigma;
+        int k = Math.Min((int)node, plan.Nodes - 2);
+        double f = node - k;
+        int a = k * NX;
+        int b = a + NX;
+        Span<double> target = stackalloc double[4];
+        Slerp(plan.X.AsSpan(a + IQ, 4), plan.X.AsSpan(b + IQ, 4), f, target);
+
+        double dot = 0.0;
+        double stateNorm2 = 0.0;
+        for (int i = 0; i < 4; i++)
+        {
+            dot += target[i] * state[IQ + i];
+            stateNorm2 += state[IQ + i] * state[IQ + i];
+        }
+        if (!(Math.Abs(dot) >= Math.Sqrt(stateNorm2) * Math.Cos(maxAngleRad / 2.0)) || !(stateNorm2 > 0.0))
+            return false;
+
+        // Model angular velocities are expressed in body axes.
+        double rateError2 = 0.0;
+        for (int i = Dynamics6Dof.IW; i < Dynamics6Dof.IM; i++)
+        {
+            double error = (1.0 - f) * plan.X[a + i] + f * plan.X[b + i] - state[i];
+            rateError2 += error * error;
+        }
+        return rateError2 <= maxRateRadS * maxRateRadS;
+    }
+
     /// <summary>Distance from the vehicle to the plan's prediction for right now.</summary>
     public double MeasureDrift(double[] x0, double simNow)
     {
@@ -1063,12 +1100,12 @@ public sealed class Ksa6DofGuidance
                 }
             }
 
-            double merit = _solver.Cost;
+            double merit = _solver.TrueCost(_planX, _planU, _planSigma).Cost;
             SearchLog += $"{sigma:F1}s J={merit:F4}  ";
             if (merit < bestMerit)
             {
                 bestMerit = merit;
-                bestSigma = sigma;
+                bestSigma = _planSigma;
                 bestX = (double[])_planX.Clone();
                 bestU = (double[])_planU.Clone();
             }
@@ -1310,13 +1347,20 @@ public sealed class Ksa6DofGuidance
         //  LastDefectM stays the honest full-horizon max, so the logs and the readout keep meaning exactly what they previously and any analysis of them stays valid.
         // What the gate TESTS is the weighted figure: full strength over the intervals about to be flown, loosening to HorizonFarSlack at the end of the horizon.
         // See Scvx6DofSolver.WeightedDefect for why, and for why it is safe.
-        //  Computed on the accepted REFERENCE, which is the same trajectory the trace's last accepted iteration reported - one evaluation, so the magnitude and its location cannot come from different iterations.
+        // Anchor the published mass to the vehicle and integrate its burn. The virtual control may otherwise let the reference gain mass under thrust.
+        // Check every defect with that mass before publishing, including the change in acceleration.
+        double[] flightState = _solver.CopyReferenceWithMassBalance();
+        if (flightState == null)
+        {
+            Error = "plan has no physical mass history";
+            return false;
+        }
         double dtPlan = _solver.Sigma / Math.Max(_n - 1, 1);
         int commit = (int)Math.Floor(Math.Max(CommitHorizonS, 0.0) / Math.Max(dtPlan, 1e-6));
         LastCommitIntervals = commit;
 
         double[] tol = DefectTolerances(cold);
-        LastGatedRatio = _solver.WeightedDefect(tol, commit, HorizonFarSlack,
+        LastGatedRatio = _solver.WeightedDefect(flightState, tol, commit, HorizonFarSlack,
                                                 out int gCh, out int gNode, out double gRaw);
         LastGatedDefectChannel = gCh;
         LastGatedDefectNode = gNode;
@@ -1339,7 +1383,7 @@ public sealed class Ksa6DofGuidance
             return false;
         }
 
-        _planX = (double[])xNew.Clone();
+        _planX = flightState;
         _planU = (double[])_solver.ReferenceU.Clone();
         _planSigma = _solver.Sigma;
         _solveTime = simNow;
@@ -1373,9 +1417,7 @@ public sealed class Ksa6DofGuidance
         double t = Math.Max(0.0, simNow - plan.SolveTime);
         PlanElapsed = t;
 
-        double sNode = Math.Clamp(t / dt, 0.0, plan.Nodes - 1.001);
-        int k = (int)sNode;
-        double f = sNode - k;
+        (int k, double f) = ControlSegment(plan, t / dt);
 
         double tdx = Lerp(plan.U, 0, k, f);
         double tdy = Lerp(plan.U, 1, k, f);
@@ -1383,7 +1425,11 @@ public sealed class Ksa6DofGuidance
         double tauRoll = Lerp(plan.U, 3, k, f);
 
         // tau = r_T x T_body with r_T = (0,0,-LArm), i.e. the engine below the centre of mass - the model's own gimbal-torque relation, verbatim.
-        torqueModel = new double3(_dyn.LArm * tdy, -_dyn.LArm * tdx, tauRoll);
+        // Lead the lateral gimbals' response while the axial thrust and roll follow the current plan step.
+        (int leadNode, double leadFraction) = ControlSegment(plan, (t + _lateralTorqueLeadS) / dt);
+        double leadTdx = Lerp(plan.U, 0, leadNode, leadFraction);
+        double leadTdy = Lerp(plan.U, 1, leadNode, leadFraction);
+        torqueModel = new double3(_dyn.LArm * leadTdy, -_dyn.LArm * leadTdx, tauRoll);
 
         // AXIAL THRUST IN NEWTONS, not a throttle fraction.
         //  This previously return thrust / _cfg.Tmax, and that was the systematic error behind the descend-until-it-loops behaviour. Tmax is fixed when the plan is built, so the moment the vehicle's real capability differs from it - a different ambient pressure, an engine out, propellant starvation - every commanded thrust is wrong by exactly that ratio. It is invisible to the MPC too: re-solving corrects the STATE, but the error is in the actuator mapping, so each new plan is executed just as wrongly as the last.
@@ -1408,6 +1454,13 @@ public sealed class Ksa6DofGuidance
             }
         }
         return true;
+    }
+
+    private static (int node, double fraction) ControlSegment(Ksa6DofPlan plan, double sample)
+    {
+        double position = Math.Clamp(sample, 0.0, plan.Nodes - 1.001);
+        int node = (int)position;
+        return (node, position - node);
     }
 
     /// <summary>

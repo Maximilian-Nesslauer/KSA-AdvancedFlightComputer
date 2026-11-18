@@ -354,7 +354,7 @@ public sealed class AutoStageAutoBurnHoldTest : AfcTest
         foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
         {
             if (!engine.IsActive && VehiclePropellant.IsFueled(engine, vehicle.Parts.Moles.States,
-                    vehicle.Parts.RocketCores.States, out _, out _))
+                    RocketStates.Of(vehicle.Parts), out _, out _))
                 return engine;
         }
         return null;

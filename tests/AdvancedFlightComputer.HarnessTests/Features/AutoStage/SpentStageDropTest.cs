@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
@@ -225,14 +226,14 @@ public sealed class SpentStageDropTest : AfcTest
     private static void LogVehicleShape(TestContext t, Vehicle vehicle)
     {
         ReadOnlySpan<MoleState> moleStates = vehicle.Parts.Moles.States;
-        ReadOnlySpan<RocketCoreState> coreStates = vehicle.Parts.RocketCores.States;
+        ReadOnlySpan<RocketState> rocketStates = RocketStates.Of(vehicle.Parts);
         foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
         {
             string cores = "";
-            foreach (RocketCore core in engine.Cores)
+            foreach (Rocket rocket in engine.Rockets)
             {
-                bool burning = coreStates[core.StatesIdx].Throttle > 0f;
-                cores += $" [{core.GetType().Name} burning={burning} fed={core.ComputePropellantAvailable(moleStates, burning)}]";
+                bool burning = rocketStates[rocket.StatesIdx].Throttle > 0f;
+                cores += $" [{rocket.Core.GetType().Name} burning={burning} fed={rocket.ComputePropellantAvailable(moleStates, burning)}]";
             }
             t.Info($"  engine '{engine.Parent.FullPart.Id}' seq={engine.Sequence} active={engine.IsActive}{cores}");
         }

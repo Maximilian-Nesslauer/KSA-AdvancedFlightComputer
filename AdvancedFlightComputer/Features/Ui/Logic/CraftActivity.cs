@@ -11,6 +11,7 @@ internal readonly record struct CraftActivity
     public bool LaunchArmed { get; init; }
     public bool ConvexLaunchPending { get; init; }
     public bool BoostbackLive { get; init; }
+    public bool BoostbackPending { get; init; }
     public bool DescentLive { get; init; }
     public bool LandingMachineLive { get; init; }
     public bool TerminalBurnActive { get; init; }
@@ -54,10 +55,10 @@ internal readonly record struct CraftActivity
     /// <summary>A landing flies that has not reached the powered descent or the hover yet: the deorbit and braking chain.</summary>
     public bool DeorbitChainLive => DescentLive && !LandingMachineLive && !HoverLive;
 
-    public bool LandingFlies => BoostbackLive || DescentLive || HoverLive || SixDofEngaged || RegisteredModeLive != null;
+    public bool LandingFlies => BoostbackLive || BoostbackPending || DescentLive || HoverLive || SixDofEngaged || RegisteredModeLive != null;
 
     public bool AnyGuidanceLive => AscentRunning || LaunchArmed || ConvexLaunchPending
-        || BoostbackLive || DescentLive || SixDofEngaged || RegisteredModeLive != null;
+        || BoostbackLive || BoostbackPending || DescentLive || SixDofEngaged || RegisteredModeLive != null;
 
     public bool PilotHolds => AnyGuidanceLive && HoldsNoControl;
 

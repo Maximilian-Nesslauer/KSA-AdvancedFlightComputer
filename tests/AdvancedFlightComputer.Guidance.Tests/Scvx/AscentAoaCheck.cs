@@ -5,7 +5,7 @@ using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 /// <summary>
 /// Does the convex ascent pay for the drag its attitude costs?
 ///
-/// KSA's drag is a six-face box plus an isotropic skin term, blended by |v_body| (see KsaAeroSweep), so the flank faces add drag in proportion to |sin alpha| from the first degree. The planner read its drag table nose-first, the attitude free of charge, and flew 2 to 13 deg off the airflow from max q down, wherever q-alpha let it. A force diagnostic flying 2stage_new on 2026-09-25 measured the drag along the airflow at 4 % above the model at 1 deg, 12 % at 2.9, 17 % at 4.2, 25 % at 6.4, 40 % at 10 and 50 to 60 % at 12.5, a shortfall of up to 5 m/s^2 that left the vehicle 8 km low and 370 m/s slow at staging.
+/// A drag law of a six-face box plus an isotropic skin term, blended by |v_body|, adds flank drag in proportion to |sin alpha| from the first degree. The planner read its drag table nose-first, the attitude free of charge, and flew 2 to 13 deg off the airflow from max q down, wherever q-alpha let it. A force diagnostic flying 2stage_new on 2026-09-25 measured the drag along the airflow at 4 % above the model at 1 deg, 12 % at 2.9, 17 % at 4.2, 25 % at 6.4, 40 % at 10 and 50 to 60 % at 12.5, a shortfall of up to 5 m/s^2 that left the vehicle 8 km low and 370 m/s slow at staging.
 ///
 /// This plans that vehicle - the problem the game wrote out, lift-off mass corrected - twice: on the old nose-first reading, and on a table of the game's box law sized to those measurements (95 m^2 nose-on, flanks adding 218 m^2 per radian of sin alpha, which gives 4, 12, 17, 25 and 40 % at those angles). The nose-first plan is then charged the drag it left out, as the flight would charge it.
 /// </summary>

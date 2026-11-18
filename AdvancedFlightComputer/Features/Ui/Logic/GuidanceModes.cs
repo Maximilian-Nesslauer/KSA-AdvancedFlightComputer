@@ -126,7 +126,7 @@ internal static class GuidanceModes
         new(GuidanceModeId.DeorbitLand, ConsolePage.Land, "DEORBIT + LAND", 40,
             a => a.DescentLive, _ => StopTarget.Landing, DeorbitPhases),
         new(GuidanceModeId.Boostback, ConsolePage.Land, "BOOSTBACK", 50,
-            a => a.BoostbackLive, _ => StopTarget.Boostback, BoostbackPhases),
+            a => a.BoostbackLive || a.BoostbackPending, _ => StopTarget.Boostback, BoostbackPhases),
         new(GuidanceModeId.AscentUpfg, ConsolePage.Launch, "CAT-S / UPFG", 60,
             a => a.AscentRunning || a.LaunchArmed || a.ConvexLaunchPending,
             a => a.AscentRunning ? StopTarget.Ascent : StopTarget.LaunchArmed, AscentPhases),

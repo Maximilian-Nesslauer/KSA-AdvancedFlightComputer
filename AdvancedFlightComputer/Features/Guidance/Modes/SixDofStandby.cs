@@ -44,10 +44,18 @@ public static partial class GuidanceWindow
     /// <summary>The time one subproblem may take for the guidance that starts as the standby under the braking burn, ms; see Ksa6DofGuidance.LongBudgetMs.</summary>
     private const double BrakingStandbyBudgetMs = 1000.0;
 
+    private const double BrakingHandoffAngleRad = 5.0 * Math.PI / 180.0;
+    private const double BrakingHandoffRateRadS = 3.0 * Math.PI / 180.0;
+
     /// <summary>True when the standby has a converged plan fresh enough to be handed the burn.</summary>
-    private static bool SixDofStandbyReady(double now, double maxPlanAgeS = SixDofStandbyMaxPlanAgeS)
+    private static bool SixDofStandbyReady(double now, double maxPlanAgeS = SixDofStandbyMaxPlanAgeS,
+                                          double[] brakingState = null)
         => _s.SixDofStandby && !_s.Converging && _s.Guidance?.Published is { } plan
-           && now - plan.SolveTime <= maxPlanAgeS;
+           && now - plan.SolveTime <= maxPlanAgeS
+           && now - plan.SolveTime < plan.Sigma
+           && (brakingState == null || (GuidanceIdle && Ksa6DofGuidance.MatchesHandoffAttitude(
+               plan, brakingState, now, BrakingHandoffAngleRad, BrakingHandoffRateRadS)
+               && _s.Guidance.MeasureDrift(brakingState, now) <= SixDofRestartDriftLimit(brakingState[2])));
 
     /// <summary>The burn-time floor for restarts and node rebuilds: the configured seed, or the entry seed when this engagement started from a shorter burn (the 3-DOF hand-over). Restarting a 3 s burn on a 20 s seed would pin sigma at a minimum longer than the burn.</summary>
     private static double SixDofSeedFloor => Math.Min(_s.SixDofSigmaSeed, _s.SixDofEntrySigmaSeed);
@@ -82,7 +90,7 @@ public static partial class GuidanceWindow
         // No pacing: the solve is off the sim thread, so there is no frame to protect.
         // Under the braking burn the craft brakes at many times the local gravity with its thrust axis near the horizon. There the cold solve starts from the braking path, and the subproblems of this guidance get the time they need, also after it takes the craft, because its solves run on the worker and a solve cut short gives no plan at all.
         bool braking = _s.LandingPhase == LandingPhase.Burn;
-        var guidance = new Ksa6DofGuidance(cfg, dyn)
+        var guidance = new Ksa6DofGuidance(cfg, dyn, Ksa6DofSetup.LateralTorqueLead(vehicle))
         {
             FixedTime = false, ColdIterationIntervalS = 0.0,
             BrakingSeed = braking, LongBudgetMs = braking ? BrakingStandbyBudgetMs : 0.0,
@@ -147,11 +155,11 @@ public static partial class GuidanceWindow
     /// One standby step through the 3-DOF's burn: collect what the worker finished, then dispatch the next cold iteration or warm re-solve from the measured state. Commands nothing. A fault costs the standby, never the 3-DOF flying the craft.
     /// </summary>
     private static void StepSixDofStandby(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x, double now,
-                                          double sigmaSeed)
+                                          double sigmaSeed, bool holdForEntryHandoff = false)
     {
         try
         {
-            StepSixDofStandbyCore(vehicle, parent, siteCci, x, now, sigmaSeed);
+            StepSixDofStandbyCore(vehicle, parent, siteCci, x, now, sigmaSeed, holdForEntryHandoff);
         }
         catch (Exception e)
         {
@@ -163,7 +171,7 @@ public static partial class GuidanceWindow
     }
 
     private static void StepSixDofStandbyCore(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x, double now,
-                                              double sigmaSeed)
+                                              double sigmaSeed, bool holdForEntryHandoff)
     {
         if (!_s.SixDofStandby)
         {
@@ -243,6 +251,11 @@ public static partial class GuidanceWindow
             return;
         }
 
+        // Leave a checked publication in place through the first command after handover.
+        if ((_s.LandingPhase == LandingPhase.Burn && SixDofStandbyReady(now, BrakingStandbyMaxPlanAgeS, x))
+            || (holdForEntryHandoff && SixDofStandbyReady(now, SixDofStandbyMaxPlanAgeS, x)))
+            return;
+
         // Nothing published for too long, or the craft far off the last plan: start again from here.
         double age = published != null ? now - published.SolveTime : double.PositiveInfinity;
         if (age > SixDofStandbyMaxPlanAgeS && now - _s.SixDofStandbyLogTime >= SixDofStandbyStaleLogS)
@@ -252,7 +265,7 @@ public static partial class GuidanceWindow
                 + $"last solve {_s.Worker.LastSolveMs:F0} ms at {_s.Guidance.Nodes} nodes; {_s.Error}");
         }
         double drift = _s.Guidance.MeasureDrift(x, now);
-        double driftLimit = Math.Max(ColdRestartDriftM, 0.05 * Math.Max(x[2], 1.0));
+        double driftLimit = SixDofRestartDriftLimit(x[2]);
         if (age > SixDofStandbyStaleRestartS || drift > driftLimit)
         {
             GuidanceLog.Info(vehicle, $"Touchdown guidance standby restarting at {x[2]:F0} m: "

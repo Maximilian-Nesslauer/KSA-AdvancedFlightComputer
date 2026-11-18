@@ -3,6 +3,7 @@
 namespace AdvancedFlightComputer.Features.Guidance;
 
 using System.Runtime.CompilerServices;
+using AdvancedFlightComputer.Core;
 using Brutal.Numerics;
 using KSA;
 
@@ -28,6 +29,7 @@ public static class KsaAttitudeRate
     {
         public double3 RateCci;
         public bool Engaged;
+        public Vehicle Owner;
     }
 
     private static readonly ConditionalWeakTable<FlightComputer.VehicleConfigInfo, Slot> Slots = new();
@@ -41,6 +43,7 @@ public static class KsaAttitudeRate
         if (s == null)
             return;
         s.RateCci = rateCci;
+        s.Owner = vehicle;
         s.Engaged = true;
     }
 
@@ -68,6 +71,8 @@ public static class KsaAttitudeRate
     {
         FlightComputer.VehicleConfigInfo cfg = flightComputer.VehicleConfig;
         if (cfg == null || !Slots.TryGetValue(cfg, out Slot s) || !s.Engaged)
+            return;
+        if (s.Owner != null && (!s.Owner.IsControllable || VehicleControlOwnership.KfsOwns(s.Owner)))
             return;
 
         // ADDED to whatever the frame contributes, not substituted for it. For the EclBody frame we steer in that term is nil, but the field is the target's total rate in CCI and a frame that does rotate would still have to be carried - overwriting it outright would silently subtract the frame.

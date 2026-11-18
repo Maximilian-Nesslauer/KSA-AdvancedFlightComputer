@@ -54,7 +54,8 @@ internal static class CommitResolver
                 a.AscentRunning || a.LaunchArmed || a.ConvexLaunchPending),
             GuidanceModeId.AscentGravityTurn when g.GravityTurnRefusal.Length > 0 => ("LAUNCH", g.GravityTurnRefusal, false),
             GuidanceModeId.Boostback => ("BOOSTBACK",
-                a.BoostbackLive ? "AFC: BOOSTBACK" : "", a.BoostbackLive),
+                a.BoostbackPending ? "WAITING FOR AERO MESH" : a.BoostbackLive ? "AFC: BOOSTBACK" : "",
+                a.BoostbackLive || a.BoostbackPending),
             GuidanceModeId.DeorbitLand => ("DEORBIT + LAND",
                 g.LandingSwitchesOff ? LandingSwitchesOffReason
                 : g.DeorbitRefusal.Length > 0 ? DeorbitSettingsReason

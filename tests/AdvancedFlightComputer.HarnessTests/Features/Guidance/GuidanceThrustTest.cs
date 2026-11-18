@@ -111,8 +111,8 @@ public sealed class GuidanceThrustTest : AfcTest
             KsaEnginePerf.AtPressure(vehicle, 0).thrust, 0, 0);
         SetActive(active, true);
 
-        active.Cores = [Uninitialized<SolidMotor>()];
-        AddCore(active.Cores[0], 200, supplied: true);
+        active.Rockets = [RocketOf(Uninitialized<SolidMotor>())];
+        AddRocket(active.Rockets[0], 200, supplied: true);
         t.Check("a solid core refuses throttle control", !KsaEnginePerf.SupportsThrottleControl(vehicle));
         t.CheckAbs("a solid engine still counts toward capability",
             KsaEnginePerf.ActiveThrustCapability(vehicle, 0), 1000, 0.01);
@@ -120,28 +120,28 @@ public sealed class GuidanceThrustTest : AfcTest
             KsaEnginePerf.CommandForThrust(vehicle, 500, 0).Status == KsaEnginePerf.ThrustStatus.UnsupportedEngine);
 
         // Combustor, ThermalCore and AntimatterRamCore all derive from PlumbedCore, but only the first two set their chamber from the throttle.
-        active.Cores = [Uninitialized<ThermalCore>()];
-        AddCore(active.Cores[0], 203, supplied: true);
+        active.Rockets = [RocketOf(Uninitialized<ThermalCore>())];
+        AddRocket(active.Rockets[0], 203, supplied: true);
         t.Check("a thermal core supports throttle control", KsaEnginePerf.SupportsThrottleControl(vehicle));
-        active.Cores = [Uninitialized<AntimatterRamCore>()];
-        AddCore(active.Cores[0], 204, supplied: true);
+        active.Rockets = [RocketOf(Uninitialized<AntimatterRamCore>())];
+        AddRocket(active.Rockets[0], 204, supplied: true);
         t.Check("an antimatter ram core refuses throttle control",
             KsaEnginePerf.GetThrottleControlStatus(vehicle) == KsaEnginePerf.ThrustStatus.UnsupportedEngine);
 
-        ProbeCore suppliedCore = Probe(0.4f);
-        ProbeCore dryCore = Probe(0.2f);
+        ProbeCore suppliedCore = Uninitialized<ProbeCore>();
+        ProbeCore dryCore = Uninitialized<ProbeCore>();
         suppliedCore.LastThrottle = dryCore.LastThrottle = -1f;
-        active.Cores = [suppliedCore, dryCore];
-        AddCore(suppliedCore, 201, supplied: true);
-        AddCore(dryCore, 202, supplied: false);
+        active.Rockets = [Probe(suppliedCore, 0.4f), Probe(dryCore, 0.2f)];
+        AddRocket(active.Rockets[0], 201, supplied: true);
+        AddRocket(active.Rockets[1], 202, supplied: false);
 
         t.CheckAbs("a partly supplied controller bypasses its full vacuum figure",
             KsaEnginePerf.ActiveThrustCapability(vehicle, 0), 0, 0);
-        t.CheckAbs("the supplied core is evaluated", suppliedCore.LastThrottle, 1, 0);
-        t.CheckAbs("the dry core is not evaluated", dryCore.LastThrottle, -1, 0);
+        t.CheckAbs("the supplied rocket is evaluated", suppliedCore.LastThrottle, 1, 0);
+        t.CheckAbs("the dry rocket is not evaluated", dryCore.LastThrottle, -1, 0);
 
         KsaEnginePerf.ThrustAtThrottle(vehicle, 0.01, 101325);
-        t.CheckAbs("a partly supplied controller keeps the stock core floor",
+        t.CheckAbs("a partly supplied controller keeps the stock rocket floor",
             suppliedCore.LastThrottle, 0.4, 1e-7);
 
         BurningSolidBlocksLiquidControl(t);
@@ -151,16 +151,10 @@ public sealed class GuidanceThrustTest : AfcTest
             tree.States.AddNew<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>(engine);
             EngineController.TryGetFrom(tree.States, out var states);
             Unsafe.AsRef(in states.States[engine.StatesIdx]).IsPropellantAvailable = supplied;
-            AddCore(engine.Cores[0], engine.InstanceId + 100, supplied);
+            AddRocket(engine.Rockets[0], engine.InstanceId + 100, supplied);
         }
 
-        void AddCore(RocketCore core, ulong id, bool supplied)
-        {
-            typeof(ModuleBase).GetField(nameof(ModuleBase.InstanceId))!.SetValue(core, id);
-            tree.States.AddNew<RocketCore, RocketCoreState, RocketCoreGlobalState, EmptyStruct>(core);
-            RocketCore.TryGetFrom(tree.States, out var states);
-            Unsafe.AsRef(in states.States[core.StatesIdx]).IsPropellantAvailable = supplied;
-        }
+        void AddRocket(Rocket rocket, ulong id, bool supplied) => AddRocketState(tree, rocket, id, supplied);
     }
 
     // A motor lit before its controller was switched off keeps burning, so it still adds
@@ -178,55 +172,65 @@ public sealed class GuidanceThrustTest : AfcTest
         tree.States.AddNew<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>(liquid);
         EngineController.TryGetFrom(tree.States, out var liquidStates);
         Unsafe.AsRef(in liquidStates.States[liquid.StatesIdx]).IsPropellantAvailable = true;
-        AddCoreState(tree, liquid.Cores[0], 300, supplied: true);
+        AddRocketState(tree, liquid.Rockets[0], 300, supplied: true);
 
         EngineController solid = Engine(12, 4000, isActive: false);
-        solid.Cores = [Uninitialized<SolidMotor>()];
+        solid.Rockets = [RocketOf(Uninitialized<SolidMotor>())];
         tree.States.AddNew<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>(solid);
         EngineController.TryGetFrom(tree.States, out var solidStates);
         Unsafe.AsRef(in solidStates.States[solid.StatesIdx]).IsPropellantAvailable = true;
-        AddCoreState(tree, solid.Cores[0], 301, supplied: true);
+        AddRocketState(tree, solid.Rockets[0], 301, supplied: true);
 
         t.Check("an unlit solid on an inactive controller leaves liquid control alone",
             KsaEnginePerf.GetThrottleControlStatus(vehicle) == KsaEnginePerf.ThrustStatus.Available);
 
-        RocketCore.TryGetFrom(tree.States, out var cores);
-        Unsafe.AsRef(in cores.States[solid.Cores[0].StatesIdx]).Throttle = 1f;
+        Rocket.TryGetFrom(tree.States, out var rockets);
+        Unsafe.AsRef(in rockets.States[solid.Rockets[0].StatesIdx]).Throttle = 1f;
         t.Check("a burning solid refuses control even with its controller switched off",
             KsaEnginePerf.GetThrottleControlStatus(vehicle) == KsaEnginePerf.ThrustStatus.UnsupportedEngine);
         t.Check("and the command is refused with it",
             KsaEnginePerf.CommandForThrust(vehicle, 500, 0).Status == KsaEnginePerf.ThrustStatus.UnsupportedEngine);
     }
 
-    private static void AddCoreState(PartTree tree, RocketCore core, ulong id, bool supplied)
+    private static void AddRocketState(PartTree tree, Rocket rocket, ulong id, bool supplied)
     {
-        typeof(ModuleBase).GetField(nameof(ModuleBase.InstanceId))!.SetValue(core, id);
-        tree.States.AddNew<RocketCore, RocketCoreState, RocketCoreGlobalState, EmptyStruct>(core);
-        RocketCore.TryGetFrom(tree.States, out var states);
-        Unsafe.AsRef(in states.States[core.StatesIdx]).IsPropellantAvailable = supplied;
+        typeof(ModuleBase).GetField(nameof(ModuleBase.InstanceId))!.SetValue(rocket, id);
+        tree.States.AddNew<Rocket, RocketState, EmptyStruct, EmptyStruct>(rocket);
+        Rocket.TryGetFrom(tree.States, out var states);
+        Unsafe.AsRef(in states.States[rocket.StatesIdx]).IsPropellantAvailable = supplied;
     }
 
     private static void CoreMinimum(TestContext t)
     {
-        ProbeCore core = Probe(0.4f);
-        RocketControllerData.ComputeFromCores(new RocketCore[] { core }, 101325f, 0.1f);
-        t.CheckAbs("the stock computation applies the per-core floor", core.LastThrottle, 0.4, 1e-7);
+        ProbeCore core = Uninitialized<ProbeCore>();
+        Rocket rocket = Probe(core, 0.4f);
+        RocketControllerData.ComputeFromRockets(new Rocket[] { rocket }, 101325f, 0.1f);
+        t.CheckAbs("the stock computation applies the per-rocket floor", core.LastThrottle, 0.4, 1e-7);
     }
 
-    private static ProbeCore Probe(float minimum)
+    // A rocket around a probe core with no nozzles, so the stock performance sums nothing and only records the throttle.
+    private static Rocket Probe(ProbeCore core, float minimum)
     {
-        ProbeCore core = Uninitialized<ProbeCore>();
-        core.MinimumThrottle = minimum;
-        core.Rocket = Uninitialized<Rocket>();
-        core.Rocket.Nozzles = [];
-        return core;
+        Rocket rocket = RocketOf(core);
+        rocket.MinimumThrottle = minimum;
+        return rocket;
+    }
+
+    private static Rocket RocketOf(RocketCore core)
+    {
+        Rocket rocket = core is SolidMotor ? Uninitialized<SolidRocket>() : Uninitialized<Rocket>();
+        rocket.Core = core;
+        rocket.Nozzles = [];
+        core.Rocket = rocket;
+        core.Nozzles = [];
+        return rocket;
     }
 
     private static EngineController Engine(ulong id, float thrust, bool isActive)
     {
         EngineController engine = Uninitialized<EngineController>();
         typeof(ModuleBase).GetField(nameof(ModuleBase.InstanceId))!.SetValue(engine, id);
-        engine.Cores = [Uninitialized<Combustor>()];
+        engine.Rockets = [RocketOf(Uninitialized<Combustor>())];
         engine.VacuumData = new RocketControllerData
         {
             ThrustMax = new float3(thrust, 0, 0),
@@ -246,7 +250,7 @@ public sealed class GuidanceThrustTest : AfcTest
             ?? throw new MissingFieldException(typeof(PartTree).FullName, "_engineThrottleMin"))
             .SetValue(tree, value);
 
-    // Records the throttle passed by RocketControllerData.ComputeFromCores.
+    // Records the throttle passed by RocketControllerData.ComputeFromRockets.
     // Other operations throw because this probe cannot simulate a live engine.
     private sealed class ProbeCore : RocketCore
     {

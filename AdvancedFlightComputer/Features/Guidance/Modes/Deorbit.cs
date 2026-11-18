@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
 using Brutal.Numerics;
+using AdvancedFlightComputer.Core;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.Guidance;
@@ -191,8 +192,7 @@ public static partial class GuidanceWindow
             signature.Add(RuntimeHelpers.GetHashCode(module));
             signature.Add(module.Sequence);
         }
-        bool hasCores = ModuleStateful<RocketCore, RocketCoreState, RocketCoreGlobalState, EmptyStruct>
-            .TryGetFrom(vehicle.Parts.States, out var cores);
+        ReadOnlySpan<RocketState> rockets = RocketStates.Of(vehicle.Parts);
         bool hasControllers = ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
             .TryGetFrom(vehicle.Parts.States, out var controllers);
         foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
@@ -200,12 +200,12 @@ public static partial class GuidanceWindow
             signature.Add(RuntimeHelpers.GetHashCode(engine));
             signature.Add(engine.IsActive);
             signature.Add(hasControllers && controllers.States[engine.StatesIdx].IsPropellantAvailable);
-            foreach (RocketCore core in engine.Cores)
+            foreach (Rocket rocket in engine.Rockets)
             {
-                signature.Add(RuntimeHelpers.GetHashCode(core));
-                signature.Add(hasCores && cores.States[core.StatesIdx].IsPropellantAvailable);
-                signature.Add(core.MinimumPulseTime);
-                signature.Add(core.MinimumThrottle);
+                signature.Add(RuntimeHelpers.GetHashCode(rocket));
+                signature.Add(!rockets.IsEmpty && rockets[rocket.StatesIdx].IsPropellantAvailable);
+                signature.Add(rocket.MinimumPulseTime);
+                signature.Add(rocket.MinimumThrottle);
             }
         }
         return signature.ToHashCode();
@@ -393,8 +393,8 @@ public static partial class GuidanceWindow
                     {
                         if (module.Sequence != sequence.Number || module is not EngineController engine) continue;
                         hasEngine = true;
-                        foreach (RocketCore core in engine.Cores)
-                            if (!KsaEnginePerf.FollowsThrottle(core))
+                        foreach (Rocket rocket in engine.Rockets)
+                            if (!KsaEnginePerf.FollowsThrottle(rocket))
                                 return "The next landing engine cannot obey throttle and shutdown commands.";
                     }
                 if (hasEngine) break;
@@ -426,7 +426,7 @@ public static partial class GuidanceWindow
         DeorbitPlanner planner = _s.DeorbitPlanner;
         if (planner == null)
         {
-            // RocketCore.UpdateState can retain an unexpired minimum pulse after the engine-off command.
+            // Rocket.UpdateState can retain an unexpired minimum pulse after the engine-off command.
             if (KsaEnginePerf.RemainingMinimumPulse(vehicle) > 0) return;
             if (!TryCaptureDeorbitRequest(vehicle, orbit, parent))
             { RefuseDeorbit(vehicle, "DEORBIT DONE: NO USABLE BRAKING MODEL."); return; }

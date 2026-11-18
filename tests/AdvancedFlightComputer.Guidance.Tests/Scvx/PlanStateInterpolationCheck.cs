@@ -6,9 +6,30 @@ internal static class PlanStateInterpolationCheck
 
     internal static int Run()
     {
-        bool ok = CheckConstantAcceleration() && CheckHighSpeedReplan();
+        bool ok = CheckConstantAcceleration() && CheckHighSpeedReplan() && CheckShortIntervalVelocity();
         Console.WriteLine(ok ? "PASS - plan state interpolation" : "FAIL - plan state interpolation");
         return ok ? 0 : 1;
+    }
+
+    private static bool CheckShortIntervalVelocity()
+    {
+        var states = new double[2 * NX];
+        states[2] = 7.0;
+        states[NX + 2] = 7.26;
+        states[Dynamics6Dof.IV + 2] = -2.0;
+        states[NX + Dynamics6Dof.IV + 2] = -1.0;
+        Span<double> position = stackalloc double[3];
+        Span<double> velocity = stackalloc double[3];
+        const double interval = 0.02;
+
+        PlanStateInterpolation.SamplePositionVelocity(states, 0, 1, 0.5, interval, position, velocity);
+        double hermitePosition = position[2];
+        double hermiteSpeed = velocity[2];
+        PlanStateInterpolation.SamplePositionVelocity(states, 0, 1, 0.5, interval, position, velocity,
+            useNodeVelocities: true);
+        return Math.Abs(hermiteSpeed - velocity[2]) > 20.0
+            && Math.Abs(position[2] - hermitePosition) < 1e-10
+            && Math.Abs(velocity[2] + 1.5) < 1e-10;
     }
 
     private static bool CheckConstantAcceleration()

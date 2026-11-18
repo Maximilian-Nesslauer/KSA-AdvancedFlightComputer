@@ -1,4 +1,5 @@
 using Brutal.Numerics;
+using HeadlessHarness.Core;
 using HeadlessHarness.Harness;
 using KSA;
 
@@ -10,6 +11,9 @@ namespace AdvancedFlightComputer.HarnessTests.Fixtures;
 //
 // Each spawn deserializes its own part tree: Vehicle.CreateVehicle(..., Part root, ...) does
 // Parts = root.Tree, so reusing one design without deserializing would alias the tree across both.
+//
+// Each spawn seats crew in every free seat, as VehicleSpawner does: Vehicle.ComputeControl gives a crew
+// pod without able crew no control, and the first step then hands Attitude and Burn back to Manual.
 public static class VehicleFixtures
 {
     // No staged state. A test that reads engines, sequences or fuel flow wants SpawnFromSaveData.
@@ -25,6 +29,7 @@ public static class VehicleFixtures
             vehicle = Vehicle.CreateVehicle(
                 system, doubleQuat.Identity, double3.Zero, parent, id, tree.Root, orbit);
             parent.Children.Add(vehicle);
+            VehicleSpawner.SeatRandomCrew(vehicle);
             return vehicle;
         }
         catch
@@ -56,6 +61,7 @@ public static class VehicleFixtures
             vehicle.Parts.SequenceList.ApplyEnvironments(data.SequenceEnvironments);
             vehicle.Parts.FuelLinks.ApplySaveData(data.FuelLinks, design);
             parent.Children.Add(vehicle);
+            VehicleSpawner.SeatRandomCrew(vehicle);
             return vehicle;
         }
         catch
@@ -67,6 +73,10 @@ public static class VehicleFixtures
 
     // PartTree.Deserialize fails with a bare NullReferenceException on a part id the game no longer
     // loads, so the check runs first, as CelestialSystem.DeserializeSave does with the same call.
+    //
+    // A save made before a part lost connectors names connector indices the part no longer has, and
+    // PartTree.Deserialize indexes past the end on them, so they are dropped first, as
+    // CelestialSystem.DeserializeSave and UncompressedVehicleSave.Load do.
     private static void EnsurePartsLoaded(PartInstance design, string name)
     {
         string? missingParts = design.FindMissingParts();
@@ -74,6 +84,9 @@ public static class VehicleFixtures
             throw new InvalidOperationException(
                 $"vehicle '{name}' uses parts that are missing or failed to load ({missingParts}). " +
                 "Save it again in the game, or build it again from the current parts.");
+        int dropped = design.DropStaleConnectors();
+        if (dropped > 0)
+            HarnessLog.Line($"[afc] vehicle '{name}': dropped {dropped} connector(s) its parts no longer have.");
     }
 
     private static void EnsureIdAvailable(CelestialSystem system, string id)

@@ -392,7 +392,7 @@ public static partial class GuidanceWindow
             // ATTITUDE SENSITIVITY is global. Broadside drag is large whatever the number above says, because a slender stack's flank area dwarfs its nose area - so the alpha axis is carrying real information even when the vehicle is insensitive to attitude where it normally sits.
             GaugeRowText(D, "CD(90)/CD(0)", FormattableString.Invariant($"{a.AttitudeSensitivity,7:F1} x"));
 
-            // Roll dependence the table cannot represent, because it has no roll input and stores the azimuthal mean. Zero only for an axisymmetric drag model: stock's is a box, so a square-section booster rolled 45 degrees presents sqrt(2) the flank it does at 0, about 25% for a slender stack.
+            // Roll dependence the table cannot represent, because it has no roll input and stores the azimuthal mean. Zero only for an airframe that is axisymmetric about its long axis: fins, strap-ons and a square section all spread it.
             GaugeRowText(D, "ROLL SPREAD", FormattableString.Invariant($"{a.RollSpread * 100.0,7:F1} %  (AVERAGED)"),
                 a.RollSpread > 0.35 ? warn : plain);
 
@@ -559,7 +559,7 @@ public static partial class GuidanceWindow
     /// <summary>
     /// The vehicle's CURRENT angle of attack, retrograde-first, in degrees.
     ///  Airspeed is surface-relative because KSA's atmosphere co-rotates rigidly with the body - the game subtracts omega x r itself before computing drag, and a readout that used inertial velocity would disagree with the sim by a full equatorial rotation speed near the ground.
-    ///  Measured in KSA's OWN body frame, where +x is the nose, rather than the solver's model frame where the thrust axis is +z. That is deliberate: the surrogate was sampled against AerodynamicCdABody, which is indexed in these axes, so reading it back the same way is what makes the two comparable.
+    ///  Measured in KSA's OWN body frame, where +x is the nose, rather than the solver's model frame where the thrust axis is +z. That is deliberate: the surrogate was sampled in these axes (KsaAeroSweep), so reading it back the same way is what makes the two comparable.
     /// </summary>
     private static bool TryLiveAlpha(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                      out double alphaDeg)

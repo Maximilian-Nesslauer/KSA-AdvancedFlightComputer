@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
 using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 
@@ -50,9 +51,10 @@ internal static class KsaAscentStages
                 bool solid = false;
                 foreach (EngineController engine in part.Modules.Get<EngineController>())
                 {
-                    if (engine.Cores == null)
+                    if (engine.Rockets == null)
                         continue;
-                    foreach (RocketCore core in engine.Cores)
+                    foreach (Rocket rocket in engine.Rockets)
+                    foreach (RocketCore core in rocket.Cores)
                     {
                         if (core is not SolidMotor motor)
                             continue;
@@ -147,7 +149,7 @@ internal static class KsaAscentStages
     }
 
     /// <summary>
-    /// A solid motor's burn from its grain as it is now, stepped through the same functions the game flies it by each frame (SolidMotor.UpdateState and ConsumePropellant): the burning area of each segment's grain, the chamber conditions that area settles at, each nozzle's performance at those conditions and every grid pressure, and the grain consumed by each segment's share of the area. It ends where the game's would: below half the minimum burn pressure once lit, or out of burnable grain. Null if the motor cannot burn at all.
+    /// A solid motor's burn from its grain as it is now, stepped through the same functions the game flies it by each frame (SolidMotor.UpdateBurn and ConsumePropellant): the burning area of each segment's grain, the chamber conditions that area settles at, each nozzle's performance at those conditions and every grid pressure, and the grain consumed by each segment's share of the area. It ends where the game's would: below half the minimum burn pressure once lit, or out of burnable grain. Null if the motor cannot burn at all.
     ///
     /// Stepped at the midpoint (RK2) about 600 times over the burn, which follows the grain's regression far more closely than the drain model's mean pacing does, and costs a few milliseconds.
     /// </summary>
@@ -164,7 +166,8 @@ internal static class KsaAscentStages
             mass[s] = segments[s].Grain != null ? moles[segments[s].Grain.StatesIdx].Mass : 0.0;
 
         RocketCoreState live = tree.RocketCores.States[motor.StatesIdx];
-        bool lit = live.Throttle > 0f;
+        ReadOnlySpan<RocketState> rockets = RocketStates.Of(tree);
+        bool lit = motor.Rocket != null && !rockets.IsEmpty && rockets[motor.Rocket.StatesIdx].Throttle > 0f;
         float warm = lit && live.Conditions.Core.Pressure > 0f ? live.Conditions.Core.Pressure : motor.MaxChamberPressure;
 
         double usable = Usable(segments, mass);

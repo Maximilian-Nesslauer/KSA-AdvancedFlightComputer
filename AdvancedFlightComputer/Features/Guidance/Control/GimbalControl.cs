@@ -58,6 +58,9 @@ public static class KsaGimbalControl
 
         /// <summary>Diagnostics from the last Lsq allocation, for the UI readout.</summary>
         public TvcAllocationResult LastAllocation;
+
+        /// <summary>The vehicle the demand is for. The worker reads Vehicle.IsControllable through it, which Vehicle.UpdateControl writes on the main thread while no worker runs.</summary>
+        internal volatile Vehicle Owner;
     }
 
     /// <summary>
@@ -71,7 +74,11 @@ public static class KsaGimbalControl
     private static Slot SlotFor(Vehicle vehicle)
     {
         FlightComputer.VehicleConfigInfo cfg = vehicle?.FlightComputer?.VehicleConfig;
-        return cfg == null ? null : Slots.GetOrCreateValue(cfg);
+        if (cfg == null)
+            return null;
+        Slot slot = Slots.GetOrCreateValue(cfg);
+        slot.Owner = vehicle;
+        return slot;
     }
 
     /// <summary>This vehicle's diagnostics, or null if it has never been driven.</summary>
@@ -124,6 +131,10 @@ public static class KsaGimbalControl
         if (mode == GimbalOverrideMode.Off)
             return;
 
+        // A craft out of control flies only what stock commands, as with the player's inputs, which ControlsLockout blocks.
+        if (st.Owner != null && (!st.Owner.IsControllable || VehicleControlOwnership.KfsOwns(st.Owner)))
+            return;
+
         if (mode == GimbalOverrideMode.Lsq)
         {
             ApplyLsq(st, cmd, cfg, flightComputer.CenterOfMassAsmb, ref outputs, ref receipt);
@@ -145,6 +156,8 @@ public static class KsaGimbalControl
             // Deliberately NOT gated on thrust, unlike the game's own ComputeTvcControl, which gives a zero command to an unlit gimbal while another gimbal is lit. An unlit engine still swings its nozzle visually, which is what makes this testable on the pad before committing to a burn. FlightComputer.VehicleConfig.Gimbals holds only the gimbals whose engine is activated, so that check needs the engine staged.
             slot.State.CommandY = cmd.CommandY;
             slot.State.CommandZ = cmd.CommandZ;
+            // Gimbal.UpdateModules follows the command at the lower of Gimbal.NaturalFrequency and this limit, and stock TVC in Auto leaves a finite limit in the state until it writes again, so the override sets the gimbal's own response.
+            slot.State.NaturalFrequencyLimit = float.PositiveInfinity;
             applied++;
         }
 
@@ -264,6 +277,7 @@ public static class KsaGimbalControl
 
             slot.State.CommandY = (float)st.Commands[2 * i];
             slot.State.CommandZ = (float)st.Commands[2 * i + 1];
+            slot.State.NaturalFrequencyLimit = float.PositiveInfinity;
             applied++;
         }
 

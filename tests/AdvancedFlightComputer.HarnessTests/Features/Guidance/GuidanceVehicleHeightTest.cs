@@ -212,7 +212,10 @@ public sealed class GuidanceVehicleHeightTest : AfcTest
         double3 up = GuidanceWindow.SiteDirCcf(latDeg, lonDeg);
         double3 east = double3.Normalize(double3.Cross(new double3(0, 0, 1), up));
         double3 north = double3.Cross(up, east);
-        double centre = body.GetTerrainHeightFromDirCcf(up);
+        // PhysicsEnvironment.ComputeOceanRadius uses the mean ocean level without a renderer.
+        double sea = body.GetOceanReference()?.Level ?? double.NegativeInfinity;
+        double Surface(double3 direction) => Math.Max(body.GetTerrainHeightFromDirCcf(direction), sea);
+        double centre = Surface(up);
         var rings = new double[(int)Math.Round(reach / 0.5)];
         for (int ring = 0; ring < rings.Length; ring++)
         {
@@ -221,7 +224,7 @@ public sealed class GuidanceVehicleHeightTest : AfcTest
             {
                 double a = i * Math.PI / 8.0;
                 double3 point = up * (body.MeanRadius + centre) + (east * Math.Cos(a) + north * Math.Sin(a)) * ((ring + 1) * 0.5);
-                high = Math.Max(high, body.GetTerrainHeightFromDirCcf(double3.Normalize(point)) - centre);
+                high = Math.Max(high, Surface(double3.Normalize(point)) - centre);
             }
             rings[ring] = high;
         }

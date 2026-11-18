@@ -722,6 +722,12 @@ internal static class Program
             StopResolver.Resolve(new CraftActivity { DescentLive = true, BoostbackLive = true }) == StopTarget.Landing);
         Check("boostback wins over ascent",
             StopResolver.Resolve(new CraftActivity { BoostbackLive = true, AscentRunning = true }) == StopTarget.Boostback);
+        var pendingBoostback = new CraftActivity { BoostbackPending = true, HoldsNoControl = true };
+        Check("a boostback waiting for its mesh has a stop", StopResolver.Resolve(pendingBoostback) == StopTarget.Boostback);
+        Check("a pending boostback is live without owning control", pendingBoostback.AnyGuidanceLive && pendingBoostback.PilotHolds);
+        Check("a pending boostback blocks a duplicate commit", CommitResolver.Resolve(GuidanceModeId.Boostback, pendingBoostback,
+            new CommitGates()).Live);
+        Check("a pending boostback stop keeps the unclaimed engine", StopResolver.OutcomeShort(StopTarget.Boostback, pendingBoostback) == "ENGINE UNCHANGED");
         Check("ascent running", StopResolver.Resolve(new CraftActivity { AscentRunning = true }) == StopTarget.Ascent);
         Check("launch armed disarms", StopResolver.Resolve(new CraftActivity { LaunchArmed = true }) == StopTarget.LaunchArmed);
         Check("convex launch pending disarms", StopResolver.Resolve(new CraftActivity { ConvexLaunchPending = true }) == StopTarget.LaunchArmed);

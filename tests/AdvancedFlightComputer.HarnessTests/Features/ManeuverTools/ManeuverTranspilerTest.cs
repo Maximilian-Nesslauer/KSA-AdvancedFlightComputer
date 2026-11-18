@@ -67,11 +67,12 @@ public sealed class ManeuverTranspilerTest : AfcTest
     }
 
     // Match the operand because this test project does not reference the ImGui assembly.
+    // KSA's ImGuiHelper wraps BeginMenu, and BurnContextMenu.Draw calls either form.
     private static bool CallsImGui(CodeInstruction instruction, string name)
         => (instruction.opcode == OpCodes.Call || instruction.opcode == OpCodes.Callvirt)
            && instruction.operand is MethodInfo method
            && method.Name == name
-           && method.DeclaringType?.Name == "ImGui";
+           && method.DeclaringType?.Name is "ImGui" or "ImGuiHelper";
 
     // UTF-8 literals use compiler-generated data fields with a trailing null byte.
     private static string? MenuLabel(List<CodeInstruction> code, int beginMenuIndex)

@@ -279,7 +279,7 @@ public sealed class VehicleAutopilotState
     public readonly HashSet<uint> StageOptimalReturn = new();
 
     /// <summary>
-    /// Each optimal-return stage's landing point, lat/lon deg: where the plan's coast comes down. Taken from each plan adopted on the ground, and FROZEN FROM LIFT-OFF, so a ship placed there before launch is where the booster is sent (BoosterReturn, OnSequenceActivating).
+    /// Each optimal-return stage's landing point, lat/lon deg: where the plan's coast comes down. Taken from each plan adopted on the ground, and FROZEN FROM LIFT-OFF, so a ship placed there before launch is where the booster is sent (BoosterReturn, OnDecouplerActivating).
     /// </summary>
     public readonly Dictionary<uint, double2> OptimalReturnSites = new();
 
@@ -554,6 +554,7 @@ public sealed class VehicleAutopilotState
     public double ConvexStageSpeed;
     public double ConvexFastest;
     public double ConvexLastTime = double.NaN;
+    public double ConvexSolidIgnitionTime = double.NaN;
 
     /// <summary>Sim time the profile handed over to UPFG, while the command is still blending from the one to the other; NaN otherwise.</summary>
     public double ConvexBlendStart = double.NaN;
@@ -975,14 +976,17 @@ public sealed class VehicleAutopilotState
     /// <summary>
     /// Resample when the vehicle's geometry changes, not merely when it is looked at.
     ///
-    /// KSA recomputes AerodynamicCdABody only in UpdateAfterPartTreeModification, so
-    /// the table is exactly as stale as the bounding box is - which staging changes and
-    /// nothing else does. Comparing the box the sweep was taken from against the live
-    /// one catches that without hooking anything.
+    /// The game rebuilds the aero mesh when the hash of its source changes, so a live
+    /// mesh hash other than the one the sweep measured means a stale table. While a
+    /// rebuild runs there is no live hash, and the bounding box the sweep was taken from
+    /// against the live one still catches a staging without hooking anything. A table
+    /// taken over another body is stale too, because its atmosphere is that body's.
     /// </summary>
-    public bool AeroStale(double3 liveExtents)
+    public bool AeroStale(double3 liveExtents, ulong liveMeshHash, IParentBody parent)
     {
         if (Aero == null) return true;
+        if (!ReferenceEquals(Aero.Parent, parent)) return true;
+        if (liveMeshHash != 0 && liveMeshHash != Aero.MeshHash) return true;
         double3 was = Aero.SampledExtents;
         double tol = 1e-3;
         return System.Math.Abs(was.X - liveExtents.X) > tol
@@ -1277,7 +1281,7 @@ public sealed class VehicleAutopilotState
     /// <summary>
     /// The miss, km, beyond which a boostback is a large one: it settles and turns on the lit engine's gimbal. Between <see cref="BoostbackGlideMissKm"/> and this it is a small one, flown without the settling burn and turned with the engine off, then burned (#197). The lit flip lays down dV of its own as it sweeps through every direction on the way round; for a small correction that is as big as the correction, which moves while the booster turns, and the short burn after it chases its own tail. A small correction leaves time to turn.
     /// </summary>
-    public double BoostbackLargeMissKm = 100.0;
+    public double BoostbackLargeMissKm = 20.0;
 
     /// <summary>The reserve every returning booster keeps for small corrections, m/s, on top of its boostback and landing burn (AscentRecovery.CorrectionDv): sized into the calculated climb.</summary>
     public double BoosterCorrectionDvMs = 100.0;
@@ -1387,7 +1391,7 @@ public sealed class VehicleAutopilotState
 
     // Boostback glide: a PID on the coast impact point, steering the angle of attack. See Guidance/BoostbackGlide.cs.
     //
-    // The PID asks for the impact to move back towards the site at (Kp miss + Ki integral + Kd rate) / tgo; the impact Jacobian turns that into lift, and the measured lift curve turns the lift into an angle. The defaults are the ones flat-earth closed-loop runs through KSAero's aero settled on.
+    // The PID asks for the impact to move back towards the site at (Kp miss + Ki integral + Kd rate) / tgo; the impact Jacobian turns that into lift, and the measured lift curve turns the lift into an angle. The defaults are the ones flat-earth closed-loop runs through a lifting aero model settled on.
 
     /// <summary>Proportional gain, dimensionless: Kp * miss / tgo^2 is the lateral acceleration asked for. 3 is the textbook zero-effort-miss law; 5 holds up better when the attitude lags the command.</summary>
     public double GlideKp = 15.0;
@@ -1399,12 +1403,12 @@ public sealed class VehicleAutopilotState
     public double GlideKd = 0.0;
 
     /// <summary>Largest angle of attack the glide commands, degrees off engine-first into the wind.</summary>
-    public double GlideMaxAoaDeg = 15.0;
+    public double GlideMaxAoaDeg = 7.5;
 
     /// <summary>
-    /// The angle of attack the boostback plans the glide at, degrees: every impact prediction - the burn's shot, its cutoff correction, the overlay and the glide PID's own - assumes the vehicle glides at this angle with its lift pointed up the trajectory, which stretches the range so the burn can stop short and save propellant. The PID flies it as its nominal and trims about it. Half the maximum leaves the PID as much authority either side. 0 plans the engine-first ballistic coast.
+    /// The angle of attack the boostback plans the glide at, degrees: every impact prediction - the burn's shot, its cutoff correction, the overlay and the glide PID's own - assumes the vehicle glides at this angle with its lift pointed up the trajectory, which stretches the range so the burn can stop short and save propellant. The PID flies it as its nominal and trims about it. It sits below the maximum so the PID keeps room to trim, and both are small because the aero moment of KSA 5901 can turn a booster at a larger angle of attack. 0 plans the engine-first ballistic coast.
     /// </summary>
-    public double GlideNominalAoaDeg = 7.5;
+    public double GlideNominalAoaDeg = 0.0;
 
     /// <summary>Miss of the coast impact point from the site, m: along the ground track (positive long) and across it (positive left).</summary>
     public double GlideMissDownM, GlideMissCrossM;
@@ -1443,6 +1447,9 @@ public sealed class VehicleAutopilotState
 
     /// <summary>The page's Engage, consumed by the next step (draw-time writes do not reach the sim), and the sim time of the last step.</summary>
     public bool ThreeDofEngagePending;
+
+    /// <summary>The console's BOOSTBACK commit, taken by the next guidance step, because the aero sweep it forces must run where no worker steps the vehicle.</summary>
+    public bool BoostbackEngagePending;
     public double ThreeDofLastStep;
     public double ThreeDofLogTime = double.NaN;
 
@@ -1460,6 +1467,8 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Set once the burn is inside the hand-over time with 6-DOF not ready yet, so that is logged once.</summary>
     public bool ThreeDofSixDofWaiting;
+    public bool ThreeDofBurnSolveFault;
+    public (string Status, bool Warning) ThreeDofTouchdownHandoff;
 
     /// <summary>Hand over with this much of the 3-DOF burn plan left, s. By time rather than speed: a light booster falls slower than any useful hand-over speed, and 6-DOF, with no coast and no drag model, cannot fly a long burn (see ThreeDof.cs).</summary>
     public double ThreeDofSixDofTimeS = 5.0;
