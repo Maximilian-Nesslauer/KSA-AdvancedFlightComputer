@@ -100,6 +100,9 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
 
             CheckDifferentTarget(t, fixture, state);
             CheckLateIgnition(t, fixture, state);
+            CheckManualIgnitionDuringPreview(t, fixture, state);
+            CheckEditDuringPreview(t, fixture, state);
+            CheckEngineChangeDuringPreview(t, fixture, state);
             CheckLongMinimumPreview(t, fixture, state);
             CheckContact(t, fixture, state);
             CheckCompletionAfterRemoval(t, fixture, state);
@@ -350,6 +353,90 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
                 state.LandingStatus);
         }
         finally { properties(fixture.Vehicle).Situation = previous; }
+    }
+
+    private static void CheckManualIgnitionDuringPreview(TestContext t, DeorbitFixture fixture, VehicleAutopilotState state)
+    {
+        Vehicle craft = fixture.Vehicle;
+        Seed(fixture, state);
+        TestSupport.SetManualControlInputs(craft, 0.63f, engineOn: false);
+        GuidanceWindow.ApplyAutopilot(craft);
+        if (!t.Check("the preview has loaded before a player ignition",
+            state.LandingPhase == GuidanceWindow.LandingPhase.DeorbitNodePending && state.DeorbitNode != null))
+            return;
+        Burn node = state.DeorbitNode!;
+        float previewThrottle = Inputs(craft).EngineThrottle;
+        try
+        {
+            TestSupport.SetManualControlInputs(craft, previewThrottle, engineOn: true);
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("a player ignition keeps its exact commanded throttle and Manual node",
+                state.LandingPhase == GuidanceWindow.LandingPhase.Done && craft.FlightComputer.BurnMode == FlightComputerBurnMode.Manual
+                && Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == previewThrottle
+                && ReferenceEquals(craft.FlightComputer.BurnPlan.FindFirstExecutableBurn(), node), state.LandingStatus);
+        }
+        finally
+        {
+            TestSupport.SetManualControlInputs(craft, 0.63f, engineOn: false);
+            craft.FlightComputer.RemoveBurn(node);
+        }
+    }
+
+    private static void CheckEditDuringPreview(TestContext t, DeorbitFixture fixture, VehicleAutopilotState state)
+    {
+        Vehicle craft = fixture.Vehicle;
+        Seed(fixture, state);
+        TestSupport.SetManualControlInputs(craft, 0.63f, engineOn: false);
+        GuidanceWindow.ApplyAutopilot(craft);
+        if (!t.Check("editing the preview starts with a loaded Manual node",
+            state.LandingPhase == GuidanceWindow.LandingPhase.DeorbitNodePending && state.DeorbitNode != null))
+            return;
+        Burn node = state.DeorbitNode!;
+        try
+        {
+            node.PlannedThrottle = 0.5f;
+            craft.FlightComputer.BurnUpdated(node);
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("the edited node stays Manual and its throttle is preserved",
+                state.LandingPhase == GuidanceWindow.LandingPhase.Done && craft.FlightComputer.BurnMode == FlightComputerBurnMode.Manual
+                && ReferenceEquals(craft.FlightComputer.BurnPlan.FindFirstExecutableBurn(), node)
+                && node.PlannedThrottle == 0.5f && !Inputs(craft).EngineOn, state.LandingStatus);
+        }
+        finally
+        {
+            craft.FlightComputer.RemoveBurn(node);
+        }
+    }
+
+    private static void CheckEngineChangeDuringPreview(TestContext t, DeorbitFixture fixture, VehicleAutopilotState state)
+    {
+        Vehicle craft = fixture.Vehicle;
+        Seed(fixture, state);
+        TestSupport.SetManualControlInputs(craft, 0.63f, engineOn: false);
+        GuidanceWindow.ApplyAutopilot(craft);
+        if (!t.Check("the engine-change fixture has a loaded Manual preview",
+            state.LandingPhase == GuidanceWindow.LandingPhase.DeorbitNodePending && state.DeorbitNode != null))
+            return;
+        Burn node = state.DeorbitNode!;
+        EngineController engine = craft.Parts.Modules.Get<EngineController>().ToArray().First(engine => engine.IsActive);
+        try
+        {
+            engine.SetIsActive(craft, false);
+            InputEvents.ApplyInputEvents();
+            if (!t.Check("the stock input drain deactivates the preview engine", !engine.IsActive))
+                return;
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("a change in engine configuration prevents using the old timing preview",
+                state.LandingPhase == GuidanceWindow.LandingPhase.Done && craft.FlightComputer.BurnMode == FlightComputerBurnMode.Manual
+                && ReferenceEquals(craft.FlightComputer.BurnPlan.FindFirstExecutableBurn(), node)
+                && !engine.IsActive && !Inputs(craft).EngineOn, state.LandingStatus);
+        }
+        finally
+        {
+            engine.SetIsActive(craft, true);
+            InputEvents.ApplyInputEvents();
+            craft.FlightComputer.RemoveBurn(node);
+        }
     }
 
     private static void CheckLongMinimumPreview(TestContext t, DeorbitFixture fixture, VehicleAutopilotState state)

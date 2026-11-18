@@ -231,7 +231,8 @@ public static partial class GuidanceWindow
             HoverFromM: _s.GfoldHoverHandoffAltM,
             MayFly: _s.Engage && _s.AutoStage,
             HoverFlies: _landHoverFlies,
-            HoverKnown: _landHoverKnown);
+            HoverKnown: _landHoverKnown,
+            DeorbitOnly: _s.DeorbitOnly);
 
     #endregion
 
@@ -614,9 +615,10 @@ public static partial class GuidanceWindow
         string hoverProblem = "";
         string noSite = "";
         string farSite = "";
+        bool entryBurnOnly = mode == GuidanceModeId.DeorbitLand && _s.DeorbitOnly;
         if (parent != null)
         {
-            if (NoSitePicked(parent))
+            if (!entryBurnOnly && NoSitePicked(parent))
                 noSite = PageText.NoSiteAnswer(SituationVerbs.VerbName(mode), _s.SiteLatDeg, _s.SiteLonDeg);
             else if (mode is GuidanceModeId.SixDofHere or GuidanceModeId.GfoldHere)
             {
@@ -641,7 +643,7 @@ public static partial class GuidanceWindow
         return new CommitGates(
             HasTarget: hasTarget,
             LandingSwitchesOff: LandingSwitchesOff,
-            DeorbitRefusal: LandingSwitchesOff ? "" : DeorbitSettingsRefusal(),
+            DeorbitRefusal: LandingSwitchesOff ? "" : DeorbitSettingsRefusal(parent),
             GravityTurnRefusal: gravityTurnRefusal,
             HoverTwrBelowOne: twrLow,
             PlansFirst: plansFirst,
@@ -658,9 +660,10 @@ public static partial class GuidanceWindow
             PageFactSolver: _landFactSolver,
             PageFactCalm: _landFactCalm,
             NoStageHome: NoStageHome,
-            SiteRefusal: mode == GuidanceModeId.DeorbitLand && noSite.Length == 0
+            SiteRefusal: mode == GuidanceModeId.DeorbitLand && !entryBurnOnly && noSite.Length == 0
                 ? SiteSlopeText.Refusal(SiteSlopeText.Verdict(SiteSlopeNowDeg(vehicle.Orbit?.Parent), _s.SiteTipDeg, _s.SiteStandDeg), _s.SiteSlopeDeg, _s.SiteStandDeg)
-                : "");
+                : "",
+            DeorbitOnly: entryBurnOnly);
     }
 
     // The backup choice counts only while the failure it answered is still shown.

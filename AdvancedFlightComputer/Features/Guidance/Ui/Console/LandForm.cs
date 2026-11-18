@@ -96,14 +96,34 @@ public static partial class GuidanceWindow
 
     internal static void DrawLandInputRows(Vehicle vehicle, LandWay way, in SituationFacts situation, in LandRead read, bool pickSite)
     {
+        DrawDeorbitFinishRows(way);
         DrawLandSiteRows(vehicle, way, in situation, pickSite);
         DrawLandMethodRows(vehicle, way, in situation, in read);
     }
 
+    internal static void DrawDeorbitFinishRows(LandWay way)
+    {
+        if (way == LandWay.FromOrbit)
+        {
+            using (new ImGuiDisabledScope(DeorbitTargetLocked))
+            {
+                int selected = ConsoleUi.ChoiceRow("AFTER DEORBIT", "AfcDeorbitFinish",
+                    DeorbitFinishLabels, _s.DeorbitOnly ? 1 : 0);
+                if (selected >= 0)
+                    _s.DeorbitOnly = selected == 1;
+                if (_s.DeorbitOnly)
+                    ConsoleUi.InputDoubleRow("ENTRY PERIAPSIS".AsSpan(), "##AfcEntryPeriapsis"u8,
+                        ref _s.DeorbitEntryPeriapsisKm, 1.0, 10.0, "%.1f"u8, unit: "km");
+            }
+        }
+    }
+
+    private static readonly string[] DeorbitFinishLabels = ["LAND", "ENTRY BURN ONLY"];
+
     internal static void DrawLandSiteRows(Vehicle vehicle, LandWay way, in SituationFacts situation, bool pickSite)
     {
         IParentBody parent = vehicle.Orbit?.Parent;
-        if (parent == null || way == LandWay.Hover)
+        if (parent == null || way == LandWay.Hover || way == LandWay.FromOrbit && _s.DeorbitOnly)
             return;
         using (ConsoleUi.Dim(DeorbitTargetLocked || (way == LandWay.Boostback && situation.Where == CraftSituation.Ground && NoStageHome)))
             DrawLandSiteRow(parent, pickSite);
@@ -180,7 +200,7 @@ public static partial class GuidanceWindow
 
     internal static void DrawLandMethodRows(Vehicle vehicle, LandWay way, in SituationFacts situation, in LandRead read)
     {
-        if (vehicle.Orbit?.Parent == null)
+        if (vehicle.Orbit?.Parent == null || (way == LandWay.FromOrbit && _s.DeorbitOnly))
             return;
         LandSolver solver = LandSolverOf(way);
         bool table = LandWays.HasSolver(way);

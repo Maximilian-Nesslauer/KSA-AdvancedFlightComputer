@@ -118,6 +118,8 @@ internal static class SituationVerbs
 
     private static VerbFit Deorbit(in CommitGates g)
     {
+        if (g.DeorbitOnly)
+            return g.Where == CraftSituation.Orbit ? VerbFit.Yes : new VerbFit("NEEDS PARKING ORBIT", ConsolePage.Orbit);
         if (g.Where == CraftSituation.Ground)
             return Grounded;
         if (SituationText.IsFalling(g.Where) && g.BelowBrakingStart)

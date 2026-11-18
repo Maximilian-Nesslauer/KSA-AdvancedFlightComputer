@@ -725,7 +725,8 @@ internal static class PageText
     /// <summary>A value that is not known is NaN or empty, and the sentence leaves it out.</summary>
     internal readonly record struct OutcomeFacts(
         bool AutoStageArms = false, string Target = "", string Solver = "", bool HandToTouchdown = false, double TouchdownLastS = double.NaN,
-        double HoverFromM = double.NaN, bool MayFly = true, bool HoverFlies = true, bool Falling = false, bool HoverKnown = true);
+        double HoverFromM = double.NaN, bool MayFly = true, bool HoverFlies = true, bool Falling = false, bool HoverKnown = true,
+        bool DeorbitOnly = false);
 
     /// <summary>The end of every launch outcome while guidance will arm AutoStage when the ascent starts.</summary>
     public const string AutoStageArmsNote = "AutoStage arms at lift-off.";
@@ -750,6 +751,8 @@ internal static class PageText
             case GuidanceModeId.Boostback:
                 return "Turns the booster back to its site.";
             case GuidanceModeId.DeorbitLand:
+                if (f.DeorbitOnly)
+                    return "Stock Auto flies the entry burn. AFC then releases control for the parachute descent.";
                 return f.Falling
                     ? (f.Solver.Length > 0 ? "Lands with " + f.Solver + ", with a stock burn first if needed." : "Lands, with a stock burn first if needed.")
                     : (f.Solver.Length > 0 ? "Burns out of orbit, then lands with " + f.Solver + "." : "Burns out of orbit, then lands.");
