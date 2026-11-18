@@ -106,7 +106,9 @@ internal static class SixDofLog
                 "thrustDemandN", "capabilityN", "throttle", "saturated",
                 "tauX", "tauY", "tauZ", "allocX", "allocY", "allocZ", "allocSat",
                 "twr", "twrMin", "ambientPa", "altToGo", "descentRate", "stopDistM",
-                "glideViolM", "biasX", "biasY", "biasZ", "trackPosM", "trackVelMs", "trackThrustN", "vcVelMs", "error"));
+                "glideViolM", "biasX", "biasY", "biasZ", "trackPosM", "trackVelMs", "trackThrustN", "vcVelMs",
+                "allocRoll", "gimCmdY", "gimCmdZ", "gimAngY", "gimAngZ", "gimRateY", "gimRateZ", "gimMaxDeg", "gimSlewPerS", "gimThrustN", "gimCount",
+                "error"));
 
             _plan.AppendLine("cycle,t,node,x,y,z,vx,vy,vz,thrustN,tiltDeg,qw,qx,qy,qz,wx,wy,wz,mass,tdx,tdy,tauRoll,solveTime,sigma");
 
@@ -233,6 +235,9 @@ internal static class SixDofLog
             F(sb, r.BiasX); F(sb, r.BiasY); F(sb, r.BiasZ);
             F(sb, r.TrackPosM); F(sb, r.TrackVelMs); F(sb, r.TrackThrustN);
             F(sb, r.VcVelMs);
+            F(sb, r.AllocRoll);
+            F(sb, r.GimCmdY); F(sb, r.GimCmdZ); F(sb, r.GimAngY); F(sb, r.GimAngZ); F(sb, r.GimRateY); F(sb, r.GimRateZ);
+            F(sb, r.GimMaxDeg); F(sb, r.GimSlewPerS); F(sb, r.GimThrustN); sb.Append(r.GimCount).Append(',');
             sb.Append(Csv(r.Error));
             sb.AppendLine();
 
@@ -379,6 +384,10 @@ internal static class SixDofLog
         public double TrackPosM, TrackVelMs, TrackThrustN;
         // The scale velocity's virtual control was priced on for the last solve, m/s (Ksa6DofGuidance.PricingVelocityMs).
         public double VcVelMs;
+
+        /// <summary>The share of the roll demand the allocation fitted (TvcAllocationResult.WeakAxisScale), and the highest-thrust gimbal's command, angle and rate in fractions of its range (KsaGimbalControl.GimbalTrace): gimCmd is what it was told, gimAng where it was, gimRate how fast it moved, per second.</summary>
+        public double AllocRoll, GimCmdY, GimCmdZ, GimAngY, GimAngZ, GimRateY, GimRateZ, GimMaxDeg, GimSlewPerS, GimThrustN;
+        public int GimCount;
         public string Error;
     }
 }

@@ -168,6 +168,7 @@ public static partial class GuidanceWindow
         _s.ThreeDofBurnSolveFault = false;
         _s.ThreeDofTouchdownHandoff = default;
         _s.ThreeDofHandoffRefusal = "";
+        _s.SixDofStandbyPredicted = false;
     }
 
     /// <summary>One step of the 3-DOF landing, run for this vehicle from ApplyAutopilot whether or not it is the one on screen.</summary>
@@ -230,7 +231,19 @@ public static partial class GuidanceWindow
         }
 
         if (burning)
+        {
+            if (_s.SixDofStandbyPredicted)
+            {
+                // The engine has lit: the standby carries on from the craft as it is. The bias estimator starts afresh, and a standby that could not be set up on the forecast may be tried again at once.
+                _s.SixDofStandbyPredicted = false;
+                _s.PrevV = null;
+                if (!_s.SixDofStandby)
+                    _s.SixDofStandbyRetryAt = now;
+            }
             StepEntryTouchdownHandoff(vehicle, parent, siteCci, x14, now);
+        }
+        else
+            StepEntryTouchdownPrepare(vehicle, parent, siteCci, x, x14, now);
 
         // Fly the plan if there is one; otherwise the PID glide until there is.
         if (!Plan3DofStep(vehicle, parent, frame, x, att, now, dt, out double3 wantLocal, out double3 rateLocal, out bool smooth))
@@ -583,14 +596,18 @@ public static partial class GuidanceWindow
         double speed = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
         if (burning)
         {
-            // STOPPED SHORT. The plan ends at zero/zero, but a craft whose minimum thrust is above its weight climbs from wherever it actually stops, and nothing with the engine lit brings it back: the engine is cut and it drops the rest of the way. 6-DOF is no better placed, since it keeps the engine lit too.
-            if (x[5] >= 0.0)
+            // STOPPED SHORT, OR CLIMBING. The plan ends at zero/zero, but a craft whose minimum thrust is above its weight climbs from wherever it actually stops, and nothing with the engine lit brings it back: the engine is cut and it drops the rest of the way. 6-DOF is no better placed, since it keeps the engine lit too.
+            //  THE SAME RULE AS TOUCHDOWN GUIDANCE'S (NoPlanNearGround): cut on any climb at all, whatever the model says - a landing burn never plans one - and once it stops descending if the minimum throttle comes within a margin of the weight, judged on the thrust the engine has been MEASURED to give (the estimator's thrust scale). Entry kept the older rule, a model TWR above 1.0 and no climb test: on 2026-11-18 the model put that TWR at 1.00 while the engine gave 10 % more, and the booster climbed from 10 m to 65 m, rising 13.5 m/s, before it was cut.
+            double minTwr = TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) * (_s.ThreeDofEstimator?.ThrustScale ?? 1.0);
+            bool cannotStop = x[5] >= 0.0 && minTwr > SixDofHoverMaxMinTwr;
+            bool climbing = x[5] > SixDofClimbCutMs;
+            if (cannotStop || climbing)
             {
-                double minTwr = TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu);
-                if (minTwr > 1.0)
                 {
-                    string why = FormattableString.Invariant($"ENTRY STOPPED SHORT {height - _s.VehicleHeightM:F1} m ABOVE PAD, RISING {x[5]:F1} m/s, ")
-                               + FormattableString.Invariant($"CANNOT THROTTLE BELOW WEIGHT (TWR {minTwr:F2} AT MIN). ENGINE CUT, DROP TO PAD.");
+                    string why = FormattableString.Invariant($"ENTRY {(cannotStop ? "STOPPED SHORT" : "CLIMBING")} {height - _s.VehicleHeightM:F1} m ABOVE PAD, RISING {x[5]:F1} m/s, ")
+                               + (cannotStop
+                                   ? FormattableString.Invariant($"CANNOT THROTTLE BELOW WEIGHT (TWR {minTwr:F2} AT MIN). ENGINE CUT, DROP TO PAD.")
+                                   : "ENGINE CUT, DROP TO PAD.");
                     GuidanceLog.Info(vehicle, why);
                     StopSixDofStandby();
                     Reset3Dof();
@@ -806,6 +823,51 @@ public static partial class GuidanceWindow
             _s.ThreeDofGuidance = null;
             _s.ThreeDofPlan = null;
         }
+    }
+
+    /// <summary>
+    /// TOUCHDOWN GUIDANCE'S HEAD START. From the ignition lock to ignition, its standby solves the burn it will be handed: from the state entry guidance predicts at the committed ignition - the craft carried along the locked plan, at that plan's attitude there - and at the ignition time, re-solved as the prediction closes in. When the engine lights, the plan is converged for the state the craft is in, and touchdown guidance can take the burn from its start.
+    ///  WHY. The hand-over is ThreeDofSixDofTimeS (5 s) before the pad and the standby used to start at ignition. A landing burn ran 6.6-7.1 s, so the standby had two seconds and took the burn at 250 m and 104 m/s with a converged plan. KSA 5901's aerodynamics gave the boosters about 60 % more drag: they arrive at 103 m/s where they came at 125, the burn is 4.8-5.0 s, ignition and the hand-over time coincide, and the standby solved from cold through the hardest braking and took over 1-1.6 s in, at half the height (2026-11-18).
+    ///  The standby is given the forecast as its state and the ignition time as its clock, so nothing in it knows the difference; only the bias estimator and the drift restart, which read the craft's motion, wait for the real thing (SixDofStandbyPredicted).
+    /// </summary>
+    private static void StepEntryTouchdownPrepare(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                                  double[] x, double[] x14, double now)
+    {
+        Guidance3Dof g = _s.ThreeDofGuidance;
+        Plan3Dof plan = g?.Published;
+        Plan3Dof locked = g?.LockPlan;
+        if (!_s.ThreeDofSixDofHandover || !_s.ThreeDofTouchdownPrepare || plan == null || locked == null
+            || plan.Phase != Phase3Dof.Locked || now >= plan.IgnitionTime || _s.ThreeDofNominal == null)
+            return;
+        KsaPointMassModel model = plan.Model ?? locked.Model ?? _s.ThreeDofNominal;
+        double ignition = plan.IgnitionTime;
+        double[] predicted = g.PredictAlong(model, x, locked, now, ignition - now, out double[] opening, out _);
+
+        // The 14-state at ignition: the predicted position and velocity, the attitude turned the shortest way from the thrust axis now onto the plan's there, the body rates and the mass as they are.
+        double[] xi = (double[])x14.Clone();
+        for (int i = 0; i < 6; i++)
+            xi[i] = predicted[i];
+        double qw = x14[6], qx = x14[7], qy = x14[8], qz = x14[9];
+        var axis = new double3(2.0 * (qx * qz + qw * qy), 2.0 * (qy * qz - qw * qx), 1.0 - 2.0 * (qx * qx + qy * qy));
+        var target = new double3(opening[0], opening[1], opening[2]);
+        double3 turn = double3.Cross(axis, target);
+        double sin = turn.Length(), cos = double3.Dot(axis, target);
+        if (sin > 1e-9)
+        {
+            double half = 0.5 * Math.Atan2(sin, cos);
+            double3 n = turn / sin * Math.Sin(half);
+            double dw = Math.Cos(half);
+            // q_at_ignition = q_turn (x) q_now, both taking body axes to the site frame.
+            xi[6] = dw * qw - n.X * qx - n.Y * qy - n.Z * qz;
+            xi[7] = dw * qx + n.X * qw + n.Y * qz - n.Z * qy;
+            xi[8] = dw * qy - n.X * qz + n.Y * qw + n.Z * qx;
+            xi[9] = dw * qz + n.X * qy - n.Y * qx + n.Z * qw;
+        }
+
+        if (!_s.SixDofStandbyPredicted)
+            GuidanceLog.Info(vehicle, FormattableString.Invariant($"Touchdown guidance preparing {ignition - now:F1} s before ignition: planning from {xi[2]:F0} m at {Math.Sqrt(xi[3] * xi[3] + xi[4] * xi[4] + xi[5] * xi[5]):F0} m/s, the state predicted there."));
+        _s.SixDofStandbyPredicted = true;
+        StepSixDofStandby(vehicle, parent, siteCci, xi, ignition, Math.Max(plan.SigmaBurn, SixDofStandbyMinSeedS));
     }
 
     private static void StepEntryTouchdownHandoff(Vehicle vehicle, IParentBody parent, double3 siteCci,

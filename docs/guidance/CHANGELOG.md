@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- Touchdown guidance gives **pitch and yaw before roll** when the gimbals run out of travel. The gimbals make roll torque by deflecting against each other and pitch and yaw by deflecting together, out of one travel; with both demands at their limits the allocation was scaled down whole, and pitch and yaw lost half their torque for a roll torque a tenth their size. Since KSA 5901 the air rolls a booster (1-6 deg/s at the hand-over), its plan asks 15-19 kN m of roll, and the allocation was scaled to about 0.65 on 83-96 % of steps; the booster got half the torque its plan flew on and left the plan within a second. Roll now gets the travel left over. Flown 2026-11-18: full pitch and yaw torque on every step, and the booster within 0.5 m of its plan where it had been 2-5 m off.
+
+- Touchdown guidance **prepares its plan before ignition**. In the 2.5 s between entry guidance locking the ignition and the engine lighting, the standby solves the burn from the state predicted at ignition, so its plan is converged when the engine lights. KSA 5901 gave boosters about 60 % more drag: they arrive at 103 m/s where they came at 125, the landing burn is 5 s where it was 7, and the standby, which used to have two seconds of burn before the 5 s hand-over, was solving from cold through the hardest braking.
+
+- Touchdown guidance's plan holds its gimbal to the game's **slew rate** (zero to full deflection in half a second on the stock engines), and its log gives the gimbal's command, angle and rate and the share of roll torque served.
+
+- Entry guidance **cuts the engine on any climb** in the landing burn, above 0.1 m/s, as touchdown guidance does, and judges whether it can stop on the thrust the engine is measured to give. Its rule was a modelled thrust-to-weight above 1.0 with no climb test; on 2026-11-18 the model said 1.00, the engine gave 10 % more, and a booster climbed from 10 m to 65 m before it was cut.
+
+- Touchdown guidance's body-axis force and moment (above) are **switched off** (`SixDofBodyAero`) until they can be flown against a landing without them: the three landings after they went in had worse hand-overs, and the one flown with them off handed over cleanly.
+
 - Touchdown guidance's log is on by default again, so a booster separated in flight, which never has the box ticked, is recorded. Like the entry log, it is taken over from a craft that has written nothing to it for 5 s.
 
 - Touchdown guidance models the **aerodynamic moment**, and the force, from the body-axis tables for the plan's own attitude, roll included. The moment joins the gimbal's in the plan's rotational dynamics, so the plan holds the gimbal against the air from its start and sends that torque to the gimbals. Before, the plan knew no moment: the craft turned away from it, the gimbal spent correcting that pushed the thrust sideways, and on 2026-11-18 a booster handed over on target touched down 5.4 m off at 9.6 m/s. The moment is moved to the craft's present centre of mass. Below 5-15 m/s, and past 20-28 deg off engine first, where the tables end, the tables fade out smoothly and the roll-averaged force makes up the rest. Offline (`--6dof-aero`), a landing against a steady pitching moment planned with it flies open loop as well as one in still air; planned without it, it ends 327 m off at 95 m/s.

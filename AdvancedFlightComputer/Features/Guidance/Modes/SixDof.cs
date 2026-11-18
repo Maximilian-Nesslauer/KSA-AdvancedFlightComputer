@@ -461,7 +461,8 @@ public static partial class GuidanceWindow
                                    out Scvx6DofConfig cfg,
                                    out Dynamics6Dof.Params dyn, out _, LandingAccelLimitMs2,
                                    floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero,
-                                   keptRollFree: _s.Guidance.TerminalRollFree))
+                                   keptRollFree: _s.Guidance.TerminalRollFree, bodyAero: _s.SixDofBodyAero,
+                                   gimbalRateLimit: _s.SixDofGimbalRateLimit))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -623,6 +624,7 @@ public static partial class GuidanceWindow
 
         double r22 = 1.0 - 2.0 * (x[7] * x[7] + x[8] * x[8]);
         TvcAllocationResult a = KsaGimbalControl.Diagnostics(vehicle)?.LastAllocation ?? default;
+        KsaGimbalControl.GimbalTrace gimbal = KsaGimbalControl.Diagnostics(vehicle)?.Trace;
 
         var row = new SixDofLog.CycleRow
         {
@@ -660,6 +662,12 @@ public static partial class GuidanceWindow
             TauX = torqueModel.X, TauY = torqueModel.Y, TauZ = torqueModel.Z,
             AllocX = a.AchievedTorque.X, AllocY = a.AchievedTorque.Y, AllocZ = a.AchievedTorque.Z,
             AllocSat = a.SaturationScale,
+            AllocRoll = a.WeakAxisScale,
+            GimCmdY = gimbal?.CmdY ?? double.NaN, GimCmdZ = gimbal?.CmdZ ?? double.NaN,
+            GimAngY = gimbal?.AngleY ?? double.NaN, GimAngZ = gimbal?.AngleZ ?? double.NaN,
+            GimRateY = gimbal?.RateY ?? double.NaN, GimRateZ = gimbal?.RateZ ?? double.NaN,
+            GimMaxDeg = gimbal?.MaxAngleDeg ?? double.NaN, GimSlewPerS = gimbal?.SlewPerS ?? double.NaN,
+            GimThrustN = gimbal?.ThrustN ?? double.NaN, GimCount = gimbal?.Count ?? 0,
             Twr = capability / weight, TwrMin = _s.SixDofThrottleFloor * capability / weight,
             AmbientPa = ambientPa,
             AltToGo = altToGo, DescentRate = descent, StopDistM = stopDist,
@@ -1814,7 +1822,8 @@ public static partial class GuidanceWindow
                                      _s.SixDofProximal,
                                      _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                      x, xf, out cfg, out dyn, out error, LandingAccelLimitMs2,
-                                     floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero);
+                                     floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero, bodyAero: _s.SixDofBodyAero,
+                                     gimbalRateLimit: _s.SixDofGimbalRateLimit);
     }
 
     /// <summary>

@@ -18,6 +18,11 @@ public sealed class Scvx6DofConfig
     public double Tmax { get; init; } = 6.0e6;
     public double ThrottleFloor { get; init; } = 0.40;          // Tmin = floor * Tmax
     public double GimbalMaxDeg { get; init; } = 10.0;
+
+    /// <summary>
+    /// How fast the gimbal can move, as full deflections (GimbalMaxDeg) per second; 0 for no limit. KSA 5901's gimbals slew at Gimbal's rate cap, NaturalFrequency / (5 e) of their range a second - 2 a second for the stock engines, zero to full deflection in half a second - where the plan took the lateral thrust as free to jump between nodes: at 50 nodes it could swing ten times faster than the gimbal follows. The lateral thrust may change between neighbouring nodes by no more than this rate times the interval times the cone's width at the thrust there.
+    /// </summary>
+    public double GimbalSlewPerS { get; init; }
     public double TauRollMax { get; init; } = 1.0e5;
 
     /// <summary>

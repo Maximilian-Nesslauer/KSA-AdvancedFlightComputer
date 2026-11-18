@@ -51,6 +51,7 @@ public sealed class Scvx6DofSubproblemScs
     private readonly ScsWorkspace _ws = new();
     private bool _frozen;
     private int _row;   // cone-row cursor
+    private readonly int _nSlew;
 
     public int VariableCount => _nVars;
     public int EqualityCount => _nEq;
@@ -106,7 +107,9 @@ public sealed class Scvx6DofSubproblemScs
         // FIVE orthant rows per node, not six.
         // The sixth was the LINEARISED tilt constraint; it is now an exact second-order cone in the block below, so the row is gone rather than merely changed.
         // See AssembleCone's tilt block. + _nVz climb-rate rows, + _nGs + _nVz slack non-negativity rows + _nTm non-negativity rows for the terminal-miss slacks
-        _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm + 2 * _nAc;
+        // + four rows per interval for the gimbal's slew rate, the last of the orthant rows.
+        _nSlew = cfg.GimbalSlewPerS > 0.0 ? 4 * (_n - 1) : 0;
+        _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm + 2 * _nAc + _nSlew;
         _socDims = new int[_n + _nGs + _n];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
@@ -548,6 +551,25 @@ public sealed class Scvx6DofSubproblemScs
         _b[row++] = -_cfg.SigmaMin;
         AddA(row, _iSig, 1.0);
         _b[row++] = _cfg.SigmaMax;
+
+        // THE GIMBAL'S SLEW RATE (Scvx6DofConfig.GimbalSlewPerS): |td_{k+1} - td_k| <= rate * dt * tan(gimbal) * (T_k + T_{k+1}) / 2 on each lateral axis, with dt at the reference burn time as the dynamics take it.
+        if (_nSlew > 0)
+        {
+            double reach = 0.5 * _cfg.GimbalSlewPerS * _dtau * sigBar * _cfg.TanGimbal;
+            for (int k = 0; k < _n - 1; k++)
+                for (int axis = 0; axis < 2; axis++)
+                {
+                    int j = axis == 0 ? Dynamics6Dof.ITDX : Dynamics6Dof.ITDY;
+                    for (int sign = 1; sign >= -1; sign -= 2)
+                    {
+                        AddA(row, IU(k + 1, j), sign);
+                        AddA(row, IU(k, j), -sign);
+                        AddA(row, IU(k, Dynamics6Dof.IT), -reach);
+                        AddA(row, IU(k + 1, Dynamics6Dof.IT), -reach);
+                        _b[row++] = 0.0;
+                    }
+                }
+        }
 
         for (int k = 0; k < _n; k++)
         {

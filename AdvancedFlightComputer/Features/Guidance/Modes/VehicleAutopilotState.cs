@@ -936,6 +936,22 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool SixDofLogging = true;
 
+    /// <summary>
+    /// Touchdown guidance plans with the body-axis force and moment for its full attitude (BodyAero6Dof) when on; off, with the roll-averaged drag and lift on the thrust axis it had before 2026-11-18. Off while the three landings since it was added (hand-overs troubled, then failed) are compared against one without it.
+    /// </summary>
+    public bool SixDofBodyAero = false;
+
+    /// <summary>Touchdown guidance's plan holds its lateral thrust to the gimbal's slew rate (Scvx6DofConfig.GimbalSlewPerS). On; off flies the plan as before 2026-11-18, free to jump between nodes.</summary>
+    public bool SixDofGimbalRateLimit = true;
+
+    /// <summary>
+    /// Touchdown guidance's standby starts in entry guidance's lock window, on the state predicted at the committed ignition, so its plan is converged when the engine lights (GuidanceWindow.StepEntryTouchdownPrepare). On. Off, it starts at ignition, as it did while a landing burn ran two seconds longer than the hand-over time.
+    /// </summary>
+    public bool ThreeDofTouchdownPrepare = true;
+
+    /// <summary>The standby is running on the predicted ignition state and the ignition time, not on the craft as it is: set through the lock window, cleared at the first burn step.</summary>
+    internal bool SixDofStandbyPredicted;
+
     // Flown track state.
     //
     // The overlay's trace. Per vehicle so switching craft shows that craft's own flown path rather than blanking a track the player was watching.

@@ -26,6 +26,7 @@ internal static class SixDofAeroCheck
         bool ok = Slopes();
         ok &= Agreement();
         ok &= Landing(verbose);
+        ok &= Slew(verbose);
         Console.WriteLine();
         Console.WriteLine(ok ? "PASS - touchdown guidance's body-axis aerodynamics" : "FAIL - see above");
         return ok ? 0 : 1;
@@ -242,7 +243,43 @@ internal static class SixDofAeroCheck
         return asBaseline && betterThanBlind;
     }
 
-    private static bool Plan(Dynamics6Dof.Params dyn, double[] x0, double[] xf, bool verbose, out Scvx6DofSolver solver, out int iterations)
+    // ------------------------------------------------------------------- 4. the gimbal's slew rate
+
+    /// <summary>The fastest the plan moves its gimbal between neighbouring nodes, in full deflections a second: |td_{k+1} - td_k| over the interval and the cone's width at the mean thrust.</summary>
+    private static double PeakSlew(Scvx6DofSolver s, double tanGimbal)
+    {
+        int n = s.ReferenceX.Length / NX;
+        double dt = s.Sigma / (n - 1), peak = 0;
+        for (int k = 0; k < n - 1; k++)
+        {
+            double thrust = 0.5 * (s.ReferenceU[k * NU + Dynamics6Dof.IT] + s.ReferenceU[(k + 1) * NU + Dynamics6Dof.IT]);
+            for (int j = 0; j < 2; j++)
+                peak = Math.Max(peak, Math.Abs(s.ReferenceU[(k + 1) * NU + j] - s.ReferenceU[k * NU + j]) / (dt * tanGimbal * thrust));
+        }
+        return peak;
+    }
+
+    private static bool Slew(bool verbose)
+    {
+        Console.WriteLine();
+        Console.WriteLine("4. the gimbal's slew rate: the same landing planned free and held to 2 full deflections a second, as KSA 5901's gimbals move");
+        Dynamics6Dof.Params dyn = Params(Body(ThreeDofScenario.BodyTable(0.02, 0.0), null, GameAxes));
+        // Off the pad's line and tilted, so the plan has turning to do.
+        double[] x0 = State(600, [25, -4, -90], 8, [0.02, -0.03, 0]);
+        double[] xf = new double[NX];
+        xf[2] = 5.0;
+        xf[6] = 1.0;
+        double tan = Math.Tan(8.0 * Math.PI / 180.0);
+        bool free = Plan(dyn, x0, xf, verbose, out Scvx6DofSolver a, out int ia);
+        bool held = Plan(dyn, x0, xf, verbose, out Scvx6DofSolver b, out int ib, slewPerS: 2.0);
+        double pa = free ? PeakSlew(a, tan) : double.NaN, pb = held ? PeakSlew(b, tan) : double.NaN;
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"  free: {(free ? $"plan in {ia} iterations" : "NO PLAN")}, gimbal moves up to {pa:F2} deflections/s"));
+        bool ok = held && pb <= 2.0 * 1.02;
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"  held: {(held ? $"plan in {ib} iterations" : "NO PLAN")}, gimbal moves up to {pb:F2} deflections/s  {(ok ? "ok" : "FAIL")}"));
+        return ok;
+    }
+
+    private static bool Plan(Dynamics6Dof.Params dyn, double[] x0, double[] xf, bool verbose, out Scvx6DofSolver solver, out int iterations, double slewPerS = 0.0)
     {
         const int n = 40;
         const double sigma = 9.0;
@@ -256,6 +293,7 @@ internal static class SixDofAeroCheck
             Tmax = Tmax,
             ThrottleFloor = Floor,
             GimbalMaxDeg = 8.0,
+            GimbalSlewPerS = slewPerS,
             TauRollMax = 5e4,
             TerminalRollFree = true,
             TiltMaxDeg = 60.0,

@@ -516,12 +516,16 @@ public sealed class Guidance3Dof
     /// The state at ignition: the measured state <paramref name="x0"/>, at <paramref name="now"/>, carried engine-off through the <paramref name="seconds"/> left along the attitude of the plan flown open loop to ignition (<see cref="LockPlan"/>), which is what the craft is commanded to do in that time. <paramref name="opening"/> is that plan's attitude at ignition, unit, and <paramref name="rateAtIgnition"/> its rate of change there (w x b, 1/s).
     /// </summary>
     public double[] PredictAlong(double[] x0, Plan3Dof flown, double now, double seconds, out double[] opening, out double[] rateAtIgnition)
+        => PredictAlong(Model, x0, flown, now, seconds, out opening, out rateAtIgnition);
+
+    /// <summary>The same with the model given, so the sim thread can predict while the solve thread owns this guidance: it reads nothing of the guidance but its settings.</summary>
+    public double[] PredictAlong(KsaPointMassModel model, double[] x0, Plan3Dof flown, double now, double seconds, out double[] opening, out double[] rateAtIgnition)
     {
         double ignition = now + Math.Max(seconds, 0.0);
         opening = AttitudeAt(flown, ignition);
         double[] before = AttitudeAt(flown, ignition - RateProbeS);
         rateAtIgnition = [(opening[0] - before[0]) / RateProbeS, (opening[1] - before[1]) / RateProbeS, (opening[2] - before[2]) / RateProbeS];
-        return Coast(x0, seconds, t => AttitudeAt(flown, now + t));
+        return Coast(model, x0, seconds, t => AttitudeAt(flown, now + t));
     }
 
     /// <summary>The same with one attitude held throughout: the stand-in for a lock with no plan to fly, which <see cref="Lock"/> never makes.</summary>
@@ -530,7 +534,7 @@ public sealed class Guidance3Dof
         opening = Normalise(attitude);
         rateAtIgnition = new double[3];
         double[] b = opening;
-        return Coast(x0, seconds, _ => b);
+        return Coast(Model, x0, seconds, _ => b);
     }
 
     /// <summary>Seconds over which the open-loop plan's turn at ignition is differenced.</summary>
@@ -545,7 +549,7 @@ public sealed class Guidance3Dof
     }
 
     /// <summary>RK4, engine off, the body axis as <paramref name="axisAt"/> gives it at each time from the start.</summary>
-    private double[] Coast(double[] x0, double seconds, Func<double, double[]> axisAt)
+    private double[] Coast(KsaPointMassModel model, double[] x0, double seconds, Func<double, double[]> axisAt)
     {
         double[] x = (double[])x0.Clone();
         if (!(seconds > 0.0)) return x;
@@ -558,13 +562,13 @@ public sealed class Guidance3Dof
             double t = s * h;
             double[] b0 = axisAt(t), bm = axisAt(t + 0.5 * h), b1 = axisAt(t + h);
             double[] u0 = [b0[0], b0[1], b0[2], 0.0], um = [bm[0], bm[1], bm[2], 0.0], u1 = [b1[0], b1[1], b1[2], 0.0];
-            PointMass3Dof.Eval(Model, x, u0, k1);
+            PointMass3Dof.Eval(model, x, u0, k1);
             for (int i = 0; i < NX; i++) tmp[i] = x[i] + 0.5 * h * k1[i];
-            PointMass3Dof.Eval(Model, tmp, um, k2);
+            PointMass3Dof.Eval(model, tmp, um, k2);
             for (int i = 0; i < NX; i++) tmp[i] = x[i] + 0.5 * h * k2[i];
-            PointMass3Dof.Eval(Model, tmp, um, k3);
+            PointMass3Dof.Eval(model, tmp, um, k3);
             for (int i = 0; i < NX; i++) tmp[i] = x[i] + h * k3[i];
-            PointMass3Dof.Eval(Model, tmp, u1, k4);
+            PointMass3Dof.Eval(model, tmp, u1, k4);
             for (int i = 0; i < NX; i++) x[i] += h / 6.0 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
         }
         return x;

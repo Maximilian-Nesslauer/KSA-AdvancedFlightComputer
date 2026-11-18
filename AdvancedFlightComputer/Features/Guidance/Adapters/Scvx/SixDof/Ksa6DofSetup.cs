@@ -136,6 +136,24 @@ public static class Ksa6DofSetup
         return total;
     }
 
+    /// <summary>
+    /// How fast the dominant planning gimbal slews, as full deflections a second (Scvx6DofConfig.GimbalSlewPerS): Gimbal's own rate cap, RATE_CAP_PER_NATURAL_FREQUENCY of its range per unit of natural frequency. 0 where there is no gimbal to read.
+    /// </summary>
+    internal static double GimbalSlewPerS(Vehicle vehicle)
+    {
+        double thrust = 0.0, frequency = 0.0;
+        foreach (GimbalController controller in KsaGimbalControl.PlanningGimbals(vehicle))
+        {
+            Gimbal gimbal = controller.Gimbal;
+            if (!(controller.Data.MaximumThrust > thrust)
+                || Math.Max(gimbal.AxisY.MaxAngle, gimbal.AxisZ.MaxAngle) <= 0.0)
+                continue;
+            thrust = controller.Data.MaximumThrust;
+            frequency = gimbal.NaturalFrequency;
+        }
+        return double.IsFinite(frequency) && frequency > 0.0 ? frequency * Gimbal.RATE_CAP_PER_NATURAL_FREQUENCY : 0.0;
+    }
+
     internal static double LateralTorqueLead(Vehicle vehicle)
     {
         double thrust = 0.0;
@@ -288,6 +306,8 @@ public static class Ksa6DofSetup
     /// <param name="xf">Terminal model state, same reason.</param>
     /// <param name="accelMaxMs2">Largest thrust acceleration the plan may use, m/s^2, or 0 for none; see Scvx6DofConfig.AccelMax.</param>
     /// <param name="keptRollFree">The Scvx6DofConfig.TerminalRollFree of the plan this one replaces, or null for the first plan of a landing; see RollModel.</param>
+    /// <param name="bodyAero">Plan with the body-axis force and moment (BodyAeroFor), or only the roll-averaged force on the thrust axis.</param>
+    /// <param name="gimbalRateLimit">Hold the plan's lateral thrust to the gimbal's slew rate (GimbalSlewPerS).</param>
     /// <summary>
     /// The body-axis force and moment for the plan's full attitude (BodyAero6Dof), from the sweep's tables, or null where it measured none: the model's axes in the game's body axes (KsaFrameBridge.BodyAxes), and the moment moved from the centre of mass the sweep saw to the one the craft has now.
     /// </summary>
@@ -319,7 +339,8 @@ public static class Ksa6DofSetup
                                 double[] x0, double[] xf,
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
                                 out string error, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
-                                KsaAeroSweep.Result aero = null, bool? keptRollFree = null)
+                                KsaAeroSweep.Result aero = null, bool? keptRollFree = null, bool bodyAero = true,
+                                bool gimbalRateLimit = true)
     {
         cfg = null!;
         dyn = null!;
@@ -458,7 +479,7 @@ public static class Ksa6DofSetup
                 }
                 : null,
             // THE BODY-AXIS FORCE AND MOMENT for the plan's own attitude, where the sweep measured them: the gimbal then holds against the air's moment from the plan's start rather than finding it in flight (BodyAero6Dof). The tables above carry the share of the force these fade out of.
-            BodyAero = aero?.Table != null ? BodyAeroFor(vehicle, aero) : null,
+            BodyAero = bodyAero && aero?.Table != null ? BodyAeroFor(vehicle, aero) : null,
             AeroAltitudeOffset = siteAltAsl,
             LArm = arm,
             Ixx = ixx, Iyy = iyy, Izz = izz,
@@ -498,6 +519,7 @@ public static class Ksa6DofSetup
             Tmax = thrust,
             ThrottleFloor = throttleFloor,
             GimbalMaxDeg = gimbalDeg,
+            GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) : 0.0,
             TauRollMax = tauRoll,
             RollTorqueFollowsThrust = true,
             TerminalRollFree = rollFree,
