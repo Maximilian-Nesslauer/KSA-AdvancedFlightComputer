@@ -1262,6 +1262,8 @@ public static partial class GuidanceWindow
             {
                 if (!_s.Active)
                     ReleaseAttitude(vehicle);
+                else if (_s.SixDofToContact)
+                    HoldTouchdownAttitude(vehicle, parent);
                 else if (!_s.Converging && _s.Guidance?.Published != null)
                     HoldManualAttitude(vehicle);
             }

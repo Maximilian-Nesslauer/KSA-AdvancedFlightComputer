@@ -1047,7 +1047,7 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void FlyWithoutPlan(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x, string why)
     {
-        if (_s.SixDofLastPublishedPlan != null)
+        if (_s.SixDofLastPublishedPlan != null && !_s.SixDofToContact)
             KsaGimbalControl.SetLsq(vehicle, default);
 
         double3 position = vehicle.Orbit.StateVectors.PositionCci;
@@ -1133,7 +1133,6 @@ public static partial class GuidanceWindow
         manual.EngineOn = false;
         manual.EngineThrottle = 0f;
         _s.LastThrottle = 0.0;
-        KsaGimbalControl.SetLsq(vehicle, default);
         string why = FormattableString.Invariant($"TOUCHDOWN STOPPED SHORT {x[2] - _s.SixDofTargetComAltM:F1} m ABOVE PLAN END, ")
                    + FormattableString.Invariant($"RISING {x[5]:F1} m/s (TWR {minTwr:F2} AT MIN). ENGINE CUT, FLYING TO CONTACT.");
         SixDofLog.Event(_s, now, why);
@@ -1144,14 +1143,24 @@ public static partial class GuidanceWindow
     // The speed at the pad that a craft which cannot brake a climb may be left to reach in free fall, m/s. A drop that ends faster is flown by the no-plan law.
     private const double SixDofSafeDropMs = 3.0;
 
+    private static void HoldTouchdownAttitude(Vehicle vehicle, IParentBody parent)
+    {
+        // The plan has ended. Let stock TVC and RCS damp the turn until first contact.
+        KsaGimbalControl.Disengage(vehicle);
+        KsaAttitudeRate.Clear(vehicle);
+        double3 up = double3.Normalize(vehicle.Orbit.StateVectors.PositionCci);
+        double3 heading = double3.UnitY.Transform(KsaFrameBridge.BodyToCci(vehicle));
+        CommandAttitude(vehicle, parent, up, !_s.WasEngaged, heading);
+        _s.WasEngaged = true;
+    }
+
     /// <summary>
-    /// After the plan end or a climb cut: no solving and no gimbal torque until the craft touches down.
+    /// After the plan end or a climb cut, fly the sink or drop to first contact.
     ///  - A craft that can brake a climb (thrust-to-weight at the minimum throttle no more than SixDofHoverMaxMinTwr) sinks to contact on its engine (SinkToContact).
     ///  - One that cannot drops with the engine off while the fall from here ends at the pad no faster than SixDofSafeDropMs. The fall is measured to VehicleHeightM, the lowest height at which the craft meets the ground at the site, because the plan end is an upper bound of the first contact. From higher up the no-plan law flies the fall, which lights the engine again once the stop on the pad needs it.
     /// </summary>
     private static void StepSixDofToContact(Vehicle vehicle, IParentBody parent, double3 siteCci, double now, double[] x)
     {
-        KsaGimbalControl.SetLsq(vehicle, default);
         ref ManualControlInputs manual = ref ManualInputs(vehicle);
         if (vehicle.Situation.HasAnyContact())
         {
