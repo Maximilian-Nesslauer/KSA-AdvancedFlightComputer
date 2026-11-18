@@ -15,13 +15,13 @@ internal static class StagingHooks
 
     internal static void RaiseDecouplerActivating(Vehicle vehicle, Decoupler decoupler)
     {
-        Action<Vehicle, Decoupler>? handlers = DecouplerActivating;
-        if (handlers == null || !CanActivate(decoupler))
+        if (!CanActivate(decoupler))
             return;
         // A listener's fault must never cost the staging itself.
         try
         {
-            handlers(vehicle, decoupler);
+            StagingDetector.ObserveDecoupler(vehicle, decoupler);
+            DecouplerActivating?.Invoke(vehicle, decoupler);
         }
         catch (Exception e)
         {

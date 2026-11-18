@@ -239,6 +239,12 @@ internal static class JettisonAnalysis
 
     private enum Separation { Predicted, None, Unpredictable }
 
+    internal static Part? PredictedJettisonRoot(Decoupler decoupler)
+    {
+        GetJettisonedRoot(decoupler, out Part? root);
+        return root;
+    }
+
     private static Separation GetJettisonedRoot(Decoupler decoupler, out Part? root)
     {
         root = null;

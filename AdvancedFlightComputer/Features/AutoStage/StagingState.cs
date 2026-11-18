@@ -32,6 +32,9 @@ internal sealed class StagingState
     // Frames on which sim time advanced since the new engines were switched on, and the sim time of the last evaluation that counted.
     public int PropagationFrames;
     public double PropagationCountedAt = double.NaN;
+    public readonly List<Part?> SeparatingRoots = new();
+    public double LastSeparationCommand = double.NaN;
+    public double AllSeparatedAt = double.NaN;
 
     // The engines a player staging switches on, until the input drain has applied the activation, and the frames spent waiting for it.
     public List<EngineController>? ActivationEngines;
@@ -71,5 +74,12 @@ internal sealed class StagingState
     {
         SpentJettisonSince = double.NaN;
         SpentJettisonBlockerReported = SpentDropBlocker.Unreported;
+    }
+
+    public void ClearSeparation()
+    {
+        SeparatingRoots.Clear();
+        LastSeparationCommand = double.NaN;
+        AllSeparatedAt = double.NaN;
     }
 }

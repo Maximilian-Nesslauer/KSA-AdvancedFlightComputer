@@ -107,6 +107,7 @@ internal static class StagingDetector
             state.ActivationFrames = 0;
             state.PropagationFrames = 0;
             state.PropagationCountedAt = double.NaN;
+            state.ClearSeparation();
             state.Sampled = false;
             state.SampledBurnMode = FlightComputerBurnMode.Manual;
             state.SampledHadPropellant = false;
@@ -192,6 +193,9 @@ internal static class StagingDetector
     private static void EvaluateVehicle(Vehicle vehicle, StagingState state, double now)
     {
         FlightComputer fc = vehicle.FlightComputer;
+        if (state.SeparatingRoots.Count > 0 && double.IsNaN(state.AllSeparatedAt)
+            && state.SeparatingRoots.All(root => root != null && root.Tree != vehicle.Parts))
+            state.AllSeparatedAt = now;
         IReadOnlySet<Part>? jettison = state.State == StagingState.Phase.Monitoring && StagingConfig.DropSpentStages
             ? JettisonAnalysis.GetPendingJettison(vehicle, state)
             : null;
@@ -311,6 +315,38 @@ internal static class StagingDetector
         {
             KeepAutoBurn(vehicle, state, fc);
         }
+    }
+
+    internal static void ObserveDecoupler(Vehicle vehicle, Decoupler decoupler)
+    {
+        if (!_states.TryGetValue(vehicle, out StagingState? state) || !state.Active)
+            return;
+        Part? root = JettisonAnalysis.PredictedJettisonRoot(decoupler);
+        if (!state.SeparatingRoots.Contains(root))
+            state.SeparatingRoots.Add(root);
+        state.LastSeparationCommand = Universe.GetElapsedSeconds();
+        state.AllSeparatedAt = double.NaN;
+    }
+
+    private static bool CanCascadeAfterSeparation(Vehicle vehicle, StagingState state, double now)
+    {
+        if (state.SeparatingRoots.Count == 0)
+            return true;
+        const double clearanceSeconds = 1.0;
+        const double deadlineSeconds = 2.5;
+        if (double.IsFinite(state.AllSeparatedAt))
+        {
+            if (now - state.AllSeparatedAt < clearanceSeconds)
+                return false;
+            state.ClearSeparation();
+            return true;
+        }
+        if (now - state.LastSeparationCommand < deadlineSeconds)
+            return false;
+
+        DefaultCategory.Log.Warning($"[AFC] AutoStage cascade on '{vehicle.Id}' reached its separation clearance deadline.");
+        state.ClearSeparation();
+        return true;
     }
 
     // Landed once every engine reads active or has left the vehicle with a decoupled part.
@@ -496,6 +532,25 @@ internal static class StagingDetector
     {
         if (!ControlAvailable(vehicle))
             return;
+        if (state.SeparatingRoots.Count > 0)
+        {
+            if (fc.BurnMode == FlightComputerBurnMode.Manual && !StockStoppedAutoBurn(state, fc))
+            {
+                heldBurn = null;
+                state.HeldBurn = null;
+            }
+            double now = Universe.GetElapsedSeconds();
+            if (!CanCascadeAfterSeparation(vehicle, state, now))
+            {
+                if (trigger == "requested")
+                    state.Requested = true;
+                else if (trigger == "burnout")
+                    BeginPropagation(state, now);
+                state.HeldBurn = heldBurn;
+                KeepAutoBurn(vehicle, state, fc);
+                return;
+            }
+        }
         if (JettisonAnalysis.WouldSeparateLastControl(vehicle))
         {
             // Once per row: the triggers keep asking every frame while the row stands.
@@ -558,6 +613,10 @@ internal static class StagingDetector
     // The mode is sampled before the worker results are applied, because a stop in this frame's results has already dropped it to Manual.
     private static BurnTarget? RunningAutoBurn(StagingState state, FlightComputer fc)
         => state.SampledBurnMode == FlightComputerBurnMode.Auto || fc.AutoBurnStoppedOutOfPropellant ? fc.Burn : null;
+
+    internal static bool StockStoppedAutoBurn(StagingState state, FlightComputer fc)
+        => fc.AutoBurnStoppedOutOfPropellant
+            || (state.SampledBurnMode == FlightComputerBurnMode.Auto && fc.Burn?.LastIgnitionDenied == true);
 
     // FlightComputer.ComputeControl drops an Auto burn to Manual when every active engine reports no propellant, raising AutoBurnStoppedOutOfPropellant, and after two denied ignitions.
     // Both are what a staging looks like until the new engines are fed, so while the held target is still the loaded one the stop is taken back before FlightComputer.RaisePendingAlerts reads it, and Auto is given back although the engines still read dry.

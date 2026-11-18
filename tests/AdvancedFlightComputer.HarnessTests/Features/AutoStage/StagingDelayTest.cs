@@ -42,6 +42,7 @@ public sealed class StagingDelayTest : AfcTest
         HashSet<string> preexisting = TestSupport.CollectVehicleIds(t.System);
         SimDriver driver = t.Session.CreateDriver();
         double time = 0.0;
+        double step = MeasureDt;
         using AutoStageTestPatches.Scope patches = AutoStageTestPatches.Apply();
         try
         {
@@ -81,8 +82,8 @@ public sealed class StagingDelayTest : AfcTest
                 {
                     if (time >= deadline)
                         return t.Fail(what, $"timed out after {capSeconds:F0}s");
-                    driver.Step(MeasureDt);
-                    time += MeasureDt;
+                    driver.Step(step);
+                    time += step;
                 }
                 return true;
             }
@@ -92,6 +93,7 @@ public sealed class StagingDelayTest : AfcTest
             if (!StepUntil(() => decouplerSeq!.Activated, MaxStagingSeconds, "the decoupler sequence activates"))
                 return;
             double tDecouplerSeq = time;
+            step = 0.05;
             StructuralLoad loadBeforeSplit = vehicle.StructuralLoad;
 
             // The vehicle's own part count, not the system-wide vehicle count: shed boosters can be
@@ -109,10 +111,22 @@ public sealed class StagingDelayTest : AfcTest
                 return;
             }
             double splitDelay = time - tDecouplerSeq;
+            var manual = new FlightComputer(vehicle.FlightComputer);
+            manual.BurnMode = FlightComputerBurnMode.Manual;
+            manual.AutoBurnStoppedOutOfPropellant = false;
+            var previous = new StagingState { SampledBurnMode = FlightComputerBurnMode.Manual };
+            t.Check("a player switch to Manual does not qualify as a stock stop",
+                !StagingDetector.StockStoppedAutoBurn(previous, manual));
+            manual.AutoBurnStoppedOutOfPropellant = true;
+            t.Check("a stock dry-stage stop still qualifies for the Auto hold",
+                StagingDetector.StockStoppedAutoBurn(previous, manual));
 
             if (!StepUntil(() => engineSeq!.Activated, MaxStagingSeconds, "the engine sequence activates"))
                 return;
             double tEngineSeq = time;
+            double clearance = tEngineSeq - tDecouplerSeq - splitDelay;
+            t.Check("the cascade leaves time for the shed parts to clear", clearance >= 0.95,
+                $"{clearance:F3} s from observed split to the next row");
 
             // The ignition check is vehicle-wide, so it only measures this sequence while nothing else burns.
             if (StagingHelpers.HasActiveEngineWithPropellant(vehicle))
