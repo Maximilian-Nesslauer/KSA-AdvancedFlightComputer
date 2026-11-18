@@ -91,7 +91,7 @@ public static partial class GuidanceWindow
             return "";
         double atmosphere = parent.GetAtmosphereRadius();
         return atmosphere > parent.MeanRadius && orbit.GetPeriapsisPositionOrb().Length() >= atmosphere
-            ? "USE DEORBIT ONLY FOR ENTRY. USE LAND NOW ONCE DESCENDING IN AIR."
+            ? Ui.Logic.CommitResolver.AtmosphericDeorbitRoute
             : "";
     }
 
