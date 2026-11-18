@@ -33,6 +33,7 @@ internal static class CommitResolver
     public const string GravityTurnUnavailable = GuidanceModes.GravityTurnUnavailable;
     public const string LandingSwitchesOffReason = "NEEDS AFC MAY STEER + MAY USE ENGINES";
     public const string DeorbitSettingsReason = "LANDING SETTING OUT OF RANGE";
+    public const string AtmosphericDeorbitRoute = "USE DEORBIT ONLY. THEN USE LAND NOW IN AIR.";
     public const string SiteTooSteepReason = "SITE TOO STEEP TO STAND";
 
     /// <summary>The status of a landing while stock AUTO flies its deorbit burn, so the footer does not give that burn to the landing.</summary>
@@ -58,6 +59,7 @@ internal static class CommitResolver
                 a.BoostbackLive || a.BoostbackPending),
             GuidanceModeId.DeorbitLand => (g.DeorbitOnly ? "DEORBIT ONLY" : "DEORBIT + LAND",
                 g.LandingSwitchesOff ? LandingSwitchesOffReason
+                : g.DeorbitRefusal == AtmosphericDeorbitRoute ? AtmosphericDeorbitRoute
                 : g.DeorbitRefusal.Length > 0 ? DeorbitSettingsReason
                 : !a.DescentLive && g.SiteRefusal.Length > 0 ? SiteTooSteepReason
                 : a.DescentLive ? (a.LandingStockAuto ? StockDeorbitStatus : "AFC: LANDING")

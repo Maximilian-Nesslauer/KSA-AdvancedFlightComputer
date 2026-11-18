@@ -25,6 +25,10 @@ public sealed class GuidanceEntryDeorbitTest : AfcTest
         double parking = Math.Max(200_000.0, entry - home.MeanRadius + 100_000.0);
         UniverseTime now = Universe.GetElapsedTime();
         Orbit source = OrbitFixtures.CircularAt(home, parking, now);
+        t.Check("a parking orbit above an atmosphere gets the entry route before search",
+            GuidanceWindow.AtmosphericDeorbitRefusal(source, entryBurnOnly: false).Contains("USE DEORBIT ONLY", StringComparison.Ordinal));
+        t.Check("the atmospheric parking orbit still permits an entry burn",
+            GuidanceWindow.AtmosphericDeorbitRefusal(source, entryBurnOnly: true).Length == 0);
         var model = new UpfgVehicle();
         model.Stages.Add(new UpfgStage { Thrust = 300_000.0, Isp = 300.0, MassTotal = 10_000.0, MassDry = 5_000.0 });
         var settings = new DeorbitSettings(0, 0, 0, 0, 0, 0, 1, EntryPeriapsis: altitude);
@@ -37,6 +41,8 @@ public sealed class GuidanceEntryDeorbitTest : AfcTest
             plan.DeparturePosition, plan.DepartureVelocity, source.OrbitLineColor);
         t.CheckAbs("the planned periapsis matches the entry target",
             lowered.GetPeriapsisPositionOrb().Length() - home.MeanRadius, altitude, 0.1);
+        t.Check("the entry path already dropping through air can use its direct descent",
+            GuidanceWindow.AtmosphericDeorbitRefusal(lowered, entryBurnOnly: false).Length == 0);
         t.CheckAbs("the coast ends at the actual atmosphere radius", plan.ArrivalPosition.Length(), entry, 1.0);
         t.Check("the craft crosses the interface downwards after the burn",
             plan.ArrivalTime > plan.DepartureTime + 30.0
