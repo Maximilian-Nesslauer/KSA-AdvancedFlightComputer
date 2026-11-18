@@ -224,12 +224,25 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         state.SixDofStandby = true;
         state.SixDofStandbyEngines = (EngineController[])Method("CaptureStandbyEngines").Invoke(null, [craft])!;
 
+        Inputs(craft).EngineOn = false;
+        step.Invoke(null, args);
+        take.Invoke(null, [craft, home]);
+        t.Check("a ready standby leaves an unlit entry burn in control", !state.EngagePending
+            && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn && !Inputs(craft).EngineOn);
+        Inputs(craft).EngineOn = true;
         step.Invoke(null, args);
         take.Invoke(null, [craft, home]);
         t.Check("a ready standby takes the entry burn without cutting its engine",
             state.EngagePending && state.SixDofStandby
             && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Idle
             && Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle);
+        t.Check("the first touchdown command uses the carried entry throttle",
+            double.IsFinite(state.SixDofEntryBlendStart) && state.SixDofEntryBlendThrottle == BurnThrottle
+            && GuidanceWindow.EntryHandoffThrottle(HandoffThrottle, 0.0, state.SixDofEntryBlendThrottle) == BurnThrottle);
+        t.CheckAbs("the touchdown command blends continuously to its own plan",
+            GuidanceWindow.EntryHandoffThrottle(HandoffThrottle, 0.2, BurnThrottle), (BurnThrottle + HandoffThrottle) * 0.5, 1e-10);
+        t.CheckAbs("the touchdown command follows its own plan after promotion",
+            GuidanceWindow.EntryHandoffThrottle(HandoffThrottle, 0.4, BurnThrottle), HandoffThrottle, 1e-10);
         _standbyReady = false;
         state.SixDofStandby = false;
         VehicleAutopilotState.Remove(craft);

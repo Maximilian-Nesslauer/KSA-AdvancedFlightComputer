@@ -800,6 +800,7 @@ public static partial class GuidanceWindow
     /// <param name="tookBurn">The caller is another mode handing over its lit burn; see VehicleAutopilotState.SixDofTookBurn.</param>
     private static void Engage6Dof(Vehicle vehicle, bool fromBrakingBurn = false, double sigmaSeed = double.NaN, bool tookBurn = false)
     {
+        _s.SixDofEntryBlendStart = double.NaN;
         _s.SixDofTookBurn = tookBurn || fromBrakingBurn;
         _s.UseSixDofLanding = true;
         _s.SixDofNoPlanLaw = false;
@@ -828,6 +829,7 @@ public static partial class GuidanceWindow
         _s.EngagePending = false;
         _s.Converging = false;
         _s.SixDofConvergingSince = double.NaN;
+        _s.SixDofEntryBlendStart = double.NaN;
         _s.SixDofRestartOpenLoop = false;
         _s.SixDofStandby = false;
         _s.SixDofFromBrakingBurn = false;
@@ -1679,6 +1681,7 @@ public static partial class GuidanceWindow
             throttle = thrustN / denom;
         }
         throttle = Math.Clamp(throttle, 0.0, 1.0);
+        throttle = EntryHandoffThrottle(throttle, now - _s.SixDofEntryBlendStart, _s.SixDofEntryBlendThrottle);
 
         _s.CapabilityN = capability;
         // Saturation is the honest failure signal here: the plan is asking for more than the vehicle physically has, so the trajectory being flown is not the one that was planned, and no amount of feedback recovers it.
@@ -1706,6 +1709,18 @@ public static partial class GuidanceWindow
 
         LogCycle(vehicle, parent, siteCci, x, now, thrustN, capability, throttle,
                  torqueModel, ambientPa);
+    }
+
+    // The first touchdown command carries the entry throttle. A short blend gives the new
+    // tracker a continuous command as it takes the remainder of the burn.
+    internal static double EntryHandoffThrottle(double planned, double elapsed, double carried)
+    {
+        const double blendSeconds = 0.4;
+        if (!double.IsFinite(elapsed) || elapsed >= blendSeconds)
+            return planned;
+        double progress = Math.Clamp(elapsed / blendSeconds, 0.0, 1.0);
+        double weight = progress * progress * (3.0 - 2.0 * progress);
+        return carried + weight * (planned - carried);
     }
 
     /// <summary>

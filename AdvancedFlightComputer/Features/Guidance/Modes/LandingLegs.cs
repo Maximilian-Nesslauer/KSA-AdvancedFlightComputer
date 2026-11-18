@@ -93,13 +93,19 @@ public static partial class GuidanceWindow
     internal static LegsClocks LegsClocksOf(VehicleAutopilotState s, Ksa6DofPlan touchdown, double fall, double now)
     {
         Plan3Dof entry = s.ThreeDofPhase is ThreeDofPhase.Glide or ThreeDofPhase.Burn ? s.ThreeDofPlan : null;
+        double entryTime = entry != null ? LegsRules.PlanToGo(entry.EndTime, now) : double.NaN;
+        // A refused re-solve can leave the burn behind its plan. Use the live fall clock
+        // as an earlier deadline while that burn cannot take a fresh touchdown plan.
+        if (s.ThreeDofPhase == ThreeDofPhase.Burn && double.IsFinite(fall)
+            && (s.ThreeDofRefusing || s.ThreeDofBurnSolveFault || s.ThreeDofSixDofWaiting))
+            entryTime = double.IsFinite(entryTime) ? Math.Min(entryTime, fall) : fall;
         // The glide holds its time to impact at GlideMinTgo or more, so near the ground the fall time, which is the shorter one there, is what reaches the deploy time.
         double impact = s.BoostbackPhase == BoostbackPhase.Glide ? LegsRules.PlanToGo(s.GlideLastUpdate + s.GlideTgo, now) : double.NaN;
         if (double.IsFinite(impact) && double.IsFinite(fall))
             impact = Math.Min(impact, fall);
         return new LegsClocks(
             TouchdownPlanS: s.Active && touchdown != null ? LegsRules.PlanToGo(touchdown.SolveTime + touchdown.Sigma, now) : double.NaN,
-            EntryPlanS: entry != null ? LegsRules.PlanToGo(entry.EndTime, now) : double.NaN,
+            EntryPlanS: entryTime,
             GfoldPlanS: s.LandingPhase == LandingPhase.GfoldDescent && s.GfoldPlan != null && !s.GfoldForceSearch
                 ? LegsRules.PlanToGo(s.GfoldArrivalTime, now) : double.NaN,
             StandbyPlanS: s.SixDofStandby && touchdown != null ? LegsRules.PlanToGo(touchdown.SolveTime + touchdown.Sigma, now) : double.NaN,

@@ -674,8 +674,14 @@ public static partial class GuidanceWindow
         if (x[5] >= 0.0 && TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) > 1.0)
             return;
 
+        ref ManualControlInputs carried = ref ManualInputs(vehicle);
+        if (!carried.EngineOn || !(carried.EngineThrottle > 0.0f))
+            return;
+        double throttle = carried.EngineThrottle;
         GuidanceLog.Info(vehicle, status);
         Engage6Dof(vehicle, fromBrakingBurn: true, tookBurn: true);
+        _s.SixDofEntryBlendStart = SimNow();
+        _s.SixDofEntryBlendThrottle = throttle;
         _s.ThreeDofStatus = status;
         if (warning)
             _s.WarnEntry(status);

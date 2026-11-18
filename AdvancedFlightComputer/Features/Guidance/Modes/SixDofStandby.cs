@@ -75,7 +75,8 @@ public static partial class GuidanceWindow
         // The standby runs the spread cold solve; the two options that replace it plan synchronously on engage instead.
         if (_s.SixDofFixedTime || _s.SixDofGfoldSeed)
         {
-            LogSixDofStandbyRefusal(vehicle, "Touchdown guidance standby is off: it needs the spread cold solve, and fixed burn time or the G-FOLD seed is on.");
+            string setting = _s.SixDofFixedTime ? "FIXED BURN TIME" : "G-FOLD SEED";
+            LogSixDofStandbyRefusal(vehicle, $"DISABLED BY {setting}.");
             return false;
         }
 
@@ -370,7 +371,7 @@ public static partial class GuidanceWindow
     internal static string SixDofStandbyText(double now)
     {
         if (!_s.SixDofStandby)
-            return _s.SixDofStandbyRefusal.Length > 0 ? "unavailable" : "NOT RUNNING";
+            return _s.SixDofStandbyRefusal.Length > 0 ? _s.SixDofStandbyRefusal : "NOT RUNNING";
         if (_s.Converging)
             return "converging";
         Ksa6DofPlan plan = _s.Guidance?.Published;

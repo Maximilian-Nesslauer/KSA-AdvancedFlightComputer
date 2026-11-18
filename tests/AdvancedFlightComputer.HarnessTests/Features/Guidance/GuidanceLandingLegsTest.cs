@@ -270,6 +270,9 @@ public sealed class GuidanceLandingLegsTest : AfcTest
         Expect("the touchdown plan comes before the entry plan", s, touchdown, Fall, LegsClock.TouchdownPlan, 5.0);
         s.Active = false;
         Expect("entry guidance in its burn flies its plan", s, touchdown, Fall, LegsClock.EntryPlan, 20.0);
+        s.ThreeDofRefusing = true;
+        Expect("a refused entry burn observes the earlier live fall deadline", s, touchdown, Fall, LegsClock.EntryPlan, Fall);
+        s.ThreeDofRefusing = false;
         s.ThreeDofPhase = GuidanceWindow.ThreeDofPhase.Glide;
         Expect("entry guidance in its glide flies its plan", s, touchdown, Fall, LegsClock.EntryPlan, 20.0);
         s.LandingPhase = GuidanceWindow.LandingPhase.GfoldDescent;

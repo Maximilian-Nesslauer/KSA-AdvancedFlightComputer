@@ -1465,6 +1465,8 @@ public sealed class VehicleAutopilotState
     public bool ThreeDofSixDofWaiting;
     public bool ThreeDofBurnSolveFault;
     public (string Status, bool Warning) ThreeDofTouchdownHandoff;
+    public double SixDofEntryBlendStart = double.NaN;
+    public double SixDofEntryBlendThrottle;
 
     /// <summary>Hand over with this much of the 3-DOF burn plan left, s. By time rather than speed: a light booster falls slower than any useful hand-over speed, and 6-DOF, with no coast and no drag model, cannot fly a long burn (see ThreeDof.cs).</summary>
     public double ThreeDofSixDofTimeS = 5.0;
