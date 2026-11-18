@@ -581,12 +581,17 @@ public sealed class VehicleAutopilotState
     internal bool RcsGimbalLostAxis;
     public bool DeorbitArrivalAngleEnabled;
     public double DeorbitArrivalDescentDeg = 5;
+    public bool DeorbitOnly;
+    public double DeorbitEntryPeriapsisKm = 30.0;
     internal DeorbitRequest DeorbitRequest;
     internal DeorbitPlanner DeorbitPlanner;
     internal DeorbitPlan DeorbitPlan;
     internal DirectBrakingPlan DirectBrakingPlan;
     internal int DeorbitEngineSignature;
     internal double DeorbitRequestHeightM;
+    internal double DeorbitEntryMeasuredPreparation;
+    internal float? DeorbitNodePlannedThrottle;
+    internal int DeorbitPreviewEngineSignature;
     internal double DeorbitLastResidual = double.PositiveInfinity;
     internal long DeorbitNextValidationTick;
     internal Burn DeorbitNode;
