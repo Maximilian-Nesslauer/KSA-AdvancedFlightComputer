@@ -437,7 +437,7 @@ public static partial class GuidanceWindow
         double3 spin = new double3(0, 0, omega);
         double3 up = double3.Normalize(r);
         bool startsWithSolid = allStages[0] is { IsPinned: true, Solid: not null };
-        bool plansPadRoll = startsWithSolid && _s.ForceRoll && IsPadAscent(r, v, parent);
+        bool plansPadRoll = startsWithSolid && _s.ForceRoll && IsPadAscent(vehicle, r, v, parent);
         bool atRest = (v - double3.Cross(spin, r)).Length() < 10.0;
         if (atRest)
             v = double3.Cross(spin, r) + 10.0 * up;
@@ -608,7 +608,7 @@ public static partial class GuidanceWindow
                 PlaneNormal = n0,
                 QMax = qLimit,
                 QAlphaMax = qAlphaMax,
-                PadRoll = plansPadRoll ? new AscentProblem.RollProgram(PadClearM, RollProgramMaxS, MaxSlewDegS) : null,
+                PadRoll = plansPadRoll ? new AscentProblem.RollProgram(ForceRollMinAltM, RollProgramMaxS, MaxSlewDegS) : null,
                 PlaneTurnMin = turnMin,
                 PlaneTurnMax = turnMax,
                 // Only while a booster's stage is a lower stage: a stack planned on fewer stages carries it to the end. Sorted by stage, so what is kept is a head of the list.
@@ -1054,7 +1054,7 @@ public static partial class GuidanceWindow
             return false;
         }
         if (p.StartsWithSolid && p.PlansPadRoll != (_s.ForceRoll
-            && IsPadAscent(orbit.StateVectors.PositionCci, orbit.StateVectors.VelocityCci, parent)))
+            && IsPadAscent(vehicle, orbit.StateVectors.PositionCci, orbit.StateVectors.VelocityCci, parent)))
         {
             why = "PAD ROLL PROGRAM CHANGED";
             return false;
@@ -1096,7 +1096,7 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// A planned pad roll follows elapsed solid burn time in the first phase. After that, the profile advances by air speed within each mass band so a separation can bring it back in step with the vehicle.
+    /// The first solid phase follows its grain burn once the craft leaves the pad. Other phases advance by air speed within each mass band.
     /// </summary>
     private static double3 ConvexProfileDirection(Vehicle vehicle, double3 r, double3 v, IParentBody parent)
     {
@@ -1108,15 +1108,16 @@ public static partial class GuidanceWindow
         double dt = double.IsFinite(_s.ConvexLastTime) ? Math.Max(0.0, now - _s.ConvexLastTime) : 0.0;
         _s.ConvexLastTime = now;
         double mass = vehicle.TotalMass;
-        if (plan.PlansPadRoll && _s.ConvexStage == 0 && profile.StageOfMass(mass) == 0)
+        bool onPad = double.IsFinite(_s.LiftoffRadius) && vehicle.Situation.HasAnyContact();
+        if (plan.StartsWithSolid && _s.ConvexStage == 0 && profile.StageOfMass(mass) == 0)
         {
             // A solid grain burns during the vertical flight, but not while guidance waits for ignition.
             if (!double.IsFinite(_s.ConvexSolidIgnitionTime) && HasBurningSolid(vehicle))
                 _s.ConvexSolidIgnitionTime = now - dt;
-            if (double.IsFinite(_s.ConvexSolidIgnitionTime))
+            if (!onPad && double.IsFinite(_s.ConvexSolidIgnitionTime))
                 _s.ConvexPlanTime = Math.Clamp(now - _s.ConvexSolidIgnitionTime, 0.0, profile.StageEndTime(0));
         }
-        else
+        else if (!onPad)
         {
             _s.ConvexPlanTime = profile.Advance(_s.ConvexPlanTime, AirSpeed(r, v, parent), mass, dt,
                 ref _s.ConvexStage, ref _s.ConvexStageSpeed, ref _s.ConvexFastest);

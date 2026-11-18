@@ -246,6 +246,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
         state.FlyConvexAscent = true;
         state.ConvexHandoverAltKm = HandoverAltKm;
         state.ConvexThrottleMinPct = ThrottleFloorPct;
+        // The fixed plane is seeded from this case's own inertial launch state.
+        state.ConvexOptimiseTiming = false;
         AmbientState() = state;
 
         // Calculate, the way the button asks: the sim step builds the problem and starts the worker. The sim is not
@@ -316,6 +318,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
         if (!t.Check("EXECUTE flies the convex profile", state.Running && state.Phase == GuidanceWindow.AscentPhase.Profile,
                 $"running {state.Running}, phase {state.Phase}, status '{state.Status}'"))
             return;
+        t.Check("an airborne slow climb does not arm the pad hold", !double.IsFinite(state.LiftoffRadius),
+            $"liftoff radius {state.LiftoffRadius}, situation {vehicle.Situation}");
 
         double time = 1.0, nextSample = 0.0;
         double handoverAltKm = double.NaN, handoverTime = double.NaN, handoverSpeed = double.NaN;
@@ -375,9 +379,9 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 && AngleDeg(r, state.CommandDir) > 1.0)
             {
                 pitchOverObserved = true;
-                t.Check("the solid burn advances while the roll program holds pitch",
-                    plan.PlansPadRoll && double.IsFinite(state.RollProgramStart) && state.RollProgramDone
-                    && state.ConvexPlanTime > 0.0 && vehicle.TotalMass < plan.Mass0,
+                t.Check("the airborne solid burn advances without the pad roll program",
+                    !plan.PlansPadRoll && !double.IsFinite(state.RollProgramStart) && state.ConvexPlanTime > 0.0
+                    && vehicle.TotalMass < plan.Mass0,
                     $"pitch-over at t={time:F2} s, plan t={state.ConvexPlanTime:F2} s, "
                     + $"{(plan.Mass0 - vehicle.TotalMass) / 1000.0:F2} t burned");
             }

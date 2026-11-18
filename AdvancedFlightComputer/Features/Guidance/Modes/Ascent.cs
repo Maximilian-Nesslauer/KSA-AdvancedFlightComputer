@@ -405,7 +405,7 @@ public static partial class GuidanceWindow
         {
             double3 r0 = vehicle.Orbit.StateVectors.PositionCci;
             double3 v0 = vehicle.Orbit.StateVectors.VelocityCci;
-            _s.LiftoffRadius = IsPadAscent(r0, v0, parent) ? r0.Length() : double.NaN;
+            _s.LiftoffRadius = IsPadAscent(vehicle, r0, v0, parent) ? r0.Length() : double.NaN;
         }
         _s.RollProgramStart = double.NaN;
         _s.RollProgramDone = false;
@@ -677,11 +677,11 @@ public static partial class GuidanceWindow
     /// <summary>How far the vehicle climbs straight up, with no roll, before the ascent may turn it: clear of the tower (#171).</summary>
     internal const double PadClearM = 50.0;
 
-    /// <summary>The surface speed under which an engagement counts as standing on the pad, m/s: a vehicle engaged in flight gets no pad hold.</summary>
+    /// <summary>The surface speed below which an engagement with contact counts as a pad ascent, in m/s.</summary>
     private const double PadHoldMaxSpeedMs = 30.0;
 
-    private static bool IsPadAscent(double3 r, double3 v, IParentBody parent)
-        => AirSpeed(r, v, parent) < PadHoldMaxSpeedMs;
+    private static bool IsPadAscent(Vehicle vehicle, double3 r, double3 v, IParentBody parent)
+        => vehicle.Situation.HasAnyContact() && AirSpeed(r, v, parent) < PadHoldMaxSpeedMs;
 
     /// <summary>
     /// Whether the ascent is still clearing the pad: engaged on the pad and not yet <see cref="PadClearM"/> above where it engaged. Until then the command is straight up and the flight computer's roll stays decoupled, whatever the solved profile or the forced roll asks for.
@@ -706,6 +706,8 @@ public static partial class GuidanceWindow
     {
         if (_s.RollProgramDone || !_s.ForceRoll || !double.IsFinite(_s.LiftoffRadius) || PadHold(r))
             return false;
+        if (r.Length() - _s.LiftoffRadius < ForceRollMinAltM)
+            return true;
         double now = SimNow();
         if (double.IsNaN(_s.RollProgramStart))
         {
