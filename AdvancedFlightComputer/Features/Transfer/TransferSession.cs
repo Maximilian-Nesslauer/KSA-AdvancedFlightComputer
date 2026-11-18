@@ -129,7 +129,7 @@ internal static class TransferSession
     {
         if (Source == null || Source.IsDisposed)
             return "No craft";
-        if (!(Source.Orbit?.Eccentricity < 1.0))
+        if (Source.Orbit?.IsBound() != true)
             return "Must have a valid orbit";
         if (Destination == null)
             return "No destination";
@@ -395,7 +395,7 @@ internal static class TransferSession
             if (!(Info.Starting.GetRelativeInclination(Info.Target.Orbit).Value() > Math.PI / 180.0))
                 return false;
             var patches = TransferBurn.FlightPlan.Patches;
-            return patches.Count > 0 && patches[patches.Count - 1].Orbit.Eccentricity < 1.0;
+            return patches.Count > 0 && patches[patches.Count - 1].Orbit.IsBound();
         }
     }
 

@@ -67,7 +67,7 @@ internal static class MoonInjectionPlanner
             refusal = $"CRAFT DOES NOT ORBIT {home.Id.ToUpperInvariant()}";
             return false;
         }
-        if (!(parking.Eccentricity < 1.0) || !(parking.Period > 0.0))
+        if (!parking.IsBound() || !(parking.Period > 0.0))
         {
             refusal = "NO CLOSED PARKING ORBIT";
             return false;
@@ -367,7 +367,8 @@ internal static class MoonInjectionPlanner
                 continue;
             double ecc = patch.Orbit.Eccentricity;
             periapsis = patch.Orbit.Periapsis;
-            if (!(ecc > 1.0) || !(periapsis > 0.0))
+            // The asymptote formula requires positive hyperbolic excess and divides by eccentricity minus one.
+            if (patch.Orbit is not Orbit.Hyperbolic || !(ecc > 1.0) || !(periapsis > 0.0))
                 return false;
             double excessSquared = moonBody.Mu * (ecc - 1.0) / periapsis;
             miss = periapsis * Math.Sqrt((ecc + 1.0) / (ecc - 1.0)) - Math.Sqrt(rp * rp + 2.0 * moonBody.Mu * rp / excessSquared);
@@ -382,10 +383,10 @@ internal static class MoonInjectionPlanner
     {
         foreach (PatchedConic patch in vehicle.FlightPlan.Patches)
             if (patch.Orbit.Parent?.Id == moonBody.Id)
-                return patch.Orbit.Eccentricity >= 1.0 ? patch.Orbit.TimeAtPeriapsis : patch.StartTime;
+                return patch.Orbit.IsBound() ? patch.StartTime : patch.Orbit.TimeAtPeriapsis;
 
         double span = 2.0 * LunarTransferGeometry.HohmannTime(orbit.Parent.Mu, orbit.Periapsis, moon.Orbit.SemiMajorAxis);
-        if (orbit.Eccentricity < 1.0 && orbit.Period > 0.0)
+        if (orbit.IsBound() && orbit.Period > 0.0)
             span = Math.Min(span, orbit.Period);
         double step = span / ApproachSamples;
         if (!(step > 0.0))
@@ -439,7 +440,7 @@ internal static class MoonInjectionPlanner
             refusal = $"CRAFT IS NOT IN THE SPHERE OF {moonName}";
             return false;
         }
-        if (orbit.Eccentricity < 1.0)
+        if (orbit.IsBound())
         {
             refusal = $"CRAFT ALREADY ORBITS {moonName}";
             return false;
@@ -493,7 +494,7 @@ internal static class MoonInjectionPlanner
             dvVlf *= dv / dvVlf.Length();
 
         if (!TryPropagateBurn(vehicle, prePatch, burnTime, dvVlf, out Orbit? captured) || captured == null
-            || !(captured.Eccentricity < 1.0) || !(captured.Periapsis > moonBody.GetNearSurfaceRadius())
+            || !captured.IsBound() || !(captured.Periapsis > moonBody.GetNearSurfaceRadius())
             || !(captured.Apoapsis <= moonBody.SphereOfInfluence))
         {
             refusal = "THE PREDICTED ORBIT AFTER THE CAPTURE BURN IS NOT A SAFE ORBIT";

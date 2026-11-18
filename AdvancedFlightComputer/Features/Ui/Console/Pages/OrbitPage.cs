@@ -422,7 +422,7 @@ internal static class OrbitPage
     private static string Refusal(in OrbitToolsPanel.Plan plan)
     {
         Orbit? orbit = plan.Basis.Orbit;
-        if (orbit == null || orbit.Eccentricity >= 1.0)
+        if (orbit == null || !orbit.IsBound())
             return "NEEDS BOUND ORBIT";
         if (plan.Maneuver == null)
             return OrbitToolForm.Problem.Length > 0 ? OrbitToolForm.Problem : "NO MANEUVER";

@@ -30,12 +30,16 @@ internal static class SketchMath
         return best;
     }
 
-    /// <summary>The true anomaly range a conic can be drawn over: the whole ellipse, or a hyperbola up to a margin inside its asymptotes.</summary>
+    /// <summary>The drawing range for raw conic data that has no game orbit type.</summary>
     public static (double From, double To) DrawableAnomaly(double e)
+        => DrawableAnomaly(e, e < 1.0);
+
+    /// <summary>The drawing range of an orbit, with a margin inside the asymptotes of an open orbit.</summary>
+    public static (double From, double To) DrawableAnomaly(double e, bool isBound)
     {
-        if (e < 1.0)
+        if (isBound)
             return (-Math.PI, Math.PI);
-        double asymptote = Math.Acos(-1.0 / e);
+        double asymptote = Math.Acos(-1.0 / Math.Max(1.0, e));
         double limit = asymptote * 0.92;
         return (-limit, limit);
     }

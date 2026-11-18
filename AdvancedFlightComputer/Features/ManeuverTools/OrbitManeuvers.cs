@@ -29,7 +29,7 @@ internal static class OrbitManeuvers
     public static ManeuverResult? ComputeSetPeriapsis(
         Orbit orbit, double targetAltitudeMeters, double parentRadius, UniverseTime now)
     {
-        if (orbit.Eccentricity >= 1.0)
+        if (!orbit.IsBound())
             return null;
 
         double currentApRadius = orbit.Apoapsis;
@@ -46,7 +46,7 @@ internal static class OrbitManeuvers
     public static ManeuverResult? ComputeSetApoapsis(
         Orbit orbit, double targetAltitudeMeters, double parentRadius, UniverseTime now)
     {
-        if (orbit.Eccentricity >= 1.0)
+        if (!orbit.IsBound())
             return null;
 
         double currentPeRadius = orbit.Periapsis;
@@ -64,7 +64,7 @@ internal static class OrbitManeuvers
     public static ManeuverResult? ComputeCircularize(
         Orbit orbit, bool useApoapsis, UniverseTime now)
     {
-        if (orbit.Eccentricity >= 1.0)
+        if (!orbit.IsBound())
             return null;
         if (orbit.Eccentricity < 0.001)
             return null;
@@ -89,7 +89,7 @@ internal static class OrbitManeuvers
         double fraction = 1.0)
     {
         // Orbit.TimeOfTrueAnomaly does not advance past node times for an unbound orbit.
-        if (vehicleOrbit.Eccentricity >= 1.0)
+        if (!vehicleOrbit.IsBound())
             return null;
 
         double relInc = vehicleOrbit.GetRelativeInclination(targetOrbit).Value();
@@ -124,7 +124,7 @@ internal static class OrbitManeuvers
         Orbit orbit, double targetInclinationRad, bool useDescendingNode, UniverseTime now,
         InclinationReference reference, double fraction = 1.0)
     {
-        if (orbit.Eccentricity >= 1.0)
+        if (!orbit.IsBound())
             return null;
 
         targetInclinationRad = Math.Clamp(targetInclinationRad, 0.0, Math.PI);

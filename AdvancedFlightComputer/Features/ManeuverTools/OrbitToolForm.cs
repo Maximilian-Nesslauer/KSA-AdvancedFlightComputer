@@ -183,7 +183,7 @@ internal static class OrbitToolForm
                 _inputAltitudeKm = 0.0;
             TargetAltitude = _inputAltitudeKm * 1000.0;
         }
-        else if (typeKey == ManeuverTools.KeySetInclination && orbit.Eccentricity < 1.0)
+        else if (typeKey == ManeuverTools.KeySetInclination && orbit.IsBound())
         {
             double currentDeg = OrbitManeuvers.GetInclinationAgainst(orbit, InclinationRef) * (180.0 / Math.PI);
             if (recheck && ManeuverSeed.AtInclination(_inputInclinationDeg, currentDeg))
@@ -253,7 +253,7 @@ internal static class OrbitToolForm
         double currentPeAlt = Math.Max(0.0, orbit.Periapsis - parentRadius);
         double currentApAlt = Math.Max(0.0, orbit.Apoapsis - parentRadius);
 
-        if (orbit.Eccentricity >= 1.0)
+        if (!orbit.IsBound())
         {
             ConsoleUi.Muted("Requires a bound (elliptical) orbit.".AsSpan());
             return;
@@ -306,7 +306,7 @@ internal static class OrbitToolForm
     {
         Orbit orbit = basis.Orbit;
 
-        if (orbit.Eccentricity >= 1.0)
+        if (!orbit.IsBound())
         {
             ConsoleUi.Muted("Requires a bound (elliptical) orbit.".AsSpan());
             return;
@@ -337,7 +337,7 @@ internal static class OrbitToolForm
         Orbit orbit = basis.Orbit;
         UniverseTime now = basis.Earliest;
 
-        if (orbit.Eccentricity >= 1.0)
+        if (!orbit.IsBound())
         {
             ConsoleUi.Muted("Requires a bound (elliptical) orbit.".AsSpan());
             return;
@@ -386,7 +386,7 @@ internal static class OrbitToolForm
         Orbit orbit = basis.Orbit;
         UniverseTime now = basis.Earliest;
 
-        if (orbit.Eccentricity >= 1.0)
+        if (!orbit.IsBound())
         {
             ConsoleUi.Muted("Requires a bound (elliptical) orbit.".AsSpan());
             return;

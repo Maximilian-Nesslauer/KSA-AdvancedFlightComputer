@@ -105,7 +105,7 @@ internal static class HyperbolicTargets
     private static bool IsUnboundTarget(Astronomical body, Vehicle source, IParentBody frame)
     {
         if (body is Vehicle || body is not IOrbiter orbiter) return false;
-        if (orbiter.Orbit == null || orbiter.Orbit.Eccentricity < 1.0) return false;
+        if (orbiter.Orbit == null || orbiter.Orbit.IsBound()) return false;
         if (orbiter.Parent != frame) return false;
         if (orbiter.Id == source.Id || orbiter.Id == source.Parent?.Id) return false;
 

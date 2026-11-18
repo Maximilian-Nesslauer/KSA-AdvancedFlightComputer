@@ -1997,6 +1997,9 @@ internal static class Program
         (double from, double to) = SketchMath.DrawableAnomaly(2.0);
         Check("hyperbola stays inside its asymptotes", to < Math.Acos(-0.5) && from == -to);
         Check("ellipse draws whole", SketchMath.DrawableAnomaly(0.3) == (-Math.PI, Math.PI));
+        (double parabolicFrom, double parabolicTo) = SketchMath.DrawableAnomaly(0.9999998, isBound: false);
+        Check("a near-parabolic open orbit clips its ends", double.IsFinite(parabolicFrom)
+            && parabolicFrom == -parabolicTo && parabolicTo > 0.0 && parabolicTo < Math.PI);
         P2 q = SketchMath.Project(1.0, 2.0, 3.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0);
         Check("projection drops the normal", q == new P2(1.0, 2.0));
 

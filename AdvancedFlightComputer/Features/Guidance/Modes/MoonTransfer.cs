@@ -224,7 +224,7 @@ public static partial class GuidanceWindow
         double floor = Math.Max(parent.MeanRadius, parent.GetAtmosphereRadius());
         if (moon == null)
             refusal = $"{moonName} DOES NOT ORBIT {parent.Id.ToUpperInvariant()}";
-        else if (orbit == null || !(orbit.Eccentricity < 1.0) || !(orbit.Periapsis > floor))
+        else if (orbit == null || !orbit.IsBound() || !(orbit.Periapsis > floor))
             refusal = "NO PARKING ORBIT ABOVE THE ATMOSPHERE";
         else if (CourseCorrector.BurnPlanned(vehicle))
             refusal = "A BURN IS ALREADY PLANNED";
@@ -372,9 +372,9 @@ public static partial class GuidanceWindow
         {
             double peKm = (orbit.Periapsis - moonBody.MeanRadius) / 1000.0;
             double apKm = (orbit.Apoapsis - moonBody.MeanRadius) / 1000.0;
-            EndMoonChain(vehicle, orbit.Eccentricity < 1.0
+            EndMoonChain(vehicle, orbit.IsBound()
                 ? $"IN ORBIT AT {moonBody.Id.ToUpperInvariant()}: {peKm:F0} x {apKm:F0} KM."
-                : $"CAPTURE BURN DONE, BUT THE ORBIT AT {moonBody.Id.ToUpperInvariant()} IS STILL OPEN.", warn: !(orbit.Eccentricity < 1.0));
+                : $"CAPTURE BURN DONE, BUT THE ORBIT AT {moonBody.Id.ToUpperInvariant()} IS STILL OPEN.", warn: !orbit.IsBound());
             return;
         }
         _s.MoonChain = MoonChainStage.Course;
