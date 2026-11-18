@@ -413,9 +413,9 @@ internal static class OrbitPage
         if (MultiPassUI.HasMultiPassPreview)
             PageKit.AddPassBars(_bars, MultiPassPreviewCache.PreviewPasses, first, exec != null, MultiPassUI.FuelShortFact(key, plan.Impulsive?.DvCci.Length() ?? 0.0).Length > 0);
         else if (plan.Maneuver is OrbitManeuvers.ManeuverResult m)
-            _bars.Add(new BurnBar("BURN", m.DvCci.Length(), double.NaN, false));
+            _bars.Add(new BurnBar("BURN", m.DvCci.Length(), double.NaN, false, (m.BurnTime - Universe.GetElapsedTime()).Seconds()));
         else if (MadeBurn(source, in plan) is Burn made)
-            _bars.Add(new BurnBar("BURN", made.DeltaVVlf.Length(), double.NaN, BurnModeInput.BurnFlies(source)));
+            _bars.Add(new BurnBar("BURN", made.DeltaVVlf.Length(), double.NaN, BurnModeInput.BurnFlies(source), ProbePower.UntilBurn(source, made)));
     }
 
     // The footer refusal, the same predicate the form shows as its warning.

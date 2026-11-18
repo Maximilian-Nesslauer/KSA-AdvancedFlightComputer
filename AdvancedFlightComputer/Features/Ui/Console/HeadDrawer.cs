@@ -310,6 +310,9 @@ internal static class HeadDrawer
         ConsoleUi.NoteShape("AfcDrawerDeleteLine", delete && deleteLine.Length > 0 ? 1 : 0);
         if (delete && deleteLine.Length > 0)
             ConsoleUi.Muted(deleteLine.AsSpan());
+        string warning = PageText.ProbePowerWarning(ProbePower.RemainingSeconds(subject), ProbePower.UntilBurn(subject, node), "NEXT BURN");
+        if (warning.Length > 0)
+            ConsoleUi.WarningWrapped(warning);
     }
 
     private static void StopButton(StopSpec stop, string id)

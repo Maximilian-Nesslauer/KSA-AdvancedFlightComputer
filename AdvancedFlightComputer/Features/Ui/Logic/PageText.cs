@@ -537,6 +537,12 @@ internal static class PageText
 
     public const string BurnListTip = "Burns of the stock flight plan and the passes to come. A row selects the burn that BURN WITH sets, and options are kept per burn.";
 
+    public static string ProbePowerWarning(double remaining, double until, string milestone)
+        => double.IsFinite(remaining) && double.IsFinite(until) && until > Math.Max(0.0, remaining)
+            ? $"PROBE POWER ENDS {Fmt.Time(until - Math.Max(0.0, remaining))} BEFORE {milestone}. "
+              + "CURRENT GENERATION ONLY. SOLAR OUTPUT CAN DROP IN ECLIPSE."
+            : "";
+
     public const string RcsInUse = "IN USE";
 
     public const string RcsOnBoard = "RCS ON BOARD";

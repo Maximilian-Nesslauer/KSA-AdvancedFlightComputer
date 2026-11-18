@@ -568,6 +568,17 @@ internal static class Program
         Check("a height near the ground has its tenth", Fmt.Height(8.34) == "8.3 m");
         Check("a height has one rule", Fmt.Height(8985.0) == "8985 m" && Fmt.Height(12400.0) == "12.4 km");
         Check("a time keeps its width", Fmt.Time(186.0) == "3m 06s" && Fmt.Time(3900.0) == "1h 05m");
+        Check("probe warning names the burn and the shortfall", PageText.ProbePowerWarning(840.0, 1020.0, "BURN")
+            .StartsWith($"PROBE POWER ENDS {Fmt.Time(180.0)} BEFORE BURN.", StringComparison.Ordinal));
+        Check("probe forecast at a coast includes the eclipse caveat", PageText.ProbePowerWarning(840.0, 2040.0, "END OF COAST")
+            .Contains("BEFORE END OF COAST. CURRENT GENERATION ONLY. SOLAR OUTPUT CAN DROP IN ECLIPSE.", StringComparison.Ordinal));
+        Check("probe warning needs a future milestone beyond the forecast",
+            PageText.ProbePowerWarning(300.0, 300.0, "BURN").Length == 0
+            && PageText.ProbePowerWarning(0.0, -1.0, "BURN").Length == 0
+            && PageText.ProbePowerWarning(0.0, double.NaN, "BURN").Length == 0);
+        Check("unlimited or unavailable probe forecasts are quiet",
+            PageText.ProbePowerWarning(double.PositiveInfinity, 1000.0, "BURN").Length == 0
+            && PageText.ProbePowerWarning(double.NaN, 1000.0, "BURN").Length == 0);
     }
 
     private static void LandingLegRules()
