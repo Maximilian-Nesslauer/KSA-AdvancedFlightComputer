@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- GLIDE PLAN AoA defaults to 2.5 deg, from 0. Every impact prediction, and entry guidance's seed, now glides with a little lift up the trajectory, so a booster comes in from a definite direction rather than from wherever it happens to arrive over the site.
+
+- The entry guidance log is no longer held by a craft that stopped writing to it. A booster destroyed or unloaded mid-run kept the log, and no later landing that session was recorded; another craft now takes it after 5 s without a row.
+
 - Entry guidance flies the last glide plan open loop for the 4 s between locking the ignition time and lighting the engine. That plan's glide runs on into its burn's opening attitude, and the burn re-solves start from the state that plan reaches at ignition. Before, the booster turned from its command towards the burn plan's opening attitude, a turn no plan had made. On 2026-11-18 the plan the ignition locked on was 2.35 s stale and every re-solve after it was refused, and that turn swung the booster across retrograde at 10 deg/s three seconds before ignition.
 
 - Entry guidance solves on its own thread, as touchdown guidance does, instead of the shared thread pool. On the pool its 40 ms re-solves sat queued for up to 3.6 s behind the game's own work. The entry log gives each solve's wait and run time.

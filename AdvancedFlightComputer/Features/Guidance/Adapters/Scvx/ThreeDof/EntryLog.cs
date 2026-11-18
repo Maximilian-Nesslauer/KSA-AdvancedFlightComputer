@@ -24,17 +24,25 @@ internal static class EntryLog
     private static string _path = "";
     private static int _pendingRows, _failedFlushes;
     private static double _lastRow = double.NegativeInfinity;
+    private static long _lastRowTick;
+
+    /// <summary>Wall-clock time without a row after which another craft may take the log, ms: a craft destroyed or unloaded mid-run never steps again to stop its own, and on 2026-11-18 one such booster kept every later landing that session from being recorded.</summary>
+    private const long StaleOwnerMs = 5000;
 
     internal static bool Enabled { get; private set; }
     internal static object Owner { get; private set; }
     internal static string Path { get; private set; } = "";
     internal static string LastError { get; private set; } = "";
 
-    /// <summary>Begin a run for this craft. One log, one craft, as SixDofLog: a second craft is not recorded while the first is.</summary>
+    /// <summary>Begin a run for this craft. One log, one craft, as SixDofLog: a second craft is not recorded while the first is, unless the first has written nothing for <see cref="StaleOwnerMs"/>.</summary>
     internal static bool Start(object owner, string vehicleName, string bodyName)
     {
         if (Enabled && Owner != null && !ReferenceEquals(Owner, owner))
-            return false;
+        {
+            if (Environment.TickCount64 - _lastRowTick < StaleOwnerMs)
+                return false;
+            Stop(Owner);
+        }
         try
         {
             Stop(owner);
@@ -64,6 +72,7 @@ internal static class EntryLog
             _pendingRows = 0;
             _failedFlushes = 0;
             _lastRow = double.NegativeInfinity;
+            _lastRowTick = Environment.TickCount64;
             LastError = "";
             Owner = owner;
             Enabled = true;
@@ -97,6 +106,7 @@ internal static class EntryLog
         try
         {
             _lastRow = r.T;
+            _lastRowTick = Environment.TickCount64;
             var sb = _rows;
             F(sb, r.T); sb.Append(Csv(r.Phase)).Append(','); sb.Append(r.OnPlan ? 1 : 0).Append(',');
             F(sb, r.Alt); F(sb, r.Speed); F(sb, r.Mach); F(sb, r.Q);
