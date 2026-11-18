@@ -359,13 +359,25 @@ public sealed class BoosterTrackView
     public double[] AltitudeKm { get; init; } = [];
     public double[] DownrangeKm { get; init; } = [];
     public BoosterReturnMode Mode => Track.Mode;
+    public string SiteKey { get; init; } = "";
+    public string SiteLabel { get; init; } = "";
+    public double SiteDownrangeKm { get; init; } = double.NaN;
 
     /// <summary>The track, its points turned about the spin axis by <paramref name="turn"/> (radians) into the frame the plan is published in, with altitude and downrange from <paramref name="pad"/>, the unit direction of the pad at lift-off.</summary>
-    public static BoosterTrackView From(uint rootId, string name, BoosterReturnTrack track, double turn, double3 pad, double bodyRadius)
+    public static BoosterTrackView From(uint rootId, string name, BoosterReturnTrack track, double turn, double3 pad, double bodyRadius,
+                                       string siteKey, string siteLabel, double[] selectedSite)
     {
-        if (!track.Ok)
-            return new BoosterTrackView { RootId = rootId, Name = name, Track = track };
         double c = Math.Cos(turn), s = Math.Sin(turn);
+        double[] site = track.Mode == BoosterReturnMode.OptimalReturn && track.Ok ? track.Impact : selectedSite;
+        double siteKm = double.NaN;
+        if (site is { Length: 3 })
+        {
+            var p = new double3(c * site[0] - s * site[1], s * site[0] + c * site[1], site[2]);
+            siteKm = bodyRadius * Math.Acos(Math.Clamp(double3.Dot(double3.NormalizeOrZero(p), pad), -1.0, 1.0)) / 1000.0;
+        }
+        if (!track.Ok)
+            return new BoosterTrackView { RootId = rootId, Name = name, Track = track, SiteKey = siteKey,
+                SiteLabel = siteLabel, SiteDownrangeKm = siteKm };
         double[] g = (double[])track.Ground.Clone();
         for (int i = 0; i + 2 < g.Length; i += 3)
         {
@@ -391,6 +403,9 @@ public sealed class BoosterTrackView
             Track = track with { Ground = g, Impact = impact },
             AltitudeKm = alt,
             DownrangeKm = down,
+            SiteKey = siteKey,
+            SiteLabel = siteLabel,
+            SiteDownrangeKm = siteKm,
         };
     }
 }

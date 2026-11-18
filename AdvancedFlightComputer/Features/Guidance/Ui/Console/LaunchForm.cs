@@ -73,7 +73,7 @@ public static partial class GuidanceWindow
 
     internal static void DrawLaunchPage(Vehicle vehicle, float innerW, bool foldsOpen)
     {
-        DrawLaunchBoosters(vehicle, foldsOpen);
+        DrawLaunchBoosters(vehicle);
         DrawLaunchLimits(vehicle, foldsOpen);
         DrawLaunchHow(vehicle, innerW, foldsOpen);
     }
@@ -88,12 +88,24 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>REUSE, the first fold under the picture: the returnable stages and their sites, above LIMITS.</summary>
-    internal static void DrawLaunchBoosters(Vehicle vehicle, bool foldsOpen)
+    internal static void DrawLaunchBoosters(Vehicle vehicle)
     {
-        if (vehicle.Orbit?.Parent == null)
+        if (vehicle.Orbit?.Parent == null || (_s.ReturnableStages.Count == 0 && _s.ReturnControlRefusals.Count == 0
+            && _s.ReserveStagedRoots.Count == 0 && _s.StageTargets.Count == 0 && _s.StageOptimalReturn.Count == 0))
             return;
         ConsoleUi.Gap();
-        DrawBoostersFold(vehicle, foldsOpen);
+        ConsoleUi.SectionHead("BOOSTER RETURN");
+        ImGui.PushID(BoostersFoldId);
+        try
+        {
+            DrawUnavailableReturns(vehicle);
+            DrawReturnableStageRows();
+            DrawBoosterReserve();
+        }
+        finally
+        {
+            ImGui.PopID();
+        }
     }
 
     internal static void DrawLaunchHow(Vehicle vehicle, float innerW, bool foldsOpen)
@@ -128,43 +140,8 @@ public static partial class GuidanceWindow
         }
     }
 
-    /// <summary>
-    /// REUSE (the BOOSTERS fold): the stages of this craft that can fly themselves home, each with its SITE, before launch. A site asks the calculated climb for a reserve, which it sizes for the boostback to that site and the landing, and the RESERVE row shows what the booster keeps. Its rows draw while the craft has a returnable stage, and also after a reserve was staged, so the RESERVE row stays readable. With none of these the fold says why. After separation the boostback is on LAND > BOOSTBACK.
-    /// </summary>
-    private static void DrawBoostersFold(Vehicle vehicle, bool openByDefault)
+    private static void DrawUnavailableReturns(Vehicle vehicle)
     {
-        int stages = _s.ReturnableStages.Count;
-        int reused = 0;
-        foreach (ReturnableStage stage in _s.ReturnableStages)
-            if (stage.ComesHome)
-                reused++;
-        if (!ConsoleUi.Fold(PageText.BoostersLabel(stages, reused), BoostersFoldId, openByDefault, PageText.BoostersTip(stages)))
-            return;
-        ImGui.PushID(BoostersFoldId);
-        try
-        {
-            bool unavailable = DrawUnavailableReturns(vehicle);
-            if (stages == 0 && _s.ReserveStagedRoots.Count == 0)
-            {
-                if (!unavailable)
-                    ConsoleUi.MutedWrapped(PageText.BoostersNone);
-                return;
-            }
-            DrawReturnableStageRows();
-            DrawBoosterReserve();
-            if (ConsoleUi.LinkRight("AFTER SEPARATION: LAND > BOOSTBACK", "AfcGoBoostback",
-                    "Opens LAND > BOOSTBACK. Shows and starts the boostback of a separated booster."))
-                PendingNavigation = ConsolePages.CueTarget(ConsolePage.Land, ConsolePages.EnumKey(LandWay.Boostback));
-        }
-        finally
-        {
-            ImGui.PopID();
-        }
-    }
-
-    private static bool DrawUnavailableReturns(Vehicle vehicle)
-    {
-        bool drawn = false;
         uint? clear = null;
         foreach (var (rootId, name, sequence, reason) in _s.ReturnControlRefusals)
             Draw(rootId, $"{name} in sequence {sequence} cannot return. {ReturnControlReason(reason)}");
@@ -175,7 +152,6 @@ public static partial class GuidanceWindow
                 DrawSaved(rootId);
         if (clear.HasValue)
             ClearStageReturn(_s, clear.Value);
-        return drawn;
 
         void DrawSaved(uint rootId)
         {
@@ -190,7 +166,6 @@ public static partial class GuidanceWindow
             if (HasStageReturn(_s, rootId)
                 && ConsoleWidgets.Button("CLEAR RETURN".AsSpan(), $"AfcUnavailableStageClear{rootId}".AsSpan(), default))
                 clear = rootId;
-            drawn = true;
         }
     }
 

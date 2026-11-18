@@ -33,7 +33,10 @@ internal static class LaunchPage
                 Core.ConsoleUi.Sentence(flown, in ConsoleStyle.TextPrimary, GuidanceWindow.FlownGoodWord());
             ctx.ToInputs();
             using (Core.ConsoleUi.Dim(after))
+            {
                 GuidanceWindow.DrawLaunchInputs(ctx.Subject, ctx.Width);
+                GuidanceWindow.DrawLaunchBoosters(ctx.Subject);
+            }
             ctx.ToPicture();
             GuidanceWindow.DrawLaunchPicture(ctx.Subject, ctx.PictureHeight);
             bool planDraws = GuidanceWindow.LaunchPictureHasData;
@@ -41,7 +44,6 @@ internal static class LaunchPage
                 ctx.ToInputs();
             using (Core.ConsoleUi.Dim(after))
             {
-                GuidanceWindow.DrawLaunchBoosters(ctx.Subject, ctx.FoldsOpen);
                 GuidanceWindow.DrawLaunchLimits(ctx.Subject, ctx.FoldsOpen);
             }
             if (!planDraws && AfcConsole.HasPanes)
