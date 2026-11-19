@@ -53,6 +53,11 @@ public sealed class Scvx6DofConfig
         => VirtualControlScale is { } s && i < s.Length && s[i] > 0.0 ? s[i] : XScale[i];
 
     public double WDu { get; init; } = 0.2;                     // control-rate smoothing
+
+    /// <summary>
+    /// Price on the RCS torque, RcsWeight * sum over nodes and controls of (u_rcs / authority)^2. The propellant alone barely prices it, so without this the split between the gimbals and the RCS, and between a control's + and - halves, was all but free, and the subproblem had flat directions: on 2026-11-19 SCS took 2-8 times the iterations it had without RCS. The square makes the split unique and leans on the gimbals, which cost no propellant, before the thrusters.
+    /// </summary>
+    public double RcsWeight { get; init; } = 0.0;
     public double WW { get; init; } = 1.0;                      // angular-rate damping
     /// <summary>
     /// PROXIMAL weight: penalise deviation from the REFERENCE trajectory,
@@ -243,6 +248,36 @@ public sealed class Scvx6DofConfig
     /// </summary>
     public double SinHalfTilt => Math.Sin(0.5 * TiltMaxDeg * Math.PI / 180.0);
 
-    public double[] ResolvedUScale => UScale ??
-        [Tmax * TanGimbal, Tmax * TanGimbal, Tmax, TauRollMax];
+    /// <summary>
+    /// The largest RCS torque about each body axis, N m, positive way and negative way (as magnitudes): Dynamics6Dof.RcsModel.MaxPosNm and MaxNegNm. The subproblem bounds each axis's control between -neg and +pos, so null, or zeros, pin it at zero.
+    /// </summary>
+    public double[]? RcsMaxPosNm { get; init; }
+    public double[]? RcsMaxNegNm { get; init; }
+
+    private static double Bound(double[]? r, int a)
+        => r is { } v && a < v.Length && double.IsFinite(v[a]) && v[a] > 0.0 ? v[a] : 0.0;
+
+    /// <summary>RCS axis <paramref name="a"/>'s bounds, N m: the most it may give the positive way, and the negative way as a magnitude; zeros for none.</summary>
+    public (double Pos, double Neg) RcsBounds(int a) => (Bound(RcsMaxPosNm, a), Bound(RcsMaxNegNm, a));
+
+    /// <summary>The control scales: the gimbal, thrust and roll ones from UScale or Tmax, then one per RCS control, its own authority, or the roll scale for a control pinned at zero (any positive figure would do there).</summary>
+    public double[] ResolvedUScale
+    {
+        get
+        {
+            double[] head = UScale ?? [Tmax * TanGimbal, Tmax * TanGimbal, Tmax, TauRollMax];
+            if (head.Length >= Dynamics6Dof.NU)
+                return head;
+            var all = new double[Dynamics6Dof.NU];
+            Array.Copy(head, all, Math.Min(head.Length, Dynamics6Dof.IRCS));
+            double fallback = TauRollMax > 0.0 && double.IsFinite(TauRollMax) ? TauRollMax : 1.0;
+            for (int a = 0; a < Dynamics6Dof.NRCS; a++)
+            {
+                (double pos, double neg) = RcsBounds(a);
+                double max = Math.Max(pos, neg);
+                all[Dynamics6Dof.IRCS + a] = max > 0.0 ? max : fallback;
+            }
+            return all;
+        }
+    }
 }

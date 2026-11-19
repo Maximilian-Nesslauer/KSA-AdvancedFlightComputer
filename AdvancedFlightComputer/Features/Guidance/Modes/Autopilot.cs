@@ -10,6 +10,7 @@ using AdvancedFlightComputer.Core;
 using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
+using AdvancedFlightComputer.Features.RcsTorque;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
 using AscentRecoveryResult = AdvancedFlightComputer.Guidance.Scvx.Ascent.AscentRecoveryResult;
@@ -1746,6 +1747,7 @@ public static partial class GuidanceWindow
         Attempt(() => ReleaseStockDeorbit(vehicle, keepClaim: true, preserve: _s.ReleaseWithoutEngineCut));
         Attempt(() => KsaAttitudeRate.Clear(vehicle));
         Attempt(() => KsaGimbalControl.Disengage(vehicle));
+        Attempt(() => KsaRcsTorqueControl.Release(vehicle));
         Attempt(() => GiveRcsBack(vehicle));
         Attempt(_s.CancelGfoldSolve);
 

@@ -19,7 +19,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 public sealed class Ksa6DofGuidance
 {
     private const int NX = 14;
-    private const int NU = 4;
+    private const int NU = Dynamics6Dof.NU;
 
     /// <summary>Quaternion offset in the state vector, for the seed resampling below.</summary>
     private const int IQ = Dynamics6Dof.IQ;
@@ -1393,6 +1393,12 @@ public sealed class Ksa6DofGuidance
     /// <summary>What the tracker corrected on the last command - zero when the plan was flown open loop.</summary>
     public Tracker6Dof.Error TrackingError { get; private set; }
 
+    /// <summary>Whether the plans carry RCS torque (Dynamics6Dof.Params.Rcs).</summary>
+    public bool HasRcs => _dyn.Rcs != null;
+
+    /// <summary>The plan's RCS torque at the last <see cref="Command"/>, N m, model body axes. Zero for a plan without RCS.</summary>
+    public double3 RcsTorqueModel { get; private set; }
+
     /// <param name="x">The measured state, model frame, for the tracker; null flies the plan open loop.</param>
     /// <param name="tracker">The feedback to fly the plan through, or null.</param>
     public bool Command(double simNow, out double3 torqueModel, out double thrustN,
@@ -1400,6 +1406,7 @@ public sealed class Ksa6DofGuidance
     {
         torqueModel = default;
         thrustN = 0.0;
+        RcsTorqueModel = default;
 
         // ONE READ of the published plan, into a local. Re-reading the field would reintroduce exactly the tear this exists to prevent: a solve landing between two reads would pair the new controls with the old anchor time, and the vehicle would be commanded from the wrong point of the right trajectory.
         Ksa6DofPlan plan = _published;
@@ -1423,6 +1430,13 @@ public sealed class Ksa6DofGuidance
         double leadTdx = Lerp(plan.U, 0, leadNode, leadFraction);
         double leadTdy = Lerp(plan.U, 1, leadNode, leadFraction);
         torqueModel = new double3(_dyn.LArm * leadTdy, -_dyn.LArm * leadTdx, tauRoll);
+
+        // The RCS torque at the current step: thrusters answer within a pulse, so there is no lag to lead.
+        if (_dyn.Rcs != null)
+        {
+            int r = Dynamics6Dof.IRCS;
+            RcsTorqueModel = new double3(Lerp(plan.U, r, k, f), Lerp(plan.U, r + 1, k, f), Lerp(plan.U, r + 2, k, f));
+        }
 
         // AXIAL THRUST IN NEWTONS, not a throttle fraction.
         //  This previously return thrust / _cfg.Tmax, and that was the systematic error behind the descend-until-it-loops behaviour. Tmax is fixed when the plan is built, so the moment the vehicle's real capability differs from it - a different ambient pressure, an engine out, propellant starvation - every commanded thrust is wrong by exactly that ratio. It is invisible to the MPC too: re-solving corrects the STATE, but the error is in the actuator mapping, so each new plan is executed just as wrongly as the last.

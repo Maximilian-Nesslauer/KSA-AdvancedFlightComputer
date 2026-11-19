@@ -109,7 +109,9 @@ public sealed class Scvx6DofSubproblemScs
         // See AssembleCone's tilt block. + _nVz climb-rate rows, + _nGs + _nVz slack non-negativity rows + _nTm non-negativity rows for the terminal-miss slacks
         // + four rows per interval for the gimbal's slew rate, the last of the orthant rows.
         _nSlew = cfg.GimbalSlewPerS > 0.0 ? 4 * (_n - 1) : 0;
-        _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm + 2 * _nAc + _nSlew;
+        // + two rows per node for each RCS control's bounds, 0 <= u <= its authority, the last orthant rows of all.
+        _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm + 2 * _nAc + _nSlew
+                + 2 * _n * Dynamics6Dof.NRCS;
         _socDims = new int[_n + _nGs + _n];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
@@ -319,6 +321,16 @@ public sealed class Scvx6DofSubproblemScs
                 AddP(IU(k + 1, j), IU(k + 1, j), 2.0 * w);
                 AddP(IU(k, j), IU(k + 1, j), -2.0 * w);   // row < col: IU(k,j) < IU(k+1,j)
             }
+
+        // RcsWeight * sum_k,j (u_rcs[k,j] / authority_j)^2 - pure diagonal (Scvx6DofConfig.RcsWeight).
+        if (_cfg.RcsWeight > 0.0)
+            for (int k = 0; k < _n; k++)
+                for (int j = 0; j < Dynamics6Dof.NRCS; j++)
+                {
+                    int col = IU(k, Dynamics6Dof.IRCS + j);
+                    double s = _us[Dynamics6Dof.IRCS + j];
+                    AddP(col, col, 2.0 * _cfg.RcsWeight / (s * s));
+                }
 
         // WW * sum_k ||w[k]||^2 - pure diagonal, no coupling between nodes
         for (int k = 0; k < _n; k++)
@@ -570,6 +582,18 @@ public sealed class Scvx6DofSubproblemScs
                     }
                 }
         }
+
+        // RCS TORQUE, each axis's signed control between what the thrusters give the negative way and the positive way (Scvx6DofConfig.RcsBounds). A craft without RCS gets the same rows with zero bounds, so the pattern does not depend on the craft and the controls stay at zero.
+        for (int k = 0; k < _n; k++)
+            for (int a = 0; a < Dynamics6Dof.NRCS; a++)
+            {
+                int col = IU(k, Dynamics6Dof.IRCS + a);
+                (double pos, double neg) = _cfg.RcsBounds(a);
+                AddA(row, col, -1.0);
+                _b[row++] = neg;
+                AddA(row, col, 1.0);
+                _b[row++] = pos;
+            }
 
         for (int k = 0; k < _n; k++)
         {

@@ -8,6 +8,7 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using AdvancedFlightComputer.Guidance.Gfold;
 using KSA;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 using AdvancedFlightComputer.Features.Ui.Canvas;
 using AdvancedFlightComputer.Features.Ui.Logic;
 using Specs = AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs;
@@ -443,7 +444,7 @@ public static partial class GuidanceWindow
             ReadOnlySpan<double> pu = g.PlanControl;
             if (px.Length < n * 14)
                 return 1;
-            haveThrust = pu.Length >= n * 4;
+            haveThrust = pu.Length >= n * Dynamics6Dof.NU;
 
             // KsaFrameBridge's site frame is Z-UP - (ex, ey, up) - unlike the G-FOLD frame above it, which is X-up. So height is index 2 and the horizon is 0 and 1, the other way round from DrawGfoldPlannedPath.
             for (int k = 0; k < n; k++)
@@ -455,8 +456,8 @@ public static partial class GuidanceWindow
                 if (!haveThrust)
                     continue;
 
-                // The control is thrust in BODY coordinates, four doubles per node - NOT three, and not in the site frame. It has to be rotated by the node's attitude quaternion before it means anything spatially, which is exactly what the world overlay does.
-                int c = k * 4;
+                // The control starts with thrust in BODY coordinates (Dynamics6Dof.NU doubles per node: lateral, lateral, axial, then the torques) - NOT three, and not in the site frame. It has to be rotated by the node's attitude quaternion before it means anything spatially, which is exactly what the world overlay does.
+                int c = k * Dynamics6Dof.NU;
                 KsaFrameBridge.QuatToMatrix(px[b + 6], px[b + 7], px[b + 8], px[b + 9],
                     out double3 b0, out double3 b1, out double3 b2);
                 double3 tSite = b0 * pu[c + 0] + b1 * pu[c + 1] + b2 * pu[c + 2];

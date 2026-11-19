@@ -251,6 +251,7 @@ public sealed class Scvx6DofSolver
         _xf = xf.ToArray();
         _xbar = (double[])xSeed.Clone();
         _ubar = (double[])uSeed.Clone();
+        ClampRcsSeed(_ubar);
         AlignTerminalBranch();
         _sigBar = sigmaSeed;
         TrustRegion = trustRegion ?? TrustRegionMax;
@@ -289,6 +290,7 @@ public sealed class Scvx6DofSolver
         _x0 = x0.ToArray();
         _xbar = (double[])xShifted.Clone();
         _ubar = (double[])uShifted.Clone();
+        ClampRcsSeed(_ubar);
         NormaliseQuaternions(_xbar);
         AlignTerminalBranch();
         _sigBar = sigma;
@@ -516,6 +518,18 @@ public sealed class Scvx6DofSolver
         return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq + AccelerationViolationCost(x, u), worst);
     }
 
+    /// <summary>A seeded RCS control is put inside its bounds (Scvx6DofConfig.RcsBounds). A plan resampled from one built with more RCS, or with RCS where there is none now, would otherwise ask the first subproblem for a step its trust region cannot take.</summary>
+    private void ClampRcsSeed(double[] u)
+    {
+        for (int k = 0; k < _n; k++)
+            for (int a = 0; a < Dynamics6Dof.NRCS; a++)
+            {
+                int i = k * NU + Dynamics6Dof.IRCS + a;
+                (double pos, double neg) = _cfg.RcsBounds(a);
+                u[i] = Math.Clamp(double.IsFinite(u[i]) ? u[i] : 0.0, -neg, pos);
+            }
+    }
+
     private double AccelerationViolationCost(double[] x, double[] u)
     {
         if (!_cfg.AccelLimitEnabled)
@@ -647,10 +661,10 @@ public sealed class Scvx6DofSolver
 
         double[] state = (double[])_xbar.Clone();
         state[Dynamics6Dof.IM] = mass;
-        double flow = _dyn.MassFlowOffset + _dyn.Alpha * _ubar[Dynamics6Dof.IT];
+        double flow = Dynamics6Dof.MassFlow(_dyn, _ubar.AsSpan(0, NU));
         for (int k = 1; k < _n; k++)
         {
-            double nextFlow = _dyn.MassFlowOffset + _dyn.Alpha * _ubar[k * NU + Dynamics6Dof.IT];
+            double nextFlow = Dynamics6Dof.MassFlow(_dyn, _ubar.AsSpan(k * NU, NU));
             if (!(flow >= 0.0) || !(nextFlow >= 0.0))
                 return null;
             mass -= 0.5 * dt * (flow + nextFlow);
@@ -684,7 +698,15 @@ public sealed class Scvx6DofSolver
                 double w = x[k * NX + Dynamics6Dof.IW + i];
                 ww += w * w;
             }
-        return _cfg.WDu * du + _cfg.WW * ww;
+        double rcs = 0;
+        if (_cfg.RcsWeight > 0.0)
+            for (int k = 0; k < _n; k++)
+                for (int j = 0; j < Dynamics6Dof.NRCS; j++)
+                {
+                    double r = u[k * NU + Dynamics6Dof.IRCS + j] / _us[Dynamics6Dof.IRCS + j];
+                    rcs += r * r;
+                }
+        return _cfg.WDu * du + _cfg.WW * ww + _cfg.RcsWeight * rcs;
     }
 
     private static double SumSquaresScaled(double[] v, double[] scale)

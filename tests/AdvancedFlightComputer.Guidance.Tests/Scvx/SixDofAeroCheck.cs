@@ -108,7 +108,7 @@ internal static class SixDofAeroCheck
             ("speed fade, 10 m/s", State(40, [3, 1, -9.4], 4, [0, 0.01, 0])),
             ("tilt fade, 24 deg", State(400, [30, 0, -70], 24, [0.02, 0, 0])),
         };
-        double[] u = [3000, -2000, 350e3, 500];
+        double[] u = [3000, -2000, 350e3, 500, 0, 0, 0];
         bool ok = true;
         foreach ((string name, double[] x) in states)
         {
@@ -150,7 +150,7 @@ internal static class SixDofAeroCheck
         Console.WriteLine();
         Console.WriteLine("2. agreement: the old force from a symmetric table, and a moment about the right axes");
         bool ok = true;
-        double[] u0 = [0, 0, 0, 0];
+        double[] u0 = new double[Dynamics6Dof.NU];
 
         // The symmetric table against the old thrust-axis force, at tilts inside the full-air region.
         Dynamics6Dof.Params oldOnly = Params(null);

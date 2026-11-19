@@ -6,6 +6,7 @@ using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 // World-space overlay for the 6-DOF plan, matching the G-FOLD one so the two read the same way. Shares the projection plumbing in OverlayCore.cs.
 //  This is the instrument for "is the PLAN sensible" as opposed to "is the TRACKER following it" - which the tracking-error readout answers. A plan that dives at the ground, wanders downrange, or demands a wild attitude profile is visible here immediately and is not diagnosable from numbers alone.
@@ -95,9 +96,9 @@ public static partial class GuidanceWindow
         for (int k = 0; k < n; k++)
         {
             double t = Math.Sqrt(
-                pu[k * 4 + 0] * pu[k * 4 + 0] +
-                pu[k * 4 + 1] * pu[k * 4 + 1] +
-                pu[k * 4 + 2] * pu[k * 4 + 2]);
+                pu[k * Dynamics6Dof.NU + 0] * pu[k * Dynamics6Dof.NU + 0] +
+                pu[k * Dynamics6Dof.NU + 1] * pu[k * Dynamics6Dof.NU + 1] +
+                pu[k * Dynamics6Dof.NU + 2] * pu[k * Dynamics6Dof.NU + 2]);
             thrustScale = Math.Max(thrustScale, t);
         }
         // Longest thrust arrow spans ~8% of the trajectory, so the picture stays readable whatever the vehicle's thrust happens to be.
@@ -115,7 +116,7 @@ public static partial class GuidanceWindow
             OvLine(dl, p, p + f.VecToCci(b2) * (0.03 * span), axisCol, 1.5f);
 
             // Thrust vector in the site frame: R(q) * (tdx, tdy, T).
-            double3 thrustSite = b0 * pu[k * 4 + 0] + b1 * pu[k * 4 + 1] + b2 * pu[k * 4 + 2];
+            double3 thrustSite = b0 * pu[k * Dynamics6Dof.NU + 0] + b1 * pu[k * Dynamics6Dof.NU + 1] + b2 * pu[k * Dynamics6Dof.NU + 2];
             if (arrow > 0)
                 OvLine(dl, p, p + f.VecToCci(thrustSite) * arrow, thrCol, 1.5f);
         }

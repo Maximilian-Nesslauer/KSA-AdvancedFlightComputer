@@ -10,6 +10,8 @@
     <ProjectReference Include="../../../AdvancedFlightComputer/Features/Guidance/Scvx/AdvancedFlightComputer.Guidance.Scvx.csproj" />
     <ProjectReference Include="../../../AdvancedFlightComputer/Features/Guidance/Gfold/AdvancedFlightComputer.Guidance.Gfold.csproj" />
     <Compile Include="../../../AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/Ksa6DofGfoldSeed.cs" Link="Ksa6DofGfoldSeed.cs" />
+    <Compile Include="../../../AdvancedFlightComputer/Features/RcsTranslation/RcsLpSolver.cs" Link="RcsLpSolver.cs" />
+    <Compile Include="../../../AdvancedFlightComputer/Features/RcsTorque/RcsTorqueAllocator.cs" Link="RcsTorqueAllocator.cs" />
     <Using Include="AdvancedFlightComputer.Features.Guidance" />
   </ItemGroup>
 </Project>

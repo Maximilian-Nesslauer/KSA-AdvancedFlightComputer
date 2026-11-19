@@ -941,6 +941,12 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool SixDofBodyAero = true;
 
+    /// <summary>RCS TORQUE: touchdown guidance plans with the craft's RCS as well as its gimbals, with the side force each newton metre brings, and AFC fires the thrusters for the plan's torque (KsaRcsTorqueControl). Off plans and flies with the gimbals alone, as before. Issue #222.</summary>
+    public bool SixDofRcs = true;
+
+    /// <summary>Price on touchdown guidance's RCS torque, Scvx6DofConfig.RcsWeight: how much the plan leans on the gimbals, which cost no propellant, before the thrusters.</summary>
+    public double SixDofRcsWeight = 0.0;
+
     /// <summary>Touchdown guidance's plan holds its lateral thrust to the gimbal's slew rate (Scvx6DofConfig.GimbalSlewPerS). On; off flies the plan as before 2026-11-18, free to jump between nodes.</summary>
     public bool SixDofGimbalRateLimit = true;
 

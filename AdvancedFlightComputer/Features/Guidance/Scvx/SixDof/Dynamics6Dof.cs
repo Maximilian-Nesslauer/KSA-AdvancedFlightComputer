@@ -9,13 +9,16 @@ namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 /// hand-written physics; every slope below comes from differentiating it.
 ///
 ///   state    X = [ r(3)  v(3)  q(4)  w(3)  m(1) ]                 (14)
-///   control  u = [ tdx, tdy, T, tau_roll ]                        (4)
+///   control  u = [ tdx, tdy, T, tau_roll, rcs(3) ]                (7)
 ///
 ///   rdot = v
-///   vdot = g + (R(q) T_body + F_aero) / m      T_body = [tdx, tdy, T]
+///   vdot = g + (R(q) (T_body + K tau_rcs) + F_aero) / m      T_body = [tdx, tdy, T]
 ///   qdot = 1/2 q (x) [0, w]              Hamilton, scalar-first
-///   wdot = I^-1 ( tau + tau_aero - w x (I w) )      Euler's equation
+///   wdot = I^-1 ( tau + tau_rcs + tau_aero - w x (I w) )      Euler's equation
 ///   mdot = -(mdot_0 + alpha * T)
+///
+/// RCS (see <see cref="RcsModel"/>): a signed torque about each body axis, between what the thrusters give one way and the other, and the side force that comes with it, K tau_rcs: on a booster whose thrusters sit at the top every pitch or yaw torque pushes it sideways. Both from the allocator's own measurement of the layout (RcsTorqueAllocator.Characterise).
+///  ONE SIGNED CONTROL PER AXIS, NOT A PAIR. The first version split each axis into a + and a - control so that the propellant, |tau| times a flow, could be linear. The two had exactly opposite columns, and SCS took 5-20 times the iterations on the warm re-solves, hitting its cap (2026-11-19: 2,668 a solve at 5 nodes against 347 without RCS; freeing only the + halves brought it back to ~500). The RCS propellant (16-50 kg against ~480 of the main engine) is left out of the mass instead; Scvx6DofConfig.RcsWeight prices the torque.
 ///
 /// Small-angle gimbal: the engine sits at r_T = [0,0,-L] below the CoM, so
 /// tau_gimbal = r_T x T_body = [L*tdy, -L*tdx, 0], linear in the controls.
@@ -29,7 +32,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 public static class Dynamics6Dof
 {
     public const int NX = 14;   // state dimension
-    public const int NU = 4;    // control dimension
+    public const int NU = 7;    // control dimension
 
     // State layout
     public const int IR = 0;    // position      r(3)
@@ -43,6 +46,8 @@ public static class Dynamics6Dof
     public const int ITDY = 1;  // lateral (gimbal) thrust, body y
     public const int IT = 2;    // axial thrust
     public const int ITAU = 3;  // direct body-z (roll) torque
+    public const int IRCS = 4;  // RCS torque, one signed control per body axis: x, y, z
+    public const int NRCS = 3;
 
     /// <summary>Vehicle and environment constants. Defaults mirror 6dof.py.</summary>
     public sealed class Params
@@ -73,6 +78,38 @@ public static class Dynamics6Dof
         /// Mass flow that does not buy thrust, kg/s: the engine's flow is linear in its throttle, but under back pressure its thrust is not, so the flow over the burn's thrust range is a line that does not pass through zero. 0 is the plain rocket equation, which is right in vacuum.
         /// </summary>
         public double MassFlowOffset = 0.0;
+
+        /// <summary>The RCS torque the plan may use, or null for none, which leaves its three controls without effect (the subproblem pins them at zero).</summary>
+        public RcsModel? Rcs;
+    }
+
+    /// <summary>
+    /// What the craft's RCS can do, in MODEL body axes, per axis a (0, 1, 2 = x, y, z): the largest torque each way, and the force that comes with each newton metre, K (N per N m, body axes, three per axis). The force is taken as odd in the torque - the average of what the two ways bring - which is exact for a symmetric layout. The allocator flies the patterns these were measured from.
+    /// </summary>
+    public sealed class RcsModel
+    {
+        /// <summary>Largest positive torque per axis, N m.</summary>
+        public double[] MaxPosNm { get; init; } = new double[NRCS];
+
+        /// <summary>Largest negative torque per axis, N m, as a magnitude.</summary>
+        public double[] MaxNegNm { get; init; } = new double[NRCS];
+
+        /// <summary>Force per newton metre of torque, body axes, three per axis.</summary>
+        public double[] ForcePerNm { get; init; } = new double[3 * NRCS];
+
+        /// <summary>Propellant per newton metre, kg/s per N m, per axis (the two ways' average): for the log, not the dynamics.</summary>
+        public double[] FlowPerNm { get; init; } = new double[NRCS];
+
+        public bool Any
+        {
+            get
+            {
+                for (int a = 0; a < NRCS; a++)
+                    if (MaxPosNm[a] > 0.0 || MaxNegNm[a] > 0.0)
+                        return true;
+                return false;
+            }
+        }
     }
 
     /// <summary>
@@ -106,9 +143,25 @@ public static class Dynamics6Dof
         Dual r21 = 2.0 * (qy * qz + qw * qx);
         Dual r22 = 1.0 - 2.0 * (qx * qx + qy * qy);
 
-        Dual fx = r00 * tdx + r01 * tdy + r02 * T;
-        Dual fy = r10 * tdx + r11 * tdy + r12 * T;
-        Dual fz = r20 * tdx + r21 * tdy + r22 * T;
+        // The RCS force joins the engine's in body axes, so the one rotation takes both to the site frame.
+        Dual bx = tdx, by = tdy, bz = T;
+        Dual rcsTx = default, rcsTy = default, rcsTz = default;
+        if (p.Rcs != null)
+        {
+            rcsTx = u[IRCS];
+            rcsTy = u[IRCS + 1];
+            rcsTz = u[IRCS + 2];
+            for (int a = 0; a < NRCS; a++)
+            {
+                Dual ua = u[IRCS + a];
+                bx += p.Rcs.ForcePerNm[3 * a] * ua;
+                by += p.Rcs.ForcePerNm[3 * a + 1] * ua;
+                bz += p.Rcs.ForcePerNm[3 * a + 2] * ua;
+            }
+        }
+        Dual fx = r00 * bx + r01 * by + r02 * bz;
+        Dual fy = r10 * bx + r11 * by + r12 * bz;
+        Dual fz = r20 * bx + r21 * by + r22 * bz;
 
         // vdot = g + (R(q) T_body + F_aero) / m
         AeroWrench(x, p, vx, vy, vz, r00, r01, r02, r10, r11, r12, r20, r21, r22,
@@ -128,9 +181,9 @@ public static class Dynamics6Dof
         xdot[IQ + 3] = 0.5 * (qw * wz + qx * wy - qy * wx);
 
         // wdot = I^-1 ( tau - w x (I w) ),  tau = [L*tdy, -L*tdx, tau_roll] plus the air's
-        Dual taux = p.LArm * tdy + aeroTx;
-        Dual tauy = -(p.LArm * tdx) + aeroTy;
-        tauRoll += aeroTz;
+        Dual taux = p.LArm * tdy + aeroTx + rcsTx;
+        Dual tauy = -(p.LArm * tdx) + aeroTy + rcsTy;
+        tauRoll += aeroTz + rcsTz;
         Dual iwx = p.Ixx * wx, iwy = p.Iyy * wy, iwz = p.Izz * wz;
         Dual gyrox = wy * iwz - wz * iwy;
         Dual gyroy = wz * iwx - wx * iwz;
@@ -196,6 +249,8 @@ public static class Dynamics6Dof
     /// value is seed-independent, so f is taken from the first sweep rather than
     /// evaluated separately. Pass null for a Jacobian to skip nothing - the
     /// sweeps are shared - but to skip storing it.
+    ///
+    /// The RCS columns of B are written from their closed form instead of more sweeps: the RCS terms are linear in those controls, so each column is the force rotated into the site frame over the mass, and the torque over the inertia. Each sweep costs a full evaluation of the aero tables, so this keeps a craft with RCS at the cost of one without.
     /// </summary>
     public static void Jacobian(ReadOnlySpan<double> x, ReadOnlySpan<double> u, Params p,
                                 Span<double> f, Span<double> A, Span<double> B)
@@ -204,7 +259,7 @@ public static class Dynamics6Dof
         Span<Dual> du = stackalloc Dual[NU];
         Span<Dual> dout = stackalloc Dual[NX];
 
-        for (int col = 0; col < NX + NU; col++)
+        for (int col = 0; col < NX + IRCS; col++)
         {
             for (int i = 0; i < NX; i++)
                 dx[i] = new Dual(x[i], col == i ? 1.0 : 0.0);
@@ -229,6 +284,39 @@ public static class Dynamics6Dof
                 for (int r = 0; r < NX; r++)
                     B[r * NU + bcol] = dout[r].D;
             }
+        }
+
+        if (!B.IsEmpty)
+            RcsColumns(x, p, B);
+    }
+
+    /// <summary>The propellant flow at one node's controls, kg/s, as F's mass row has it: the engine's line in its axial thrust.</summary>
+    public static double MassFlow(Params p, ReadOnlySpan<double> u)
+        => p.MassFlowOffset + p.Alpha * u[IT];
+
+    /// <summary>The RCS columns of B, row-major NX x NU: d(xdot)/d(u_rcs), exactly what F's RCS terms differentiate to.</summary>
+    private static void RcsColumns(ReadOnlySpan<double> x, Params p, Span<double> B)
+    {
+        for (int j = 0; j < NRCS; j++)
+            for (int r = 0; r < NX; r++)
+                B[r * NU + IRCS + j] = 0.0;
+        if (p.Rcs == null)
+            return;
+
+        double qw = x[IQ], qx = x[IQ + 1], qy = x[IQ + 2], qz = x[IQ + 3];
+        double r00 = 1.0 - 2.0 * (qy * qy + qz * qz), r01 = 2.0 * (qx * qy - qw * qz), r02 = 2.0 * (qx * qz + qw * qy);
+        double r10 = 2.0 * (qx * qy + qw * qz), r11 = 1.0 - 2.0 * (qx * qx + qz * qz), r12 = 2.0 * (qy * qz - qw * qx);
+        double r20 = 2.0 * (qx * qz - qw * qy), r21 = 2.0 * (qy * qz + qw * qx), r22 = 1.0 - 2.0 * (qx * qx + qy * qy);
+        double m = x[IM];
+        for (int a = 0; a < NRCS; a++)
+        {
+            int c = IRCS + a;
+            double fbx = p.Rcs.ForcePerNm[3 * a], fby = p.Rcs.ForcePerNm[3 * a + 1], fbz = p.Rcs.ForcePerNm[3 * a + 2];
+            B[(IV + 0) * NU + c] = (r00 * fbx + r01 * fby + r02 * fbz) / m;
+            B[(IV + 1) * NU + c] = (r10 * fbx + r11 * fby + r12 * fbz) / m;
+            B[(IV + 2) * NU + c] = (r20 * fbx + r21 * fby + r22 * fbz) / m;
+            double inertia = a == 0 ? p.Ixx : a == 1 ? p.Iyy : p.Izz;
+            B[(IW + a) * NU + c] = 1.0 / inertia;
         }
     }
 

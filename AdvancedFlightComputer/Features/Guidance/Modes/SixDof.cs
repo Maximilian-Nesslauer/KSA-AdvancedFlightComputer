@@ -6,6 +6,7 @@ using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Features.RcsTorque;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 // The 6-DOF MPC guidance, built on the frame bridge. Its content on the LAND page is Ui/Gauges/SixDofGauge.cs.
@@ -462,7 +463,7 @@ public static partial class GuidanceWindow
                                    out Dynamics6Dof.Params dyn, out _, LandingAccelLimitMs2,
                                    floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero,
                                    keptRollFree: _s.Guidance.TerminalRollFree, bodyAero: _s.SixDofBodyAero,
-                                   gimbalRateLimit: _s.SixDofGimbalRateLimit))
+                                   gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -625,6 +626,7 @@ public static partial class GuidanceWindow
         double r22 = 1.0 - 2.0 * (x[7] * x[7] + x[8] * x[8]);
         TvcAllocationResult a = KsaGimbalControl.Diagnostics(vehicle)?.LastAllocation ?? default;
         KsaGimbalControl.GimbalTrace gimbal = KsaGimbalControl.Diagnostics(vehicle)?.Trace;
+        KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Last(vehicle);
 
         var row = new SixDofLog.CycleRow
         {
@@ -668,6 +670,10 @@ public static partial class GuidanceWindow
             GimRateY = gimbal?.RateY ?? double.NaN, GimRateZ = gimbal?.RateZ ?? double.NaN,
             GimMaxDeg = gimbal?.MaxAngleDeg ?? double.NaN, GimSlewPerS = gimbal?.SlewPerS ?? double.NaN,
             GimThrustN = gimbal?.ThrustN ?? double.NaN, GimCount = gimbal?.Count ?? 0,
+            RcsX = _s.Guidance.RcsTorqueModel.X, RcsY = _s.Guidance.RcsTorqueModel.Y, RcsZ = _s.Guidance.RcsTorqueModel.Z,
+            RcsGivenX = rcs.GivenNm.X, RcsGivenY = rcs.GivenNm.Y, RcsGivenZ = rcs.GivenNm.Z,
+            RcsShortNm = rcs.ShortfallNm, RcsForceN = rcs.ForceN.Length(), RcsFlowKgS = rcs.FlowKgS, RcsFiring = rcs.Firing,
+            RcsReached = KsaRcsTorqueControl.Reached(vehicle),
             Twr = capability / weight, TwrMin = _s.SixDofThrottleFloor * capability / weight,
             AmbientPa = ambientPa,
             AltToGo = altToGo, DescentRate = descent, StopDistM = stopDist,
@@ -851,6 +857,7 @@ public static partial class GuidanceWindow
         _s.Guidance = null;
         try { worker?.Dispose(); } catch { /* disengaging must always succeed */ }
         KsaGimbalControl.Disengage(vehicle);
+        KsaRcsTorqueControl.Release(vehicle);
         // This also runs from the UI, so queue the engine cut for the next vehicle step.
         if (vehicle != null && cutEngine && _s.ControlAcquired)
             _s.LandingCutPending = true;
@@ -1059,6 +1066,8 @@ public static partial class GuidanceWindow
     {
         if (_s.SixDofLastPublishedPlan != null && !_s.SixDofToContact)
             KsaGimbalControl.SetLsq(vehicle, default);
+        // Nothing plans an RCS torque either.
+        KsaRcsTorqueControl.Release(vehicle);
 
         double3 position = vehicle.Orbit.StateVectors.PositionCci;
         double3 up = double3.Normalize(position);
@@ -1157,6 +1166,7 @@ public static partial class GuidanceWindow
     {
         // The plan has ended. Let stock TVC and RCS damp the turn until first contact.
         KsaGimbalControl.Disengage(vehicle);
+        KsaRcsTorqueControl.Release(vehicle);
         KsaAttitudeRate.Clear(vehicle);
         GiveRcsBack(vehicle);
         double3 up = double3.Normalize(vehicle.Orbit.StateVectors.PositionCci);
@@ -1652,6 +1662,30 @@ public static partial class GuidanceWindow
         ApplyPlanCommand(vehicle, parent, siteCci, x, now, torqueModel, thrustN);
     }
 
+    /// <summary>Pitch and yaw before roll when the RCS cannot give the whole of the plan's torque: model z is the roll axis.</summary>
+    private static readonly double[] RcsAxisPriority = [1.0, 1.0, 0.3];
+
+    /// <summary>
+    /// The RCS the touchdown plan may use: measured by the allocator that will fly it (Ksa6DofSetup.RcsModel), or none when RCS TORQUE is off (SixDofRcs). The stock flight computer's RCS switch plays no part: that switch is stock's own steering with RCS, which guidance keeps out of the burn (SteerLandingBurnWithGimbal), and this fires the thrusters itself (KsaRcsTorqueControl).
+    /// </summary>
+    private static Dynamics6Dof.RcsModel PlanRcs(Vehicle vehicle)
+        => _s.SixDofRcs ? Ksa6DofSetup.RcsModel(vehicle) : null;
+
+    /// <summary>
+    /// Flies the plan's RCS torque (Ksa6DofGuidance.RcsTorqueModel) through the RCS allocator, in the model's body axes, which KSA axes mx, my, mz are. Like the gimbals' torque it is the plan's own, untouched between re-solves. Nothing fires for a plan without RCS.
+    /// </summary>
+    private static void FlyPlanRcs(Vehicle vehicle, double3 mx, double3 my, double3 mz)
+    {
+        if (_s.Guidance == null || !_s.Guidance.HasRcs)
+        {
+            KsaRcsTorqueControl.Release(vehicle);
+            return;
+        }
+        double3 rcs = _s.Guidance.RcsTorqueModel;
+        double3 torqueKsa = rcs.X * mx + rcs.Y * my + rcs.Z * mz;
+        KsaRcsTorqueControl.Command(vehicle, torqueKsa, mx, my, mz, RcsAxisPriority);
+    }
+
     /// <summary>The feedback the plan's thrust is flown through between re-solves, from the panel's gains, or null to fly it open loop.</summary>
     private static Tracker6Dof SixDofTracker() => _s.SixDofTrack
         ? new Tracker6Dof
@@ -1703,6 +1737,7 @@ public static partial class GuidanceWindow
         // Published for THIS vehicle.
         // The override used to be a single global target, so a second guided craft silently stole the first one's gimbals.
         KsaGimbalControl.SetLsq(vehicle, torqueKsa);
+        FlyPlanRcs(vehicle, mx, my, mz);
 
         ref ManualControlInputs manual = ref ManualInputs(vehicle);
         // ENGINE STAYS LIT WHILE GUIDING.
@@ -1791,7 +1826,7 @@ public static partial class GuidanceWindow
                                      _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                      x, xf, out cfg, out dyn, out error, LandingAccelLimitMs2,
                                      floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero, bodyAero: _s.SixDofBodyAero,
-                                     gimbalRateLimit: _s.SixDofGimbalRateLimit);
+                                     gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight);
     }
 
     /// <summary>

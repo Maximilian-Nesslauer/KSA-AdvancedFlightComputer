@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using BepuUtilities;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Features.RcsTorque;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 
@@ -207,6 +208,44 @@ public static class Ksa6DofSetup
     }
 
     /// <summary>
+    /// What the craft's RCS can give touchdown guidance, in MODEL body axes (KsaFrameBridge.BodyAxes), measured by the allocator that will fly it (KsaRcsTorqueControl.TryCharacterise): per one-sided control the largest torque, the propellant per newton metre and the side force per newton metre. Null for a craft with no usable thruster.
+    /// The side force is the point on a booster: its thrusters sit at the top, far from the centre of mass, so every newton metre they give comes with a push of roughly 1/arm newtons sideways, which the plan must carry or it will drift off what it planned.
+    /// </summary>
+    public static Dynamics6Dof.RcsModel RcsModel(Vehicle vehicle)
+    {
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        Span<RcsTorqueAllocator.AxisAuthority> six = stackalloc RcsTorqueAllocator.AxisAuthority[Dynamics6Dof.NRCS];
+        if (!KsaRcsTorqueControl.TryCharacterise(vehicle, mx, my, mz, six))
+            return null;
+        return RcsModelFrom(six);
+    }
+
+    /// <summary>The plan's RCS model from the allocator's six one-way measurements (+x, -x, +y, -y, +z, -z): each axis's two bounds, and the side force per newton metre as the average of what the two ways bring - force odd in the torque, exact for a symmetric layout. Null when no direction has any authority.</summary>
+    internal static Dynamics6Dof.RcsModel RcsModelFrom(ReadOnlySpan<RcsTorqueAllocator.AxisAuthority> six)
+    {
+        static bool Good(RcsTorqueAllocator.AxisAuthority a)
+            => a.MaxTorqueNm > 0.0 && double.IsFinite(a.MaxTorqueNm) && double.IsFinite(a.FlowPerNm)
+               && double.IsFinite(a.ForcePerNmX) && double.IsFinite(a.ForcePerNmY) && double.IsFinite(a.ForcePerNmZ);
+        var model = new Dynamics6Dof.RcsModel();
+        for (int axis = 0; axis < Dynamics6Dof.NRCS; axis++)
+        {
+            RcsTorqueAllocator.AxisAuthority plus = six[2 * axis], minus = six[2 * axis + 1];
+            bool p = Good(plus), m = Good(minus);
+            if (!p && !m)
+                continue;
+            model.MaxPosNm[axis] = p ? plus.MaxTorqueNm : 0.0;
+            model.MaxNegNm[axis] = m ? minus.MaxTorqueNm : 0.0;
+            // Force for a torque tau: f+ tau one way, f- |tau| the other; the odd line through both is (f+ - f-) / 2, or the one side measured.
+            double w = p && m ? 0.5 : 1.0;
+            model.ForcePerNm[3 * axis] = w * ((p ? plus.ForcePerNmX : 0.0) - (m ? minus.ForcePerNmX : 0.0));
+            model.ForcePerNm[3 * axis + 1] = w * ((p ? plus.ForcePerNmY : 0.0) - (m ? minus.ForcePerNmY : 0.0));
+            model.ForcePerNm[3 * axis + 2] = w * ((p ? plus.ForcePerNmZ : 0.0) - (m ? minus.ForcePerNmZ : 0.0));
+            model.FlowPerNm[axis] = w * ((p ? Math.Max(plus.FlowPerNm, 0.0) : 0.0) + (m ? Math.Max(minus.FlowPerNm, 0.0) : 0.0));
+        }
+        return model.Any ? model : null;
+    }
+
+    /// <summary>
     /// Peak roll torque the vehicle can actually produce, in N*m, at PlanningThrust - the model's TauRollMax before it is scaled to the plan's thrust. See TorqueAlong.
     /// </summary>
     public static double RollTorqueLimit(Vehicle vehicle)
@@ -340,7 +379,7 @@ public static class Ksa6DofSetup
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
                                 out string error, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
                                 KsaAeroSweep.Result aero = null, bool? keptRollFree = null, bool bodyAero = true,
-                                bool gimbalRateLimit = true)
+                                bool gimbalRateLimit = true, Dynamics6Dof.RcsModel rcs = null, double rcsWeight = 0.0)
     {
         cfg = null!;
         dyn = null!;
@@ -483,6 +522,8 @@ public static class Ksa6DofSetup
             AeroAltitudeOffset = siteAltAsl,
             LArm = arm,
             Ixx = ixx, Iyy = iyy, Izz = izz,
+            // RCS torque and the side force and propellant that come with it (RcsModel), or none.
+            Rcs = rcs,
         };
 
         // NON-DIMENSIONALISE AGAINST THIS PROBLEM, not against the Python test case.
@@ -522,6 +563,9 @@ public static class Ksa6DofSetup
             GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) : 0.0,
             TauRollMax = tauRoll,
             RollTorqueFollowsThrust = true,
+            RcsMaxPosNm = rcs?.MaxPosNm,
+            RcsMaxNegNm = rcs?.MaxNegNm,
+            RcsWeight = rcsWeight,
             TerminalRollFree = rollFree,
             // WIDENED TO ADMIT THE CURRENT ATTITUDE. The tilt cone is applied at every node INCLUDING node 0, and node 0 is pinned by an equality to the measured state - so a cap below the vehicle's present tilt asks for a quaternion that is simultaneously exactly the measured one and inside a cone the measured one is outside. That is infeasible by construction, not merely expensive: measured offline from the the recorded run entry at 92.1 degrees with a 60-degree cap, NO node count solves at all - infinite defect at 15, 30 and 50 nodes, never reaching even the loose cold gate. Raise the cap above the entry attitude and the same problem solves at every one of them.
             //  This is the same failure the trust-region box had before it was moved off node 0, and the reason the glideslope and climb-rate constraints start at node 1. Widening rather than restructuring the rows, because the row layout is what the Python reference comparison checks.

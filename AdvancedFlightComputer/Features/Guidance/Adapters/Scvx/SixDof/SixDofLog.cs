@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Flight telemetry for the 6-DOF guidance, written to CSV so a run can be read back afterwards instead of described from memory.
@@ -108,9 +109,10 @@ internal static class SixDofLog
                 "twr", "twrMin", "ambientPa", "altToGo", "descentRate", "stopDistM",
                 "glideViolM", "biasX", "biasY", "biasZ", "trackPosM", "trackVelMs", "trackThrustN", "vcVelMs",
                 "allocRoll", "gimCmdY", "gimCmdZ", "gimAngY", "gimAngZ", "gimRateY", "gimRateZ", "gimMaxDeg", "gimSlewPerS", "gimThrustN", "gimCount",
+                "rcsX", "rcsY", "rcsZ", "rcsGivenX", "rcsGivenY", "rcsGivenZ", "rcsShortNm", "rcsForceN", "rcsFlowKgS", "rcsFiring", "rcsReached",
                 "error"));
 
-            _plan.AppendLine("cycle,t,node,x,y,z,vx,vy,vz,thrustN,tiltDeg,qw,qx,qy,qz,wx,wy,wz,mass,tdx,tdy,tauRoll,solveTime,sigma");
+            _plan.AppendLine("cycle,t,node,x,y,z,vx,vy,vz,thrustN,tiltDeg,qw,qx,qy,qz,wx,wy,wz,mass,tdx,tdy,tauRoll,solveTime,sigma,rcsX,rcsY,rcsZ");
 
             _events.AppendLine($"# navbox 6-DOF run {RunName}");
             _events.AppendLine($"# vehicle: {vehicleName}   body: {bodyName}");
@@ -238,6 +240,9 @@ internal static class SixDofLog
             F(sb, r.AllocRoll);
             F(sb, r.GimCmdY); F(sb, r.GimCmdZ); F(sb, r.GimAngY); F(sb, r.GimAngZ); F(sb, r.GimRateY); F(sb, r.GimRateZ);
             F(sb, r.GimMaxDeg); F(sb, r.GimSlewPerS); F(sb, r.GimThrustN); sb.Append(r.GimCount).Append(',');
+            F(sb, r.RcsX); F(sb, r.RcsY); F(sb, r.RcsZ);
+            F(sb, r.RcsGivenX); F(sb, r.RcsGivenY); F(sb, r.RcsGivenZ);
+            F(sb, r.RcsShortNm); F(sb, r.RcsForceN); F(sb, r.RcsFlowKgS); sb.Append(r.RcsFiring).Append(',').Append(r.RcsReached).Append(',');
             sb.Append(Csv(r.Error));
             sb.AppendLine();
 
@@ -267,7 +272,7 @@ internal static class SixDofLog
             for (int k = 0; k < plan.Nodes; k++)
             {
                 int i = k * 14;
-                int u = k * 4;
+                int u = k * Dynamics6Dof.NU;
                 double qx = plan.X[i + 7], qy = plan.X[i + 8];
                 double r22 = 1.0 - 2.0 * (qx * qx + qy * qy);
                 double tilt = Math.Acos(Math.Clamp(r22, -1.0, 1.0)) * 180.0 / Math.PI;
@@ -285,7 +290,10 @@ internal static class SixDofLog
                 F(sb, plan.X[i + 10]); F(sb, plan.X[i + 11]); F(sb, plan.X[i + 12]);
                 F(sb, plan.X[i + 13]);
                 F(sb, plan.U[u + 0]); F(sb, plan.U[u + 1]); F(sb, plan.U[u + 3]);
-                F(sb, plan.SolveTime); F(sb, plan.Sigma, last: true);
+                F(sb, plan.SolveTime); F(sb, plan.Sigma);
+                // The plan's RCS torque, model body axes, N m.
+                int r = u + Dynamics6Dof.IRCS;
+                F(sb, plan.U[r]); F(sb, plan.U[r + 1]); F(sb, plan.U[r + 2], last: true);
                 sb.AppendLine();
             }
         }
@@ -388,6 +396,10 @@ internal static class SixDofLog
         /// <summary>The share of the roll demand the allocation fitted (TvcAllocationResult.WeakAxisScale), and the highest-thrust gimbal's command, angle and rate in fractions of its range (KsaGimbalControl.GimbalTrace): gimCmd is what it was told, gimAng where it was, gimRate how fast it moved, per second.</summary>
         public double AllocRoll, GimCmdY, GimCmdZ, GimAngY, GimAngZ, GimRateY, GimRateZ, GimMaxDeg, GimSlewPerS, GimThrustN;
         public int GimCount;
+
+        /// <summary>The plan's RCS torque, N m, model body axes; what the allocator's duties give of it; the part out of reach; the side force those duties bring, N; their propellant, kg/s; how many thrusters fire (KsaRcsTorqueControl.Report), and how many the worker's last pass reached (0 with a command standing: the pulses land nowhere).</summary>
+        public double RcsX, RcsY, RcsZ, RcsGivenX, RcsGivenY, RcsGivenZ, RcsShortNm, RcsForceN, RcsFlowKgS;
+        public int RcsFiring, RcsReached;
         public string Error;
     }
 }

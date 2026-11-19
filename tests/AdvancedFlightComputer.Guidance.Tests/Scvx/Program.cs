@@ -13,7 +13,9 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 const int NX = Dynamics6Dof.NX;
 const int NU = Dynamics6Dof.NU;
-const int RowLen = NX + NU + NX + NX * NX + NX * NU;
+// The Python references' control count: u = (tdx, tdy, T, tau_roll), from before the RCS controls (Dynamics6Dof.IRCS). Their RCS controls are zero, so the references are read into the wider layout with zeros there, and compared on their own four.
+const int RefNU = 4;
+const int RowLen = NX + RefNU + NX + NX * NX + NX * RefNU;
 
 bool verbose = args.Contains("--verbose");
 
@@ -57,6 +59,12 @@ if (args.Contains("--3dof-far"))
     if (glideAt >= 0) ThreeDofFarCheck.GlideIntervals = int.Parse(args[glideAt + 1], CultureInfo.InvariantCulture);
     return ThreeDofFarCheck.Run();
 }
+
+if (args.Contains("--6dof-lift"))
+    return SixDofLiftCheck.Run(verbose);
+
+if (args.Contains("--6dof-rcs"))
+    return SixDofRcsCheck.Run(verbose);
 
 if (args.Contains("--6dof-aero"))
     return SixDofAeroCheck.Run(verbose);
@@ -103,6 +111,8 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --3dof-ksa      glide-and-burn and burn-only solves of a returning booster on the KSA model
           --3dof-mpc      the glide-and-burn guidance flown closed loop against dispersed drag, lift, thrust and attitude lag
           --6dof-aero     touchdown guidance's body-axis force and moment: slopes, agreement, a landing against a steady moment
+          --6dof-lift     touchdown guidance from logged hand-overs in pre-5901 and 5901 air: convergence and a closed-loop landing
+          --6dof-rcs      the RCS torque allocator on a booster's layout, and the logged fast hand-over planned with gimbals alone and with RCS
           --boostback-replay <file> [--delay s] [--min-pitch deg]  the booster's own burn planner from where the plan separates it
           --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f] [--hold i,j]
                           solve an ascent problem the game dumped, with the full trace
@@ -354,10 +364,10 @@ foreach (string line in File.ReadLines(csv))
 
     int o = 0;
     double[] x = vals[o..(o += NX)];
-    double[] u = vals[o..(o += NU)];
+    double[] u = WidenU(vals[o..(o += RefNU)]);
     double[] fRef = vals[o..(o += NX)];
     double[] aRef = vals[o..(o += NX * NX)];
-    double[] bRef = vals[o..(o += NX * NU)];
+    double[] bRef = vals[o..(o += NX * RefNU)];
 
     double[] f = new double[NX];
     double[] A = new double[NX * NX];
@@ -366,7 +376,7 @@ foreach (string line in File.ReadLines(csv))
 
     double ef = MaxRelDiff(f, fRef, out int wf);
     double ea = MaxRelDiff(A, aRef, out int wa);
-    double eb = MaxRelDiff(B, bRef, out int wb);
+    double eb = MaxRelDiff(NarrowB(B), bRef, out int wb);
 
     if (ef > worstF) { worstF = ef; worstWhere = $"case {cases} f[{wf}]"; }
     if (ea > worstA) worstA = ea;
@@ -378,7 +388,7 @@ foreach (string line in File.ReadLines(csv))
     if (verbose || !ok)
     {
         Console.WriteLine($"case {cases}: f {ef:E2} (idx {wf})   " +
-                          $"A {ea:E2} (r{wa / NX},c{wa % NX})   B {eb:E2} (r{wb / NU},c{wb % NU})   " +
+                          $"A {ea:E2} (r{wa / NX},c{wa % NX})   B {eb:E2} (r{wb / RefNU},c{wb % RefNU})   " +
                           (ok ? "ok" : "FAIL"));
     }
     cases++;
@@ -401,7 +411,7 @@ if (args.Contains("--fd"))
         double[] vals = line.Split(',')
             .Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
         double[] x = vals[0..NX];
-        double[] u = vals[NX..(NX + NU)];
+        double[] u = WidenU(vals[NX..(NX + RefNU)]);
 
         double[] A = new double[NX * NX], B = new double[NX * NU];
         Dynamics6Dof.Jacobian(x, u, p, [], A, B);
@@ -449,9 +459,10 @@ static int SubproblemCheckScs(bool verbose)
     double[] Row(int i) => lines[i].Split(',')
         .Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
 
-    double[] x0 = Row(0), xf = Row(1), xbar = Row(2), ubar = Row(3);
+    double[] x0 = Row(0), xf = Row(1), xbar = Row(2), ubar = WidenU(Row(3));
     double[] meta = Row(4);
     double[] xRef = Row(5), uRef = Row(6), tail = Row(7);
+    double[] uRefWide = WidenU(uRef);
     double sigBar = meta[0], tr = meta[1];
     double sigRef = tail[0], objRef = tail[1];
 
@@ -479,7 +490,7 @@ static int SubproblemCheckScs(bool verbose)
     if (lines.Length > 8)
     {
         double[] wvRef = Row(8);
-        double[] packed = sub.PackPrimal(xRef, uRef, wvRef, sigRef);
+        double[] packed = sub.PackPrimal(xRef, uRefWide, wvRef, sigRef);
         var (eqRes, eqRow, coneVio, coneIdx) = sub.CheckPrimal(packed);
         double obj = sub.Objective(packed);
         Console.WriteLine($"reference point audit: max |Az-b| {eqRes:E2} (row {eqRow}), " +
@@ -516,13 +527,13 @@ static int SubproblemCheckScs(bool verbose)
     double objGot = sub.PrimalObjective;   // SCS's own reported (1/2)x'Px+c'x, already unscaled to our units? see note below
 
     double ex = MaxRelDiff(xGot, xRef, out int wx);
-    double eu = MaxRelDiff(uGot, uRef, out int wu);
+    double eu = MaxRelDiff(NarrowU(uGot), uRef, out int wu);
     double es = Math.Abs(sub.SolutionSigma - sigRef) / Math.Abs(sigRef);
 
     Console.WriteLine();
     Console.WriteLine("vs CVXPY reference:");
     Console.WriteLine($"  X       max rel diff {ex:E2}  (node {wx / NX}, comp {wx % NX})");
-    Console.WriteLine($"  U       max rel diff {eu:E2}  (node {wu / NU}, comp {wu % NU})");
+    Console.WriteLine($"  U       max rel diff {eu:E2}  (node {wu / RefNU}, comp {wu % RefNU})");
     Console.WriteLine($"  sigma   {sub.SolutionSigma:F6} vs {sigRef:F6}   rel {es:E2}");
     Console.WriteLine($"  SCS-reported objective (scaled coords): {objGot:E6}");
 
@@ -639,14 +650,14 @@ static int LoopCheck(bool verbose)
     double propRef = m0 - xRef[(n - 1) * NX + Dynamics6Dof.IM];
 
     double ex = MaxRelDiff(xGot, xRef, out int wx);
-    double eu = MaxRelDiff(uGot, uRef, out int wu);
+    double eu = MaxRelDiff(NarrowU(uGot), uRef, out int wu);
     double es = Math.Abs(solver.Sigma - sigRef) / Math.Abs(sigRef);
     double ep = Math.Abs(propGot - propRef) / Math.Abs(propRef);
 
     Console.WriteLine();
     Console.WriteLine("converged solution vs python_ref/loop_ref.py:");
     Console.WriteLine($"  X          max rel diff {ex:E2}  (node {wx / NX}, comp {wx % NX})");
-    Console.WriteLine($"  U          max rel diff {eu:E2}  (node {wu / NU}, comp {wu % NU})");
+    Console.WriteLine($"  U          max rel diff {eu:E2}  (node {wu / RefNU}, comp {wu % RefNU})");
     Console.WriteLine($"  sigma      {solver.Sigma:F6} vs {sigRef:F6}   rel {es:E2}");
     Console.WriteLine($"  propellant {propGot:F0} vs {propRef:F0} kg   rel {ep:E2}");
     Console.WriteLine($"  cost       {costGot:E6} vs {costRef:E6}");
@@ -943,6 +954,38 @@ static double[] FdStateJacobian(double[] x, double[] u, Dynamics6Dof.Params p)
 // Largest |a-b| normalised by the scale of the array, so entries that are
 // legitimately zero don't produce a divide-by-zero and large entries don't
 // swamp small ones.
+// A reference's controls, RefNU per node, in the solver's layout: the RCS controls at zero.
+static double[] WidenU(double[] u4)
+{
+    int n = u4.Length / RefNU;
+    var u = new double[n * NU];
+    for (int k = 0; k < n; k++)
+        for (int j = 0; j < RefNU; j++)
+            u[k * NU + j] = u4[k * RefNU + j];
+    return u;
+}
+
+// The solver's controls cut back to a reference's RefNU per node.
+static double[] NarrowU(double[] u)
+{
+    int n = u.Length / NU;
+    var u4 = new double[n * RefNU];
+    for (int k = 0; k < n; k++)
+        for (int j = 0; j < RefNU; j++)
+            u4[k * RefNU + j] = u[k * NU + j];
+    return u4;
+}
+
+// One node's B (NX x NU, row-major) cut back to a reference's RefNU columns.
+static double[] NarrowB(double[] b)
+{
+    var b4 = new double[NX * RefNU];
+    for (int r = 0; r < NX; r++)
+        for (int j = 0; j < RefNU; j++)
+            b4[r * RefNU + j] = b[r * NU + j];
+    return b4;
+}
+
 static double MaxRelDiff(double[] got, double[] want, out int worstIdx)
 {
     double scale = 0;
