@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-- **MAX BURN ACCEL** defaults to 2 g, down from 3, as a stopgap. On KSA 5901 the air turns a returning booster back towards its flight path harder than its 2 deg gimbals can resist at the speed a 3 g burn hands over at (0.31 rad/s^2 against 0.09 on 2026-11-18 at 23:38), and touchdown guidance stalls there. At 2 g the burn lights higher and slower and touchdown guidance converged and landed. The ascent planner's booster landing reserve reads the same limit, so it keeps a little more propellant back. The fix is to plan with the RCS and control surfaces as well as the gimbals (#222).
-
 - A converged touchdown plan is **never refused the hand-over**. The thrust-continuity check, which kept entry guidance flying until its thrust matched touchdown guidance's to half a percent of throttle, is reverted: it held the hand-over 1.6 s into a 5 s burn. The entry throttle is still carried into touchdown guidance's first command and blended to its plan over 0.4 s. The 3 g test on the plan's rebalanced mass is reverted too: it refused accurate plans for passing a soft limit by 0.1 %.
 
 - The hand-over time is **fixed when the engine lights**, AT BURN LEFT before the end of the burn as planned then. A burn that entry guidance stretches afterwards no longer pushes it back; it had waited 2.3 s into a 5 s burn.

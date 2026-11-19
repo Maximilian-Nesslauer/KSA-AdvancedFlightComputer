@@ -762,9 +762,8 @@ public sealed class VehicleAutopilotState
 
     /// <summary>
     /// Largest thrust acceleration a landing burn may PLAN, in g, or 0 for none - a soft constraint in both the 3-DOF and the 6-DOF solvers, read when they build their problem; the glide plan times the ignition under it with headroom (Guidance3Dof.Settings.AccelHeadroom). A min-fuel burn otherwise lights as late as it can, or coasts on minimum thrust once lit, and brakes at full throttle at the end: 5-6 g over two seconds on the 2026-10-08 boosters, up to 13.7 g in the last second on the 2026-10-09 7 t one, where a tenth of a second of lag is metres per second and no node count the solver keeps up with resolves the burn. The trackers may still go past it to correct; see StartThreeDofCold.
-    ///  2 g, from 3, AS A STOPGAP (2026-11-18). On KSA 5901 the air turns a booster back towards its flight path harder than its gimbals alone can resist at the speed of a 3 g burn's hand-over; the lower limit lights the burn earlier, and touchdown guidance converges and lands with it. The fix is to plan with every torque the craft has (RCS, and control surfaces where it has them) as well as the gimbals; issue #222.
     /// </summary>
-    public double LandingAccelLimitG = 2.0;
+    public double LandingAccelLimitG = 3.0;
 
     /// <summary>
     /// Throttle the landing plans keep in hand below them, as a fraction of full: the 3-DOF and the 6-DOF both plan from the engines' minimum throttle plus this, and their feedback (BurnTracker3Dof, Tracker6Dof) may use the rest, down to the real minimum. A min-fuel burn otherwise rides the minimum, and a craft that cannot throttle below its weight, slowed a little more than planned, has no thrust to take off and stops short above the pad (headless, 2026-10-08: 33 m up at a minimum TWR of 1.09). 0 plans on the minimum itself.
