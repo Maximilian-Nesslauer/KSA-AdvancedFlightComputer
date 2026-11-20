@@ -215,9 +215,28 @@ internal sealed class LandingEngineLayout
         return options.ToArray();
     }
 
-    /// <summary>The suggestion with exactly these engines, or null for a choice made by hand.</summary>
-    internal static LandingEngineOption? Matching(LandingEngineOption[] options, IReadOnlyCollection<string> keys)
-        => options.FirstOrDefault(o => o.Keys.Length == keys.Count && o.Keys.All(keys.Contains));
+    /// <summary>
+    /// The suggestion these engines are, or null for an unbalanced choice made by hand. A choice counts as a suggestion when it has the same
+    /// engines, or when it is balanced and has the same number of engines at each distance from the axis, for example another opposite pair.
+    /// </summary>
+    internal LandingEngineOption? Matching(LandingEngineOption[] options, IReadOnlyCollection<string> keys)
+    {
+        LandingEngineOption? exact = options.FirstOrDefault(o => o.Keys.Length == keys.Count && o.Keys.All(keys.Contains));
+        if (exact != null || keys.Count == 0 || Stats(keys).OffsetM > BalancedOffsetM)
+            return exact;
+        string signature = Signature(keys);
+        return options.FirstOrDefault(o => o.Keys.Length == keys.Count && Signature(o.Keys) == signature);
+    }
+
+    // The distances of the engines from the axis, in steps of a twentieth of the cluster's reach, so that rotated choices compare equal.
+    private string Signature(IReadOnlyCollection<string> keys)
+    {
+        LandingEngineDot[] plane = Dots.Where(d => d.AftPlane).ToArray();
+        float reach = Math.Max(plane.Length == 0 ? 0f : plane.Max(Radius), 0.01f);
+        return string.Join(",", Dots.Where(d => keys.Contains(d.Key))
+            .Select(d => d.AftPlane ? ((int)MathF.Round(20f * Radius(d) / reach)).ToString(System.Globalization.CultureInfo.InvariantCulture) : "up:" + d.Key)
+            .Order(StringComparer.Ordinal));
+    }
 
     private static float Radius(LandingEngineDot dot) => MathF.Sqrt(dot.X * dot.X + dot.Y * dot.Y);
 }

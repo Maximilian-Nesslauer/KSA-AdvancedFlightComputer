@@ -171,6 +171,11 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
             && options.Any(o => o.Name == "ALL 9" && o.Stats.Engines == 9)
             && options.All(o => o.Stats.OffsetM <= LandingEngineLayout.BalancedOffsetM), names);
         t.Check("the center alone is recommended for an empty booster of 7 t", options.SingleOrDefault(o => o.Recommended)?.Name == "CENTER", names);
+        string[] handPicked = plane.Where(d => d.Engine.TemplateId is "AltairCenter" or "AltairRing1" or "AltairRing5").Select(d => d.Key).ToArray();
+        string[] lopsided = plane.Where(d => d.Engine.TemplateId is "AltairCenter" or "AltairRing1" or "AltairRing2").Select(d => d.Key).ToArray();
+        t.Check("any opposite pair with the center is the CENTER + PAIR choice, a lopsided three is not",
+            layout.Matching(options, handPicked)?.Name == "CENTER + PAIR" && layout.Matching(options, lopsided) == null,
+            $"{layout.Matching(options, handPicked)?.Name ?? "none"}, {layout.Matching(options, lopsided)?.Name ?? "none"}");
     }
 
     private static void CheckEngineGroupRoundTrip(TestContext t, Vehicle craft, Vehicle rebuilt, DirectoryInfo save, bool prisma = false)

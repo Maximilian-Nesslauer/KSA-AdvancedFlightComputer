@@ -71,7 +71,7 @@ public static partial class GuidanceWindow
             bool manual = craft && editable && CanSwitchEnginesManually(vehicle);
 
             if (onPicture > 0 && DrawEngineMap(vehicle, layout, chosen, craft, editable) is { } clicked)
-                Choose(scope, Toggle(chosen, clicked), options);
+                Choose(scope, Toggle(chosen, clicked), layout, options);
             ConsoleUi.MutedWrapped(editable
                 ? "Click an engine to add it to the landing or take it out, or pick a choice below."
                 : "The choice is fixed while AFC flies.");
@@ -201,7 +201,7 @@ public static partial class GuidanceWindow
                 ImGui.PushID(dot.Key);
                 string label = (chosen.Contains(dot.Key) ? "LANDS: " : "") + dot.Engine.TemplateId;
                 if (ConsoleWidgets.Button(label.AsSpan(), "OtherEngine".AsSpan(), default))
-                    Choose(scope, Toggle(chosen, dot.Key), options);
+                    Choose(scope, Toggle(chosen, dot.Key), layout, options);
                 ImGui.PopID();
             }
         }
@@ -250,13 +250,14 @@ public static partial class GuidanceWindow
             {
                 LandingEngineStats s = layout.Stats(staged);
                 if (SuggestionRow("AS STAGED", s, "", chosen.Count == 0, staged))
-                    Choose(scope, [], options);
+                    Choose(scope, [], layout, options);
             }
+            LandingEngineOption? current = layout.Matching(options, chosen);
             foreach (LandingEngineOption option in options)
             {
-                bool isChosen = option.Keys.Length == chosen.Count && option.Keys.All(chosen.Contains);
-                if (SuggestionRow(option.Name, option.Stats, option.Recommended ? "BEST" : "", isChosen, option.Keys))
-                    Choose(scope, option.Keys, [option]);
+                bool isChosen = ReferenceEquals(option, current);
+                if (SuggestionRow(option.Name, option.Stats, option.Recommended ? "BEST" : "", isChosen, option.Keys) && !isChosen)
+                    Choose(scope, option.Keys, layout, [option]);
             }
         }
         finally
@@ -336,14 +337,14 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>Makes <paramref name="keys"/> the landing choice of the scope, named after the matching suggestion, or as staged when empty.</summary>
-    private static void Choose(string scope, string[] keys, LandingEngineOption[] options)
+    private static void Choose(string scope, string[] keys, LandingEngineLayout layout, LandingEngineOption[] options)
     {
         if (keys.Length == 0)
         {
             SetLandingEngineGroups(scope, LandingEngineGroups.Empty);
             return;
         }
-        string name = LandingEngineLayout.Matching(options, keys)?.Name ?? $"CUSTOM {keys.Length}";
+        string name = layout.Matching(options, keys)?.Name ?? $"CUSTOM {keys.Length}";
         var group = new LandingEngineGroup(name, keys.Order(StringComparer.Ordinal).ToArray());
         SetLandingEngineGroups(scope, new LandingEngineGroups([group], group.Name));
     }
