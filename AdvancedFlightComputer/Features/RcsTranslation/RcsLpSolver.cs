@@ -6,7 +6,7 @@ internal static class RcsLpSolver
 {
     private const double Eps = 1e-9;
 
-    // Columns are column-major. Return null for invalid, infeasible, or unbounded inputs.
+    // Columns are column-major. Return null when the solve cannot certify a finite feasible result.
     public static double[]? Solve(int rows, int n, double[] columns, double[] cost, double[] b)
     {
         if (!HasValidInputs(rows, n, columns, cost, b))
@@ -145,7 +145,7 @@ internal static class RcsLpSolver
             int pivotCol = -1;
             for (int i = 0; i < n; i++)
             {
-                if (Math.Abs(t[r2 * width + i]) > Eps)
+                if (!IsBasic(basis, m, i) && Math.Abs(t[r2 * width + i]) > Eps)
                 {
                     pivotCol = i;
                     break;
@@ -188,6 +188,10 @@ internal static class RcsLpSolver
     {
         int rhs = width - 1;
         int numVars = width - 1;
+        // Bland's rule cannot cycle in exact arithmetic, but rounding can break its ties. A solve that is still pivoting at this
+        // limit fails like an infeasible one instead of looping, and the limit is far above the pivots that a thruster layout needs.
+        int pivotLimit = (int)Math.Clamp(32L * numVars, 256L, 4096L);
+        int pivots = 0;
         while (true)
         {
             // Reduced cost per nonbasic column: c_j - c_B .
@@ -221,9 +225,12 @@ internal static class RcsLpSolver
                 double a = t[r * width + entering];
                 if (a <= Eps)
                     continue;
-                double ratio = t[r * width + rhs] / a;
-                if (ratio < bestRatio - Eps
-                    || (ratio < bestRatio + Eps && (leaving < 0 || basis[r] < basis[leaving])))
+                double ratio = Math.Max(0.0, t[r * width + rhs]) / a;
+                if (!double.IsFinite(ratio))
+                    continue;
+                // Taking the larger of two close ratios can drive the tighter row below zero.
+                if (ratio < bestRatio
+                    || (ratio == bestRatio && (leaving < 0 || basis[r] < basis[leaving])))
                 {
                     bestRatio = ratio;
                     leaving = r;
@@ -232,6 +239,11 @@ internal static class RcsLpSolver
             if (leaving < 0)
             {
                 objective = double.NegativeInfinity;
+                return false;
+            }
+            if (pivots++ >= pivotLimit)
+            {
+                objective = double.NaN;
                 return false;
             }
             Pivot(t, basis, m, width, leaving, entering);
