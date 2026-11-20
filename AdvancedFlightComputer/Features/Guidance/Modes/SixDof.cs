@@ -463,7 +463,10 @@ public static partial class GuidanceWindow
                                    out Dynamics6Dof.Params dyn, out _, LandingAccelLimitMs2,
                                    floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero,
                                    keptRollFree: _s.Guidance.TerminalRollFree, bodyAero: _s.SixDofBodyAero,
-                                   gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight, rateMaxDegS: _s.SixDofRateMaxDegS))
+                                   gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight, rateMaxDegS: _s.SixDofRateMaxDegS,
+                                   coastIntervals: _s.SixDofCoastPending ? CoastIntervalsFor(nodes) : 0,
+                                   scaleFrom: _s.SixDofCoastPending ? _s.SixDofCoastScaleState : null,
+                                   momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -628,6 +631,7 @@ public static partial class GuidanceWindow
         KsaGimbalControl.GimbalTrace gimbal = KsaGimbalControl.Diagnostics(vehicle)?.Trace;
         KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Last(vehicle);
 
+        AttitudeFeedback6Dof.Result fb = _s.Guidance.AttitudeCorrection;
         var row = new SixDofLog.CycleRow
         {
             T = now, Alt = x[2],
@@ -682,6 +686,10 @@ public static partial class GuidanceWindow
             TrackPosM = _s.Guidance.TrackingError.PositionM, TrackVelMs = _s.Guidance.TrackingError.VelocityMs,
             TrackThrustN = _s.Guidance.TrackingError.ThrustN,
             VcVelMs = _s.Guidance.PricingVelocityMs,
+            AttErrDeg = fb.AttitudeErrorDeg, RateErrDegS = fb.RateErrorDegS,
+            FbWantX = fb.Wanted.X, FbWantY = fb.Wanted.Y, FbWantZ = fb.Wanted.Z,
+            FbGimX = fb.Gimbal.X, FbGimY = fb.Gimbal.Y, FbGimZ = fb.Gimbal.Z,
+            FbRcsX = fb.Rcs.X, FbRcsY = fb.Rcs.Y, FbRcsZ = fb.Rcs.Z, FbShortNm = fb.ShortNm,
             Error = _s.Error,
         };
         SixDofLog.Cycle(_s, row);
@@ -848,6 +856,8 @@ public static partial class GuidanceWindow
         _s.SixDofStandby = false;
         _s.SixDofFromBrakingBurn = false;
         _s.SixDofLastPublishedPlan = null;
+        _s.SixDofCoastPending = false;
+        _s.ThreeDofGlideHandoff = null;
 
         // CLEAR THE REFERENCE FIRST, then stop the worker.
         // If stopping ever throws, the mod must still end up disengaged: leaving a live _s.Worker behind means the next engage builds a second one and the first keeps solving into an orphan.
@@ -1007,9 +1017,10 @@ public static partial class GuidanceWindow
 
         // Untracked after a cold restart: the plan has been abandoned, so its position error is not one to correct (SixDofRestartOpenLoop).
         Ksa6DofPlan plan = _s.Guidance.Published;
-        if (plan != null && now - plan.SolveTime < plan.Sigma
+        if (plan != null && now - plan.SolveTime < plan.Duration
             && _s.Guidance.Command(now, out double3 torqueModel, out double thrustN, x,
-                                   _s.SixDofRestartOpenLoop ? null : SixDofTracker()))
+                                   _s.SixDofRestartOpenLoop ? null : SixDofTracker(),
+                                   _s.SixDofRestartOpenLoop ? null : SixDofAttitude()))
         {
             ApplyPlanCommand(vehicle, parent, siteCci, x, now, torqueModel, thrustN);
             return;
@@ -1381,7 +1392,7 @@ public static partial class GuidanceWindow
         if (newPlan && (!_s.Converging || coldResult?.Ok == true))
             NotePublishedPlan(publishedPlan, now);
         bool lastPlanExpired = _s.SixDofLastPublishedPlan != null
-            && now - _s.SixDofLastPublishedPlan.SolveTime >= _s.SixDofLastPublishedPlan.Sigma;
+            && now - _s.SixDofLastPublishedPlan.SolveTime >= _s.SixDofLastPublishedPlan.Duration;
 
         // STOPPED SHORT, OR NO PLAN NEAR THE GROUND. The 6-DOF model keeps the engine lit at T >= Tmin, so a craft whose minimum thrust is above its weight climbs from wherever it stops, and no plan with the engine lit brings it back down: the engine is cut. A plan lost near the ground goes to terminal hover when the craft can hold its weight. Neither falls back to G-FOLD, which cannot plan what 6-DOF could not.
         if (NoPlanNearGround(vehicle, parent, siteCci, x, now, lastPlanExpired))
@@ -1459,7 +1470,7 @@ public static partial class GuidanceWindow
             // BeginWarmRestart declines if there is no plan to keep, in which case there is nothing to choose between them and the straight line is all that is left.
             bool keptPlan = !driftedOff && _s.Guidance.BeginWarmRestart(x, xfR, sigmaR, now);
             if (!keptPlan)
-                _s.Guidance.BeginCold(x, xfR, sigmaR);
+                _s.Guidance.BeginCold(x, xfR, sigmaR, simNow: now);
 
             SixDofLog.Event(_s, now,
                 (keptPlan ? "WARM RESTART" : "COLD RESTART") + $" at alt {x[2]:F0} m: " +
@@ -1567,7 +1578,7 @@ public static partial class GuidanceWindow
                     double sigma = rebuiltPlan != null
                         ? Math.Max(_s.Guidance.Sigma, SixDofSeedFloor) : retrySigma;
                     _s.Guidance.BeginCold(x, xfMore,
-                        Math.Clamp(sigma, _s.Guidance.SigmaMin, _s.Guidance.SigmaMax));
+                        Math.Clamp(sigma, _s.Guidance.SigmaMin, _s.Guidance.SigmaMax), simNow: now);
                     _s.ColdFrames = 0;
                 }
                 else
@@ -1597,7 +1608,7 @@ public static partial class GuidanceWindow
                         _s.Guidance.ColdIterationIntervalS =
                             _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
                         _s.Guidance.BeginCold(x, xfMore,
-                            Math.Clamp(retrySigma, _s.Guidance.SigmaMin, _s.Guidance.SigmaMax));
+                            Math.Clamp(retrySigma, _s.Guidance.SigmaMin, _s.Guidance.SigmaMax), simNow: now);
                         _s.ColdFrames = 0;
                     }
                 }
@@ -1655,7 +1666,8 @@ public static partial class GuidanceWindow
         // Re-crossing a gate during a brief climb would rebuild twice for no benefit.
         // Same rule: StepNodeGates can call RebuildAt, which constructs a new guidance and assigns _s.Guidance.
         // Doing that while the worker holds a reference to the old one would leave a solve running on an object nothing is going to read.
-        if (!firstBrakingCommand && _s.SixDofNodeGates && GuidanceIdle)
+        // Not before ignition: the ladder's spacing is the burn's, and a rebuild after it drops the coast.
+        if (!firstBrakingCommand && _s.SixDofNodeGates && GuidanceIdle && !_s.SixDofCoastPending)
             StepNodeGates(vehicle, parent, siteCci, x, now);
 
         // THE MPC STEP: re-solve from the MEASURED state on a cadence.
@@ -1668,7 +1680,8 @@ public static partial class GuidanceWindow
         // Refresh inertia from the live vehicle before re-solving.
         // It changes as propellant drains, and a stale value is a SYSTEMATIC torque error that MPC structurally cannot correct - re-anchoring the state does not fix the model.
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
-        _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz);
+        UpdateMomentLimiter(vehicle, now);
+        _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz).WithMomentLimiter(_s.MomentLimiterPerPa);
 
         // The first command after braking handover uses the plan the braking mode checked.
         if (!firstBrakingCommand && now - _s.LastReplan >= cadence)
@@ -1686,17 +1699,36 @@ public static partial class GuidanceWindow
         // Past the end of the plan the node index clamps, so Command would hold the terminal control indefinitely: a thrust of at least the minimum, which for a craft that cannot hover is a climb. Not guidance any more, so the craft flies the no-plan law until a re-solve lands.
         // The age and the burn time are read from the one published plan. Ksa6DofGuidance.PlanElapsed is the age at the last command, which belongs to the plan before when a re-solve has just published. Near the ground that age can be more than the burn time of the new plan, and no command would run to renew it.
         Ksa6DofPlan flying = _s.Guidance.Published;
-        if (flying != null && now - flying.SolveTime > flying.Sigma)
+        if (flying != null && now - flying.SolveTime > flying.Duration)
         {
             FlyWithoutPlan(vehicle, parent, siteCci, x,
-                $"PLAN EXPIRED {now - flying.SolveTime - flying.Sigma:F1} s AGO");
+                $"PLAN EXPIRED {now - flying.SolveTime - flying.Duration:F1} s AGO");
             return;
         }
 
-        if (!_s.Guidance.Command(now, out double3 torqueModel, out double thrustN, x, SixDofTracker()))
+        if (!_s.Guidance.Command(now, out double3 torqueModel, out double thrustN, x, SixDofTracker(), SixDofAttitude()))
             return;
 
         ApplyPlanCommand(vehicle, parent, siteCci, x, now, torqueModel, thrustN);
+    }
+
+    /// <summary>How often the game's moment limiter is measured, s (UpdateMomentLimiter).</summary>
+    private const double MomentLimiterEveryS = 0.5;
+
+    /// <summary>
+    /// Measures the game's moment limiter on the craft now (KsaAeroSweep.TryMomentLimiter) every MomentLimiterEveryS, smoothed, into the state the plans read it from (BodyAero6Dof.MomentLimiterPerPa). Keeps the last value where the air is too thin to read it. Main thread, as the aero probe.
+    /// </summary>
+    internal static void UpdateMomentLimiter(Vehicle vehicle, double now)
+    {
+        if (now - _s.MomentLimiterAt < MomentLimiterEveryS)
+            return;
+        _s.MomentLimiterAt = now;
+        if (!KsaAeroSweep.TryMomentLimiter(vehicle, out double perPa, out double divisor))
+            return;
+        _s.MomentLimiterDivisor = divisor;
+        _s.MomentLimiterPerPa = double.IsFinite(_s.MomentLimiterPerPa) && _s.MomentLimiterPerPa > 0.0
+            ? 0.7 * _s.MomentLimiterPerPa + 0.3 * perPa
+            : perPa;
     }
 
     /// <summary>Pitch and yaw before roll when the RCS cannot give the whole of the plan's torque: model z is the roll axis.</summary>
@@ -1732,6 +1764,14 @@ public static partial class GuidanceWindow
         }
         : null;
 
+    /// <summary>The feedback that holds the plan's attitude from the torque margin (AttitudeFeedback6Dof), or null to fly the plan's torques open loop.</summary>
+    private static AttitudeFeedback6Dof SixDofAttitude() => _s.SixDofAttitudeFeedback
+        ? new AttitudeFeedback6Dof { BandwidthRadS = Math.Max(_s.SixDofAttitudeBandwidth, 0.0) }
+        : null;
+
+    /// <summary>The share of the gimbals' and RCS's torque the plans leave for the attitude feedback; none without it.</summary>
+    private static double SixDofTorqueMarginNow => _s.SixDofAttitudeFeedback ? Math.Clamp(_s.SixDofTorqueMargin, 0.0, 0.5) : 0.0;
+
     /// <summary>
     /// Turns one plan command into the throttle and the gimbal torque, and logs the cycle.
     /// </summary>
@@ -1762,6 +1802,18 @@ public static partial class GuidanceWindow
         throttle = Math.Clamp(throttle, 0.0, 1.0);
         throttle = EntryHandoffThrottle(throttle, now - _s.SixDofEntryBlendStart, _s.SixDofEntryBlendThrottle);
 
+        // THE COAST BEFORE IGNITION (SixDofOwnsIgnition): the engine off, nothing on the gimbals, the plan's RCS torque alone. From the plan's ignition on, the engine is lit below and the coast is over for good.
+        bool coasting = _s.Guidance.InCoast;
+        if (coasting)
+            throttle = 0.0;
+        else if (_s.Guidance.HasCoast && !_s.Guidance.EngineLit)
+        {
+            _s.Guidance.EngineLit = true;
+            _s.SixDofCoastPending = false;
+            SixDofLog.Event(_s, now, $"IGNITION at alt {x[2]:F1} m, {Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]):F1} m/s, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from the target");
+            GuidanceLog.Info(vehicle, FormattableString.Invariant($"Touchdown guidance ignition at {x[2]:F0} m, {Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]):F0} m/s, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F0} m from the target."));
+        }
+
         _s.CapabilityN = capability;
         // Saturation is the honest failure signal here: the plan is asking for more than the vehicle physically has, so the trajectory being flown is not the one that was planned, and no amount of feedback recovers it.
         _s.ThrustSaturated = capability > 1.0 && thrustN > capability;
@@ -1783,7 +1835,7 @@ public static partial class GuidanceWindow
         // The 6-DOF model is the opposite: its throttle box guarantees T >= Tmin > 0, so it NEVER asks for a coast.
         // And KSA clamps a vehicle's MinimumThrottle as low as 0.01, so with the floor now read from the vehicle a perfectly normal min-fuel opening command of 1% fell below the 2% threshold and shut the engine down.
         // That loses THRUST AND TORQUE together - gimbals have no authority without thrust - so the vehicle went into free fall with no attitude control on the very first step.
-        manual.EngineOn = true;
+        manual.EngineOn = !coasting;
         manual.EngineThrottle = (float)throttle;
         _s.LastThrottle = throttle;
 
@@ -1863,8 +1915,16 @@ public static partial class GuidanceWindow
                                      _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                      x, xf, out cfg, out dyn, out error, LandingAccelLimitMs2,
                                      floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero, bodyAero: _s.SixDofBodyAero,
-                                     gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight, rateMaxDegS: _s.SixDofRateMaxDegS);
+                                     gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight, rateMaxDegS: _s.SixDofRateMaxDegS,
+                                     coastIntervals: _s.SixDofCoastPending ? CoastIntervalsFor(engageNodes) : 0,
+                                     scaleFrom: _s.SixDofCoastPending ? _s.SixDofCoastScaleState : null,
+                                     momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow);
     }
+
+    /// <summary>
+    /// The coast's share of a plan's intervals when touchdown guidance takes the craft before ignition (SixDofOwnsIgnition): two fifths, as offline (--6dof-coast: 12 of 39 intervals for 5 s of coast, 20 of 49 for 10 s), leaving the burn at least as many intervals as it has on its own.
+    /// </summary>
+    internal static int CoastIntervalsFor(int nodes) => Math.Clamp((int)Math.Round(0.4 * (nodes - 1)), 1, Math.Max(nodes - 3, 1));
 
     /// <summary>
     /// Starts a G-FOLD descent for a craft in the air that touchdown guidance cannot plan for, or found no plan for, when G-FOLD can fly it (GfoldCanFly). The descent keeps a lit engine at its throttle, so a burn that was handed over does not stop. The landing phase it sets is what ApplyAutopilot reads as a hand-over, so the step does not release the craft and cut the engine. False when G-FOLD cannot fly the craft or the craft is not on its way down, and the caller then decides.
@@ -1896,7 +1956,7 @@ public static partial class GuidanceWindow
 
         var xf = PlanEndState(x);
         _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
-        _s.Guidance.BeginCold(x, xf, Math.Clamp(RetrySigma(_s.Guidance), _s.Guidance.SigmaMin, _s.Guidance.SigmaMax));
+        _s.Guidance.BeginCold(x, xf, Math.Clamp(RetrySigma(_s.Guidance), _s.Guidance.SigmaMin, _s.Guidance.SigmaMax), simNow: now);
         _s.Converging = true;
         _s.ColdFrames = 0;
         _s.SixDofNoPlanLaw = true;
@@ -1971,7 +2031,8 @@ public static partial class GuidanceWindow
         if (_s.SixDofSpreadCold && !_s.SixDofFixedTime && !_s.SixDofGfoldSeed)
         {
             _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
-            _s.Guidance.BeginCold(x, xf, _s.SixDofEntrySigmaSeed);
+            _s.Guidance.ColdSeedPath = _s.SixDofCoastPending ? EntrySeedPath(now) : null;
+            _s.Guidance.BeginCold(x, xf, _s.SixDofEntrySigmaSeed, _s.SixDofCoastPending ? _s.SixDofCoastSeedS : double.NaN, now);
             _s.Converging = true;
             _s.Worker = _s.SixDofThreaded ? new Ksa6DofSolveWorker() : null;
             _s.ColdFrames = 0;

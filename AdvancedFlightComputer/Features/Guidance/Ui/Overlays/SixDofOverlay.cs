@@ -132,10 +132,9 @@ public static partial class GuidanceWindow
         OvLine(dl, siteCci, targetCci, padCol, 1.0f);
 
         // --- where the tracker thinks the vehicle should be right now --- Drawn against the live vehicle so plan-vs-flown divergence is visible in the world, not just as a number.
-        double dt = g.Sigma / (n - 1);
-        double sNode = Math.Clamp(g.PlanElapsed / dt, 0.0, n - 1.001);
-        int k0 = (int)sNode;
-        double frac = sNode - k0;
+        if (g.Published is not { } published || published.Nodes != n)
+            return;
+        (int k0, double frac) = published.Locate(g.PlanElapsed);
         int k1 = Math.Min(k0 + 1, n - 1);
         double3 refCci = node[k0] * (1.0 - frac) + node[k1] * frac;
         if (TryProjectCci(refCci, out float2 rs))

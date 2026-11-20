@@ -849,7 +849,8 @@ public static class KsaAeroSweep
     ///  What the tables cannot be: they average over roll, sample at sea-level air and a still body, and leave out any force the craft makes at zero angle of attack. Against this the guidance can tell a model error from a force that is not aerodynamic at all.
     ///  Main thread only, as the sweep: guidance calls it from the Vehicle.PrepareWorker prefix, where no worker steps the vehicle. The flow direction is the live one, so the mesh's shielding is what the game's own step left. False while the aero mesh rebuilds.
     /// </summary>
-    public static bool TryLiveAero(Vehicle vehicle, out double3 forceBody, out double3 torqueBody)
+    /// <param name="dtS">The physics step the game's limiters are worked for, s. 0 (the default) asks for the loads with no limiter. The game's own integrator calls the same function with its substep (KinematicMeasurements.DeltaTime), and ComputeAerodynamicLoads divides the moment by 1 + invInertiaBound dt q (0.5 dt stiffnessBound + dampingBound / V) - so at 0 this is not what the integrator applies.</param>
+    public static bool TryLiveAero(Vehicle vehicle, out double3 forceBody, out double3 torqueBody, double dtS = 0.0)
     {
         forceBody = torqueBody = double3.Zero;
         PartTree parts = vehicle?.Parts;
@@ -860,7 +861,7 @@ public static class KsaAeroSweep
         VehicleProperties props = vehicle.Props;
         PhysicsEnvironment environment = vehicle.PhysicsEnvironment;
         Disturbances d = PhysicsStates.ComputeDerivatives(in origin, in live, in props, in environment,
-            0.0, 0.0, origin.PositionBub, origin.VelocityBub, default, default, parts);
+            0.0, dtS, origin.PositionBub, origin.VelocityBub, default, default, parts);
 
         // The crawl: the airspeed scaled down to BaselineSpeed along the same direction, the body rates kept.
         float3 airBody = PhysicsStates.ComputeAirVelocityBody(in origin, in live, in environment);
@@ -871,10 +872,33 @@ public static class KsaAeroSweep
         KinematicStates crawl = live;
         crawl.VelocityPhys = live.VelocityPhys - (air * (1.0 - BaselineSpeed / airspeed)).Transform(live.Body2Phys);
         Disturbances d0 = PhysicsStates.ComputeDerivatives(in origin, in crawl, in props, in environment,
-            0.0, 0.0, origin.PositionBub, origin.VelocityBub, default, default, parts);
+            0.0, dtS, origin.PositionBub, origin.VelocityBub, default, default, parts);
         forceBody = d.ForceBody - d0.ForceBody;
         torqueBody = d.TorqueBody - d0.TorqueBody;
         return double.IsFinite(forceBody.X) && double.IsFinite(forceBody.Y) && double.IsFinite(forceBody.Z);
+    }
+
+    /// <summary>
+    /// The game's moment limiter on the craft as it is now, per pascal (BodyAero6Dof.MomentLimiterPerPa): the air's moment with no limiter against the one the integrator applies at its own substep (KinematicMeasurements.DeltaTime), k = (M0 / Mdt - 1) / q. False where the air is too thin or the moment too small to read, or the ratio is not one a limiter could give.
+    /// </summary>
+    public static bool TryMomentLimiter(Vehicle vehicle, out double perPa, out double divisor)
+    {
+        perPa = divisor = double.NaN;
+        double dt = vehicle?.KinematicMeasurements.DeltaTime ?? 0.0;
+        if (!(dt > 0.0) || !TryLiveAero(vehicle, out _, out double3 m0) || !TryLiveAero(vehicle, out _, out double3 mdt, dt))
+            return false;
+        double mm = double3.Dot(mdt, mdt);
+        if (!(mm > 1e4))   // 100 N m
+            return false;
+        double ratio = double3.Dot(m0, mdt) / mm;
+        float3 air = PhysicsStates.ComputeAirVelocityBody(vehicle.BubbleOrigin, vehicle.KinematicStates, vehicle.PhysicsEnvironment);
+        double v2 = double3.Unpack(in air).LengthSquared();
+        double q = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * v2;
+        if (!(q > 500.0) || !(ratio >= 1.0 && ratio < 100.0))
+            return false;
+        divisor = ratio;
+        perPa = (ratio - 1.0) / q;
+        return double.IsFinite(perPa);
     }
 
     /// <summary>

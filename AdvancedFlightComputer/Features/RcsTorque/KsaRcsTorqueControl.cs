@@ -134,6 +134,42 @@ internal static class KsaRcsTorqueControl
     }
 
     /// <summary>
+    /// The ROLL BALANCE's RCS terms (EntryLog's roll monitor), about <paramref name="axisAsmb"/> in assembly axes, N m: the torque the thrusters fire this step - each one's full-thrust torque times the share of <paramref name="stepS"/> its commanded pulse covers, whoever commanded it - and what all of them can give each way, every thruster that turns the craft that way at full thrust, as the stock flight computer counts its authority (ThrusterAuthority.TotalTorque). Main thread.
+    /// </summary>
+    internal static bool FiredTorqueAlong(Vehicle vehicle, double3 axisAsmb, double stepS,
+                                          out double firedNm, out double maxPosNm, out double maxNegNm)
+    {
+        firedNm = maxPosNm = maxNegNm = 0.0;
+        if (vehicle?.Parts == null)
+            return false;
+        ThrusterController[] modules = Thrusters(vehicle);
+        if (modules.Length == 0
+            || !ModuleStateful<ThrusterController, ThrusterControllerState, ThrusterControllerGlobalState, EmptyStruct>
+                .TryGetFrom(vehicle.Parts.States, out var states))
+            return false;
+        ReadOnlySpan<RocketState> rocketStates = RocketStates.Of(vehicle.Parts);
+        float3 com = vehicle.TotalMassPropsAsmb.Offset;
+        float ambient = vehicle.PhysicsEnvironment.AtmosphericPressure;
+        var assembly = new RcsCtrlFrame(floatQuat.Identity);
+        double step = Math.Max(stepS, 1e-3);
+        foreach (ThrusterController module in modules)
+        {
+            RcsWrenchTable.ComputeLive(module, rocketStates, com, ambient, in assembly,
+                out float3 force, out float3 torque, out float flow);
+            double along = double3.Dot(new double3(torque.X, torque.Y, torque.Z), axisAsmb);
+            if (!double.IsFinite(along))
+                continue;
+            if (along > 0.0) maxPosNm += along;
+            else maxNegNm -= along;
+            ThrusterControllerState st = states.States[module.StatesIdx];
+            double share = Math.Clamp(st.CommandPulseTime / step, 0.0, 1.0);
+            if (st.IsPropellantAvailable && share > 0.0)
+                firedNm += share * along;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// What the craft's RCS can do about each axis of the frame each way, into <paramref name="six"/> in the order +x, -x, +y, -y, +z, -z (RcsTorqueAllocator.Characterise). False when it has no usable thruster.
     /// </summary>
     internal static bool TryCharacterise(Vehicle vehicle, double3 ax, double3 ay, double3 az,

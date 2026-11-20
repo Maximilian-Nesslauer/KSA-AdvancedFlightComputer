@@ -351,7 +351,7 @@ public static class Ksa6DofSetup
     /// <summary>
     /// The body-axis force and moment for the plan's full attitude (BodyAero6Dof), from the sweep's tables, or null where it measured none: the model's axes in the game's body axes (KsaFrameBridge.BodyAxes), and the moment moved from the centre of mass the sweep saw to the one the craft has now.
     /// </summary>
-    private static BodyAero6Dof BodyAeroFor(Vehicle vehicle, KsaAeroSweep.Result aero)
+    private static BodyAero6Dof BodyAeroFor(Vehicle vehicle, KsaAeroSweep.Result aero, double momentLimiterPerPa)
     {
         if (aero?.BodyAero == null || aero.Atmosphere == null || !(aero.ReferenceArea > 0.0))
             return null;
@@ -367,8 +367,19 @@ public static class Ksa6DofSetup
             ReferenceLength = aero.ReferenceLength,
             ModelToTable = [mx.X, my.X, mz.X, mx.Y, my.Y, mz.Y, mx.Z, my.Z, mz.Z],
             ComShiftX = shift.X, ComShiftY = shift.Y, ComShiftZ = shift.Z,
+            // The game's moment limiter, as measured in flight (BodyAero6Dof.MomentLimiterPerPa).
+            MomentLimiterPerPa = double.IsFinite(momentLimiterPerPa) && momentLimiterPerPa > 0.0 ? momentLimiterPerPa : 0.0,
         };
     }
+
+    /// <summary>The fixed length and speed the terminal miss is priced on, m and m/s (Scvx6DofConfig.TerminalMissScaleM): the scales of the hand-over the terminal weights were tuned at.</summary>
+    internal const double TerminalMissPriceM = 250.0, TerminalSpeedPriceMs = 100.0;
+
+    /// <summary>
+    /// The body-rate scale, rad/s. The trust region is a share of each scale, so at 1 a warm re-solve may move a body rate 0.05 rad/s in one step against a 0.01 rad/s defect gate, and the refusals at ignition on 2026-11-20 were rate defects at the first interval, 4-8 times the gate.
+    ///  KEPT AT 1. Tried at 0.2, about the rates a landing flies (--6dof-coast --rate-scale 0.2, 2026-11-20): the two-phase landings came out the same (3.1 and 2.8 m off against 2.9 and 3.2 m), but the burn-only re-solves went from 650-1,825 SCS iterations to 5,750-9,000, at the cap. The virtual control and the rate limit's slack are priced on this scale, so a tighter one makes every subproblem harder.
+    /// </summary>
+    internal static double RateScaleRadS = 1.0;
 
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                 int nodes, double tiltMaxDeg, double throttleFloor,
@@ -381,7 +392,8 @@ public static class Ksa6DofSetup
                                 out string error, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
                                 KsaAeroSweep.Result aero = null, bool? keptRollFree = null, bool bodyAero = true,
                                 bool gimbalRateLimit = true, Dynamics6Dof.RcsModel rcs = null, double rcsWeight = 0.0,
-                                double rateMaxDegS = 0.0)
+                                double rateMaxDegS = 0.0, int coastIntervals = 0, double[] scaleFrom = null,
+                                double momentLimiterPerPa = 0.0, double torqueMargin = 0.0)
     {
         cfg = null!;
         dyn = null!;
@@ -472,6 +484,15 @@ public static class Ksa6DofSetup
         }
         RollModel(tauRoll, izz, keptRollFree, out bool rollFree, out tauRoll);
 
+        // THE TORQUE MARGIN (Scvx6DofConfig.PlanTorqueShare): the plan gets this share of the gimbals' torque, their roll and the RCS's, and the attitude feedback the rest (AttitudeFeedback6Dof). The cone is shrunk in torque, through its tangent; the gimbals' slew, in full deflections a second, is widened by as much so it stays the hardware's rate in degrees. After the roll model, so a margin cannot by itself decide the roll is left free.
+        double torqueShare = Math.Clamp(1.0 - (double.IsFinite(torqueMargin) ? torqueMargin : 0.0), 0.5, 1.0);
+        gimbalDeg = Math.Atan(Math.Tan(gimbalDeg * Math.PI / 180.0) * torqueShare) * 180.0 / Math.PI;
+        tauRoll *= torqueShare;
+        double[] rcsPos = rcs?.MaxPosNm is { } pos ? Array.ConvertAll(pos, v => v * torqueShare) : null;
+        double[] rcsNeg = rcs?.MaxNegNm is { } neg ? Array.ConvertAll(neg, v => v * torqueShare) : null;
+        // A plan with a coast keeps the heading and the roll-rate limit like any other. Freeing them was tried on 2026-11-20 while the air's roll moment read 40 kN m against 22 of RCS; that was the sweep's moment without the game's limiter (BodyAero6Dof.MomentLimiterPerPa), and the booster felt about 11.
+        bool coastPlan = false;
+
         // Refuse an over-powered configuration up front, with the number needed to fix it. Reporting "infeasible" after a 500 ms solve tells the user nothing; this says exactly which knob is wrong and what value would work.
         {
             double gSite = parent.Mu / (siteCci.Length() * siteCci.Length());
@@ -520,7 +541,7 @@ public static class Ksa6DofSetup
                 }
                 : null,
             // THE BODY-AXIS FORCE AND MOMENT for the plan's own attitude, where the sweep measured them: the gimbal then holds against the air's moment from the plan's start rather than finding it in flight (BodyAero6Dof). The tables above carry the share of the force these fade out of.
-            BodyAero = bodyAero && aero?.Table != null ? BodyAeroFor(vehicle, aero) : null,
+            BodyAero = bodyAero && aero?.Table != null ? BodyAeroFor(vehicle, aero, momentLimiterPerPa) : null,
             AeroAltitudeOffset = siteAltAsl,
             LArm = arm,
             Ixx = ixx, Iyy = iyy, Izz = izz,
@@ -535,11 +556,13 @@ public static class Ksa6DofSetup
         //  Quaternion and body-rate scales stay at 1: both are already dimensionless or O(1), and they are the values the reference converges with - no reason to perturb a validated part of the setup.
         double mass = vehicle.TotalMass;
         double gScale = parent.Mu / (siteCci.Length() * siteCci.Length());
+        // A plan with a coast before ignition is scaled on the burn, from the state at ignition (scaleFrom), not on the glide from the craft now: the terminal miss is priced per length scale, so scaled on a hand-over several hundred metres up it cost a third as much per metre, and offline the landings missed by 10 m against 3 m (--6dof-coast, 2026-11-20).
+        double[] sx = scaleFrom != null && scaleFrom.Length >= 6 ? scaleFrom : x0;
         double lengthScale = Math.Max(
-            Math.Sqrt((x0[0] - xf[0]) * (x0[0] - xf[0]) +
-                      (x0[1] - xf[1]) * (x0[1] - xf[1]) +
-                      (x0[2] - xf[2]) * (x0[2] - xf[2])), 1.0);
-        double speed0 = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
+            Math.Sqrt((sx[0] - xf[0]) * (sx[0] - xf[0]) +
+                      (sx[1] - xf[1]) * (sx[1] - xf[1]) +
+                      (sx[2] - xf[2]) * (sx[2] - xf[2])), 1.0);
+        double speed0 = Math.Sqrt(sx[3] * sx[3] + sx[4] * sx[4] + sx[5] * sx[5]);
         double velocityScale = Math.Max(Math.Max(speed0, Math.Sqrt(lengthScale * gScale)), 1.0);
         // Burn-time bounds must BRACKET the seed. Scvx6DofConfig's defaults (5..25 s, scale 12) describe the Python test case; leaving them while seeding sigma elsewhere gives the solver a starting point outside its own feasible range and a badly conditioned scale. Both are set from the seed instead.
         double sigma = Math.Max(sigmaSeed, 1.0);
@@ -559,19 +582,24 @@ public static class Ksa6DofSetup
         cfg = new Scvx6DofConfig
         {
             Nodes = nodes,
+            // The coast before ignition (Scvx6DofConfig.CoastIntervals), or none.
+            CoastIntervals = coastIntervals > 0 && coastIntervals <= nodes - 3 ? coastIntervals : 0,
+            CoastSigmaMax = 60.0,
             Tmax = thrust,
             ThrottleFloor = throttleFloor,
             GimbalMaxDeg = gimbalDeg,
             // The RCS controls are scaled on each axis's whole control torque (Scvx6DofConfig.ResolvedUScale).
             GimbalArm = arm,
-            GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) : 0.0,
+            GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) / torqueShare : 0.0,
+            PlanTorqueShare = torqueShare,
             TauRollMax = tauRoll,
             RollTorqueFollowsThrust = true,
-            RcsMaxPosNm = rcs?.MaxPosNm,
-            RcsMaxNegNm = rcs?.MaxNegNm,
+            RcsMaxPosNm = rcsPos,
+            RcsMaxNegNm = rcsNeg,
             RcsWeight = rcsWeight,
             // The turn-rate limit (Scvx6DofConfig.RateMaxRadS).
             RateMaxRadS = Math.Max(rateMaxDegS, 0.0) * Math.PI / 180.0,
+            RateLimitIncludesRoll = !coastPlan,
             TerminalRollFree = rollFree,
             // WIDENED TO ADMIT THE CURRENT ATTITUDE. The tilt cone is applied at every node INCLUDING node 0, and node 0 is pinned by an equality to the measured state - so a cap below the vehicle's present tilt asks for a quaternion that is simultaneously exactly the measured one and inside a cone the measured one is outside. That is infeasible by construction, not merely expensive: measured offline from the the recorded run entry at 92.1 degrees with a 60-degree cap, NO node count solves at all - infinite defect at 15, 30 and 50 nodes, never reaching even the loose cold gate. Raise the cap above the entry attitude and the same problem solves at every one of them.
             //  This is the same failure the trust-region box had before it was moved off node 0, and the reason the glideslope and climb-rate constraints start at node 1. Widening rather than restructuring the rows, because the row layout is what the Python reference comparison checks.
@@ -602,6 +630,9 @@ public static class Ksa6DofSetup
             //  POSITION ABOVE SPEED. Both are normalised by the problem's scales (here ~250 m and ~100 m/s at a hand-over), so the weights alone do not say what trades for what. With speed at 1e5 and the miss at 1e3, 1 m/s cost as much as ~270 m of miss, and a squeezed plan stopped at rest 20-30 m over the pad - where a booster that cannot throttle below its weight floats and then climbs (2026-10-08, 17:42 and 17:53). At 1e5 and 1e4, 1 m of miss costs about as much as 4 m/s: a squeezed plan arrives a little fast rather than high, as Falcon 9 lands at ~2 m/s rather than stopping short.
             TerminalMissWeight = 1.0e5,
             TerminalSpeedWeight = 1.0e4,
+            // Priced per fixed metre and m/s - the ~250 m and ~100 m/s scales of the hand-over these weights were tuned at - so a metre of miss costs the same however far away the plan starts (Scvx6DofConfig.TerminalMissScaleM).
+            TerminalMissScaleM = TerminalMissPriceM,
+            TerminalSpeedScaleMs = TerminalSpeedPriceMs,
             SigmaMin = sigma * 0.15,
             SigmaMax = sigma * 4.0,
             SigmaScale = sigma,
@@ -610,7 +641,8 @@ public static class Ksa6DofSetup
                 lengthScale, lengthScale, lengthScale,
                 velocityScale, velocityScale, velocityScale,
                 1, 1, 1, 1,
-                1, 1, 1,
+                // Body rates on the rates a landing flies (RateScaleRadS), not 1 rad/s.
+                RateScaleRadS, RateScaleRadS, RateScaleRadS,
                 Math.Max(mass, 1.0),
             ],
         };

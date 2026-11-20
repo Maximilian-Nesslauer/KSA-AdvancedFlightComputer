@@ -68,6 +68,9 @@ internal static class EntryLog
                 "axisOffsetDeg", "alphaBody", "tnm", "rollDeg",
                 "measDrag", "measLift", "measSide", "predDrag", "predLift", "predLiftBody", "predSideBody",
                 "liveOk", "liveDrag", "liveLift", "liveSide", "liveMomentNm", "bodyAero", "rollHoldErrDeg",
+                "rollRateDegS", "rollAccelDegS2", "rollIzz", "rollNetNm", "rollAirNm", "rollRcsNm", "rollResidNm", "rcsRollPosNm", "rcsRollNegNm",
+                "physDtS", "pitchNetNm", "pitchIntNm", "pitchAirNm", "pitchAirDtNm", "pitchRcsNm",
+                "yawNetNm", "yawIntNm", "yawAirNm", "yawAirDtNm", "yawRcsNm", "rollIntNm", "rollAirDtNm",
                 "liveMxNm", "liveMyNm", "liveMzNm", "predMxNm", "predMyNm", "predMzNm", "solveWaitMs", "solveRunMs", "solver"));
             _pendingRows = 0;
             _failedFlushes = 0;
@@ -122,6 +125,9 @@ internal static class EntryLog
             F(sb, r.MeasDrag); F(sb, r.MeasLift); F(sb, r.MeasSide); F(sb, r.PredDrag); F(sb, r.PredLift); F(sb, r.PredLiftBody); F(sb, r.PredSideBody);
             sb.Append(r.LiveOk ? 1 : 0).Append(','); F(sb, r.LiveDrag); F(sb, r.LiveLift); F(sb, r.LiveSide); F(sb, r.LiveMomentNm);
             sb.Append(r.BodyAero ? 1 : 0).Append(','); F(sb, r.RollHoldErrDeg);
+            F(sb, r.RollRateDegS); F(sb, r.RollAccelDegS2); F(sb, r.RollIzz); F(sb, r.RollNetNm); F(sb, r.RollAirNm); F(sb, r.RollRcsNm); F(sb, r.RollResidNm); F(sb, r.RcsRollPosNm); F(sb, r.RcsRollNegNm);
+            F(sb, r.PhysDtS); F(sb, r.PitchNetNm); F(sb, r.PitchIntNm); F(sb, r.PitchAirNm); F(sb, r.PitchAirDtNm); F(sb, r.PitchRcsNm);
+            F(sb, r.YawNetNm); F(sb, r.YawIntNm); F(sb, r.YawAirNm); F(sb, r.YawAirDtNm); F(sb, r.YawRcsNm); F(sb, r.RollIntNm); F(sb, r.RollAirDtNm);
             F(sb, r.LiveMx); F(sb, r.LiveMy); F(sb, r.LiveMz); F(sb, r.PredMx); F(sb, r.PredMy); F(sb, r.PredMz);
             F(sb, r.SolveWaitMs); F(sb, r.SolveRunMs);
             sb.Append(Csv(r.Solver)).AppendLine();
@@ -179,6 +185,17 @@ internal static class EntryLog
         public double AxisOffsetDeg, AlphaBody, RollDeg, MeasDrag, MeasLift, MeasSide, PredDrag, PredLift, PredLiftBody, PredSideBody;
         public bool Tnm, LiveOk;
         public double LiveDrag, LiveLift, LiveSide, LiveMomentNm, RollHoldErrDeg;
+
+        /// <summary>
+        /// THE ROLL BALANCE, about the thrust axis (touchdown guidance's roll axis), each step: the measured roll rate and its change, the roll inertia touchdown guidance models, the net torque that change says the craft felt (Izz x roll accel), the game's air torque (KsaAeroSweep.TryLiveAero), the RCS's as fired (KsaRcsTorqueControl.FiredTorqueAlong), what is left over, and what the thrusters can give each way. 2026-11-20: the air's was -40 kN m against 22 kN m of RCS by both counts, yet the booster held its roll - one of these terms is wrong.
+        /// </summary>
+        public double RollRateDegS, RollAccelDegS2, RollIzz, RollNetNm, RollAirNm, RollRcsNm, RollResidNm, RcsRollPosNm, RcsRollNegNm;
+
+        /// <summary>
+        /// THE BALANCE ON ALL THREE AXES (model x, y = pitch, yaw; z = roll, the thrust axis), N m: the net from the measured rate change (I x d(w)/dt), the integrator's own (I x KinematicMeasurements.AngularAccelerationBody, every torque it applied), the air's as KsaAeroSweep.TryLiveAero gives it with no limiter and with the integrator's substep (physDtS), and the RCS fired. The integrator divides the air's moment by a factor of its substep (ComputeAerodynamicLoads); airDt against int - rcs says whether that is the whole difference.
+        /// </summary>
+        public double PhysDtS, PitchNetNm, PitchIntNm, PitchAirNm, PitchAirDtNm, PitchRcsNm,
+                      YawNetNm, YawIntNm, YawAirNm, YawAirDtNm, YawRcsNm, RollIntNm, RollAirDtNm;
 
         /// <summary>The aerodynamic moment about the centre of mass, body axes, N m: the game's own now (KsaAeroSweep.TryLiveAero), and the body-axis tables' for the same air (KsaAeroSweep.PredictBodyMoment). NaN where there is none (set by the caller).</summary>
         public double LiveMx, LiveMy, LiveMz, PredMx, PredMy, PredMz;

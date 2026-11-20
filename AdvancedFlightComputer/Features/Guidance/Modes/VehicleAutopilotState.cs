@@ -902,6 +902,17 @@ public sealed class VehicleAutopilotState
     private static readonly Tracker6Dof SixDofTrackDefaults = new();
 
     /// <summary>
+    /// Hold the plan's attitude and body rates between re-solves with a torque from the share of the gimbals and RCS the plans leave unused (AttitudeFeedback6Dof), and the loop's natural frequency, rad/s. Off flies the plan's torques open loop, as before 2026-11-20, and the plans use the whole of the craft's torque.
+    /// </summary>
+    public bool SixDofAttitudeFeedback = true;
+    public double SixDofAttitudeBandwidth = 1.5;
+
+    /// <summary>
+    /// The share of the gimbals' torque, their roll and the RCS's the touchdown plans keep back for the attitude feedback (Scvx6DofConfig.PlanTorqueShare), as LandingPlanFloorMargin keeps throttle back for the thrust tracker. Only with the feedback on.
+    /// </summary>
+    public double SixDofTorqueMargin = 0.2;
+
+    /// <summary>
     /// Solve this craft's re-plan on a worker thread. Per vehicle because the worker
     /// is: toggling it off disposes THIS vehicle's worker, and as one global flag it
     /// left every other craft's worker running while claiming threading was off.
@@ -969,6 +980,38 @@ public sealed class VehicleAutopilotState
 
     /// <summary>How long before entry guidance's planned ignition touchdown guidance's standby starts, s, on the state forecast at ignition along the glide plan (GuidanceWindow.StepEntryTouchdownPrepare); the lock window takes over from there. 0 starts it at the lock, as before.</summary>
     public double ThreeDofTouchdownPrepareS = 15.0;
+
+    /// <summary>
+    /// TOUCHDOWN GUIDANCE OWNS IGNITION: it takes the craft in the glide, before the engine lights, with a coast ahead of the burn whose length - the ignition time - it chooses (Scvx6DofConfig.CoastIntervals). Its standby plans from the measured state, not a forecast. Entry guidance flies only the glide. Off, it takes the burn after ignition as before.
+    /// </summary>
+    public bool SixDofOwnsIgnition = true;
+
+    /// <summary>With SixDofOwnsIgnition: the hand-over comes this long before entry guidance's planned ignition, s, or ThreeDofTakeoverBeforeImpactS before its touchdown, whichever is earlier.</summary>
+    public double ThreeDofTakeoverBeforeIgnitionS = 5.0;
+
+    /// <summary>See ThreeDofTakeoverBeforeIgnitionS: s before entry guidance's planned touchdown.</summary>
+    public double ThreeDofTakeoverBeforeImpactS = 12.0;
+
+    /// <summary>Touchdown guidance's plans open with a coast: set when its standby starts before ignition, cleared once it lights the engine or entry guidance does.</summary>
+    internal bool SixDofCoastPending;
+
+    /// <summary>The time to ignition the coast's cold solve starts from, s: entry guidance's, as of the last standby step.</summary>
+    internal double SixDofCoastSeedS;
+
+    /// <summary>The state at ignition entry guidance forecasts: what a plan with a coast is scaled on (Ksa6DofSetup.TryBuild scaleFrom).</summary>
+    internal double[] SixDofCoastScaleState;
+
+    /// <summary>The roll rate about the thrust axis at the last entry log row, rad/s, and when, for the roll monitor's acceleration (EntryLog.EntryRow.RollNetNm).</summary>
+    internal double RollMonitorPrevRate = double.NaN, RollMonitorPrevT = double.NegativeInfinity;
+
+    /// <summary>The game's air moment limiter measured on this craft, per Pa (BodyAero6Dof.MomentLimiterPerPa), smoothed; 0 until measured. The divisor it gave at the last reading, and when that was.</summary>
+    internal double MomentLimiterPerPa, MomentLimiterDivisor = double.NaN, MomentLimiterAt = double.NegativeInfinity;
+
+    /// <summary>The body rates at the last entry log row, assembly axes, rad/s, for the three-axis balance.</summary>
+    internal Brutal.Numerics.double3? RollMonitorPrevW;
+
+    /// <summary>A hand-over in the glide, waiting for the next step's claim (CheckPendingEntryTouchdownHandoff), or null.</summary>
+    internal string ThreeDofGlideHandoff;
 
     /// <summary>When the standby's forecast was last renewed in the glide.</summary>
     internal double ThreeDofPrepareForecastAt = double.NegativeInfinity;

@@ -104,11 +104,11 @@ public static partial class GuidanceWindow
         if (double.IsFinite(impact) && double.IsFinite(fall))
             impact = Math.Min(impact, fall);
         return new LegsClocks(
-            TouchdownPlanS: s.Active && touchdown != null ? LegsRules.PlanToGo(touchdown.SolveTime + touchdown.Sigma, now) : double.NaN,
+            TouchdownPlanS: s.Active && touchdown != null ? LegsRules.PlanToGo(touchdown.SolveTime + touchdown.Duration, now) : double.NaN,
             EntryPlanS: entryTime,
             GfoldPlanS: s.LandingPhase == LandingPhase.GfoldDescent && s.GfoldPlan != null && !s.GfoldForceSearch
                 ? LegsRules.PlanToGo(s.GfoldArrivalTime, now) : double.NaN,
-            StandbyPlanS: s.SixDofStandby && touchdown != null ? LegsRules.PlanToGo(touchdown.SolveTime + touchdown.Sigma, now) : double.NaN,
+            StandbyPlanS: s.SixDofStandby && touchdown != null ? LegsRules.PlanToGo(touchdown.SolveTime + touchdown.Duration, now) : double.NaN,
             ImpactS: impact,
             FallS: fall);
     }

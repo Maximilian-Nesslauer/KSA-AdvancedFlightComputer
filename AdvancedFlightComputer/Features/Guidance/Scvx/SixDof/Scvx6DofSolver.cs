@@ -69,6 +69,13 @@ public sealed class Scvx6DofSolver
     private readonly Scvx6DofSubproblemScs _sub;
     private readonly int _n;
     private readonly double _dtau;
+
+    // The coast before ignition (Scvx6DofConfig.CoastIntervals): its interval count, the dynamics with the engine off, each phase's normalised step, and the ignition node's engine-off linearisation, which ends the last coast interval.
+    private readonly int _nCoast;
+    private readonly Dynamics6Dof.Params _dynCoast;
+    private readonly double _dtauC, _dtauB;
+    private readonly double[] _aJ = new double[NX * NX], _bJ = new double[NX * NU], _f0J = new double[NX];
+    private double _sigCBar;
     private readonly double[] _xs, _us;
 
     /// <summary>The scale the defect and the virtual control are PRICED on in the merit; the convergence test reads them on _xs. See Scvx6DofConfig.VirtualControlScale and SetVirtualControlScale.</summary>
@@ -226,6 +233,27 @@ public sealed class Scvx6DofSolver
     public double[] ReferenceX => _xbar;
     public double[] ReferenceU => _ubar;
     public double Sigma => _sigBar;
+
+    /// <summary>The coast's duration, s: the time to ignition. 0 without a coast.</summary>
+    public double CoastSigma => _sigCBar;
+
+    /// <summary>Intervals in the coast (Scvx6DofConfig.CoastIntervals).</summary>
+    public int CoastIntervals => _nCoast;
+
+    /// <summary>The dynamics interval k is flown with: the engine off in the coast.</summary>
+    private Dynamics6Dof.Params ParamsOf(int k) => k < _nCoast ? _dynCoast : _dyn;
+
+    /// <summary>Interval k's duration at these phase durations, s.</summary>
+    private double IntervalDt(int k, double sigma, double coastSigma) => k < _nCoast ? _dtauC * coastSigma : _dtauB * sigma;
+
+    /// <summary>The time of node k from node 0, s, at the reference's durations: the coast's nodes spread over its duration, the burn's over the burn's.</summary>
+    public double NodeTime(int k) => NodeTime(k, _n, _nCoast, _sigBar, _sigCBar);
+
+    /// <summary>The time of node k of an n-node plan with a coast of coastIntervals over coastSigma s and a burn of sigma s.</summary>
+    public static double NodeTime(int k, int n, int coastIntervals, double sigma, double coastSigma)
+        => k <= coastIntervals
+            ? (coastIntervals > 0 ? coastSigma * k / coastIntervals : 0.0)
+            : coastSigma + sigma * (k - coastIntervals) / (n - 1 - coastIntervals);
     public double Cost => _jRef;
     public int IterationCount { get; private set; }
 
@@ -238,6 +266,10 @@ public sealed class Scvx6DofSolver
         _dyn = dyn ?? new Dynamics6Dof.Params();
         _n = cfg.Nodes;
         _dtau = 1.0 / (_n - 1);
+        _nCoast = Math.Max(cfg.CoastIntervals, 0);
+        _dynCoast = _dyn.WithEngineOff();
+        _dtauC = _nCoast > 0 ? 1.0 / _nCoast : 0.0;
+        _dtauB = 1.0 / (_n - 1 - _nCoast);
         _xs = cfg.XScale;
         _vcs = new double[NX];
         for (int i = 0; i < NX; i++) _vcs[i] = cfg.VirtualControlScaleOf(i);
@@ -257,7 +289,7 @@ public sealed class Scvx6DofSolver
     /// </summary>
     public void Initialize(ReadOnlySpan<double> x0, ReadOnlySpan<double> xf,
                            double[] xSeed, double[] uSeed, double sigmaSeed,
-                           double? trustRegion = null)
+                           double? trustRegion = null, double coastSigmaSeed = 0.0)
     {
         if (xSeed.Length != _n * NX) throw new ArgumentException($"xSeed must be {_n * NX} long");
         if (uSeed.Length != _n * NU) throw new ArgumentException($"uSeed must be {_n * NU} long");
@@ -269,6 +301,7 @@ public sealed class Scvx6DofSolver
         ClampRcsSeed(_ubar);
         AlignTerminalBranch();
         _sigBar = sigmaSeed;
+        _sigCBar = CoastSeed(coastSigmaSeed);
         TrustRegion = trustRegion ?? TrustRegionMax;
         IterationCount = 0;
         _trace.Clear();
@@ -300,7 +333,7 @@ public sealed class Scvx6DofSolver
     /// interval of vehicle motion barely changes the problem.
     /// </summary>
     public void Reseed(ReadOnlySpan<double> x0, double[] xShifted, double[] uShifted,
-                       double sigma, double? trustRegion = null)
+                       double sigma, double? trustRegion = null, double coastSigma = 0.0)
     {
         _x0 = x0.ToArray();
         _xbar = (double[])xShifted.Clone();
@@ -309,6 +342,7 @@ public sealed class Scvx6DofSolver
         NormaliseQuaternions(_xbar);
         AlignTerminalBranch();
         _sigBar = sigma;
+        _sigCBar = CoastSeed(coastSigma);
         if (trustRegion.HasValue) TrustRegion = trustRegion.Value;
         _trace.Clear();
         IterationCount = 0;
@@ -398,13 +432,16 @@ public sealed class Scvx6DofSolver
         // 1. Linearise the true dynamics about the current reference.
         for (int k = 0; k < _n; k++)
             Dynamics6Dof.Jacobian(
-                _xbar.AsSpan(k * NX, NX), _ubar.AsSpan(k * NU, NU), _dyn,
+                _xbar.AsSpan(k * NX, NX), _ubar.AsSpan(k * NU, NU), ParamsOf(k),
                 _f0.AsSpan(k * NX, NX),
                 _a.AsSpan(k * NX * NX, NX * NX),
                 _b.AsSpan(k * NX * NU, NX * NU));
+        // The ignition node once more with the engine off, for the far end of the last coast interval.
+        if (_nCoast > 0)
+            Dynamics6Dof.Jacobian(_xbar.AsSpan(_nCoast * NX, NX), _ubar.AsSpan(_nCoast * NU, NU), _dynCoast, _f0J, _aJ, _bJ);
 
         // 2. Solve the convex subproblem inside the current trust region. Warm-started from the previous solve's iterate: the problem changes between iterations, but only within the trust region, so the last point is a good ADMM start. ScsWorkspace refuses to carry forward an unusable solution, so a failed solve cannot poison this.
-        _sub.Assemble(_x0, _xf, _xbar, _ubar, _sigBar, TrustRegion, _a, _b, _f0);
+        _sub.Assemble(_x0, _xf, _xbar, _ubar, _sigBar, TrustRegion, _a, _b, _f0, _sigCBar, _aJ, _bJ, _f0J);
         ScsStatus st = _sub.Run(warmStart: WarmStart && _sub.HasWarmStart,
                                 maxIterations: MaxSubproblemIterations,
                                 epsAbs: SubproblemEps, epsRel: SubproblemEps);
@@ -437,11 +474,29 @@ public sealed class Scvx6DofSolver
 
         double[] x = _sub.SolutionX, u = _sub.SolutionU, wv = _sub.SolutionWv;
         double sigma = _sub.SolutionSigma;
+        double coastSigma = _nCoast > 0 ? _sub.SolutionCoastSigma : 0.0;
+
+        // A solution outside its own time bounds is not a step. SCS's "inaccurate" answers are taken as usable, and one came back with a burn and coast summing to -359 s (2026-11-20 12:36, a coast standby): the next re-anchor threw on it. Refused like a truncated solve, so the trust region shrinks and the reference stays.
+        double slack = 1e-3 * _cfg.SigmaScale;
+        double coastLo = _cfg.CoastSigmaFixed ?? _cfg.CoastSigmaMin, coastHi = _cfg.CoastSigmaFixed ?? _cfg.CoastSigmaMax;
+        if (!double.IsFinite(sigma) || sigma < _cfg.SigmaMin - slack || sigma > _cfg.SigmaMax + slack
+            || (_nCoast > 0 && (!double.IsFinite(coastSigma) || coastSigma < coastLo - slack || coastSigma > coastHi + slack)))
+        {
+            TrustRegion = Math.Max(TrustRegionMin, TrustRegion * Shrink);
+            LastFailureReason = $"{st} \"{_sub.StatusText}\" with the burn {sigma:G4} s and the coast {coastSigma:G4} s outside their bounds";
+            var outside = new ScvxIteration(index, false, false, double.NaN, TrustRegion,
+                _sigBar, 0, double.NaN, _jRef, _sub.Iterations, sw.Elapsed.TotalMilliseconds, -1, -1);
+            _trace.Add(outside);
+            return outside;
+        }
+        sigma = Math.Clamp(sigma, _cfg.SigmaMin, _cfg.SigmaMax);
+        if (_nCoast > 0)
+            coastSigma = Math.Clamp(coastSigma, coastLo, coastHi);
 
         // 3. Ratio test. Predicted reduction uses the subproblem's own defect proxy (the virtual control); actual reduction uses the true nonlinear defect at the new point.
         double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * SumSquaresScaled(wv, _vcs)
             + _sub.AccelerationSlackCost;
-        (double jTrue, double defectNorm) = TrueCost(x, u, sigma,
+        (double jTrue, double defectNorm) = TrueCost(x, u, sigma, coastSigma,
                                                      out int defectChannel, out int defectNode);
 
         double predicted = _jRef - jLin;
@@ -452,7 +507,7 @@ public sealed class Scvx6DofSolver
 
         double dX = MaxNormalisedDiff(x, _xbar, _xs, NX);
         double dU = MaxNormalisedDiff(u, _ubar, _us, NU);
-        double dSigma = Math.Abs(sigma - _sigBar) / _cfg.SigmaScale;
+        double dSigma = Math.Max(Math.Abs(sigma - _sigBar), Math.Abs(coastSigma - _sigCBar)) / _cfg.SigmaScale;
         double used = Math.Max(Math.Max(dX, dU), dSigma);
 
         // 4. Accept or reject.
@@ -466,6 +521,7 @@ public sealed class Scvx6DofSolver
             // Skipping this lets |q| drift and quietly degrades every subsequent linearisation.
             NormaliseQuaternions(_xbar);
             _sigBar = sigma;
+            _sigCBar = coastSigma;
             _jRef = jTrue;
             step = Math.Max(dX, dSigma);   // matches the reference: dU is not part of the measure
         }
@@ -492,7 +548,11 @@ public sealed class Scvx6DofSolver
     /// feasible, not merely optimal for its own linearisation).
     /// </summary>
     public (double Cost, double DefectNorm) TrueCost(double[] x, double[] u, double sigma)
-        => TrueCost(x, u, sigma, out _, out _);
+        => TrueCost(x, u, sigma, _sigCBar, out _, out _);
+
+    public (double Cost, double DefectNorm) TrueCost(double[] x, double[] u, double sigma,
+                                                     out int worstChannel, out int worstNode)
+        => TrueCost(x, u, sigma, _sigCBar, out worstChannel, out worstNode);
 
     /// <summary>
     /// As above, and also reports WHERE the worst defect is - which state channel and
@@ -500,20 +560,23 @@ public sealed class Scvx6DofSolver
     /// max runs over channels whose scales differ by orders of magnitude and whose
     /// units differ entirely.
     /// </summary>
-    public (double Cost, double DefectNorm) TrueCost(double[] x, double[] u, double sigma,
+    public (double Cost, double DefectNorm) TrueCost(double[] x, double[] u, double sigma, double coastSigma,
                                                      out int worstChannel, out int worstNode)
     {
         Span<double> fk = stackalloc double[NX];
         Span<double> fk1 = stackalloc double[NX];
         double sumSq = 0, worst = 0;
-        double half = 0.5 * _dtau * sigma;
         worstChannel = -1;
         worstNode = -1;
 
-        Dynamics6Dof.Eval(x.AsSpan(0, NX), u.AsSpan(0, NU), _dyn, fk);
         for (int k = 0; k < _n - 1; k++)
         {
-            Dynamics6Dof.Eval(x.AsSpan((k + 1) * NX, NX), u.AsSpan((k + 1) * NU, NU), _dyn, fk1);
+            // Each interval with its phase's dynamics and step: the ignition node is evaluated with the engine off as the coast's end and lit as the burn's start.
+            Dynamics6Dof.Params pk = ParamsOf(k);
+            if (k == 0 || k == _nCoast)
+                Dynamics6Dof.Eval(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), pk, fk);
+            Dynamics6Dof.Eval(x.AsSpan((k + 1) * NX, NX), u.AsSpan((k + 1) * NU, NU), pk, fk1);
+            double half = 0.5 * IntervalDt(k, sigma, coastSigma);
             for (int i = 0; i < NX; i++)
             {
                 double d = x[(k + 1) * NX + i] - x[k * NX + i] - half * (fk[i] + fk1[i]);
@@ -533,6 +596,16 @@ public sealed class Scvx6DofSolver
         return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq + AccelerationViolationCost(x, u) + RateViolationCost(x), worst);
     }
 
+    /// <summary>A coast duration for the reference: none without a coast, the pinned one when locked (Scvx6DofConfig.CoastSigmaFixed), otherwise the seed inside the bounds.</summary>
+    private double CoastSeed(double seed)
+    {
+        if (_nCoast == 0)
+            return 0.0;
+        if (_cfg.CoastSigmaFixed is double fixedSigma)
+            return fixedSigma;
+        return Math.Clamp(double.IsFinite(seed) ? seed : 0.0, _cfg.CoastSigmaMin, _cfg.CoastSigmaMax);
+    }
+
     /// <summary>A seeded RCS control is put inside its bounds (Scvx6DofConfig.RcsBounds). A plan resampled from one built with more RCS, or with RCS where there is none now, would otherwise ask the first subproblem for a step its trust region cannot take.</summary>
     private void ClampRcsSeed(double[] u)
     {
@@ -543,6 +616,15 @@ public sealed class Scvx6DofSolver
                 int i = k * NU + Dynamics6Dof.IRCS + a;
                 (double pos, double neg) = _cfg.ControlTorqueBounds(a, u[k * NU + Dynamics6Dof.IT]);
                 u[i] = Math.Clamp(double.IsFinite(u[i]) ? u[i] : 0.0, -neg, pos);
+            }
+            // The coast's nodes have the engine off.
+            if (k < _nCoast)
+            {
+                u[k * NU + Dynamics6Dof.ITDX] = 0.0;
+                u[k * NU + Dynamics6Dof.ITDY] = 0.0;
+                u[k * NU + Dynamics6Dof.IT] = 0.0;
+                if (_cfg.RollTorqueFollowsThrust)
+                    u[k * NU + Dynamics6Dof.ITAU] = 0.0;
             }
             // TorqueDemand pins the gimbals' own controls at zero.
             if (_cfg.TorqueDemand)
@@ -563,7 +645,8 @@ public sealed class Scvx6DofSolver
         for (int k = 1; k < _n; k++)
         {
             double wx = x[k * NX + Dynamics6Dof.IW], wy = x[k * NX + Dynamics6Dof.IW + 1], wz = x[k * NX + Dynamics6Dof.IW + 2];
-            violation += Math.Max(0.0, Math.Sqrt(wx * wx + wy * wy + wz * wz) - _cfg.RateMaxRadS);
+            double roll = _cfg.RateLimitIncludesRoll ? wz * wz : 0.0;
+            violation += Math.Max(0.0, Math.Sqrt(wx * wx + wy * wy + roll) - _cfg.RateMaxRadS);
         }
         return _cfg.RateWeight * violation / _cfg.XScale[Dynamics6Dof.IW];
     }
@@ -652,13 +735,15 @@ public sealed class Scvx6DofSolver
 
         Span<double> fk = stackalloc double[NX];
         Span<double> fk1 = stackalloc double[NX];
-        double half = 0.5 * _dtau * _sigBar;
         double worst = 0;
 
-        Dynamics6Dof.Eval(state[..NX], _ubar.AsSpan(0, NU), _dyn, fk);
         for (int k = 0; k < _n - 1; k++)
         {
-            Dynamics6Dof.Eval(state.Slice((k + 1) * NX, NX), _ubar.AsSpan((k + 1) * NU, NU), _dyn, fk1);
+            Dynamics6Dof.Params pk = ParamsOf(k);
+            if (k == 0 || k == _nCoast)
+                Dynamics6Dof.Eval(state.Slice(k * NX, NX), _ubar.AsSpan(k * NU, NU), pk, fk);
+            Dynamics6Dof.Eval(state.Slice((k + 1) * NX, NX), _ubar.AsSpan((k + 1) * NU, NU), pk, fk1);
+            double half = 0.5 * IntervalDt(k, _sigBar, _sigCBar);
 
             // Allowance is 1 across the commit window, then rises LINEARLY to slack at the last interval.
             // Linear in the ALLOWANCE rather than in its reciprocal, because the allowance is the half with a physical reading: "this interval may carry N times its tolerance".
@@ -692,24 +777,23 @@ public sealed class Scvx6DofSolver
     {
         if (!_initialised)
             return null;
-        double dt = _dtau * _sigBar;
         double mass = _x0[Dynamics6Dof.IM];
-        if (!(dt > 0.0) || !double.IsFinite(dt) || !(mass > 0.0) || !double.IsFinite(mass))
+        if (!(_dtauB * _sigBar > 0.0) || !double.IsFinite(_sigBar) || !(mass > 0.0) || !double.IsFinite(mass))
             return null;
 
         double[] state = (double[])_xbar.Clone();
         state[Dynamics6Dof.IM] = mass;
-        double flow = Dynamics6Dof.MassFlow(_dyn, _ubar.AsSpan(0, NU));
-        for (int k = 1; k < _n; k++)
+        for (int k = 0; k < _n - 1; k++)
         {
-            double nextFlow = Dynamics6Dof.MassFlow(_dyn, _ubar.AsSpan(k * NU, NU));
+            Dynamics6Dof.Params pk = ParamsOf(k);
+            double flow = Dynamics6Dof.MassFlow(pk, _ubar.AsSpan(k * NU, NU));
+            double nextFlow = Dynamics6Dof.MassFlow(pk, _ubar.AsSpan((k + 1) * NU, NU));
             if (!(flow >= 0.0) || !(nextFlow >= 0.0))
                 return null;
-            mass -= 0.5 * dt * (flow + nextFlow);
+            mass -= 0.5 * IntervalDt(k, _sigBar, _sigCBar) * (flow + nextFlow);
             if (!(mass > 0.0))
                 return null;
-            state[k * NX + Dynamics6Dof.IM] = mass;
-            flow = nextFlow;
+            state[(k + 1) * NX + Dynamics6Dof.IM] = mass;
         }
         return state;
     }
@@ -726,6 +810,8 @@ public sealed class Scvx6DofSolver
         for (int k = 0; k < _n - 1; k++)
             for (int j = 0; j < NU; j++)
             {
+                if (Scvx6DofSubproblemScs.IsIgnitionStep(_nCoast, k, j))
+                    continue;
                 double d = (u[(k + 1) * NU + j] - u[k * NU + j]) / _us[j];
                 du += d * d;
             }

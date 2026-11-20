@@ -23,23 +23,31 @@ internal static class SixDofRcsCheck
     // The logged booster (SixDofLiftCheck's): 2171 kN, 10 % floor, 2 deg gimbals at 2 deflections a second.
     private const double Tmax = 2171e3, Floor = 0.10, Isp = 290.0, Gravity = 9.81;
     private const double Arm = 10.0, Ipitch = 1.14e6, Iroll = 2.7e4, Length = 40.0;
-    private const double TargetZ = 13.0, AccelMax = 31.0, GimbalDeg = 2.0, SlewPerS = 2.0;
+    internal const double TargetZ = 13.0, AccelMax = 31.0, GimbalDeg = 2.0, SlewPerS = 2.0;
     private const double Area = ThreeDofScenario.Area;
 
     // Its RCS: eight 6.7 kN thrusters, Isp 220 s, at the top, 28 m over the centre of mass, on a 1.85 m radius.
     private const double RcsHeight = 28.0, RcsRadius = 1.85, RcsThrust = 6.7e3, RcsIsp = 220.0;
 
     // The air's turn on the logged booster, rad/s^2 per degree off the airflow at 100 m/s.
-    private const double AirTurnPerDeg = 0.04, PlantMomentFactor = 1.1;
+    internal const double AirTurnPerDeg = 0.04, PlantMomentFactor = 1.1;
 
     // The model's +Z (thrust axis) along the game's +x (nose); see SixDofAeroCheck.GameAxes.
     private static readonly double[] GameAxes = [0, 0, 1, 1, 0, 0, 0, 1, 0];
 
     // --rcs-weight w: Scvx6DofConfig.RcsWeight for the plans, 0 for none.
-    private static double RcsWeight;
+    internal static double RcsWeight;
+
+    // --abs-terminal: the terminal miss priced on fixed scales; --rate-scale s: the body-rate scale, rad/s (1 before 2026-11-20).
+    internal static bool AbsTerminal;
+
+    // The 2026-11-20 12:20 booster's roll, for the coast check: --izz (kg m^2, 64,780 flown), --roll-cl (the swept C_l, -0.002 to -0.005 flown), --rcs-roll (N m of RCS roll each way, ~22,000 flown).
+    internal static double IrollUsed = Iroll, RollCl, RcsRollNm;
+    internal static bool RollPinned;
+    internal static double RateScale = 1.0;
 
     // Probes of the SCS slowdown (2026-11-20), harness only: --eps e (SCS tolerance), --anderson n (acceleration memory; 0 off), --uscale-rcs f (RCS controls' column scale times f), --wdu w, --prox w.
-    private static double ProbeEps = 3e-4, ProbeUScaleRcs = 1.0, ProbeWdu = 0.05, ProbeProx = 0.05, RateMaxDegS;
+    internal static double ProbeEps = 3e-4, ProbeUScaleRcs = 1.0, ProbeWdu = 0.05, ProbeProx = 0.05, RateMaxDegS;
 
     // Diagnostics of the SCS slowdown with RCS (2026-11-19): --diag runs only the fast case's closed loop and prints the first warm re-solves' SCS outcome; with it, --rcs-scale f scales the RCS authority, --rcs-noforce drops its side force, --gimbal flies gimbals alone, --nowarm turns SCS's warm start off.
     private static double RcsScale = 1.0;
@@ -168,7 +176,7 @@ internal static class SixDofRcsCheck
         return ok;
     }
 
-    private static Dynamics6Dof.RcsModel RcsModel()
+    internal static Dynamics6Dof.RcsModel RcsModel()
     {
         // As Ksa6DofSetup.RcsModelFrom: each axis's two bounds, and the side force per newton metre odd in the torque.
         RcsTorqueAllocator a = Layout();
@@ -183,6 +191,8 @@ internal static class SixDofRcsCheck
             m.ForcePerNm[3 * axis + 2] = 0.5 * (plus.ForcePerNmZ - minus.ForcePerNmZ);
             m.FlowPerNm[axis] = 0.5 * (plus.FlowPerNm + minus.FlowPerNm);
         }
+        if (RcsRollNm > 0.0)
+            m.MaxPosNm[2] = m.MaxNegNm[2] = RcsRollNm;
         return m;
     }
 
@@ -227,17 +237,17 @@ internal static class SixDofRcsCheck
         }
     }
 
-    private static Dynamics6Dof.Params Params(BodyAeroTable moment, Dynamics6Dof.RcsModel? rcs) => new()
+    internal static Dynamics6Dof.Params Params(BodyAeroTable moment, Dynamics6Dof.RcsModel? rcs, double areaScale = 1.0) => new()
     {
         Gx = 0, Gy = 0, Gz = -Gravity, G0 = 9.80665, Isp = Isp,
-        LArm = Arm, Ixx = Ipitch, Iyy = Ipitch, Izz = Iroll,
+        LArm = Arm, Ixx = Ipitch, Iyy = Ipitch, Izz = IrollUsed,
         Aero = ThreeDofScenario.Model(),
         BodyAero = new BodyAero6Dof
         {
             Atmosphere = ThreeDofScenario.Model().Atmosphere!,
             Force = ThreeDofScenario.BodyTable(),
             Moment = moment,
-            ReferenceArea = Area,
+            ReferenceArea = Area * areaScale,
             ReferenceLength = Length,
             ModelToTable = GameAxes,
         },
@@ -250,7 +260,7 @@ internal static class SixDofRcsCheck
     /// <summary>
     /// A moment table that turns the booster back towards its flight path at <see cref="AirTurnPerDeg"/> rad/s^2 per degree at 100 m/s, times <paramref name="factor"/>: C_m and C_n linear in alpha and beta. Its sign and size are found by flying it: whichever signs turn a tilted booster back, scaled to the logged turn at a 5 degree tilt.
     /// </summary>
-    private static BodyAeroTable MomentPerDeg(double factor)
+    internal static BodyAeroTable MomentPerDeg(double factor)
     {
         if (_unitMoment == null)
         {
@@ -287,7 +297,7 @@ internal static class SixDofRcsCheck
             for (int ja = 0; ja < angles.Length; ja++)
                 for (int jb = 0; jb < angles.Length; jb++)
                 {
-                    c[i++] = 0.0;
+                    c[i++] = RollCl;
                     c[i++] = perDegM * angles[ja];
                     c[i++] = perDegN * angles[jb];
                 }
@@ -316,7 +326,7 @@ internal static class SixDofRcsCheck
     }
 
     /// <summary>The thrust axis's angle off retrograde, radians.</summary>
-    private static double OffAir(double[] x)
+    internal static double OffAir(double[] x)
     {
         double n = Math.Sqrt(x[6] * x[6] + x[7] * x[7] + x[8] * x[8] + x[9] * x[9]);
         double qw = x[6] / n, qx = x[7] / n, qy = x[8] / n, qz = x[9] / n;
@@ -327,7 +337,7 @@ internal static class SixDofRcsCheck
     }
 
     /// <summary>A state at height h, position r, velocity v, the thrust axis tilted off retrograde about the site's x (about = 0) or y (1) axis.</summary>
-    private static double[] State(double h, double[] r, double[] v, double tiltDeg, double mass, int about = 0)
+    internal static double[] State(double h, double[] r, double[] v, double tiltDeg, double mass, int about = 0)
     {
         double sp = Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
         double[] retro = [-v[0] / sp, -v[1] / sp, -v[2] / sp];
@@ -351,7 +361,7 @@ internal static class SixDofRcsCheck
         return [Math.Cos(half), axis[0] / s * Math.Sin(half), axis[1] / s * Math.Sin(half), axis[2] / s * Math.Sin(half)];
     }
 
-    private static double[] Target(double mass)
+    internal static double[] Target(double mass)
     {
         var xf = new double[NX];
         xf[2] = TargetZ;
@@ -360,7 +370,7 @@ internal static class SixDofRcsCheck
         return xf;
     }
 
-    private static Scvx6DofConfig Config(int n, double sigma, double[] x0, double[] xf, Dynamics6Dof.Params dyn)
+    internal static Scvx6DofConfig Config(int n, double sigma, double[] x0, double[] xf, Dynamics6Dof.Params dyn, int coastIntervals = 0)
     {
         double length = Math.Sqrt(x0[0] * x0[0] + x0[1] * x0[1] + (x0[2] - xf[2]) * (x0[2] - xf[2]));
         double speed = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
@@ -369,13 +379,18 @@ internal static class SixDofRcsCheck
         return new Scvx6DofConfig
         {
             Nodes = n,
+            CoastIntervals = coastIntervals,
             Tmax = Tmax,
             ThrottleFloor = Floor,
             GimbalMaxDeg = GimbalDeg,
             GimbalArm = Environment.GetCommandLineArgs().Contains("--old-scale") ? 0.0 : Arm,
             GimbalSlewPerS = Environment.GetCommandLineArgs().Contains("--noslew") ? 0.0 : SlewPerS,
-            TauRollMax = 1.0e4,
-            TerminalRollFree = true,
+            // --roll-pinned (coast check): as the 12:20-12:53 boosters flew - their engine gives 88.8 kN m of roll at full thrust, so the plan holds the heading to the end (Ksa6DofSetup.RollModel).
+            TauRollMax = RollPinned ? 88_833.0 : 1.0e4,
+            RollTorqueFollowsThrust = RollPinned,
+            TerminalRollFree = !RollPinned || coastIntervals > 0,
+            // As flight: a coast plan neither pins the heading nor limits the roll rate (Ksa6DofSetup).
+            RateLimitIncludesRoll = coastIntervals == 0,
             TiltMaxDeg = 60.0,
             GroundFloor = -1.0,
             AccelMax = AccelMax,
@@ -387,6 +402,9 @@ internal static class SixDofRcsCheck
             VzMax = 0.0,
             TerminalMissWeight = 1.0e5,
             TerminalSpeedWeight = 1.0e4,
+            // --abs-terminal: priced per fixed metre and m/s, as in flight (Ksa6DofSetup.TerminalMissPriceM).
+            TerminalMissScaleM = AbsTerminal ? 250.0 : 0.0,
+            TerminalSpeedScaleMs = AbsTerminal ? 100.0 : 0.0,
             SigmaMin = sigma * 0.15,
             SigmaMax = sigma * 4.0,
             SigmaScale = sigma,
@@ -398,7 +416,7 @@ internal static class SixDofRcsCheck
             DemandTorquePerN = Demand ? GimbalTorquePerN : 0.0,
             DemandRollPerN = Demand ? RollTorquePerN : 0.0,
             VirtualControlScale = [0, 0, 0, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0],
-            XScale = [length, length, length, velocity, velocity, velocity, 1, 1, 1, 1, 1, 1, 1, x0[13]],
+            XScale = [length, length, length, velocity, velocity, velocity, 1, 1, 1, 1, RateScale, RateScale, RateScale, x0[13]],
         };
     }
 
@@ -417,7 +435,7 @@ internal static class SixDofRcsCheck
         return us;
     }
 
-    private static Scvx6DofSolver Solver(Scvx6DofConfig cfg, Dynamics6Dof.Params dyn)
+    internal static Scvx6DofSolver Solver(Scvx6DofConfig cfg, Dynamics6Dof.Params dyn)
     {
         var s = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = ProbeEps, WarmStart = !Environment.GetCommandLineArgs().Contains("--nowarm") };
         s.MaxSubproblemIterations = 9000;
@@ -425,7 +443,7 @@ internal static class SixDofRcsCheck
         return s;
     }
 
-    private static double[] Tolerance(double mass)
+    internal static double[] Tolerance(double mass)
     {
         var tol = new double[NX];
         for (int i = 0; i < 3; i++) { tol[i] = 1.0; tol[3 + i] = 0.5; tol[10 + i] = 0.01; }
@@ -464,7 +482,7 @@ internal static class SixDofRcsCheck
     }
 
     /// <summary>The largest RCS torque a plan asks for on one axis, N m, and its share of that axis's reach.</summary>
-    private static double PeakRcs(double[] u, int n, out double share)
+    internal static double PeakRcs(double[] u, int n, out double share)
     {
         double peak = 0.0;
         share = 0.0;
@@ -561,7 +579,7 @@ internal static class SixDofRcsCheck
             $"first plan {(planned ? "inside" : "OUTSIDE")} the gate; {kept} kept, {refused} refused, median gate {med:F2}x, SCS {Median(loopAdmm)}/iteration; ends {x[2]:F1} m up, {miss:F1} m off, {-x[5]:F1} m/s down, {side:F1} m/s sideways; {mass0 - x[13]:F0} kg burned; peak rate {peakRate:F1} deg/s");
     }
 
-    private static int Median(List<int> v)
+    internal static int Median(List<int> v)
     {
         if (v.Count == 0) return 0;
         var c = new List<int>(v);
@@ -721,7 +739,7 @@ internal static class SixDofRcsCheck
         return r;
     }
 
-    private static void Step(double[] x, double[] u, Dynamics6Dof.Params p, double h)
+    internal static void Step(double[] x, double[] u, Dynamics6Dof.Params p, double h)
     {
         Span<double> k1 = stackalloc double[NX], k2 = stackalloc double[NX], k3 = stackalloc double[NX], k4 = stackalloc double[NX], tmp = stackalloc double[NX];
         Dynamics6Dof.Eval(x, u, p, k1);

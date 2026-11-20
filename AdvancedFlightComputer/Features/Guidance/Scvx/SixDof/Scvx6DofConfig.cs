@@ -90,6 +90,24 @@ public sealed class Scvx6DofConfig
     public double SigmaMax { get; set; } = 25.0;
     public double SigmaScale { get; init; } = 12.0;
 
+    /// <summary>
+    /// THE COAST BEFORE IGNITION, as a number of intervals, or 0 for none (the burn starts at node 0, as before).
+    ///  The first CoastIntervals intervals are flown with the engine off (Dynamics6Dof.Params.EngineOff): nodes 0 .. CoastIntervals-1 have no thrust, and node CoastIntervals is the IGNITION, where the thrust steps to the burn's. The coast has its own free duration, the second time variable beside the burn's sigma, so the plan chooses when to light as well as how to burn: entry guidance's glide and burn split, on the full attitude. Attitude in the coast is the RCS's and the air's; there is no gimbal torque without thrust.
+    ///  One node grid for both phases, so the problem keeps its shape as ignition nears and passes: a warm start carries from a re-solve to the next, through ignition (<see cref="CoastSigmaFixed"/>).
+    /// </summary>
+    public int CoastIntervals { get; init; }
+
+    public bool HasCoast => CoastIntervals > 0;
+
+    /// <summary>The coast's duration bounds, s. SETTABLE like sigma's.</summary>
+    public double CoastSigmaMin { get; set; }
+    public double CoastSigmaMax { get; set; } = 30.0;
+
+    /// <summary>
+    /// THE IGNITION LOCK: the coast's duration pinned to this, s, or null to leave it free. A fuel-optimal plan always lights as late as it can, so a free ignition time slides later on every re-solve; locked a second or so out, the craft commits to it. After ignition the coast is pinned at zero: its nodes sit at the start, the problem keeps its shape, and the warm start carries on.
+    /// </summary>
+    public double? CoastSigmaFixed { get; set; }
+
     public double[] XScale { get; init; } =
         [100, 100, 300, 50, 50, 50, 1, 1, 1, 1, 1, 1, 1, 250000.0];
     public double[]? UScale { get; init; }                      // defaults from Tmax/gimbal
@@ -180,6 +198,21 @@ public sealed class Scvx6DofConfig
     public double TerminalMissWeight { get; init; }
 
     /// <summary>
+    /// The length the terminal miss is priced on, m: TerminalMissWeight per this many metres of miss. 0 prices it on the position scale (XScale), as it was.
+    ///  PRICED ON A FIXED LENGTH, the miss costs the same per metre wherever the plan starts. On the position scale - the craft's distance from the target when the solver was built - it cost a third as much per metre on a plan handed over 760 m up as on one from 240 m, and offline the landings missed by 10 m against 3 m (--6dof-coast, 2026-11-20).
+    /// </summary>
+    public double TerminalMissScaleM { get; init; }
+
+    /// <summary>The speed the terminal velocity miss is priced on, m/s; 0 prices it on the velocity scale (XScale). See TerminalMissScaleM.</summary>
+    public double TerminalSpeedScaleMs { get; init; }
+
+    /// <summary>The length a metre of terminal miss is priced on.</summary>
+    public double TerminalMissPriceScale => TerminalMissScaleM > 0.0 ? TerminalMissScaleM : XScale[Dynamics6Dof.IR];
+
+    /// <summary>The speed an m/s of terminal velocity miss is priced on.</summary>
+    public double TerminalSpeedPriceScale => TerminalSpeedScaleMs > 0.0 ? TerminalSpeedScaleMs : XScale[Dynamics6Dof.IV];
+
+    /// <summary>
     /// Penalty per m/s on missing the terminal VELOCITY, or 0 to keep it hard.
     ///
     /// Softening position alone does not help the case it was meant for. When a
@@ -224,6 +257,14 @@ public sealed class Scvx6DofConfig
 
     public bool RateLimitEnabled => RateMaxRadS > 0.0;
 
+    /// <summary>
+    /// Whether the turn-rate limit counts the roll rate. Off for a plan with a coast before ignition: there the air can roll the craft harder than its RCS can stop - 40 kN m against 22 on the 2026-11-20 booster, which spun at 30 deg/s under entry guidance in the headless harness - and a limit on a rate nothing can hold only makes the plan infeasible. The pitch and yaw rates, which steer the craft, stay limited.
+    /// </summary>
+    public bool RateLimitIncludesRoll { get; init; } = true;
+
+    /// <summary>Components of the body rate the turn-rate limit takes: 3 with the roll, 2 without.</summary>
+    public int RateLimitComponents => RateLimitIncludesRoll ? 3 : 2;
+
     /// <summary>cot of the glideslope half-angle: the cone's horizontal run per unit of height.</summary>
     public double CotGlideSlope => 1.0 / Math.Tan(Math.Clamp(GlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
 
@@ -264,6 +305,11 @@ public sealed class Scvx6DofConfig
     /// </summary>
     public double[]? RcsMaxPosNm { get; init; }
     public double[]? RcsMaxNegNm { get; init; }
+
+    /// <summary>
+    /// The share of the craft's torque the plan's limits are: GimbalMaxDeg (in torque, the tangent), TauRollMax and the RCS bounds are this much of the hardware's, the rest kept for the feedback that holds the plan's attitude between re-solves (the flight's AttitudeFeedback6Dof). 1 for none kept. The solver does not read it; the flight divides by it to recover the hardware's limits.
+    /// </summary>
+    public double PlanTorqueShare { get; init; } = 1.0;
 
     private static double Bound(double[]? r, int a)
         => r is { } v && a < v.Length && double.IsFinite(v[a]) && v[a] > 0.0 ? v[a] : 0.0;

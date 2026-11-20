@@ -106,7 +106,7 @@ public static partial class GuidanceWindow
                 Ksa6DofGuidance g = _s.Guidance;
                 bool hasPlan = g != null && g.HasPlan;
                 var plan = hasPlan ? g.Published : null;
-                double planLeft = plan != null ? Math.Max(0.0, plan.Sigma - (SimNow() - plan.SolveTime)) : double.NaN;
+                double planLeft = plan != null ? Math.Max(0.0, plan.Duration - (SimNow() - plan.SolveTime)) : double.NaN;
                 bool planned = double.IsFinite(planLeft);
                 PlanWord word = !_s.Active ? default
                     : _s.Converging ? PlanWords.Planning

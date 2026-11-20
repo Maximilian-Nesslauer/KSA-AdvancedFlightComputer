@@ -63,6 +63,9 @@ if (args.Contains("--3dof-far"))
 if (args.Contains("--6dof-lift"))
     return SixDofLiftCheck.Run(verbose);
 
+if (args.Contains("--6dof-coast"))
+    return SixDofCoastCheck.Run(verbose);
+
 if (args.Contains("--6dof-rcs"))
     return SixDofRcsCheck.Run(verbose);
 
@@ -112,6 +115,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --3dof-mpc      the glide-and-burn guidance flown closed loop against dispersed drag, lift, thrust and attitude lag
           --6dof-aero     touchdown guidance's body-axis force and moment: slopes, agreement, a landing against a steady moment
           --6dof-lift     touchdown guidance from logged hand-overs in pre-5901 and 5901 air: convergence and a closed-loop landing
+          --6dof-coast    touchdown guidance taking the craft in the glide, a coast before a burn with the ignition time free, against taking the burn at ignition
           --6dof-rcs      the RCS torque allocator on a booster's layout, and the logged fast hand-over planned with gimbals alone and with RCS
           --boostback-replay <file> [--delay s] [--min-pitch deg]  the booster's own burn planner from where the plan separates it
           --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f] [--hold i,j]

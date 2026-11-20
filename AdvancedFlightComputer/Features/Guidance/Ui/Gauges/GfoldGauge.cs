@@ -110,7 +110,7 @@ public static partial class GuidanceWindow
     private static double DescentPlanToGo()
     {
         if (_s.Active && _s.Guidance != null && _s.Guidance.HasPlan && _s.Guidance.Published is { } published)
-            return published.Sigma - (SimNow() - published.SolveTime);
+            return published.Duration - (SimNow() - published.SolveTime);
         return _s.LandingPhase == LandingPhase.GfoldDescent && _s.GfoldPlan != null ? _s.GfoldArrivalTime - SimNow() : double.NaN;
     }
 

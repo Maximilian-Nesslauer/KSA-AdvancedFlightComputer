@@ -172,7 +172,9 @@ public sealed class Ksa6DofSolveWorker : IDisposable
                 catch (Exception e)
                 {
                     faulted = true;
-                    error = "solve threw: " + e.Message;
+                    // Where, too: a message alone did not say which clamp threw (2026-11-20 12:36).
+                    string where = string.Join(" | ", (e.StackTrace ?? "").Split('\n').Take(3).Select(l => l.Trim()));
+                    error = $"solve threw {e.GetType().Name}: {e.Message} at {where}";
                 }
 
                 lock (_gate)

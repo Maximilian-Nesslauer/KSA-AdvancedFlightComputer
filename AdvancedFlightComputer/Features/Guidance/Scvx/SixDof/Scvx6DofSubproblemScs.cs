@@ -38,7 +38,11 @@ public sealed class Scvx6DofSubproblemScs
     private readonly double _dtau;
     private readonly double[] _xs, _us;
 
-    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _oAc, _oRr, _nVars;
+    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _oAc, _oRr, _iSigC, _nVars;
+
+    // The coast before ignition (Scvx6DofConfig.CoastIntervals): its interval count, and each phase's share of normalised time per interval.
+    private readonly int _nCoast;
+    private readonly double _dtauC, _dtauB;
     private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nAc, _nRr;
     private readonly int _nEq, _lDim, _nCone;   // _nCone = total rows = nEq + lDim + sum(soc)
     private readonly int[] _socDims;
@@ -49,6 +53,8 @@ public sealed class Scvx6DofSubproblemScs
     private readonly double[] _colScale;
 
     private readonly ScsWorkspace _ws = new();
+    private double _sigCBar;
+    private double[]? _aJ, _bJ, _f0J;
     private bool _frozen;
     private int _row;   // cone-row cursor
     private readonly int _nSlew;
@@ -79,6 +85,11 @@ public sealed class Scvx6DofSubproblemScs
         _dtau = 1.0 / (_n - 1);
         _xs = cfg.XScale;
         _us = cfg.ResolvedUScale;
+        _nCoast = Math.Max(cfg.CoastIntervals, 0);
+        if (_nCoast > _n - 2)
+            throw new ArgumentException($"a coast of {_nCoast} intervals leaves no burn in {_n} nodes");
+        _dtauC = _nCoast > 0 ? 1.0 / _nCoast : 0.0;
+        _dtauB = 1.0 / (_n - 1 - _nCoast);
 
         // Path constraints apply from node 1 onward, NEVER at node 0 - see Scvx6DofConfig.GlideSlopeWeight for why that is a correctness requirement rather than a tidiness choice.
         // Zero when disabled, so a config without them assembles exactly the problem it did before.
@@ -104,7 +115,9 @@ public sealed class Scvx6DofSubproblemScs
         // The turn-rate limit's slacks, one per node from node 1, LAST again (Scvx6DofConfig.RateMaxRadS).
         _nRr = cfg.RateLimitEnabled ? _n - 1 : 0;
         _oRr = _oAc + _nAc;
-        _nVars = _oRr + _nRr;
+        // The coast's duration, LAST of all (Scvx6DofConfig.CoastIntervals); -1 without a coast.
+        _iSigC = _nCoast > 0 ? _oRr + _nRr : -1;
+        _nVars = _oRr + _nRr + (_nCoast > 0 ? 1 : 0);
 
         // With the terminal roll free, three terminal rows go (qw, qz, wz) and the last node gets a tangent-plane row.
         _nEq = NX + (NX - 1) + (_n - 1) * NX + (_n - 2) - (cfg.TerminalRollFree ? 2 : 0);
@@ -116,14 +129,14 @@ public sealed class Scvx6DofSubproblemScs
         // + two rows per node for each RCS control's bounds, 0 <= u <= its authority, the last orthant rows of all.
         _nPin = cfg.TorqueDemand ? 6 * _n : 0;
         _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm + 2 * _nAc + _nSlew
-                + 2 * _n * Dynamics6Dof.NRCS + _nPin + _nRr;
+                + 2 * _n * Dynamics6Dof.NRCS + _nPin + _nRr + (_nCoast > 0 ? 4 : 0);
         _socDims = new int[_n + _nGs + _n + _nRr];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
         // Tilt cones LAST, so adding them leaves every pre-existing block at the row offset it already had - anything reading a cone index keeps its meaning.
         for (int k = 0; k < _n; k++) _socDims[_n + _nGs + k] = 3; // tilt cone per node
         // ...and the turn-rate cones after them, for the same reason.
-        for (int k = 0; k < _nRr; k++) _socDims[_n + _nGs + _n + k] = 4; // |w| per node from node 1
+        for (int k = 0; k < _nRr; k++) _socDims[_n + _nGs + _n + k] = 1 + cfg.RateLimitComponents; // |w| (or its pitch and yaw) per node from node 1
         _nCone = _nEq + _lDim + _socDims.Sum();
 
         _A = new CcsAssembler(_nCone, _nVars);
@@ -148,7 +161,17 @@ public sealed class Scvx6DofSubproblemScs
         for (int i = 0; i < _nTmVel; i++) _colScale[_oTm + _nTmPos + i] = _xs[Dynamics6Dof.IV];
         for (int k = 0; k < _nAc; k++) _colScale[_oAc + k] = _us[Dynamics6Dof.IT];
         for (int k = 0; k < _nRr; k++) _colScale[_oRr + k] = _xs[Dynamics6Dof.IW];
+        if (_iSigC >= 0) _colScale[_iSigC] = cfg.SigmaScale;
     }
+
+    /// <summary>The coast's duration variable, or -1 without a coast.</summary>
+    public int ISigmaCoast => _iSigC;
+
+    /// <summary>Whether interval k (node k to k+1) is in the coast.</summary>
+    private bool CoastInterval(int k) => k < _nCoast;
+
+    /// <summary>Half the normalised time step of interval k, and which duration variable scales it.</summary>
+    private (double Half, int Sigma) Step(int k) => CoastInterval(k) ? (0.5 * _dtauC, _iSigC) : (0.5 * _dtauB, _iSig);
 
     private void AddA(int row, int col, double value) => _A.Add(row, col, value * _colScale[col]);
     private void AddP(int row, int col, double value) =>
@@ -165,8 +188,13 @@ public sealed class Scvx6DofSubproblemScs
     /// </summary>
     public void Assemble(ReadOnlySpan<double> x0, ReadOnlySpan<double> xf,
                          double[] xbar, double[] ubar, double sigBar, double tr,
-                         double[] A, double[] B, double[] f0)
+                         double[] A, double[] B, double[] f0,
+                         double sigCBar = 0.0, double[]? aJ = null, double[]? bJ = null, double[]? f0J = null)
     {
+        if (_nCoast > 0 && (aJ == null || bJ == null || f0J == null))
+            throw new ArgumentException("a coast needs the ignition node's engine-off linearisation");
+        _sigCBar = sigCBar;
+        _aJ = aJ; _bJ = bJ; _f0J = f0J;
         if (_frozen) { _A.BeginRefill(); _P.BeginRefill(); }
         Array.Clear(_b);
         Array.Clear(_c);
@@ -298,6 +326,7 @@ public sealed class Scvx6DofSubproblemScs
     public double[] SolutionU => Slice(_oU, _n * NU);
     public double[] SolutionWv => Slice(_oW, (_n - 1) * NX);
     public double SolutionSigma => Solution[_iSig];
+    public double SolutionCoastSigma => _iSigC >= 0 ? Solution[_iSigC] : 0.0;
     private double[] Slice(int offset, int count) => Solution[offset..(offset + count)];
 
     internal double AccelerationSlackCost
@@ -324,6 +353,9 @@ public sealed class Scvx6DofSubproblemScs
         for (int k = 0; k < _n - 1; k++)
             for (int j = 0; j < NU; j++)
             {
+                // The engine's controls step at ignition, so their smoothing skips that interval.
+                if (IsIgnitionStep(k, j))
+                    continue;
                 double w = _cfg.WDu / (_us[j] * _us[j]);
                 AddP(IU(k, j), IU(k, j), 2.0 * w);
                 AddP(IU(k + 1, j), IU(k + 1, j), 2.0 * w);
@@ -378,15 +410,21 @@ public sealed class Scvx6DofSubproblemScs
         for (int k = 0; k < _nVz; k++)
             _c[IVz(k)] += _cfg.VzWeight * _colScale[IVz(k)] / _xs[Dynamics6Dof.IV];
         for (int i = 0; i < _nTmPos; i++)
-            _c[_oTm + i] += _cfg.TerminalMissWeight * _colScale[_oTm + i] / _xs[Dynamics6Dof.IR];
+            _c[_oTm + i] += _cfg.TerminalMissWeight * _colScale[_oTm + i] / _cfg.TerminalMissPriceScale;
         for (int i = 0; i < _nTmVel; i++)
             _c[_oTm + _nTmPos + i] +=
-                _cfg.TerminalSpeedWeight * _colScale[_oTm + _nTmPos + i] / _xs[Dynamics6Dof.IV];
+                _cfg.TerminalSpeedWeight * _colScale[_oTm + _nTmPos + i] / _cfg.TerminalSpeedPriceScale;
         for (int k = 0; k < _nAc; k++)
             _c[_oAc + k] += _cfg.AccelWeight * _colScale[_oAc + k] / _us[Dynamics6Dof.IT];
         for (int k = 0; k < _nRr; k++)
             _c[_oRr + k] += _cfg.RateWeight * _colScale[_oRr + k] / _xs[Dynamics6Dof.IW];
     }
+
+    /// <summary>Whether control j's change over interval k is the ignition's step: the engine's controls (not the RCS) over the last coast interval.</summary>
+    internal bool IsIgnitionStep(int k, int j) => IsIgnitionStep(_nCoast, k, j);
+
+    internal static bool IsIgnitionStep(int coastIntervals, int k, int j)
+        => coastIntervals > 0 && k == coastIntervals - 1 && j < Dynamics6Dof.IRCS;
 
     // -------------------------------------------------------------- equalities
 
@@ -426,41 +464,46 @@ public sealed class Scvx6DofSubproblemScs
             _b[row++] = xf[i];
         }
 
-        double half = 0.5 * _dtau;
         for (int k = 0; k < _n - 1; k++)
         {
-            int aK = k * NX * NX, aK1 = (k + 1) * NX * NX;
-            int bK = k * NX * NU, bK1 = (k + 1) * NX * NU;
+            // Each phase has its own time step and duration. The last coast interval ends at the ignition node with the engine still off, so its far end takes that node's engine-off linearisation (aJ, bJ, f0J) rather than the burn's.
+            (double half, int sigCol) = Step(k);
+            double sig = CoastInterval(k) ? _sigCBar : sigBar;
+            bool toIgnition = _nCoast > 0 && k == _nCoast - 1;
+            double[] a1 = toIgnition ? _aJ! : A, b1 = toIgnition ? _bJ! : B, f1 = toIgnition ? _f0J! : f0;
+            int aK = k * NX * NX, aK1 = toIgnition ? 0 : (k + 1) * NX * NX;
+            int bK = k * NX * NU, bK1 = toIgnition ? 0 : (k + 1) * NX * NU;
+            int fK1 = toIgnition ? 0 : (k + 1) * NX;
             for (int i = 0; i < NX; i++)
             {
                 int r = row + i;
                 for (int j = 0; j < NX; j++)
                 {
-                    double v = -half * sigBar * A[aK + i * NX + j];
+                    double v = -half * sig * A[aK + i * NX + j];
                     if (i == j) v -= 1.0;
                     AddA(r, IX(k, j), v);
                 }
                 for (int j = 0; j < NX; j++)
                 {
-                    double v = -half * sigBar * A[aK1 + i * NX + j];
+                    double v = -half * sig * a1[aK1 + i * NX + j];
                     if (i == j) v += 1.0;
                     AddA(r, IX(k + 1, j), v);
                 }
                 for (int j = 0; j < NU; j++)
-                    AddA(r, IU(k, j), -half * sigBar * B[bK + i * NU + j]);
+                    AddA(r, IU(k, j), -half * sig * B[bK + i * NU + j]);
                 for (int j = 0; j < NU; j++)
-                    AddA(r, IU(k + 1, j), -half * sigBar * B[bK1 + i * NU + j]);
-                AddA(r, _iSig, -half * (f0[k * NX + i] + f0[(k + 1) * NX + i]));
+                    AddA(r, IU(k + 1, j), -half * sig * b1[bK1 + i * NU + j]);
+                AddA(r, sigCol, -half * (f0[k * NX + i] + f1[fK1 + i]));
                 AddA(r, IW(k, i), -1.0);
 
                 double rhs = 0;
                 for (int j = 0; j < NX; j++)
                     rhs += A[aK + i * NX + j] * xbar[k * NX + j]
-                         + A[aK1 + i * NX + j] * xbar[(k + 1) * NX + j];
+                         + a1[aK1 + i * NX + j] * xbar[(k + 1) * NX + j];
                 for (int j = 0; j < NU; j++)
                     rhs += B[bK + i * NU + j] * ubar[k * NU + j]
-                         + B[bK1 + i * NU + j] * ubar[(k + 1) * NU + j];
-                _b[r] = -half * sigBar * rhs;
+                         + b1[bK1 + i * NU + j] * ubar[(k + 1) * NU + j];
+                _b[r] = -half * sig * rhs;
             }
             row += NX;
         }
@@ -488,10 +531,12 @@ public sealed class Scvx6DofSubproblemScs
 
         for (int k = 0; k < _n; k++)
         {
+            // In the coast the engine is off: no thrust, and so (by the gimbal cone, and the roll rows when the roll follows the thrust) no gimbal or engine roll either.
+            bool coast = k < _nCoast;
             AddA(row, IU(k, Dynamics6Dof.IT), -1.0);
-            _b[row++] = -_cfg.Tmin;
+            _b[row++] = coast ? 0.0 : -_cfg.Tmin;
             AddA(row, IU(k, Dynamics6Dof.IT), 1.0);
-            _b[row++] = _cfg.Tmax;
+            _b[row++] = coast ? 0.0 : _cfg.Tmax;
             // |tau_roll| <= TauRollMax, or <= (TauRollMax / Tmax) T when the roll comes from the gimbals; the thrust column is always present so the pattern does not depend on the mode.
             double rollPerNewton = _cfg.RollTorqueFollowsThrust && _cfg.Tmax > 0.0 ? _cfg.TauRollMax / _cfg.Tmax : 0.0;
             AddA(row, IU(k, Dynamics6Dof.ITAU), 1.0);
@@ -574,15 +619,33 @@ public sealed class Scvx6DofSubproblemScs
         AddA(row, _iSig, 1.0);
         _b[row++] = _cfg.SigmaMax;
 
+        // The coast's duration: inside its trust region and its bounds, or pinned (Scvx6DofConfig.CoastSigmaFixed).
+        if (_iSigC >= 0)
+        {
+            double lo = _cfg.CoastSigmaFixed ?? _cfg.CoastSigmaMin, hi = _cfg.CoastSigmaFixed ?? _cfg.CoastSigmaMax;
+            // A pinned duration is reached whatever the trust region, so a reference a little off it is not made infeasible.
+            double lim = _cfg.CoastSigmaFixed.HasValue ? Math.Max(sigLim, Math.Abs(_sigCBar - lo)) : sigLim;
+            AddA(row, _iSigC, 1.0);
+            _b[row++] = lim + _sigCBar;
+            AddA(row, _iSigC, -1.0);
+            _b[row++] = lim - _sigCBar;
+            AddA(row, _iSigC, -1.0);
+            _b[row++] = -lo;
+            AddA(row, _iSigC, 1.0);
+            _b[row++] = hi;
+        }
+
         // THE GIMBAL'S SLEW RATE (Scvx6DofConfig.GimbalSlewPerS): |td_{k+1} - td_k| <= rate * dt * tan(gimbal) * (T_k + T_{k+1}) / 2 on each lateral axis, with dt at the reference burn time as the dynamics take it.
         // In TorqueDemand the same limit falls on the pitch and yaw torque: the gimbals' share slews at their rate, |tau_{k+1} - tau_k| <= rate * dt * DemandTorquePerN * (T_k + T_{k+1}) / 2 + what the RCS can jump, from one bound to the other.
         if (_nSlew > 0)
         {
             double perN = _cfg.TorqueDemand ? _cfg.DemandTorquePerN : _cfg.TanGimbal;
-            double reach = 0.5 * _cfg.GimbalSlewPerS * _dtau * sigBar * perN;
             for (int k = 0; k < _n - 1; k++)
                 for (int axis = 0; axis < 2; axis++)
                 {
+                    // In the coast there is no thrust and so no gimbal to slew; at ignition the nozzle may already be where the burn wants it, so the step onto the burn is free.
+                    double reach = CoastInterval(k) ? 0.0 : 0.5 * _cfg.GimbalSlewPerS * _dtauB * sigBar * perN;
+                    double free = _nCoast > 0 && k == _nCoast - 1 ? 2.0 * perN * _cfg.Tmax : 0.0;
                     int j = _cfg.TorqueDemand ? Dynamics6Dof.IRCS + axis : axis == 0 ? Dynamics6Dof.ITDX : Dynamics6Dof.ITDY;
                     (double pos, double neg) = _cfg.TorqueDemand ? _cfg.RcsBounds(axis) : (0.0, 0.0);
                     for (int sign = 1; sign >= -1; sign -= 2)
@@ -591,7 +654,7 @@ public sealed class Scvx6DofSubproblemScs
                         AddA(row, IU(k, j), -sign);
                         AddA(row, IU(k, Dynamics6Dof.IT), -reach);
                         AddA(row, IU(k + 1, Dynamics6Dof.IT), -reach);
-                        _b[row++] = pos + neg;
+                        _b[row++] = pos + neg + free;
                     }
                 }
         }
@@ -737,7 +800,7 @@ public sealed class Scvx6DofSubproblemScs
         {
             AddA(row, _oRr + k, -1.0);
             _b[row++] = _cfg.RateMaxRadS;
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < _cfg.RateLimitComponents; i++)
             {
                 AddA(row, IX(k + 1, Dynamics6Dof.IW + i), -1.0);
                 _b[row++] = 0.0;

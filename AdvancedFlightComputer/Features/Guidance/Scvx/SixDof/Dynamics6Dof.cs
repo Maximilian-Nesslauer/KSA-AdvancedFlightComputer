@@ -81,6 +81,19 @@ public static class Dynamics6Dof
 
         /// <summary>The RCS torque the plan may use, or null for none, which leaves its three controls without effect (the subproblem pins them at zero).</summary>
         public RcsModel? Rcs;
+
+        /// <summary>
+        /// The engine is off: its lateral and axial thrust have no effect and no propellant flows (<see cref="MassFlowOffset"/> included), while the roll torque, the RCS and the air still act. The coast before ignition (Scvx6DofConfig.CoastIntervals) is evaluated with these.
+        /// </summary>
+        public bool EngineOff;
+
+        /// <summary>These parameters with the engine off (<see cref="EngineOff"/>), sharing every table.</summary>
+        public Params WithEngineOff()
+        {
+            var p = (Params)MemberwiseClone();
+            p.EngineOff = true;
+            return p;
+        }
     }
 
     /// <summary>
@@ -125,6 +138,8 @@ public static class Dynamics6Dof
         Dual m = x[IM];
 
         Dual tdx = u[ITDX], tdy = u[ITDY], T = u[IT], tauRoll = u[ITAU];
+        if (p.EngineOff)
+            tdx = tdy = T = default;
 
         // rdot = v
         xdot[IR + 0] = vx;
@@ -193,7 +208,7 @@ public static class Dynamics6Dof
         xdot[IW + 2] = (tauRoll - gyroz) / p.Izz;
 
         // mdot = -(mdot_0 + alpha * T)
-        xdot[IM] = -(p.MassFlowOffset + p.Alpha * T);
+        xdot[IM] = p.EngineOff ? default : -(p.MassFlowOffset + p.Alpha * T);
     }
 
     /// <summary>
@@ -292,7 +307,7 @@ public static class Dynamics6Dof
 
     /// <summary>The propellant flow at one node's controls, kg/s, as F's mass row has it: the engine's line in its axial thrust.</summary>
     public static double MassFlow(Params p, ReadOnlySpan<double> u)
-        => p.MassFlowOffset + p.Alpha * u[IT];
+        => p.EngineOff ? 0.0 : p.MassFlowOffset + p.Alpha * u[IT];
 
     /// <summary>The RCS columns of B, row-major NX x NU: d(xdot)/d(u_rcs), exactly what F's RCS terms differentiate to.</summary>
     private static void RcsColumns(ReadOnlySpan<double> x, Params p, Span<double> B)

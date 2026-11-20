@@ -40,6 +40,12 @@ public sealed class BodyAero6Dof
     public double ComShiftZ { get; init; }
 
     /// <summary>The airspeed the tables fade in over, m/s: none below the low end, all above the high.</summary>
+    /// <summary>
+    /// THE GAME'S MOMENT LIMITER, per pascal of dynamic pressure: the moment is divided by 1 + MomentLimiterPerPa q. 0 for none.
+    ///  KSA's integrator does not apply the air's moment as the tables measure it. ComputeAerodynamicLoads divides it by 1 + invInertiaBound dt q (0.5 dt stiffnessBound + dampingBound / V), a semi-implicit guard worked for the physics substep dt (0.02 s at 1x) and the largest inverse inertia - on a booster the small roll inertia's, so it bites on every axis. The sweep reads the loads at dt 0, without it. On the 2026-11-20 booster at 6-7 kPa it divided the moment by 3.7 on all three axes: the plan saw 40 kN m of roll the RCS could not hold, the booster felt 11 (headless, entry log's roll balance). Set from flight, measured at the game's own substep (KsaAeroSweep.TryMomentLimiter); the speed term is folded into it at the speed it was measured at.
+    /// </summary>
+    public double MomentLimiterPerPa { get; set; }
+
     public double FadeSpeedLowMs { get; init; } = 5.0;
     public double FadeSpeedHighMs { get; init; } = 15.0;
 
@@ -107,6 +113,14 @@ public sealed class BodyAero6Dof
             Mx += qsl * cl;
             My += qsl * cm;
             Mz += qsl * cn;
+        }
+        // As the game's integrator applies it (MomentLimiterPerPa): the whole moment about the centre of mass, divided by one factor.
+        if (MomentLimiterPerPa > 0.0)
+        {
+            Dual limiter = 1.0 + MomentLimiterPerPa * (0.5 * Atmosphere.Density(altitude) * speed2);
+            Mx /= limiter;
+            My /= limiter;
+            Mz /= limiter;
         }
         tx = m[0] * Mx + m[3] * My + m[6] * Mz;
         ty = m[1] * Mx + m[4] * My + m[7] * Mz;
