@@ -137,6 +137,7 @@ public static partial class GuidanceWindow
     /// <summary>Stop the 3-DOF. In the air the engine is left as it is; a cut there drops the craft.</summary>
     private static void Disengage3Dof(string why)
     {
+        _s.ThreeDofStandby = false;
         bool burning = _s.ThreeDofPhase == ThreeDofPhase.Burn;
         // AFC's own attitude controller flew the glide: its RCS and surfaces stop with entry guidance.
         if (_s.OwnAttitudeFlying && _s.OwnAttitudeVehicle is { } flown)
@@ -268,7 +269,23 @@ public static partial class GuidanceWindow
             StepEntryTouchdownPrepare(vehicle, parent, siteCci, x, x14, now);
 
         // Fly the plan if there is one; otherwise the PID glide until there is.
-        if (!Plan3DofStep(vehicle, parent, frame, x, att, now, dt, out double3 wantLocal, out double3 rateLocal, out bool smooth))
+        bool planned = Plan3DofStep(vehicle, parent, frame, x, att, now, dt, out double3 wantLocal, out double3 rateLocal, out bool smooth);
+        // ON STANDBY (ThreeDofStandbyQkPa): the plan is solved and re-solved, but the craft holds the planned glide until the air reaches ThreeDofEngageQkPa, or its time to impact the backstop.
+        if (_s.ThreeDofStandby && _s.ThreeDofPhase == ThreeDofPhase.Glide)
+        {
+            double qNow = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * (x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
+            if (qNow >= _s.ThreeDofEngageQkPa * 1000.0 || (double.IsFinite(_s.GlideTgo) && _s.GlideTgo <= _s.ThreeDofEngageTgoS))
+            {
+                _s.ThreeDofStandby = false;
+                GuidanceLog.Info(vehicle, FormattableString.Invariant($"Entry guidance takes the glide at {qNow / 1000.0:F2} kPa, {(planned ? "on its plan" : "its plan not ready yet")}."));
+            }
+            else
+            {
+                planned = false;
+                _s.DiagEntry(FormattableString.Invariant($"ENTRY STANDBY: PLANNING, HOLDING THE PLANNED GLIDE UNTIL {_s.ThreeDofEngageQkPa:0.##} kPa (NOW {qNow / 1000.0:F2})."));
+            }
+        }
+        if (!planned)
         {
             if (!ThreeDofLive)
                 return;   // a handover claimed the craft on this step

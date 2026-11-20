@@ -707,6 +707,7 @@ public static partial class GuidanceWindow
                 GaugeRowCheck(Specs.ThreeDofFromGlide, ref _s.ThreeDofFromGlide);
                 using (new ImGuiDisabledScope(!_s.ThreeDofFromGlide))
                 {
+                    GaugeRow(Specs.ThreeDofStandbyQkPa, ref _s.ThreeDofStandbyQkPa);
                     GaugeRow(Specs.ThreeDofEngageQkPa, ref _s.ThreeDofEngageQkPa);
                     GaugeRow(Specs.ThreeDofEngageTgoS, ref _s.ThreeDofEngageTgoS);
                 }

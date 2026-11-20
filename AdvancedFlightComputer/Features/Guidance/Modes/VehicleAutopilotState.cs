@@ -1570,6 +1570,12 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double ThreeDofEngageQkPa = 1.0;
 
+    /// <summary>The dynamic pressure, kPa, at which entry guidance engages on standby ahead of taking the glide at ThreeDofEngageQkPa: it plans from here, so the take-over finds a plan ready, while the craft holds the planned glide. 0, or above ThreeDofEngageQkPa, for none.</summary>
+    public double ThreeDofStandbyQkPa = 0.5;
+
+    /// <summary>Entry guidance is on standby (ThreeDofStandbyQkPa): planning, the craft holding the planned glide, until the air reaches ThreeDofEngageQkPa.</summary>
+    internal bool ThreeDofStandby;
+
     /// <summary>Steer the boostback glide on its impact prediction's miss (the PID). Off by default: above where entry guidance takes over the air is too thin for it to matter, and the prediction, which knows nothing of what the fins push, made the glide swing (2026-11-20). Off holds the glide the boostback planned.</summary>
     public bool GlideSteerMiss = false;
 

@@ -506,10 +506,11 @@ public static partial class GuidanceWindow
                         _s.BoostbackClimbHold = true;
                         break;
                     }
-                    if (smallMiss && (CanCoastBeforeSmallBoostback(vehicle, 0.0) || !CanPowerBoostbackTurn(vehicle)))
+                    // A DRONE SHIP'S BOOSTER (optimal return) never settles or turns lit: its landing reserve is sized for the landing alone (AscentRecovery), and a settle and a powered flip spend it on dV it then has to take back. Whatever correction it needs, it turns engine-off and burns once (2026-11-20: a downrange booster settled and turned lit, at separation and again at the apex).
+                    if (_s.BoostbackGlideOnly || (smallMiss && (CanCoastBeforeSmallBoostback(vehicle, 0.0) || !CanPowerBoostbackTurn(vehicle))))
                     {
                         _s.BoostbackSmall = true;
-                        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, small boostback (miss {missKm:F1} km, {missDv:F0} m/s): no settle, turning engine-off."));
+                        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"clear, {(_s.BoostbackGlideOnly ? "drone ship's " : "")}small boostback (miss {missKm:F1} km, {missDv:F0} m/s): no settle, turning engine-off."));
                         EnterBoostbackPhase(BoostbackPhase.Rotation, now);
                         break;
                     }
@@ -700,11 +701,17 @@ public static partial class GuidanceWindow
                 }
                 want = GlideDirection(vehicle, orbit, parent, now, dt);
                 // Close enough to impact for the air to be worth planning in: the 3-DOF glide-and-burn landing takes the craft from here (Modes/ThreeDof.cs). It flies the PID glide itself until its first plan, from the same glide state, so the hand-over does not move the command.
-                // ON DYNAMIC PRESSURE (ThreeDofEngageQkPa), falling past the apex: entry guidance takes the glide once the air begins to matter, and flies the whole of the descent where it does. The boostback's glide only holds its planned angle above that. Its time to impact, ThreeDofEngageTgoS, is kept as a backstop for an atmosphere too thin to reach the pressure.
-                bool airMatters = _s.ThreeDofEngageQkPa > 0.0 && _s.GlideQ >= _s.ThreeDofEngageQkPa * 1000.0 && vUp < 0.0;
+                // ON DYNAMIC PRESSURE, falling past the apex. Entry guidance engages on standby at ThreeDofStandbyQkPa: it solves and re-solves its plan while the craft goes on holding the planned glide, and takes the glide at ThreeDofEngageQkPa with a plan already in hand (ThreeDofStandby). The boostback's glide only holds its planned angle above that. Its time to impact, ThreeDofEngageTgoS, is kept as a backstop for an atmosphere too thin to reach the pressure.
+                double standbyQ = Math.Min(_s.ThreeDofStandbyQkPa > 0.0 ? _s.ThreeDofStandbyQkPa : _s.ThreeDofEngageQkPa, _s.ThreeDofEngageQkPa) * 1000.0;
+                bool airMatters = _s.ThreeDofEngageQkPa > 0.0 && _s.GlideQ >= standbyQ && vUp < 0.0;
                 bool lastChance = double.IsFinite(_s.GlideTgo) && _s.GlideTgo <= _s.ThreeDofEngageTgoS;
                 if (_s.ThreeDofFromGlide && (airMatters || lastChance) && Engage3Dof(vehicle, now))
+                {
+                    _s.ThreeDofStandby = !lastChance && _s.GlideQ < _s.ThreeDofEngageQkPa * 1000.0;
+                    if (_s.ThreeDofStandby)
+                        GuidanceLog.Info(vehicle, FormattableString.Invariant($"Entry guidance on standby at {_s.GlideQ / 1000.0:F2} kPa: planning, holding the planned glide until {_s.ThreeDofEngageQkPa:0.##} kPa."));
                     return;
+                }
                 break;
 
             default:

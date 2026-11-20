@@ -170,6 +170,8 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                 state.UseThreeDofLanding = true;
                 // AFC_LANDING_OWN_ATTITUDE=0 flies the glide on the stock flight computer, as before AttitudeController.
                 state.ThreeDofOwnAttitude = Env("AFC_LANDING_OWN_ATTITUDE", 1.0) > 0.0;
+                // AFC_LANDING_STANDBY=1 engages entry guidance on standby, as a boostback glide does at ThreeDofStandbyQkPa: planning, holding the planned glide until ThreeDofEngageQkPa.
+                state.ThreeDofStandby = Env("AFC_LANDING_STANDBY", 0.0) > 0.0;
                 state.ThreeDofEngagePending = true;
             }
             state.LandingAccelLimitG = Env("AFC_LANDING_ACCEL_G", state.LandingAccelLimitG);

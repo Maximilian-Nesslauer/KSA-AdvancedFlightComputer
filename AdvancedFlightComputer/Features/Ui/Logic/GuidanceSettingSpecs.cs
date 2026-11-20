@@ -304,7 +304,9 @@ internal static class GuidanceSettingSpecs
         { BoostbackClearanceM, BoostbackSeparationS, BoostbackGlideMissKm, BoostbackLargeMissKm, BoosterCorrectionDvMs, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg };
 
     /// <summary>The HANDOVER settings of a boostback glide and of entry guidance: who takes the glide and who takes the end of the burn.</summary>
-    public static readonly SettingSpec[] LandHandOvers = { ThreeDofEngageQkPa, ThreeDofEngageTgoS, ThreeDofSixDofTimeS };
+    public static readonly SettingSpec ThreeDofStandbyQkPa = new("ThreeDofStandbyQkPa", "PLANS FROM", "kPa", P, 0.5, 0.0, 100.0, "%.2f",
+        "Dynamic pressure at which ENTRY starts planning on standby, the craft holding the planned glide, so it has a plan ready when it takes over at AT DYNAMIC PRESSURE.");
+    public static readonly SettingSpec[] LandHandOvers = { ThreeDofStandbyQkPa, ThreeDofEngageQkPa, ThreeDofEngageTgoS, ThreeDofSixDofTimeS };
     public static readonly BoolSpec[] LandHandOverBools = { ThreeDofFromGlide, ThreeDofSixDofHandover };
 
     public static readonly SettingSpec[] LandGfoldPlayer = { GfoldHoverHandoffAltM };
@@ -391,7 +393,7 @@ internal static class GuidanceSettingSpecs
         SixDofNodes, SixDofTiltDeg, SixDofThrottleFloor, SixDofSigmaSeed,
         SixDofSigmaSamples, SixDofGlideSlopeDeg, SixDofVzMaxMs, SixDofNodeDtTarget, SixDofColdIntervalS,
         SixDofReplanSec, SixDofRateDampShare, SixDofControlSmooth, SixDofProximal, SixDofTrackKp, SixDofTrackKd,
-        ThreeDofEngageQkPa, ThreeDofEngageTgoS, ThreeDofSixDofTimeS, ThreeDofSmoothTau, ThreeDofTurnAccelDegS2, ThreeDofGlideCeiling,
+        ThreeDofStandbyQkPa, ThreeDofEngageQkPa, ThreeDofEngageTgoS, ThreeDofSixDofTimeS, ThreeDofSmoothTau, ThreeDofTurnAccelDegS2, ThreeDofGlideCeiling,
         ThreeDofBurnCeiling, ThreeDofTrackKp, ThreeDofTrackKd, ThreeDofTrackTiltDeg,
         TermTouchdownRate, TermConstAltM, TermQuadK, TermMaxDescRate, TermMaxTiltDeg, TermNudgeStep,
         TermKpV, TermKiV, TermKdV, TermKpL, TermKiL, TermKdL,

@@ -156,7 +156,8 @@ public static partial class GuidanceWindow
                         double entryIn = _s.ThreeDofFromGlide && !onQ && double.IsFinite(_s.GlideTgo) ? _s.GlideTgo - _s.ThreeDofEngageTgoS : double.NaN;
                         double glideMissKm = Math.Sqrt(_s.GlideMissDownM * _s.GlideMissDownM + _s.GlideMissCrossM * _s.GlideMissCrossM) / 1000.0;
                         return new ModeReadout(a, "BOOSTBACK", "", phase, Tone(true), _s.GlideTgo, "IMPACT T-",
-                            PageText.GlideNumbers(_s.GlideMissDownM, _s.GlideMissCrossM, entryIn, onQ ? _s.GlideQ / 1000.0 : double.NaN, onQ ? _s.ThreeDofEngageQkPa : double.NaN), PageText.GlideNumbersCard, PhaseList: chain,
+                            PageText.GlideNumbers(_s.GlideMissDownM, _s.GlideMissCrossM, entryIn, onQ ? _s.GlideQ / 1000.0 : double.NaN,
+                                onQ ? (_s.ThreeDofStandbyQkPa > 0.0 ? Math.Min(_s.ThreeDofStandbyQkPa, _s.ThreeDofEngageQkPa) : _s.ThreeDofEngageQkPa) : double.NaN), PageText.GlideNumbersCard, PhaseList: chain,
                             Word: PlanWords.Miss(glideMissKm), ImpactShown: true);
                     }
                     case BoostbackPhase.Boostback:
