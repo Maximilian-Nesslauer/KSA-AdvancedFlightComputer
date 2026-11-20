@@ -2043,7 +2043,7 @@ public static partial class GuidanceWindow
         if (threeDofGuides)
             return _s.ThreeDofPhase == ThreeDofPhase.Glide;
         return boostbackGuides && _s.BoostbackGlideOwnAttitude && _s.BoostbackPhase == BoostbackPhase.Glide
-               && !(vehicle.ComputeLiveThrust() > 0.0);
+               && !(KsaEnginePerf.LiveEngineThrust(vehicle) > 0.0);
     }
 
     /// <summary>

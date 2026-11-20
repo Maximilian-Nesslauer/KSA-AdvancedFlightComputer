@@ -1604,9 +1604,9 @@ public sealed class VehicleAutopilotState
     public double3 ReturnRollRefCcf;
 
     /// <summary>
-    /// Roll entry guidance's glide to the nearest roll at which the air's rolling moment is zero and restoring (GuidanceWindow.UpdateGlideRoll), under AFC's own attitude controller. On by default. The offset it has turned the held wing direction by, rad, about the engine-first axis (ReturnRollRefCci); when it last chose; and the air's rolling moment at the held roll and at the one it heads for then, N m.
+    /// Roll entry guidance's glide to the nearest roll at which the air's rolling moment is zero and restoring (GuidanceWindow.UpdateGlideRoll), under AFC's own attitude controller. OFF by default since 2026-11-20: on 2stage_KSAero no roll trims (the rolling moment is a near-constant bias), and the search only wandered; the glide flies wings level to the local vertical, as before. The offset it has turned the held wing direction by, rad, about the engine-first axis (ReturnRollRefCci); when it last chose; and the air's rolling moment at the held roll and at the one it heads for then, N m.
     /// </summary>
-    public bool ThreeDofLeastRollMoment = true;
+    public bool ThreeDofLeastRollMoment = false;
 
     /// <summary>Fly the boostback's glide with AFC's own attitude controller too, while the engine is off (ThreeDofOwnAttitude switches both). On by default.</summary>
     public bool BoostbackGlideOwnAttitude = true;
