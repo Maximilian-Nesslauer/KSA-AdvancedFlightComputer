@@ -685,7 +685,7 @@ public static partial class GuidanceWindow
             return;
         }
         string label = entryRows
-            ? PageText.HandOversLabel(_s.ThreeDofFromGlide, _s.ThreeDofEngageTgoS, _s.ThreeDofSixDofHandover, _s.ThreeDofSixDofTimeS)
+            ? PageText.HandOversLabel(_s.ThreeDofFromGlide, _s.ThreeDofEngageTgoS, _s.ThreeDofSixDofHandover, _s.ThreeDofSixDofTimeS, _s.ThreeDofEngageQkPa)
             : PageText.HoverHandOverLabel(_s.GfoldHoverHandoffAltM, hoverCanFly, _landHoverKnown);
         if (!ConsoleUi.Fold(label, HandOversFoldId, openByDefault, entryRows ? PageText.HandOversTip : PageText.HoverHandOverTip))
             return;
@@ -706,7 +706,10 @@ public static partial class GuidanceWindow
             {
                 GaugeRowCheck(Specs.ThreeDofFromGlide, ref _s.ThreeDofFromGlide);
                 using (new ImGuiDisabledScope(!_s.ThreeDofFromGlide))
+                {
+                    GaugeRow(Specs.ThreeDofEngageQkPa, ref _s.ThreeDofEngageQkPa);
                     GaugeRow(Specs.ThreeDofEngageTgoS, ref _s.ThreeDofEngageTgoS);
+                }
             }
             GaugeRowCheck(Specs.ThreeDofSixDofHandover, ref _s.ThreeDofSixDofHandover);
             using (new ImGuiDisabledScope(!_s.ThreeDofSixDofHandover))

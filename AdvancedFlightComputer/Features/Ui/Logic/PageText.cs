@@ -1185,8 +1185,16 @@ internal static class PageText
     }
 
     /// <summary>The numbers of a boostback glide in the head: the miss, its two parts where the row has room, and the time until entry guidance takes over, NaN when it does not.</summary>
-    public static HeadValue[] GlideNumbers(double downM, double crossM, double entryInS = double.NaN)
+    public static HeadValue[] GlideNumbers(double downM, double crossM, double entryInS = double.NaN, double qKpa = double.NaN, double entryAtKpa = double.NaN)
     {
+        // Entry guidance takes over on dynamic pressure: the air now against the pressure it takes over at.
+        if (double.IsFinite(qKpa) && entryAtKpa > 0.0)
+        {
+            double km = Math.Sqrt(downM * downM + crossM * crossM) / 1000.0;
+            string m = "MISS " + Fmt.KmFine(km);
+            return [new HeadValue(m, 0, m, PlanWords.MissTone(km, flying: true)),
+                    new HeadValue(string.Create(Inv, $"q {qKpa:0.00} OF {entryAtKpa:0.##} kPa TO ENTRY"))];
+        }
         double missKm = Math.Sqrt(downM * downM + crossM * crossM) / 1000.0;
         string miss = "MISS " + Fmt.KmFine(missKm);
         string parts = string.Create(Inv, $"{Math.Abs(downM) / 1000.0:F1} {(downM < 0.0 ? "SHORT" : "LONG")}, {Math.Abs(crossM) / 1000.0:F1} {(crossM < 0.0 ? "RIGHT" : "LEFT")}");
@@ -1251,9 +1259,11 @@ internal static class PageText
 
     public const string NoThrustToJudge = "NO LIT ENGINE. NO TWR.";
 
-    public static string HandOversLabel(bool entryTakesGlide, double glideAtS, bool touchdownTakesBurn, double burnLastS)
+    public static string HandOversLabel(bool entryTakesGlide, double glideAtS, bool touchdownTakesBurn, double burnLastS, double glideAtKpa = 0.0)
     {
-        string glide = entryTakesGlide ? string.Create(Inv, $"ENTRY AT IMPACT T-{glideAtS:F0} s") : "ENTRY OFF";
+        string glide = !entryTakesGlide ? "ENTRY OFF"
+            : glideAtKpa > 0.0 ? string.Create(Inv, $"ENTRY AT {glideAtKpa:0.##} kPa")
+            : string.Create(Inv, $"ENTRY AT IMPACT T-{glideAtS:F0} s");
         string burn = touchdownTakesBurn ? string.Create(Inv, $"TOUCHDOWN LAST {burnLastS:F0} s") : "TOUCHDOWN OFF";
         return "HANDOVER: " + glide + ", " + burn;
     }

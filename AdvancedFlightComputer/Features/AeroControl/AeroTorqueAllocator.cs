@@ -159,52 +159,72 @@ internal sealed class AeroTorqueAllocator
         double change = degree * ChangePriceShare / DegreePriceShare;
 
         // REFINED FROM ITS OWN ANSWER. The first pass is a linear programme over each curve's pieces from the present deflection, straightened where they steepen (AddDirection), exact wherever the curves bend the usual way. Where they do not, its answer can count on torque the curves do not give, and from a deflection on a bend it can even fill the steep piece one way and the shallow one back, moving nowhere for torque it does not get (2026-11-20: 2stage_KSAero's fins at a 45 deg range, the drag of a deflected fin growing faster outward, 48 of 51 kN m of pitch with 12 of roll and 14 of yaw nobody asked for). So it is refined: passes with one straight slope per surface across a window round the best answer yet - the same slope either way, nothing to play off - kept when the true cost, off the curves, falls, and with the window halved when it does not.
-        var start = (double[])current.Clone();
+        //  THE WINDOW GROWS BACK. A pass that lowers the cost doubles the window (to RefineWindowMaxDeg), one that does not halves it: on the scaled-up fins of 2026-11-20 a window that could only shrink settled 8 % short of half the pitch reach, small moves no longer helping where one large coordinated move of several fins would.
+        //  TWO STARTS: from the first pass's answer, and, if that does not settle, from where the surfaces are now; the better answer is kept.
         var best = new double[Count];
         var bestDuty = new double[m];
         var trial = new double[Count];
         var trialDuty = new double[m];
+        var anchor = new double[Count];
+        var anchorDuty = new double[m];
         double bestCost = double.PositiveInfinity, bestMiss = double.PositiveInfinity;
         double size = Math.Sqrt(demandX * demandX + demandY * demandY + demandZ * demandZ);
-        double window = RefineWindowDeg;
-        for (int pass = 0; pass < MaxPasses && window > RefineWindowMinDeg; pass++)
+        double settled = 1.0 + 5e-3 * size;
+        bool any = false;
+        for (int round = 0; round < 2 && bestMiss > settled; round++)
         {
-            bool pieces = pass == 0;
-            if (!SolvePass(demandX, demandY, demandZ, priority, pieces ? current : best, current, lo, hi, degree, change,
-                           backupTorque, backupCost, trial, trialDuty, out double plannedX, out double plannedY, out double plannedZ,
-                           pieces ? 0.0 : window))
+            double window = RefineWindowDeg, anchorCost = double.PositiveInfinity;
+            Array.Copy(current, anchor, Count);
+            for (int pass = 0; pass < MaxPasses && window > RefineWindowMinDeg; pass++)
             {
-                if (pieces)
-                    return default;
-                window *= 0.5;
-                continue;
+                bool pieces = round == 0 && pass == 0;
+                if (!SolvePass(demandX, demandY, demandZ, priority, anchor, current, lo, hi, degree, change,
+                               backupTorque, backupCost, trial, trialDuty, out double plannedX, out double plannedY, out double plannedZ,
+                               pieces ? 0.0 : window))
+                {
+                    if (pieces)
+                        return default;
+                    window *= 0.5;
+                    continue;
+                }
+                Result r = Evaluate(trial, 0.0, 0.0, 0.0);
+                double cost = TrueCost(demandX, demandY, demandZ, priority, r, trial, current, degree, change, backupTorque, backupCost, trialDuty);
+                double miss = Math.Sqrt((plannedX - r.TorqueX) * (plannedX - r.TorqueX) + (plannedY - r.TorqueY) * (plannedY - r.TorqueY)
+                                        + (plannedZ - r.TorqueZ) * (plannedZ - r.TorqueZ));
+                if (double.IsPositiveInfinity(anchorCost) || cost < anchorCost - 1e-9 * (1.0 + Math.Abs(anchorCost)))
+                {
+                    anchorCost = cost;
+                    Array.Copy(trial, anchor, Count);
+                    Array.Copy(trialDuty, anchorDuty, m);
+                    if (!pieces)
+                        window = Math.Min(2.0 * window, RefineWindowMaxDeg);
+                    if (!any || cost < bestCost - 1e-9 * (1.0 + Math.Abs(bestCost)))
+                    {
+                        any = true;
+                        bestCost = cost;
+                        bestMiss = miss;
+                        Array.Copy(trial, best, Count);
+                        Array.Copy(trialDuty, bestDuty, m);
+                    }
+                }
+                else if (!pieces)
+                    window *= 0.5;
+                // Done once the best answer's plan is what the curves give.
+                if (bestMiss <= settled)
+                    break;
             }
-            Result r = Evaluate(trial, 0.0, 0.0, 0.0);
-            double cost = TrueCost(demandX, demandY, demandZ, priority, r, trial, current, degree, change, backupTorque, backupCost, trialDuty);
-            double miss = Math.Sqrt((plannedX - r.TorqueX) * (plannedX - r.TorqueX) + (plannedY - r.TorqueY) * (plannedY - r.TorqueY)
-                                    + (plannedZ - r.TorqueZ) * (plannedZ - r.TorqueZ));
-            if (double.IsPositiveInfinity(bestCost) || cost < bestCost - 1e-9 * (1.0 + Math.Abs(bestCost)))
-            {
-                bestCost = cost;
-                bestMiss = miss;
-                Array.Copy(trial, best, Count);
-                Array.Copy(trialDuty, bestDuty, m);
-            }
-            else if (!pieces)
-                window *= 0.5;
-            // Done once the best answer's plan is what the curves give.
-            if (bestMiss <= 1.0 + 5e-3 * size)
-                break;
         }
+        if (!any)
+            return default;
         best.CopyTo(deflectionDeg);
         if (backupDuty.Length >= m)
             bestDuty.CopyTo(backupDuty);
         return Evaluate(deflectionDeg, demandX, demandY, demandZ, solved: true);
     }
 
-    /// <summary>The refinement in Allocate: at most this many passes; the first window either way of the best answer, and the smallest, degrees.</summary>
-    private const int MaxPasses = 12;
-    private const double RefineWindowDeg = 10.0, RefineWindowMinDeg = 0.05;
+    /// <summary>The refinement in Allocate: at most this many passes a start; the first window either way of the answer so far, the largest it grows to, and the smallest, degrees.</summary>
+    private const int MaxPasses = 24;
+    private const double RefineWindowDeg = 10.0, RefineWindowMaxDeg = 15.0, RefineWindowMinDeg = 0.05;
 
     /// <summary>
     /// One pass of Allocate: the linear programme over the pieces from <paramref name="start"/>, within [lo, hi], each degree priced against <paramref name="current"/> (change) and against rest (degree). The deflections into <paramref name="deflection"/>, the backup's duties into <paramref name="duty"/>, and the surfaces' torque the programme counted on.
@@ -451,6 +471,17 @@ internal sealed class AeroTorqueAllocator
         double max = x != null ? Math.Max(x[2 * n], 0.0) : 0.0;
         if (!(max > 0.0) || !double.IsFinite(max))
             return default;
+        // HONEST: the programme's pieces are chords where the curves steepen, so its maximum can promise more than the curves give. The reach is what an allocation for it really gives about the axis.
+        {
+            Span<double> full = stackalloc double[3];
+            full[axis] = sign * max;
+            Span<double> d = Count <= 64 ? stackalloc double[Count] : new double[Count];
+            Span<double> w = stackalloc double[3] { 1.0, 1.0, 1.0 };
+            Result reach = Allocate(full[0], full[1], full[2], w, d);
+            double reached = axis == 0 ? reach.TorqueX : axis == 1 ? reach.TorqueY : reach.TorqueZ;
+            if (reach.Solved && double.IsFinite(reached))
+                max = Math.Clamp(sign * reached, 0.0, max);
+        }
 
         Span<double> demand = stackalloc double[3];
         demand[axis] = 0.5 * sign * max;

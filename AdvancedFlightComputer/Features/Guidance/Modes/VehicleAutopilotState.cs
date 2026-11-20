@@ -1556,7 +1556,7 @@ public sealed class VehicleAutopilotState
     public double ThreeDofLastStep;
     public double ThreeDofLogTime = double.NaN;
 
-    /// <summary>Take a boostback glide over automatically once its predicted time to impact falls under <see cref="ThreeDofEngageTgoS"/>.</summary>
+    /// <summary>Take a boostback glide over automatically once the air's dynamic pressure reaches <see cref="ThreeDofEngageQkPa"/>, or its predicted time to impact falls under <see cref="ThreeDofEngageTgoS"/>.</summary>
     public bool ThreeDofFromGlide = true;
 
     /// <summary>
@@ -1566,12 +1566,12 @@ public sealed class VehicleAutopilotState
     public double ThreeDofEngageTgoS = 45.0;
 
     /// <summary>
-    /// The height, m above the mean radius, below which a falling boostback glide is taken over too, whatever its time to impact: entry guidance then flies the whole descent from there. 45 km: offline (--3dof-far) its cold solve converges from every start at 50 km and below, and gives up from most at 60 and above. 0 for the time to impact alone.
+    /// The dynamic pressure, kPa, at which entry guidance takes over a falling boostback glide (past its apex): where the air begins to matter, so entry guidance flies all of the descent where it does and the boostback's glide only holds its planned angle above. 1 kPa is about 37 km on the 2026-11-20 return. Offline (--3dof-far) entry's cold solve converges from every start at 50 km and below. 0 for the time to impact alone (ThreeDofEngageTgoS, also the backstop).
     /// </summary>
-    public double ThreeDofEngageAltM = 45_000.0;
+    public double ThreeDofEngageQkPa = 1.0;
 
-    /// <summary>The seconds of glide each of entry guidance's glide intervals covers at its cold solve (GuidanceWindow.GlideIntervalsFor), 12 to 48 intervals.</summary>
-    public double ThreeDofGlideIntervalS = 3.0;
+    /// <summary>Steer the boostback glide on its impact prediction's miss (the PID). Off by default: above where entry guidance takes over the air is too thin for it to matter, and the prediction, which knows nothing of what the fins push, made the glide swing (2026-11-20). Off holds the glide the boostback planned.</summary>
+    public bool GlideSteerMiss = false;
 
     /// <summary>Hand the landing burn to 6-DOF for its last seconds, for its rotational model of the final flare: the 3-DOF's horizon collapses there and its re-solves start being refused. On by default.</summary>
     public bool ThreeDofSixDofHandover = true;

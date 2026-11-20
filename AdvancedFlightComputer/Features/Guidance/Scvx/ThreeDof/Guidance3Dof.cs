@@ -100,6 +100,9 @@ public sealed class Guidance3Dof
         public int ColdAdmmCap { get; init; } = 20_000;
         public int WarmAdmmCap { get; init; } = 2_000;
         public int EscalatedAdmmCap { get; init; } = 8_000;
+
+        /// <summary>A glide longer than this, s, gets the cold cap for its warm re-solves' escalated retry. From high up (entry engages on dynamic pressure, about 37 km) the same 12 glide intervals are 8 s each and the subproblem is harder: re-solves that only ran out of iterations were refused 20 at a time and the plan dropped (harness, 2026-11-20). Close in, where the intervals are back to their proven size, the caps are as they were.</summary>
+        public double LongGlideS { get; init; } = 40.0;
         public int WarmIterations { get; init; } = 3;
         public int SwapIterations { get; init; } = 12;
 
@@ -319,6 +322,9 @@ public sealed class Guidance3Dof
         cfg.ThrottleCeiling = _set.GlideThrottleCeiling;
         _two.SetAttitudeAnchor(attitude, AnchorCone(_set.AnchorSeconds));
         _two.SetAttitudeRateAnchor(_attitudeRate);
+        _two.EscalatedSubproblemIterations = sigG > _set.LongGlideS
+            ? Math.Max(_set.ColdAdmmCap, _set.EscalatedAdmmCap)
+            : Math.Max(_two.MaxSubproblemIterations, _set.EscalatedAdmmCap);
         return Solve(_two, x0, xs, us, sigG, sigB, now, now, Phase3Dof.Glide, _set.WarmIterations, reseed: true);
     }
 

@@ -357,6 +357,14 @@ public static partial class GuidanceWindow
             return;
         }
 
+        // NO STEERING ON THE MISS (GlideSteerMiss, off by default): the glide holds the angle the boostback planned its impact with, lift up the trajectory towards the site, until entry guidance takes it on dynamic pressure. The miss and the time to go above are still read for the readout and the backstop.
+        if (!_s.GlideSteerMiss)
+        {
+            _s.GlideIntCcf = double3.Zero;
+            HoldPlannedGlide(aero, "HOLDING PLANNED GLIDE.");
+            return;
+        }
+
         double3 pid = _s.GlideKp * miss + _s.GlideKi * _s.GlideIntCcf + _s.GlideKd * _s.GlideRateCcf;
         SolveGlideLift(perUp, perLeft, -pid / tgo, out double aUp, out double aLeft);
 

@@ -240,7 +240,9 @@ internal static class GuidanceSettingSpecs
     #region Entry guidance (3-DOF)
 
     public static readonly SettingSpec ThreeDofEngageTgoS = new("ThreeDofEngageTgoS", "AT IMPACT T-", "s", P, 45.0, 0.0, 1e4, "%.1f",
-        "Predicted time to impact at which ENTRY takes over a boostback glide.");
+        "Predicted time to impact at which ENTRY takes over a boostback glide if the air has not reached AT DYNAMIC PRESSURE first.");
+    public static readonly SettingSpec ThreeDofEngageQkPa = new("ThreeDofEngageQkPa", "AT DYNAMIC PRESSURE", "kPa", P, 1.0, 0.0, 100.0, "%.2f",
+        "Dynamic pressure at which ENTRY takes over a falling boostback glide: from there entry guidance flies the whole descent. 0 for the time to impact alone.");
     public static readonly SettingSpec ThreeDofSixDofTimeS = new("ThreeDofSixDofTimeS", "AT BURN LEFT", "s", P, 30.0, 0.0, 1e3, "%.1f",
         "Burn left in the plan at which TOUCHDOWN takes over the burn, once its standby plan is ready.");
     public static readonly SettingSpec ThreeDofSmoothTau = new("ThreeDofSmoothTau", "COMMAND SMOOTHING", "s", T, 0.05, 0.0, 60.0, "%.2f",
@@ -302,7 +304,7 @@ internal static class GuidanceSettingSpecs
         { BoostbackClearanceM, BoostbackSeparationS, BoostbackGlideMissKm, BoostbackLargeMissKm, BoosterCorrectionDvMs, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg };
 
     /// <summary>The HANDOVER settings of a boostback glide and of entry guidance: who takes the glide and who takes the end of the burn.</summary>
-    public static readonly SettingSpec[] LandHandOvers = { ThreeDofEngageTgoS, ThreeDofSixDofTimeS };
+    public static readonly SettingSpec[] LandHandOvers = { ThreeDofEngageQkPa, ThreeDofEngageTgoS, ThreeDofSixDofTimeS };
     public static readonly BoolSpec[] LandHandOverBools = { ThreeDofFromGlide, ThreeDofSixDofHandover };
 
     public static readonly SettingSpec[] LandGfoldPlayer = { GfoldHoverHandoffAltM };
@@ -389,7 +391,7 @@ internal static class GuidanceSettingSpecs
         SixDofNodes, SixDofTiltDeg, SixDofThrottleFloor, SixDofSigmaSeed,
         SixDofSigmaSamples, SixDofGlideSlopeDeg, SixDofVzMaxMs, SixDofNodeDtTarget, SixDofColdIntervalS,
         SixDofReplanSec, SixDofRateDampShare, SixDofControlSmooth, SixDofProximal, SixDofTrackKp, SixDofTrackKd,
-        ThreeDofEngageTgoS, ThreeDofSixDofTimeS, ThreeDofSmoothTau, ThreeDofTurnAccelDegS2, ThreeDofGlideCeiling,
+        ThreeDofEngageQkPa, ThreeDofEngageTgoS, ThreeDofSixDofTimeS, ThreeDofSmoothTau, ThreeDofTurnAccelDegS2, ThreeDofGlideCeiling,
         ThreeDofBurnCeiling, ThreeDofTrackKp, ThreeDofTrackKd, ThreeDofTrackTiltDeg,
         TermTouchdownRate, TermConstAltM, TermQuadK, TermMaxDescRate, TermMaxTiltDeg, TermNudgeStep,
         TermKpV, TermKiV, TermKdV, TermKpL, TermKiL, TermKdL,

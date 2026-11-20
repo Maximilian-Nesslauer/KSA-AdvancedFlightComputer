@@ -871,32 +871,6 @@ public static partial class GuidanceWindow
         _s.ThreeDofCommandLocal = frame.VecToLocal(slewed);
     }
 
-    /// <summary>The glide-and-burn plan's burn intervals, as the first plan has always had them.</summary>
-    private const int BurnIntervals = 17;
-
-    /// <summary>The glide's intervals: fewest and most.</summary>
-    private const int GlideIntervalsMin = 12, GlideIntervalsMax = 48;
-
-    /// <summary>
-    /// The glide's interval count for a cold solve from <paramref name="x"/> (site frame, the height at [2], the vertical speed at [5]): its time to the ground, the boostback's prediction where there is one, otherwise the longer of a fall without drag and one at the present sinking speed, over ThreeDofGlideIntervalS.
-    /// </summary>
-    private static int GlideIntervalsFor(double[] x)
-    {
-        double tgo = _s.GlideTgo;
-        if (!double.IsFinite(tgo) || !(tgo > 0.0))
-        {
-            // A fall without drag is the shortest it could be, and with it a booster soon falls at about the speed it has: the longer of the two (from 45 km at 450 m/s, 60 s and 100 s, against 120 flown).
-            const double G = 9.81;
-            double h = Math.Max(x[2], 0.0), vz = x[5];
-            double free = (vz + Math.Sqrt(vz * vz + 2.0 * G * h)) / G;
-            double steady = vz < -1.0 ? h / -vz : free;
-            tgo = Math.Max(free, steady);
-        }
-        double step = _s.ThreeDofGlideIntervalS > 0.5 ? _s.ThreeDofGlideIntervalS : 3.0;
-        int n = (int)Math.Ceiling(Math.Max(tgo, 0.0) / step);
-        return Math.Clamp(n, GlideIntervalsMin, GlideIntervalsMax);
-    }
-
     private static void StartThreeDofCold(Vehicle vehicle, double[] x, double now)
     {
         // Anchored tight on the last command, so consecutive plans start where the command is; see the file summary.
@@ -916,9 +890,9 @@ public static partial class GuidanceWindow
         _s.ThreeDofRateInUse = Ksa3DofSetup.PlanRateMax(vehicle);
         double coastTurn = _s.ThreeDofTurnAccelDegS2 == 0.0 ? Ksa3DofSetup.CoastTurnAccelLimit(vehicle) : turn;
         bool fixedCoast = _s.ThreeDofTurnAccelDegS2 == 0.0 && coastTurn == 0.0;
-        // THE GLIDE'S INTERVALS FROM ITS LENGTH (ThreeDofGlideIntervalS): one every few seconds of the glide still to fly, 12 at the least. A fixed 12 over a glide taken from 45 km (about 110 s) was 9 s an interval, too coarse to follow the air's rise through max q and the transonic drop, and the plans were refused for their defect one after another (harness, 2026-11-20). The burn's 17 stay as they were.
-        int glideIntervals = GlideIntervalsFor(x);
-        Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: glideIntervals + BurnIntervals + 1, glideIntervals: glideIntervals, _s.GlideMaxAoaDeg,
+        // THE PROVEN NODE COUNT, 12 glide intervals and 17 in the burn, from wherever entry guidance takes over. From higher up (it engages on dynamic pressure, ThreeDofEngageQkPa) each interval is longer; as the horizon closes they shrink back to the sizes flown for months. More intervals instead took 0.7-0.9 s a re-solve up high (2026-11-20).
+        const int glideIntervals = 12;
+        Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: glideIntervals, _s.GlideMaxAoaDeg,
             _s.VehicleHeightM, settings.GlideAccelMax(LandingAccelLimitMs2), _s.LandingPlanFloorMargin, turn,
             fixedGlideAttitude: fixedCoast, burnTiltPerSDeg: _s.ThreeDofBurnTiltPerSDeg);
         Scvx3DofConfig burn = Ksa3DofSetup.Config(vehicle, nodes: 20, glideIntervals: 0, _s.GlideMaxAoaDeg,
@@ -929,7 +903,7 @@ public static partial class GuidanceWindow
         // Zero/zero: the legs on the pad, at rest. The plan flies the CoM, VehicleHeightM above the legs.
         double[] xf = [0, 0, _s.VehicleHeightM, 0, 0, 0];
         _s.DiagEntry("PID glide while the entry guidance cold solve runs.");
-        GuidanceLog.Info(vehicle, $"Entry guidance cold solve at {x[2] / 1000:F1} km, {glideIntervals} glide intervals.");
+        GuidanceLog.Info(vehicle, $"Entry guidance cold solve at {x[2] / 1000:F1} km.");
         // Seed the glide the boostback planned: the nominal angle, lifting up the trajectory. Positive C_L lifts towards the engine end's tilt, so the engine end tilts up and the thrust axis down; the other way round for an airframe that lifts the other way.
         double nominal = GlideNominalAlpha(_s.Aero);
         var seed = new Seed3Dof.Options

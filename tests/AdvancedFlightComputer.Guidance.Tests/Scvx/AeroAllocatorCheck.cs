@@ -116,6 +116,26 @@ internal static class AeroAllocatorCheck
         ok &= Check($"2stage_KSAero's fins, half the pitch reach of {pitchReach:F0} N m: short {r.ShortfallNm:F0}, gives {r.TorqueX:F0}/{r.TorqueY:F0}/{r.TorqueZ:F0}, deflections {Text(d4)}",
                     r.ShortfallNm < 0.02 * pitchReach);
 
+        // The same craft re-saved with its fins scaled 1.28 (2026-11-20, 20:54), coefficients about twice: a window that could only shrink came 8 % short of half the pitch reach there, and the reach itself, read off the straightened pieces, was twice what the fins give.
+        double[][] scaled =
+        [
+            [67260.8, 65532.6, -70038.3, 66984.8, 65389.0, -40859.2, 49216.0, 46839.0, -14317.6, 0.0, 0.0, 0.0, -51628.6, -47173.1, -12606.9, -70214.1, -62709.4, -38695.6, -70489.1, -61085.2, -68259.2],
+            [73419.7, 77324.9, 71826.2, 73833.4, 45978.4, 72851.3, 55061.5, 17155.8, 54776.5, 0.0, 0.0, 0.0, -57499.4, 12997.3, -55335.4, -76138.4, 40983.3, -70596.4, -76592.4, 73196.9, -68910.1],
+            [67275.9, -66114.4, 63855.7, 64936.2, -63815.4, 34869.0, 47701.5, -47185.2, 10935.8, 0.0, 0.0, 0.0, -51971.2, 47356.0, 15732.2, -68261.6, 60052.9, 41734.1, -70598.8, 60477.0, 73544.4],
+            [72339.2, -68549.1, -70745.7, 71662.7, -38411.6, -70104.8, 54450.7, -12378.8, -53628.9, 0.0, 0.0, 0.0, -54341.1, -16250.4, 50501.1, -74312.3, -45334.2, 67495.1, -75083.1, -78119.8, 66094.0]
+        ];
+        var big = new AeroTorqueAllocator(4);
+        for (int i = 0; i < 4; i++)
+            big.SetSurface(i, grid45, scaled[i], new double[scaled[i].Length]);
+        double bigReach = Math.Min(big.Characterise(1, 1).MaxTorqueNm, big.Characterise(1, -1).MaxTorqueNm);
+        r = big.Allocate(0.0, 0.5 * bigReach, 0.0, priority, d4);
+        ok &= Check($"the scaled fins, half the pitch reach of {bigReach:F0} N m: short {r.ShortfallNm:F0}, deflections {Text(d4)}",
+                    r.ShortfallNm < 0.02 * bigReach);
+        // The reach is one the fins give: asked for it, they come within 2 %.
+        r = big.Allocate(0.0, bigReach, 0.0, priority, d4);
+        ok &= Check($"the scaled fins, all of the reach: gives {r.TorqueY:F0} of {bigReach:F0} N m, deflections {Text(d4)}",
+                    r.TorqueY >= 0.98 * bigReach);
+
         Console.WriteLine();
         Console.WriteLine(ok ? "PASS - the aero torque allocator" : "FAIL - the aero torque allocator");
         return ok ? 0 : 1;
