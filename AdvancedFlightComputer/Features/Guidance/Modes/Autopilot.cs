@@ -132,6 +132,15 @@ public static partial class GuidanceWindow
         }
 
         bool thrustOn = vehicle.IsAnyEngineActive() && vehicle.IsAnyEnginePropellantAvailable();
+        // A planned launch must let the first engines report ignition before requesting another row.
+        bool waitingForLiftoff = _s.Running && _s.Phase == AscentPhase.Profile && !_s.ConvexLiftoffDetected
+            && double.IsFinite(_s.LiftoffRadius);
+        if (waitingForLiftoff && !thrustOn
+            && (StagingHelpers.HasQueuedEngineActivation(vehicle) || StagingHelpers.HasUnreportedActiveEngine(vehicle)))
+        {
+            _s.StagingActive = false;
+            return;
+        }
 
         // The reserve's own cue fires while the stage could still burn, because the propellant left in it is spoken for. UPFG plans stage boundaries but never commands one.
         bool reserveDone = ShouldStageForReserve(vehicle);
@@ -1858,10 +1867,9 @@ public static partial class GuidanceWindow
             fc.RollMode = requestedRollMode;
         else if (_s.Running)
         {
-            double altM = r.Length() - parent.MeanRadius;
-            // An ascent engaged on the pad rolls as soon as it is clear of it (PadHold), while it still climbs straight up: the roll program (RollProgramHolds) holds the pitch-over until the roll is done. ForceRollMinAltM, above the mean radius, only gates an ascent engaged in flight, which has no pad to clear; on a pad near sea level it came 150 m after the pitch-over had begun.
-            bool clear = double.IsFinite(_s.LiftoffRadius) ? !PadHold(r) : altM >= ForceRollMinAltM;
-            fc.RollMode = _s.ForceRoll && clear
+            double groundRadius = double.IsFinite(_s.LiftoffRadius) ? _s.LiftoffRadius : parent.MeanRadius;
+            bool clear = r.Length() - groundRadius >= ForceRollMinAltM;
+            fc.RollMode = _s.ForceRoll && clear && !_s.RollProgramTimedOut
                 ? FlightComputerRollMode.Up
                 : FlightComputerRollMode.Decoupled;
         }

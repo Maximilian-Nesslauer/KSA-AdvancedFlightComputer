@@ -179,6 +179,7 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double RollProgramStart = double.NaN;
     public bool RollProgramDone;
+    public bool RollProgramTimedOut;
 
     /// <summary>
     /// FORCE A SPECIFIC ROLL instead of holding the one the vehicle lifted off with.
@@ -564,7 +565,10 @@ public sealed class VehicleAutopilotState
     public double ConvexStageSpeed;
     public double ConvexFastest;
     public double ConvexLastTime = double.NaN;
+    public double LastSolidDarkTime = double.NaN;
+    public double ObservedSolidIgnitionTime = double.NaN;
     public double ConvexSolidIgnitionTime = double.NaN;
+    public bool ConvexLiftoffDetected;
 
     /// <summary>Sim time the profile handed over to UPFG, while the command is still blending from the one to the other; NaN otherwise.</summary>
     public double ConvexBlendStart = double.NaN;

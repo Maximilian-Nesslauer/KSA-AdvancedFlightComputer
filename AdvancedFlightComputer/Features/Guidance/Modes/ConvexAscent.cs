@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.AutoStage;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
@@ -77,6 +78,9 @@ public static partial class GuidanceWindow
 
     private static void StepAscentPlannerCore(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
+        if (_s.AscentPlanRequested || _s.AscentPlanJob != null
+            || _s.AscentPlan?.PlansPadRoll == true || _s.FlyingPlan?.PlansPadRoll == true)
+            ObserveSolidIgnition(vehicle);
         if (_s.ConvexLaunchPending && !ControlAvailable(vehicle))
             return;
         AscentPlanJob job = _s.AscentPlanJob;
@@ -541,7 +545,8 @@ public static partial class GuidanceWindow
         double3 spin = new double3(0, 0, omega);
         double3 up = double3.Normalize(r);
         bool startsWithSolid = allStages[0] is { IsPinned: true, Solid: not null };
-        bool plansPadRoll = startsWithSolid && _s.ForceRoll && IsPadAscent(r, v, parent);
+        bool padAscent = IsPadAscent(vehicle, r, v, parent);
+        bool plansPadRoll = startsWithSolid && _s.ForceRoll && padAscent;
         bool atRest = (v - double3.Cross(spin, r)).Length() < 10.0;
         if (atRest)
             v = double3.Cross(spin, r) + 10.0 * up;
@@ -704,6 +709,7 @@ public static partial class GuidanceWindow
                 Omega = omega,
                 R0 = r0,
                 V0 = v0,
+                LiftoffDirection = padAscent ? r0 : null,
                 M0 = m0,
                 Stages = list,
                 Atmosphere = air,
@@ -714,7 +720,7 @@ public static partial class GuidanceWindow
                 PlaneNormal = n0,
                 QMax = qLimit,
                 QAlphaMax = qAlphaMax,
-                PadRoll = plansPadRoll ? new AscentProblem.RollProgram(PadClearM, RollProgramMaxS, MaxSlewDegS) : null,
+                PadRoll = plansPadRoll ? new AscentProblem.RollProgram(ForceRollMinAltM, RollProgramMaxS, MaxSlewDegS) : null,
                 PlaneTurnMin = turnMin,
                 PlaneTurnMax = turnMax,
                 // Only while a booster's stage is a lower stage: a stack planned on fewer stages carries it to the end. Sorted by stage, so what is kept is a head of the list.
@@ -739,6 +745,8 @@ public static partial class GuidanceWindow
         bool optimiseTiming = _s.ConvexOptimiseTiming;
         double qMaxKpa = qMax / 1000.0;
         double insAltKm = (rIns - bodyRadius) / 1000.0;
+        // The stage model starts at the grain left in this simulation state.
+        double solidBurnSnapshotTime = plansPadRoll && ReadSolidBurn(vehicle).Burning ? now : double.NaN;
 
         AscentPlan Publish(AscentSolution solved, AscentProblem winningProblem, double qUsed, string[] notes, double wall, AscentPlanJob.ThrottledKept kept)
         {
@@ -802,6 +810,7 @@ public static partial class GuidanceWindow
             QCeilingKpa = qCeiling / 1000.0,
             SolidStages = allStages.Take(stages).Count(st => st.Solid != null),
             StartsWithSolid = startsWithSolid,
+            SolidBurnSnapshotTime = solidBurnSnapshotTime,
             PlansPadRoll = plansPadRoll,
             CoreThrottledDown = stagePlan.CoreThrottledDown,
             StageLines = stagePlan.Describe.Take(stages).Select((d, i) => d
@@ -1161,10 +1170,20 @@ public static partial class GuidanceWindow
             return false;
         }
         if (p.StartsWithSolid && p.PlansPadRoll != (_s.ForceRoll
-            && IsPadAscent(orbit.StateVectors.PositionCci, orbit.StateVectors.VelocityCci, parent)))
+            && IsPadAscent(vehicle, orbit.StateVectors.PositionCci, orbit.StateVectors.VelocityCci, parent)))
         {
             why = "PAD ROLL PROGRAM CHANGED";
             return false;
+        }
+        if (p.PlansPadRoll && !double.IsFinite(p.SolidBurnSnapshotTime)
+            && !double.IsFinite(_s.ObservedSolidIgnitionTime))
+        {
+            var (burning, ignited) = ReadSolidBurn(vehicle);
+            if (burning && !SolidIgnitionInLastStep(ignited))
+            {
+                why = "SOLID IGNITION WAS NOT OBSERVED";
+                return false;
+            }
         }
         if (p.RecoverySite != RecoverySitesKey())
         {
@@ -1203,7 +1222,7 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// A planned pad roll follows elapsed solid burn time in the first phase. After that, the profile advances by air speed within each mass band so a separation can bring it back in step with the vehicle.
+    /// The first phase of a planned solid pad roll follows its grain burn. Other phases advance by air speed within each mass band.
     /// </summary>
     private static double3 ConvexProfileDirection(Vehicle vehicle, double3 r, double3 v, IParentBody parent)
     {
@@ -1215,33 +1234,75 @@ public static partial class GuidanceWindow
         double dt = double.IsFinite(_s.ConvexLastTime) ? Math.Max(0.0, now - _s.ConvexLastTime) : 0.0;
         _s.ConvexLastTime = now;
         double mass = vehicle.TotalMass;
+        double climb = r.Length() - _s.LiftoffRadius;
+        bool fromPad = double.IsFinite(_s.LiftoffRadius);
+        bool onTerrain = fromPad && vehicle.Situation.HasTerrainContact();
+        if (!fromPad || (climb >= 0.5 && !onTerrain))
+            _s.ConvexLiftoffDetected = true;
         if (plan.PlansPadRoll && _s.ConvexStage == 0 && profile.StageOfMass(mass) == 0)
         {
-            // A solid grain burns during the vertical flight, but not while guidance waits for ignition.
-            if (!double.IsFinite(_s.ConvexSolidIgnitionTime) && HasBurningSolid(vehicle))
-                _s.ConvexSolidIgnitionTime = now - dt;
-            if (double.IsFinite(_s.ConvexSolidIgnitionTime))
+            if (!double.IsFinite(_s.ConvexSolidIgnitionTime))
+                _s.ConvexSolidIgnitionTime = double.IsFinite(plan.SolidBurnSnapshotTime)
+                    ? plan.SolidBurnSnapshotTime
+                    : _s.ObservedSolidIgnitionTime;
+            if (_s.ConvexLiftoffDetected && !onTerrain && double.IsFinite(_s.ConvexSolidIgnitionTime))
                 _s.ConvexPlanTime = Math.Clamp(now - _s.ConvexSolidIgnitionTime, 0.0, profile.StageEndTime(0));
+        }
+        else if (!onTerrain && !PadProfileHolds(r))
+        {
+            _s.ConvexPlanTime = profile.Advance(_s.ConvexPlanTime, AirSpeed(r, v, parent), mass, dt,
+                ref _s.ConvexStage, ref _s.ConvexStageSpeed, ref _s.ConvexFastest);
         }
         else
         {
-            _s.ConvexPlanTime = profile.Advance(_s.ConvexPlanTime, AirSpeed(r, v, parent), mass, dt,
+            // The attitude and clock are held, but throttle belongs to the live phase.
+            profile.SyncStage(AirSpeed(r, v, parent), mass,
                 ref _s.ConvexStage, ref _s.ConvexStageSpeed, ref _s.ConvexFastest);
         }
         return profile.Direction(r, _s.ConvexPlanTime, _s.ConvexStage);
     }
 
-    private static bool HasBurningSolid(Vehicle vehicle)
+    private static void ObserveSolidIgnition(Vehicle vehicle)
+    {
+        var (burning, ignited) = ReadSolidBurn(vehicle);
+        if (!burning)
+        {
+            _s.ObservedSolidIgnitionTime = double.NaN;
+            _s.LastSolidDarkTime = SimNow();
+            return;
+        }
+        if (!double.IsFinite(_s.ObservedSolidIgnitionTime) && SolidIgnitionInLastStep(ignited))
+            _s.ObservedSolidIgnitionTime = Universe.GetLastSimStep().PreviousTime.Seconds();
+        _s.LastSolidDarkTime = double.NaN;
+    }
+
+    // A later PhysicsBubble substep can clear SolidRocket.UpdateState's ignition flag.
+    // Consecutive applied samples still locate the transition within the last sim step.
+    private static bool SolidIgnitionInLastStep(bool ignited)
+    {
+        SimStep step = Universe.GetLastSimStep();
+        return step.DeltaTime > 0.0 && (ignited || _s.LastSolidDarkTime == step.PreviousTime.Seconds());
+    }
+
+    private static (bool Burning, bool Ignited) ReadSolidBurn(Vehicle vehicle)
     {
         ReadOnlySpan<RocketState> states = RocketStates.Of(vehicle.Parts);
         if (states.IsEmpty)
-            return false;
+            return default;
+        bool burning = false;
         foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
+        {
             foreach (Rocket rocket in engine.Rockets)
-                if (rocket is SolidRocket && (uint)rocket.StatesIdx < (uint)states.Length
-                    && states[rocket.StatesIdx].Throttle > 0f)
-                    return true;
-        return false;
+            {
+                if (rocket is not SolidRocket || (uint)rocket.StatesIdx >= (uint)states.Length
+                    || states[rocket.StatesIdx].Throttle <= 0f)
+                    continue;
+                if (states[rocket.StatesIdx].ActivatedThisFrame)
+                    return (true, true);
+                burning = true;
+            }
+        }
+        return (burning, false);
     }
 
     /// <summary>The rotation rate that takes <paramref name="last"/> to <paramref name="want"/> in one step, rad/s about their common normal; and <paramref name="last"/> moved on to <paramref name="want"/>.</summary>
@@ -1314,10 +1375,57 @@ public static partial class GuidanceWindow
         KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(vehicle, fraction * full, pressure);
         if (command.Status == KsaEnginePerf.ThrustStatus.UnsupportedEngine)
             command = KsaEnginePerf.CommandLiquidFraction(vehicle, fraction, pressure);
+        double3 position = vehicle.Orbit.StateVectors.PositionCci;
+        if (GroundedLiquidOpening() && PadProfileHolds(position))
+        {
+            double3 up = PadUpAsmb(vehicle, position);
+            double lift = PadWeight(vehicle, parent, position);
+            double planned = KsaEnginePerf.ThrustAtThrottle(vehicle, command.Throttle, pressure, up);
+            if (!PadEnginesCanLift(planned, lift))
+            {
+                KsaEnginePerf.ThrustCommand opening = KsaEnginePerf.CommandForThrust(vehicle, PadOpeningDemand(planned, lift), pressure, up);
+                if (opening.Status is KsaEnginePerf.ThrustStatus.Available or KsaEnginePerf.ThrustStatus.BelowMinimum
+                                      or KsaEnginePerf.ThrustStatus.AboveMaximum)
+                    command = opening;
+            }
+        }
         return command.Status is KsaEnginePerf.ThrustStatus.Available or KsaEnginePerf.ThrustStatus.BelowMinimum
                                  or KsaEnginePerf.ThrustStatus.AboveMaximum
             ? (float)command.Throttle
             : 1f;
+    }
+
+    private static bool GroundedLiquidOpening()
+        => _s.Phase == AscentPhase.Profile && _s.FlyingPlan is { StartsWithSolid: false }
+            && double.IsFinite(_s.LiftoffRadius);
+
+    private static bool PadProfileHolds(double3 position)
+        => double.IsFinite(_s.LiftoffRadius) && (!_s.ConvexLiftoffDetected || PadHold(position)
+            || (_s.ForceRoll && !_s.RollProgramDone && !_s.RollProgramTimedOut));
+
+    private static double3 PadUpAsmb(Vehicle vehicle, double3 position)
+        => position.NormalizeOrZero().Transform(KsaFrameBridge.BodyToCci(vehicle).Inverse());
+
+    private static double PadWeight(Vehicle vehicle, IParentBody parent, double3 position)
+        => vehicle.TotalMass * parent.Mu / position.LengthSquared();
+
+    internal static bool PadEnginesCanLift(double availableThrust, double liftThrust)
+        => double.IsFinite(availableThrust) && liftThrust > 0.0 && availableThrust > liftThrust;
+
+    internal static double PadOpeningDemand(double plannedThrust, double liftThrust)
+        => plannedThrust > liftThrust ? plannedThrust : 1.1 * liftThrust;
+
+    private static bool GroundedLiquidCannotLift(Vehicle vehicle, IParentBody parent)
+    {
+        if (!GroundedLiquidOpening() || _s.ConvexLiftoffDetected || StagingHelpers.HasQueuedEngineActivation(vehicle)
+            || StagingHelpers.HasUnreportedActiveEngine(vehicle)
+            || StagingDetector.StateOf(vehicle).Pending?.AnyPending == true
+            || KsaEnginePerf.GetThrottleControlStatus(vehicle) != KsaEnginePerf.ThrustStatus.Available)
+            return false;
+        double3 position = vehicle.Orbit.StateVectors.PositionCci;
+        double pressure = KsaEnginePerf.AmbientPressureAt(parent, position.Length() - parent.MeanRadius);
+        double lift = KsaEnginePerf.ThrustAtThrottle(vehicle, 1.0, pressure, PadUpAsmb(vehicle, position));
+        return !PadEnginesCanLift(lift, PadWeight(vehicle, parent, position));
     }
 
     /// <summary>
@@ -1331,6 +1439,11 @@ public static partial class GuidanceWindow
         {
             why = "NO PROFILE TO FLY";
             return true;
+        }
+        if (PadProfileHolds(r))
+        {
+            why = "";
+            return false;
         }
         if (_s.ConvexPlanTime >= profile.EndTime)
         {

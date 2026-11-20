@@ -185,14 +185,17 @@ public abstract class ConvexAscentFlightTest : AfcTest
             Vehicle vehicle;
             try
             {
-                vehicle = VehicleSpawner.SpawnFromSave(saves[0], t.System, home, "HarnessConvexAscent", pad, spawn);
+                vehicle = RequiresSolids
+                    ? VehicleSpawner.SpawnAtLocation(saves[0], body, SiteLatDeg, SiteLonDeg, 180.0, "HarnessConvexAscent")
+                    : VehicleSpawner.SpawnFromSave(saves[0], t.System, home, "HarnessConvexAscent", pad, spawn);
             }
             catch (InvalidOperationException e)
             {
                 t.Fail("spawn", e.Message);
                 return;
             }
-            t.Info($"'{saves[0]}' spawned {terrain + PadHeightM:F0} m above the mean radius at lat {SiteLatDeg:F1}, lon {SiteLonDeg:F1} "
+            double spawnAltitude = vehicle.Orbit.StateVectors.PositionCci.Length() - home.MeanRadius;
+            t.Info($"'{saves[0]}' spawned {spawnAltitude:F0} m above the mean radius at lat {SiteLatDeg:F1}, lon {SiteLonDeg:F1} "
                  + $"(terrain {terrain:F0} m), {vehicle.TotalMass / 1000.0:F1} t, id '{vehicle.Id}', hash {vehicle.Hash.Code}");
             t.CheckAbs("the launch vehicle starts upright", AngleDeg(dirCci, KsaFrameBridge.BodyNoseCci(vehicle)), 0.0, 0.001);
 
@@ -202,6 +205,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
             StagingConfig.DecouplerDelays.Clear();
             StagingConfig.DropSpentStages = true;
             driver.Step(0.05, 6);
+            if (RequiresSolids && !t.Check("the solid test stack has terrain contact", vehicle.Situation.HasTerrainContact()))
+                return;
 
             _flown = vehicle;
             _flownDisposedBy = null;
@@ -226,6 +231,17 @@ public abstract class ConvexAscentFlightTest : AfcTest
         }
     }
 
+    private static bool SolidThrustObserved(Vehicle vehicle)
+    {
+        ReadOnlySpan<RocketState> states = RocketStates.Of(vehicle.Parts);
+        foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
+            foreach (Rocket rocket in engine.Rockets)
+                if (rocket is SolidRocket && (uint)rocket.StatesIdx < (uint)states.Length
+                    && states[rocket.StatesIdx].Throttle > 0f)
+                    return true;
+        return false;
+    }
+
     private void Fly(TestContext t, Vehicle vehicle, IParentBody home, SimDriver driver, HashSet<string> preexisting)
     {
         VehicleAutopilotState state = VehicleAutopilotState.For(vehicle);
@@ -246,6 +262,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
         state.FlyConvexAscent = true;
         state.ConvexHandoverAltKm = HandoverAltKm;
         state.ConvexThrottleMinPct = ThrottleFloorPct;
+        // The fixed plane is seeded from this case's own inertial launch state.
+        state.ConvexOptimiseTiming = false;
         AmbientState() = state;
 
         // Calculate, the way the button asks: the sim step sweeps the aero on its own threads, then builds the problem and
@@ -305,17 +323,33 @@ public abstract class ConvexAscentFlightTest : AfcTest
             t.Info($"  profile: {profile.Speed[k],7:F0} m/s  pitch {profile.PitchRad[k] * 180.0 / Math.PI,5:F1} deg  "
                  + $"alt {profile.Altitude[k] / 1000.0,6:F1} km  t {profile.Time[k],5:F0} s");
 
-        // Lit the way the other flight tests light it, then EXECUTE.
         if (!AutoStageFlightSupport.Arm(t, vehicle))
             return;
+        if (RequiresSolids && !t.Check("the grounded stack is cold when the plan is ready",
+            !SolidThrustObserved(vehicle) && double.IsNaN(plan.SolidBurnSnapshotTime)))
+            return;
+
+        // Execute with the stock ignition row queued, before the first worker report of its engines.
         vehicle.Parts.SequenceList.ActivateNextSequence(vehicle);
-        driver.Step(1.0);
+        int ignitionSequence = vehicle.Parts.SequenceList.ActiveSequence;
+        if (RequiresSolids && !t.Check("the stock ignition row has queued engine activations",
+            StagingHelpers.HasQueuedEngineActivation(vehicle), $"sequence {ignitionSequence}"))
+            return;
+        double observedSolidIgnition = double.NaN;
+        if (!RequiresSolids)
+            driver.Step(1.0);
         StartGuidance.Invoke(null, new object[] { vehicle, vehicle.Orbit, home });
         if (!t.Check("EXECUTE flies the convex profile", state.Running && state.Phase == GuidanceWindow.AscentPhase.Profile,
                 $"running {state.Running}, phase {state.Phase}, status '{state.Status}'"))
             return;
+        if (RequiresSolids)
+            t.Check("the grounded solid stack arms the pad roll", double.IsFinite(state.LiftoffRadius) && plan.PlansPadRoll,
+                $"liftoff radius {state.LiftoffRadius}, situation {vehicle.Situation}");
+        else
+            t.Check("an airborne slow climb does not arm the pad hold", !double.IsFinite(state.LiftoffRadius),
+                $"liftoff radius {state.LiftoffRadius}, situation {vehicle.Situation}");
 
-        double time = 1.0, nextSample = 0.0;
+        double time = RequiresSolids ? 0.0 : 1.0, nextSample = 0.0;
         double handoverAltKm = double.NaN, handoverTime = double.NaN, handoverSpeed = double.NaN;
         double worstDevKm = 0.0, worstDevSpeed = double.NaN;
         bool upfgConverged = false, blended = false;
@@ -337,6 +371,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 }
         double firstSplitBurnTime = double.NaN;
         double worstStagingAltKm = double.NaN;
+        bool launchRowHeld = true, contactSampled = false, contactClockHeld = true;
+        double rollStartClearance = double.NaN;
         double3 lastSampleR = double3.Zero;
         bool frozenReported = false, cutoffLogged = false;
         bool pitchOverObserved = false;
@@ -349,10 +385,26 @@ public abstract class ConvexAscentFlightTest : AfcTest
         {
             // Fine steps through the terminal count: the cutoff lands on a step, and at four g a quarter second is 10 m/s, which is 35 km of apoapsis.
             double dt = state.Phase == GuidanceWindow.AscentPhase.Terminal ? TerminalStepDt : StepDt;
+            double beforeStep = driver.Elapsed.Seconds();
+            bool hadTerrainContact = RequiresSolids && vehicle.Situation.HasTerrainContact();
+            double radiusBeforeStep = RequiresSolids ? vehicle.Orbit.StateVectors.PositionCci.Length() : 0.0;
             driver.Step(dt);
+            if (RequiresSolids && !double.IsFinite(observedSolidIgnition) && SolidThrustObserved(vehicle))
+                observedSolidIgnition = beforeStep;
             time += dt;
             // A spent stage falls back to the ground minutes later, and the game's ground-impact effect throws in the headless runtime. The flight under test does not need them, so they go as soon as they separate.
             int activations = StagingDetector.ActivationsOf(vehicle);
+            if (RequiresSolids && double.IsNaN(rollStartClearance))
+            {
+                launchRowHeld &= vehicle.Parts.SequenceList.ActiveSequence == ignitionSequence && activations == lastActivations;
+                if (double.IsFinite(state.RollProgramStart))
+                    rollStartClearance = radiusBeforeStep - state.LiftoffRadius;
+            }
+            if (hadTerrainContact && double.IsNaN(rollStartClearance))
+            {
+                contactSampled = true;
+                contactClockHeld &= state.ConvexPlanTime == 0.0;
+            }
             if (activations != lastActivations)
             {
                 t.Info($"AutoStage staged ({activations - lastActivations}) at t={time:F2} s, {vehicle.TotalMass / 1000.0:F2} t, "
@@ -362,8 +414,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 lastActivations = activations;
             }
             if (DespawnJettisoned(t.System, preexisting, vehicle)
-                && double.IsNaN(firstSplitBurnTime) && double.IsFinite(state.ConvexSolidIgnitionTime))
-                firstSplitBurnTime = Universe.GetElapsedSeconds() - state.ConvexSolidIgnitionTime;
+                && double.IsNaN(firstSplitBurnTime) && double.IsFinite(observedSolidIgnition))
+                firstSplitBurnTime = Universe.GetElapsedSeconds() - observedSolidIgnition;
             double3 r = vehicle.Orbit.StateVectors.PositionCci;
             double3 v = vehicle.Orbit.StateVectors.VelocityCci;
             double altKm = (r.Length() - home.MeanRadius) / 1000.0;
@@ -373,8 +425,9 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 && AngleDeg(r, state.CommandDir) > 1.0)
             {
                 pitchOverObserved = true;
-                t.Check("the solid burn advances while the roll program holds pitch",
-                    plan.PlansPadRoll && double.IsFinite(state.RollProgramStart) && state.RollProgramDone
+                t.Check("the solid burn advances while the pad roll holds pitch",
+                    plan.PlansPadRoll && double.IsFinite(state.RollProgramStart)
+                    && (state.RollProgramDone || state.RollProgramTimedOut)
                     && state.ConvexPlanTime > 0.0 && vehicle.TotalMass < plan.Mass0,
                     $"pitch-over at t={time:F2} s, plan t={state.ConvexPlanTime:F2} s, "
                     + $"{(plan.Mass0 - vehicle.TotalMass) / 1000.0:F2} t burned");
@@ -570,8 +623,18 @@ public abstract class ConvexAscentFlightTest : AfcTest
             else
                 t.CheckAbs("each staging lands where the plan stages, km off the plan's altitude", worstStagingAltKm, 0.0, StagingAltitudeTolKm);
         }
-        if (RequiresSolids && !pitchOverObserved)
-            t.Fail("pitch-over", "the vehicle did not pitch over while following the profile.");
+        if (RequiresSolids)
+        {
+            t.Check("AFC holds the stock ignition row through pad clearance",
+                launchRowHeld && double.IsFinite(rollStartClearance), $"ignition sequence {ignitionSequence}");
+            t.Check("the profile clock stays at zero on the pad", contactSampled && contactClockHeld);
+            t.Check("forced roll starts at least 200 m above the pad", rollStartClearance >= 200.0,
+                $"first roll command at {rollStartClearance:F2} m above the pad");
+            t.CheckAbs("the AFC solid clock starts at stock ignition",
+                state.ConvexSolidIgnitionTime, observedSolidIgnition, 2 * StepDt);
+            if (!pitchOverObserved)
+                t.Fail("pitch-over", "the vehicle did not pitch over while following the profile.");
+        }
         if (RequiresSolids && t.Check("the first planned jettison creates a separate vehicle",
             firstPlannedSplit > 0 && double.IsFinite(firstSplitBurnTime)))
         {
@@ -679,6 +742,23 @@ public abstract class ConvexAscentFlightTest : AfcTest
         t.CheckAbs("a delayed staging holds the burnout direction", AngleDeg(profile.Direction(r, boundary + 1.0, 0), up), 0.0, 1e-5);
         t.CheckAbs("the next phase starts at its ignition throttle", profile.Throttle(boundary, 1), startThrottle, 1e-9);
         t.CheckAbs("the next phase starts at its ignition direction", AngleDeg(profile.Direction(r, boundary, 1), east), 0.0, 1e-5);
+        int phase = 0;
+        double phaseSpeed = 0.0, fastest = 15.0;
+        double nextMass = sample.Mass[ignition];
+        t.Check("a pad hold can reconcile the live phase without advancing its clock",
+            profile.SyncStage(45.0, nextMass, ref phase, ref phaseSpeed, ref fastest)
+            && phase == 1 && phaseSpeed == 45.0 && fastest == 0.0);
+        t.CheckAbs("the held clock samples the following phase's opening throttle",
+            profile.Throttle(before, phase), startThrottle, 1e-9);
+        const double weight = 1000.0;
+        double corrected = GuidanceWindow.PadOpeningDemand(600.0, weight);
+        KsaEnginePerf.ThrustCommand limited = KsaEnginePerf.InvertThrust(corrected, 0.1, u => 2000.0 * u, 0.53);
+        t.Check("the liquid opening requests lift and respects a stock cap that can lift",
+            corrected > weight && limited.Status == KsaEnginePerf.ThrustStatus.AboveMaximum
+            && limited.Throttle == 0.53 && GuidanceWindow.PadEnginesCanLift(limited.DeliveredThrust, weight));
+        t.Check("an already lifting opening stays on the plan and an insufficient cap is refused",
+            GuidanceWindow.PadOpeningDemand(1200.0, weight) == 1200.0
+            && !GuidanceWindow.PadEnginesCanLift(weight, weight));
         double mid = 0.5 * (sample.Time[0] + sample.Time[1]);
         double3 middle = profile.Direction(r, mid, 0);
         t.CheckAbs("opposite azimuths near vertical interpolate through the zenith", AngleDeg(middle, up), 0.0, 1e-5);
