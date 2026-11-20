@@ -214,7 +214,8 @@ public static class Ksa6DofSetup
     public static Dynamics6Dof.RcsModel RcsModel(Vehicle vehicle)
     {
         KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
-        Span<RcsTorqueAllocator.AxisAuthority> six = stackalloc RcsTorqueAllocator.AxisAuthority[Dynamics6Dof.NRCS];
+        // Six measurements, each axis each way (KsaRcsTorqueControl.TryCharacterise), two per RCS control.
+        Span<RcsTorqueAllocator.AxisAuthority> six = stackalloc RcsTorqueAllocator.AxisAuthority[2 * Dynamics6Dof.NRCS];
         if (!KsaRcsTorqueControl.TryCharacterise(vehicle, mx, my, mz, six))
             return null;
         return RcsModelFrom(six);
