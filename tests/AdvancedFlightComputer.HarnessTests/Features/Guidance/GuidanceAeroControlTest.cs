@@ -67,14 +67,14 @@ public sealed class GuidanceAeroControlTest : AfcTest
             foreach (KsaAeroSweep.SurfaceTable table in aero.Surfaces)
             {
                 t.Check($"'{table.Name}' swept at {string.Join("/", table.DeflectionDeg)} deg",
-                    table.DeflectionDeg.SequenceEqual(new[] { -30.0, -15.0, 0.0, 15.0, 30.0 }));
+                    table.DeflectionDeg.SequenceEqual(new[] { -45.0, -30.0, -15.0, 0.0, 15.0, 30.0, 45.0 }));
                 // At Mach 0.4, flying engine first: the fin's moment at its two stops, and at rest none.
                 int zero = Array.IndexOf(table.DeflectionDeg, 0.0);
                 table.Moment[zero].Coefficients(0.4, 0.0, 0.0, out double l0, out double m0, out double n0);
                 table.Moment[0].Coefficients(0.4, 0.0, 0.0, out double ln, out double mn, out double nn);
                 table.Moment[^1].Coefficients(0.4, 0.0, 0.0, out double lp, out double mp, out double np);
                 double3 neg = new(ln, mn, nn), pos = new(lp, mp, np);
-                t.Info($"'{table.Name}': dC_l/m/n at -30 deg {ln:0.00000}/{mn:0.00000}/{nn:0.00000}, at +30 deg {lp:0.00000}/{mp:0.00000}/{np:0.00000}");
+                t.Info($"'{table.Name}': dC_l/m/n at its negative stop {ln:0.00000}/{mn:0.00000}/{nn:0.00000}, at its positive stop {lp:0.00000}/{mp:0.00000}/{np:0.00000}");
                 t.Check($"'{table.Name}': nothing at rest", Math.Abs(l0) + Math.Abs(m0) + Math.Abs(n0) == 0.0);
                 t.Check($"'{table.Name}': a moment at its stops", pos.Length() > 1e-5 && neg.Length() > 1e-5, $"{pos.Length():0.00000}/{neg.Length():0.00000}");
                 // Engine first at no angle a fin is alone in the flow either way it turns: the two stops turn the craft opposite ways.

@@ -85,6 +85,37 @@ internal static class AeroAllocatorCheck
         ok &= Check($"45 kN m pitch + 10 kN m roll with a backup: pitch {pitch:F0}, roll {roll:F0} N m (fins {r.TorqueX:F0}/{r.TorqueZ:F0}), duties {Text(duty)}",
                     Near(pitch, 45_000.0, 1.0) && Near(roll, 10_000.0, 1.0) && duty[0] > 0.0);
 
+        // A fin that bites harder further out (500 N m a degree to 15, 1500 beyond): one pass fills the steeper outer piece alone and comes up short; the refinement from its own answer reaches the 15 kN m at 20 deg.
+        var steep = new AeroTorqueAllocator(1);
+        double[] grid3 = [-30.0, -15.0, 0.0, 15.0, 30.0];
+        double Steep(double deg) => Math.Sign(deg) * (500.0 * Math.Min(Math.Abs(deg), 15.0) + 1500.0 * Math.Max(Math.Abs(deg) - 15.0, 0.0));
+        var steepTorque = new double[3 * grid3.Length];
+        for (int k = 0; k < grid3.Length; k++)
+            steepTorque[3 * k] = Steep(grid3[k]);
+        steep.SetSurface(0, grid3, steepTorque, new double[3 * grid3.Length]);
+        var one = new double[1];
+        r = steep.Allocate(15_000.0, 0.0, 0.0, priority, one);
+        ok &= Check($"15 kN m from a fin steeper past 15 deg: gives {r.TorqueX:F0} N m at {one[0]:F2} deg",
+                    Near(r.TorqueX, 15_000.0, 75.0) && Near(one[0], 20.0, 0.05));
+
+        // 2stage_KSAero's four fins at Mach 0.3, 6 kPa, engine first, +-45 deg (the harness's sweep, 2026-11-20), asmb axes: each fin's roll about as big as its pitch, and the drag it adds growing faster out to 45 deg. Half the pitch reach, met.
+        double[][] real =
+        [
+            [23605.0, 29152.5, -24763.2, 22530.4, 27100.2, -13864.0, 13225.5, 14687.4, -3642.4, 0, 0, 0, -12496.7, -13504.5, -3348.9, -21775.4, -24718.9, -11672.8, -20826.1, -23308.8, -19778.5],
+            [27969.5, 29130.5, 35134.8, 27740.1, 17293.1, 34273.6, 20761.9, 6635.1, 25471.8, 0, 0, 0, -17989.1, 4087.2, -20712.7, -25048.3, 13437.2, -29118.3, -23623.0, 22963.2, -26770.6],
+            [24529.3, -30434.3, 23550.7, 23572.5, -28805.7, 12752.9, 19968.5, -24349.6, 4191.4, 0, 0, 0, -19173.6, 23158.1, 6300.1, -21048.3, 23814.7, 13132.1, -20839.3, 23491.2, 21625.8],
+            [24808.5, -23797.7, -30307.6, 24075.3, -13005.4, -28958.7, 19133.8, -4212.4, -23199.5, 0, 0, 0, -18934.9, -5979.6, 22522.9, -24152.4, -14941.6, 27878.1, -24003.6, -24947.5, 27237.9],
+        ];
+        double[] grid45 = [-45.0, -30.0, -15.0, 0.0, 15.0, 30.0, 45.0];
+        var fins = new AeroTorqueAllocator(4);
+        for (int i = 0; i < 4; i++)
+            fins.SetSurface(i, grid45, real[i], new double[real[i].Length]);
+        double pitchReach = Math.Min(fins.Characterise(1, 1).MaxTorqueNm, fins.Characterise(1, -1).MaxTorqueNm);
+        var d4 = new double[4];
+        r = fins.Allocate(0.0, 0.5 * pitchReach, 0.0, priority, d4);
+        ok &= Check($"2stage_KSAero's fins, half the pitch reach of {pitchReach:F0} N m: short {r.ShortfallNm:F0}, gives {r.TorqueX:F0}/{r.TorqueY:F0}/{r.TorqueZ:F0}, deflections {Text(d4)}",
+                    r.ShortfallNm < 0.02 * pitchReach);
+
         Console.WriteLine();
         Console.WriteLine(ok ? "PASS - the aero torque allocator" : "FAIL - the aero torque allocator");
         return ok ? 0 : 1;
