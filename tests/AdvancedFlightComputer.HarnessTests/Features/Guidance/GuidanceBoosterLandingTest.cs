@@ -31,6 +31,7 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
     private const double StepS = 0.02;
     private const double SampleS = 0.5;
     private const double TimeoutS = 150.0;
+    private const double EntryAeroWaitS = 5.0;
 
     // Overridable from the environment, so a case can be re-flown without a rebuild.
     private static double Env(string name, double fallback)
@@ -154,6 +155,8 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
             }
             else
             {
+                if (!SweepAero(t, booster, state, home, ambient))
+                    return;
                 state.UseThreeDofLanding = true;
                 state.ThreeDofEngagePending = true;
             }
@@ -222,7 +225,7 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
     {
         var wall = Stopwatch.StartNew();
         double sim = 0.0, nextSample = 0.0, sampleMass = double.NaN;
-        bool engaged = false, airborne = false, touched = false;
+        bool engaged = false, airborne = false, touched = false, entryAsked = false;
         double touchSink = double.NaN, touchSideways = double.NaN, touchMiss = double.NaN, endAt = double.PositiveInfinity;
         string lastMode = "", runName = "";
         double nextAeroProbe = 0.0, probeT = double.NaN;
@@ -254,10 +257,20 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                 break;
             }
             sim += StepS;
-            // The aero tables are measured off the main thread, so entry guidance refuses until they are in. Ask again while that is the only reason.
+            // Entry guidance refuses while the booster's table is stale and sweeps a new one on its own thread. Ask again while that is the only reason, as a player would, for a short time only.
             if (state.UseThreeDofLanding && !state.ThreeDofEngagePending && !engaged
                 && state.ThreeDofStatus.Contains("AERO MODEL UNAVAILABLE", StringComparison.Ordinal))
+            {
+                if (sim > EntryAeroWaitS)
+                {
+                    t.Fail("entry", $"entry guidance still had no aero table after {EntryAeroWaitS:F0} s of flight");
+                    break;
+                }
+                if (!entryAsked)
+                    t.Info($"  t {sim,6:F2}  entry waits for its aero table and is asked again until it is in");
+                entryAsked = true;
                 state.ThreeDofEngagePending = true;
+            }
             // Real time: the solves run against the wall clock on their own threads.
             double ahead = sim / pace - wall.Elapsed.TotalSeconds;
             if (ahead > 0.002)
@@ -620,6 +633,31 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                 state.State.Mass = (float)(fraction * mole.GetStoredMass(mole.ContainerVolume));
                 loadedKg += state.State.Mass;
             }
+    }
+
+    // Entry guidance refuses without a current aero table, and the sweep that makes one runs on its own thread. Swept here with the sim held, the table is in when the flight starts, and entry takes the glide over at the start this test is posed at.
+    private static bool SweepAero(TestContext t, Vehicle booster, VehicleAutopilotState state, IParentBody home, FieldInfo ambient)
+    {
+        object? before = ambient.GetValue(null);
+        ambient.SetValue(null, state);
+        try
+        {
+            MethodInfo resample = Method("ResampleBoostbackAero");
+            resample.Invoke(null, [booster, home, false]);
+            KsaAeroSweep.Job? sweep = state.AeroJob;
+            if (sweep == null)
+                return t.Fail("aero sweep", $"the booster's sweep did not start: '{state.AeroError}'");
+            if (!AeroSweepWait.Until(() => sweep.Done))
+                return t.Fail("aero sweep", $"the booster's sweep did not finish within {AeroSweepWait.TimeoutS:F0} s");
+            resample.Invoke(null, [booster, home, false]);
+            if (state.Aero?.Table == null || state.Aero.Atmosphere == null)
+                return t.Fail("aero sweep", $"the booster's sweep gave no table with an atmosphere: '{state.AeroError}'");
+            return true;
+        }
+        finally
+        {
+            ambient.SetValue(null, before);
+        }
     }
 
     private static MethodInfo Method(string name) =>

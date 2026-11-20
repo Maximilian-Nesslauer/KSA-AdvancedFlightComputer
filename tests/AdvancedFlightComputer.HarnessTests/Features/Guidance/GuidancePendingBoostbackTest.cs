@@ -121,7 +121,8 @@ public sealed class GuidancePendingBoostbackTest : AfcTest
         t.Check("releasing RCS lets the old deorbit arm without a second boostback attempt",
             state.BoostbackPhase == GuidanceWindow.BoostbackPhase.Idle && !state.BoostbackEngagePending);
 
-        // Retain the older table when the new sweep refuses.
+        // Retain the older table when the new sweep refuses. Guidance sweeps only a table the craft has outgrown, so the craft is posed as changed, as after a staging: the kept table is stale, and the next request sweeps again.
+        state.Aero.SampledExtents = default;
         Burn node = state.DeorbitNode;
         BurnTarget target = state.DeorbitTarget;
         FlightComputer fc = craft.FlightComputer;
@@ -144,11 +145,23 @@ public sealed class GuidancePendingBoostbackTest : AfcTest
             prefix: new HarmonyMethod(typeof(GuidancePendingBoostbackTest), nameof(ObserveClaimAtStart)));
         state.BoostbackEngagePending = true;
         GuidanceWindow.ApplyAutopilot(craft);
-        t.Check("a ready boostback takes over the stock deorbit on the same step",
+        // The stale table is swept again on its own thread, and the boostback takes over on the step the new table lands.
+        KsaAeroSweep.Job? sweep = state.AeroJob;
+        if (!t.Check("a boostback waiting on its aero sweep keeps the request and the stock deorbit",
+                sweep != null && state.BoostbackEngagePending && state.BoostbackStatus.Contains("MEASURING AERO")
+                && state.LandingPhase == GuidanceWindow.LandingPhase.DeorbitBurn && fc.BurnPlan.TryGetBurn(node)
+                && fc.BurnMode == FlightComputerBurnMode.Auto && !_heldAtStart,
+                $"sweep {(sweep == null ? "none" : "running")}, pending {state.BoostbackEngagePending}, status '{state.BoostbackStatus}', phase {state.LandingPhase}"))
+            return;
+        if (!t.Check($"the aero sweep finishes within {AeroSweepWait.TimeoutS:F0} s", AeroSweepWait.Until(() => sweep!.Done)))
+            return;
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("a ready boostback takes over the stock deorbit on the step its aero table is in",
             !state.BoostbackEngagePending && state.LandingPhase == GuidanceWindow.LandingPhase.Idle
             && !state.DeorbitNodeClaimed && !fc.BurnPlan.TryGetBurn(node)
             && fc.BurnMode == FlightComputerBurnMode.Manual && state.ControlAcquired && _heldAtStart
-            && VehicleControlOwnership.Holds(craft, ControlClaimant.Guidance));
+            && VehicleControlOwnership.Holds(craft, ControlClaimant.Guidance),
+            $"pending {state.BoostbackEngagePending}, status '{state.BoostbackStatus}', phase {state.LandingPhase}, burn mode {fc.BurnMode}");
     }
 
     private static bool CheckRcsBlocksTakeover(TestContext t, Vehicle craft, VehicleAutopilotState state)
