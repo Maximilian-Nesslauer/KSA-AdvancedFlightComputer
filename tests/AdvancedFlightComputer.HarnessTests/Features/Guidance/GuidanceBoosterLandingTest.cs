@@ -254,6 +254,10 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                 break;
             }
             sim += StepS;
+            // The aero tables are measured off the main thread, so entry guidance refuses until they are in. Ask again while that is the only reason.
+            if (state.UseThreeDofLanding && !state.ThreeDofEngagePending && !engaged
+                && state.ThreeDofStatus.Contains("AERO MODEL UNAVAILABLE", StringComparison.Ordinal))
+                state.ThreeDofEngagePending = true;
             // Real time: the solves run against the wall clock on their own threads.
             double ahead = sim / pace - wall.Elapsed.TotalSeconds;
             if (ahead > 0.002)
