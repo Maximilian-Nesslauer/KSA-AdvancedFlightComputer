@@ -1565,6 +1565,14 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double ThreeDofEngageTgoS = 45.0;
 
+    /// <summary>
+    /// The height, m above the mean radius, below which a falling boostback glide is taken over too, whatever its time to impact: entry guidance then flies the whole descent from there. 45 km: offline (--3dof-far) its cold solve converges from every start at 50 km and below, and gives up from most at 60 and above. 0 for the time to impact alone.
+    /// </summary>
+    public double ThreeDofEngageAltM = 45_000.0;
+
+    /// <summary>The seconds of glide each of entry guidance's glide intervals covers at its cold solve (GuidanceWindow.GlideIntervalsFor), 12 to 48 intervals.</summary>
+    public double ThreeDofGlideIntervalS = 3.0;
+
     /// <summary>Hand the landing burn to 6-DOF for its last seconds, for its rotational model of the final flare: the 3-DOF's horizon collapses there and its re-solves start being refused. On by default.</summary>
     public bool ThreeDofSixDofHandover = true;
 

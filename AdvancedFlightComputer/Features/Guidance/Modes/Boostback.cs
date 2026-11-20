@@ -700,7 +700,9 @@ public static partial class GuidanceWindow
                 }
                 want = GlideDirection(vehicle, orbit, parent, now, dt);
                 // Close enough to impact for the air to be worth planning in: the 3-DOF glide-and-burn landing takes the craft from here (Modes/ThreeDof.cs). It flies the PID glide itself until its first plan, from the same glide state, so the hand-over does not move the command.
-                if (_s.ThreeDofFromGlide && double.IsFinite(_s.GlideTgo) && _s.GlideTgo <= _s.ThreeDofEngageTgoS
+                // Or once it falls back below ThreeDofEngageAltM, past its apex: entry guidance then flies the whole of the air that matters. The boostback's own glide steers on its impact prediction, which knows nothing of what the fins push (the flown miss swung 1-2.6 km through max q on 2026-11-20, against 0.2 under the stock controller); entry guidance plans the whole descent and learns what its model misses.
+                bool lowEnough = _s.ThreeDofEngageAltM > 0.0 && altAsl <= _s.ThreeDofEngageAltM && vUp < 0.0;
+                if (_s.ThreeDofFromGlide && ((double.IsFinite(_s.GlideTgo) && _s.GlideTgo <= _s.ThreeDofEngageTgoS) || lowEnough)
                     && Engage3Dof(vehicle, now))
                     return;
                 break;

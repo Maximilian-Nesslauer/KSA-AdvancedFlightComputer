@@ -122,6 +122,12 @@ public sealed class Guidance3Dof
         /// <summary>Per-channel defect tolerance for publishing, SI: m, m/s, kg.</summary>
         public double[] DefectTolerance { get; init; } = [2, 2, 2, 0.5, 0.5, 0.5, 5];
 
+        /// <summary>
+        /// The position and velocity tolerances grow with the speed at the plan's start: at least DefectTolerance, and this share of the speed (velocity) or this many seconds of it (position). Under 250 m/s they are DefectTolerance as they always were; at 600 m/s through max q, 1.2 m/s and 6 m. A glide taken over from 45 km had its plans refused for a 0.6 m/s defect in the first interval (2026-11-20, harness): an error the next re-solve, a tenth of a second later, takes back, at a speed where it moves the landing by nothing.
+        /// </summary>
+        public double VelocityToleranceShare { get; init; } = 0.002;
+        public double PositionToleranceS { get; init; } = 0.01;
+
         /// <summary>Seconds of plan judged at full strength, and the allowance at its far end. See Scvx6DofSolver.WeightedDefect.</summary>
         public double CommitHorizonS { get; init; } = 2.0;
         public double HorizonFarSlack { get; init; } = 25.0;
@@ -485,6 +491,14 @@ public sealed class Guidance3Dof
         while (commit < solver.Nodes - 1 && solver.NodeTime(commit + 1) <= _set.CommitHorizonS) commit++;
         Span<double> tol = stackalloc double[NX];
         for (int i = 0; i < NX; i++) tol[i] = _set.DefectTolerance[i];
+        // Scaled with the speed at the plan's start (VelocityToleranceShare, PositionToleranceS).
+        double[] x0 = solver.ReferenceX;
+        double speed = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
+        for (int i = 0; i < 3; i++)
+        {
+            tol[i] = Math.Max(tol[i], _set.PositionToleranceS * speed);
+            tol[3 + i] = Math.Max(tol[3 + i], _set.VelocityToleranceShare * speed);
+        }
         gated = solver.WeightedDefect(tol, commit, _set.HorizonFarSlack, out int ch, out _, out _);
         LastGatedDefect = gated;
         LastGatedChannel = Scvx3DofSolver.ChannelName(ch);
