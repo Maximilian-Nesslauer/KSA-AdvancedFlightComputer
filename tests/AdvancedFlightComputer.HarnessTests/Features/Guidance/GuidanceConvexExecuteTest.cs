@@ -151,9 +151,22 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
                 state.ConvexLaunchPending && !state.Running && state.AscentPlanRequested,
                 $"pending {state.ConvexLaunchPending}, running {state.Running}, requested {state.AscentPlanRequested}"))
             return;
+        // The sim step starts the aero sweeps on their own threads, and the solve starts on the first step after all of them land.
         driver.Step(0.02);
+        if (state.AscentPlanJob == null)
+        {
+            GuidanceWindow.AscentAeroSweeps? sweeps = state.AscentAero;
+            if (!t.Check("the sim step starts the aero sweeps",
+                    sweeps != null && state.AscentPlanRequested && state.AscentPlanStatus == "MEASURING AERO...",
+                    $"status '{state.AscentPlanStatus}'"))
+                return;
+            if (!t.Check($"the aero sweeps finish within {AeroSweepWait.TimeoutS:F0} s", AeroSweepWait.Until(sweeps!.TryCollect),
+                    $"status '{state.AscentPlanStatus}'"))
+                return;
+            driver.Step(0.02);
+        }
         AscentPlanJob? job = state.AscentPlanJob;
-        if (!t.Check("the sim step starts the solve", job != null, $"status '{state.AscentPlanStatus}'"))
+        if (!t.Check("the first sim step with the aero tables starts the solve", job != null, $"status '{state.AscentPlanStatus}'"))
             return;
         // The sim is not stepped while it solves, so the vehicle is still on its pad when the plan comes back.
         var clock = System.Diagnostics.Stopwatch.StartNew();
@@ -213,7 +226,8 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
         // A plan that cannot be calculated: nothing launches, the panel says why, and the backup is the player's call.
         state.PeKm = -100.0;
         ExecuteAscent.Invoke(null, args);
-        driver.Step(0.02);
+        if (!StepThroughAeroSweeps(t, state, driver))
+            return;
         t.Check("a plan that cannot be calculated launches nothing",
             !state.Running && !state.ConvexLaunchPending && state.ConvexLaunchFailure.Length > 0,
             $"running {state.Running}, pending {state.ConvexLaunchPending}, failure '{state.ConvexLaunchFailure}'");
@@ -224,5 +238,18 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
             $"running {state.Running}, phase {state.Phase}, backup {state.BackupAscent}, failure '{state.ConvexLaunchFailure}'");
         AbortAscent.Invoke(null, new object[] { vehicle });
         t.Check("ABORT clears the backup", !state.Running && !state.BackupAscent, $"running {state.Running}, backup {state.BackupAscent}");
+    }
+
+    // One sim step, and when that step started the aero sweeps, a wait for them with the sim held and the step that takes them, on which the request starts its solve or fails.
+    private static bool StepThroughAeroSweeps(TestContext t, VehicleAutopilotState state, SimDriver driver)
+    {
+        driver.Step(0.02);
+        GuidanceWindow.AscentAeroSweeps? sweeps = state.AscentAero;
+        if (sweeps == null)
+            return true;
+        if (!AeroSweepWait.Until(sweeps.TryCollect))
+            return t.Fail("aero sweeps", $"not finished within {AeroSweepWait.TimeoutS:F0} s, status '{state.AscentPlanStatus}'");
+        driver.Step(0.02);
+        return true;
     }
 }
