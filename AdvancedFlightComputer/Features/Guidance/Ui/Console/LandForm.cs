@@ -98,6 +98,8 @@ public static partial class GuidanceWindow
     {
         DrawDeorbitFinishRows(way);
         DrawLandSiteRows(vehicle, way, in situation, pickSite);
+        if (vehicle.Parts?.Root is { } root)
+            DrawLandingEngineGroups(vehicle, root, LandingEngineGroups.CraftScope);
         DrawLandMethodRows(vehicle, way, in situation, in read);
     }
 

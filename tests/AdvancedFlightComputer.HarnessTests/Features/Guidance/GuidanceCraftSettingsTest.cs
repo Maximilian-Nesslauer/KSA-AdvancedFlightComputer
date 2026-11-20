@@ -22,10 +22,12 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
     {
         if (!TestWorld.RequireHome(t, out IParentBody home))
             return;
-        VehicleSave? design = DefaultVehicleSaves.FindSave("Rocket");
+        string? prismaFixture = Environment.GetEnvironmentVariable("AFC_LANDING_SETTINGS_PRISMA_SAVE");
+        VehicleSave? design = prismaFixture == null ? DefaultVehicleSaves.FindSave("Rocket")
+            : VehicleSaves.AsSpan().ToArray().FirstOrDefault(save => save.Id == prismaFixture);
         if (design?.VehicleSaveData.RootPartInstance == null)
         {
-            t.Fail("default vehicle", "Rocket is not available");
+            t.Fail("vehicle fixture", $"{prismaFixture ?? "Rocket"} is not available");
             return;
         }
 
@@ -42,8 +44,15 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
             other = VehicleFixtures.SpawnDesign(t.System, home, design.VehicleSaveData.RootPartInstance, otherId,
                 OrbitFixtures.CircularAt(home, 600_000, Universe.GetElapsedTime()));
 
+            if (prismaFixture != null)
+            {
+                CheckEngineGroupRoundTrip(t, craft, other, Save(temp, "prisma-engine-groups"), prisma: true);
+                return;
+            }
+
             CheckFreshCraftHasNoRecord(t);
             CheckSaveAndLoad(t, craft, other, Save(temp, "first"));
+            CheckEngineGroupRoundTrip(t, craft, other, Save(temp, "engine-groups"));
             CheckBodyDefaults(t, craft, home, Save(temp, "luna"));
             CheckSecondSave(t, craft, Save(temp, "first"), Save(temp, "second"), Save(temp, "empty"));
             CheckRename(t, craft, renamedId, Save(temp, "renamed"));
@@ -142,6 +151,64 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
         t.Check("a load starts no mode", !s.Active && !s.EngagePending && !s.Running && !s.LaunchArmed && !s.ControlAcquired
             && s.LandingPhase == GuidanceWindow.LandingPhase.Idle && s.MoonChain == MoonChainStage.Idle);
         t.Check("a new craft keeps its defaults", !VehicleAutopilotState.TryGet(other, out _));
+    }
+
+    private static void CheckEngineGroupRoundTrip(TestContext t, Vehicle craft, Vehicle rebuilt, DirectoryInfo save, bool prisma = false)
+    {
+        VehicleAutopilotState state = VehicleAutopilotState.For(craft);
+        var original = LandingEngineGroups.Controllers(craft, craft.Parts.Root);
+        string[] keys;
+        if (prisma)
+        {
+            var bay = original.Where(item => item.Value?.Parent.FullPart.Template.Id == "AltairEngineA_Prefab_EngineBay").ToArray();
+            string[] expected = ["AltairCenter", .. Enumerable.Range(1, 8).Select(index => $"AltairRing{index}")];
+            string[] names = bay.Select(item => item.Value!.TemplateId).ToArray();
+            t.Check("nine independent Altair Bay addresses", bay.Length == 9 && names.ToHashSet(StringComparer.Ordinal).SetEquals(expected)
+                && bay.All(item => item.Value!.Rockets.Length == 1), string.Join(", ", names));
+            keys = bay.Where(item => item.Value?.TemplateId is "AltairCenter" or "AltairRing1")
+                .OrderBy(item => item.Value!.TemplateId).Select(item => item.Key).ToArray();
+        }
+        else
+            keys = original.Where(item => item.Value != null).Select(item => item.Key).Take(2).ToArray();
+        if (!t.Check("at least two distinct controller addresses", keys.Length == 2))
+            return;
+
+        var group = new LandingEngineGroup("Landing pair", keys);
+        var single = new LandingEngineGroup("Center", [keys[0]]);
+        state.EngineGroups[LandingEngineGroups.CraftScope] = new LandingEngineGroups([single, group], group.Name);
+        t.Check("engine groups write with the vehicle", CraftSettings.WriteTo(save, Universe.CurrentSystem) == 1);
+        VehicleAutopilotState.Remove(craft);
+        t.Check("engine group vehicle restored", CraftSettings.RestoreFrom(save, Universe.CurrentSystem) == 1);
+        LandingEngineGroups restored = VehicleAutopilotState.For(craft).GetEngineGroups(LandingEngineGroups.CraftScope);
+        t.Check("shared membership and selected group round trip", restored.Groups.Length == 2
+            && restored.Chosen is { } chosen && chosen.Name == group.Name && chosen.Engines.SequenceEqual(keys));
+
+        var rebuiltControllers = LandingEngineGroups.Controllers(rebuilt, rebuilt.Parts.Root);
+        EngineController[] members = [];
+        if (t.Check("saved addresses resolve on a newly deserialized vehicle with new runtime IDs",
+            restored.Chosen is { } selection && LandingEngineGroups.Resolve(selection, rebuiltControllers, out members)
+            && members.Length == 2 && members[0].InstanceId != original[keys[0]]!.InstanceId))
+        {
+            LandingEngineGroups.Activate(rebuilt, members);
+            InputEvents.ApplyInputEvents();
+            t.Check("reload and apply the saved group activates exactly its two controllers",
+                rebuilt.Parts.Modules.Get<EngineController>().ToArray().Where(engine => engine.IsActive).ToHashSet().SetEquals(members));
+        }
+        rebuiltControllers.Remove(keys[1]);
+        t.Check("a missing member never silently shrinks a group",
+            restored.Chosen is { } incomplete && !LandingEngineGroups.Resolve(incomplete, rebuiltControllers, out _));
+
+        EngineController first = original[keys[0]]!, second = original[keys[1]]!;
+        LandingEngineGroups.Activate(craft, [first]);
+        InputEvents.ApplyInputEvents();
+        t.Check("apply group leaves only the selected controller active",
+            craft.Parts.Modules.Get<EngineController>().ToArray().Where(engine => engine.IsActive).SequenceEqual([first]));
+        LandingEngineGroups.Activate(craft, [second], enableSingle: true);
+        InputEvents.ApplyInputEvents();
+        t.Check("manual enable keeps the other controller active", first.IsActive && second.IsActive);
+        LandingEngineGroups.Activate(craft, [first], enableSingle: false);
+        InputEvents.ApplyInputEvents();
+        t.Check("manual disable affects only the selected controller", !first.IsActive && second.IsActive);
     }
 
     // A craft follows the defaults of the body it is at: a value still at the old body's default moves with it, one the player set stays, and a save measures its record against that body.

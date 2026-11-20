@@ -148,6 +148,8 @@ public static partial class GuidanceWindow
             return;
         }
         _s.AutoStage = true;
+        if (!ThreeDofLive && !BoostbackLive && !_s.Active && !LandingMachineLive)
+            ResetLandingEngineSelection();
         _s.ThreeDofEngagePending = true;
     }
 
@@ -157,5 +159,7 @@ public static partial class GuidanceWindow
         _s.ThreeDofEngagePending = false;
         if (ThreeDofLive)
             Disengage3Dof("ENTRY GUIDANCE STOPPED");
+        else if (!BoostbackLive)
+            ResetLandingEngineSelection();
     }
 }

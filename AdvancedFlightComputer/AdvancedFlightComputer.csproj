@@ -34,6 +34,10 @@
       <HintPath>$(KsaDir)\Brutal.ImGui.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="Brutal.Core">
+      <HintPath>$(KsaDir)\Brutal.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Brutal.Strings">
       <HintPath>$(KsaDir)\Brutal.Strings.dll</HintPath>
       <Private>false</Private>

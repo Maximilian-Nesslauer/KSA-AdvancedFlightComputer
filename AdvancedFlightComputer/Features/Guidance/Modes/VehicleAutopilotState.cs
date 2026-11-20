@@ -17,6 +17,18 @@ using KSA;
 /// </summary>
 public sealed class VehicleAutopilotState
 {
+    internal readonly Dictionary<string, LandingEngineGroups> EngineGroups = new(System.StringComparer.Ordinal);
+    internal readonly Dictionary<string, LandingEngineGroupDraft> EngineGroupDrafts = new(System.StringComparer.Ordinal);
+    internal ManualEngineChange ManualEngineChange;
+    internal GuidanceModeId? LandingEngineCommitPending;
+    internal LandingEngineActivation EngineActivation;
+    internal bool LandingGroupWaiting;
+    internal string LandingGroupRefusal = "";
+    internal bool LandingGroupReplanPending;
+
+    internal LandingEngineGroups GetEngineGroups(string scope)
+        => EngineGroups.TryGetValue(scope, out LandingEngineGroups groups) ? groups : LandingEngineGroups.Empty;
+
     // Engagement state.
     public Ksa6DofGuidance Guidance;
     public Ksa6DofSolveWorker Worker;

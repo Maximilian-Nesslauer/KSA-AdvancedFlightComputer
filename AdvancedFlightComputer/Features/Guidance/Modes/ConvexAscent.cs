@@ -608,10 +608,17 @@ public static partial class GuidanceWindow
         for (int boosterIndex = 0; boosterIndex < _s.ReturnableStages.Count; boosterIndex++)
         {
             ReturnableStage booster = _s.ReturnableStages[boosterIndex];
+            LandingEngineGroup group = booster.ComesHome && booster.EngineGroupScope.Length > 0
+                ? _s.GetEngineGroups(booster.EngineGroupScope).Chosen : null;
             int boosterStage = BoosterPlanStage(vehicle, booster, model, stageParts, allStages, out double flowShare, out string note);
 
             if (boosterStage < 0 || aero.Table == null || aero.Atmosphere == null)
             {
+                if (group != null)
+                {
+                    error = $"'{booster.Name}': NO RESERVE MODEL FOR LANDING GROUP '{group.Name}'.";
+                    return false;
+                }
                 if (booster.ComesHome)
                     recoveryNotes.Add(boosterStage < 0 ? note : "NO BOOSTER RESERVE: NO AIR FOR RETURN");
                 continue;
@@ -642,14 +649,32 @@ public static partial class GuidanceWindow
 
             // THE LANDING BURN AS IT WILL BE FLOWN: at sea level, from its own engines, and braking no harder than the landing's acceleration limit (AscentRecovery.LandingAccel). Its thrust goes against its own share of the row's dry mass: side boosters leaving together split it.
             double landingThrust = double.NaN;
-            double landingVe = leaving != null ? BoosterSeaLevelVe(vehicle, leaving, aero.Atmosphere?.SeaLevelPressure ?? 0.0, out landingThrust) : double.NaN;
+            double pressure = aero.Atmosphere?.SeaLevelPressure ?? 0.0;
+            double landingVe = group != null
+                ? LandingGroupSeaLevelVe(vehicle, booster, boosterRoot, leaving, group, pressure, out landingThrust)
+                : leaving != null ? BoosterSeaLevelVe(vehicle, leaving, pressure, out landingThrust) : double.NaN;
+            if (group != null && double.IsNaN(landingVe))
+            {
+                error = $"'{booster.Name}': LANDING GROUP '{group.Name}' HAS A MISSING, UNSUPPLIED OR UNSUPPORTED ENGINE.";
+                return false;
+            }
             int onRow = 0;
             foreach (ReturnableStage st in _s.ReturnableStages)
                 if (st.SequenceIndex == booster.SequenceIndex)
                     onRow++;
+            if (group != null && onRow > 1 && !SharesACommonBoosterReserve(vehicle, booster, leaving, pressure, landingThrust, landingVe))
+            {
+                error = $"'{booster.Name}': THE LANDING GROUP NEEDS A SEPARATE RESERVE FOR THIS UNEQUAL BOOSTER ROW.";
+                return false;
+            }
             double landingAccel = landingThrust / (boosterDryKg / Math.Max(onRow, 1));
             if (_s.LandingAccelLimitG > 0.0)
                 landingAccel = Math.Min(landingAccel, _s.LandingAccelLimitG * StandardGravity);
+            if (group != null && (!(landingVe > 0.0) || !(landingAccel > mu / (bodyRadius * bodyRadius))))
+            {
+                error = $"'{booster.Name}': LANDING GROUP '{group.Name}' CANNOT BRAKE EVEN AT DRY MASS.";
+                return false;
+            }
             var rec = new AscentRecovery
             {
                 Stage = boosterStage,
@@ -678,6 +703,11 @@ public static partial class GuidanceWindow
                 continue;
             if (!AscentPhasePlan.CanKeepReserve(allStages, boosterStage))
             {
+                if (group != null)
+                {
+                    error = $"'{booster.Name}': CANNOT KEEP PROPELLANT FOR LANDING GROUP '{group.Name}'.";
+                    return false;
+                }
                 recoveryNotes.Add("NO BOOSTER RESERVE: SEPARATING STAGE HAS NO LIQUID LOAD OF ITS OWN");
                 continue;
             }
@@ -1171,6 +1201,9 @@ public static partial class GuidanceWindow
             why = "BOOSTER LANDING TARGET CHANGED SINCE PLAN";
             return false;
         }
+        why = LandingGroupsChangedSincePlan(vehicle);
+        if (why.Length > 0)
+            return false;
         double late = launchAt - p.SolvedAt;
         if (Math.Abs(late) > PlanLaunchToleranceS)
         {
