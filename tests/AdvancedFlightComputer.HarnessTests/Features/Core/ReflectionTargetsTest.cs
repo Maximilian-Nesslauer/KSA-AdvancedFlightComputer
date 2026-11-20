@@ -39,6 +39,8 @@ public sealed class ReflectionTargetsTest : AfcTest
         t.Check("GameSettings.OnDrawUi PopWidgetStyle anchor", ModSettingsPage.IsAnchorPresent);
         t.Check("ModLibrary.AllParts anchor", GameReflection.ModLibrary_AllParts != null);
         t.Check("FlightComputer.SerializeSave anchor", GameReflection.FlightComputer_SerializeSave != null);
+        // Without this check every kFS program could fly against AFC unseen, because KfsOwns reads false.
+        t.Check("kFS control check builds", GameReflection.KfsControlsVehicle != null);
         // RcsWarpPatch binds by its attribute, so the overload it names is checked here.
         t.Check("Universe.AutoWarpTo(UniverseTime, double, bool) anchor",
             AccessTools.Method(typeof(Universe), nameof(Universe.AutoWarpTo),
