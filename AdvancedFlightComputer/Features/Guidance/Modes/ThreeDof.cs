@@ -324,7 +324,7 @@ public static partial class GuidanceWindow
         double3 vAir = orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r);
         double speed = vAir.Length();
         // Off under AFC's own attitude controller (ThreeDofOwnAttitude): it holds the command against the air itself, where the trim wound out the stock flight computer's standing error.
-        if (!_s.ThreeDofTrim || OwnsEntryAttitude(true))
+        if (!_s.ThreeDofTrim || OwnsGlideAttitude(vehicle, false, true))
             trim = default;
         else if (integrate && speed > ThreeDofTrimMinSpeedMs)
         {
@@ -539,6 +539,18 @@ public static partial class GuidanceWindow
                 rcsFiring = firedCount;
             }
             bool ownAtt = _s.OwnAttitudeFlying;
+            // The air as the body meets it, retrograde-first, as the aero tables read it.
+            double alphaRf = double.NaN, betaRf = double.NaN;
+            {
+                float3 airF = PhysicsStates.ComputeAirVelocityBody(vehicle.BubbleOrigin, vehicle.KinematicStates, vehicle.PhysicsEnvironment);
+                double3 airBodyNow = double3.Unpack(in airF);
+                if (airBodyNow.Length() > 1.0)
+                {
+                    double3 uAir = double3.Normalize(airBodyNow);
+                    alphaRf = Math.Atan2(uAir.Z, -uAir.X);
+                    betaRf = Math.Atan2(uAir.Y, -uAir.X);
+                }
+            }
             AttitudeController.Report ac = ownAtt ? AttitudeController.Last(vehicle) : default;
             double rcsTransverse = Math.Min(rcs.Y, rcs.Z);
             Guidance3Dof g = _s.ThreeDofGuidance;
@@ -611,6 +623,11 @@ public static partial class GuidanceWindow
                 AcInt = ownAtt ? ac.IntegralNm : new double3(double.NaN, double.NaN, double.NaN),
                 FinCommandDeg = ownAtt ? ac.FinCommandDeg : null,
                 FinNowDeg = ownAtt ? ac.FinNowDeg : null,
+                AlphaRfDeg = alphaRf * Deg,
+                BetaRfDeg = betaRf * Deg,
+                RollOffsetDeg = _s.ReturnRollOffsetRad * Deg,
+                RollMomentNm = _s.GlideRollMomentNm,
+                RollMomentBestNm = _s.GlideRollBestNm,
                 // Guidance results are the worker's while it solves; -1 then.
                 Refusals = g == null ? 0 : ThreeDofBusy ? -1 : g.ConsecutiveRefusals,
                 AxisOffsetDeg = axisOffset * Deg,

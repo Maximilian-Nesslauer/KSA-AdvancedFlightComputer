@@ -160,7 +160,7 @@ public sealed class GuidanceAttitudeControllerTest : AfcTest
                 state.CommandRate = double3.Zero;
                 GuidanceWindow.UpdateMomentLimiter(craft, now);
                 if (own)
-                    fly.Invoke(null, [craft, home, rollRef]);
+                    fly.Invoke(null, [craft, home, rollRef, false]);
                 else
                     command.Invoke(null, [craft, home, state.CommandDir, i == 0, rollRef, FlightComputerRollMode.Up]);
                 driver.Step(StepS, 1);

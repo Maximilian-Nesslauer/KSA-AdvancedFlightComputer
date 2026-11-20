@@ -192,6 +192,79 @@ internal static class AttitudeController
     private static double3 Capped(double3 v, double max)
         => max > 0.0 && v.Length() > max ? v * (max / v.Length()) : v;
 
+    /// <summary>Roll steps searched round the axis, degrees.</summary>
+    private const double RollSearchStepDeg = 5.0;
+
+    /// <summary>
+    /// The roll to turn by, rad (right-handed about body +x, the engine-first axis), to reach the nearest roll at which the air's rolling moment about that axis is zero and restoring (a roll one way brings a moment the other), from the body moment table at the air the craft meets in its present axes, <paramref name="airVelocityBody"/> (m/s, body axes; rolling the body turns that air about +x). Where no roll trims, the one with the least moment. Also the moment there now and at the roll chosen, N m, with the game's moment limiter. The tables' centre of mass is used: a centre of mass off the axis adds a little the search ignores. False without a body moment table, below 50 Pa, or outside the tables.
+    /// </summary>
+    internal static bool TryLeastRollMoment(KsaAeroSweep.Result aero, double3 airVelocityBody, double rho, double momentLimiterPerPa,
+                                            out double deltaRad, out double momentNowNm, out double momentAtNm)
+    {
+        deltaRad = 0.0;
+        momentNowNm = momentAtNm = double.NaN;
+        if (aero?.BodyMoment == null || aero.Atmosphere == null || !(aero.ReferenceArea > 0.0) || !(aero.ReferenceLength > 0.0))
+            return false;
+        double speed = airVelocityBody.Length();
+        double q = 0.5 * rho * speed * speed;
+        if (!(speed > 1.0) || !(q > 50.0))
+            return false;
+        double3 u = airVelocityBody / speed;
+        if (!(-u.X > 0.0))
+            return false;
+        double mach = aero.Atmosphere.Mach(speed);
+        double limit = KsaAeroSweep.BodyAngleMaxDeg * Math.PI / 180.0;
+        double divisor = 1.0 + (double.IsFinite(momentLimiterPerPa) && momentLimiterPerPa > 0.0 ? momentLimiterPerPa * q : 0.0);
+        double scale = q * aero.ReferenceArea * aero.ReferenceLength / divisor;
+
+        int n = (int)Math.Round(360.0 / RollSearchStepDeg);
+        var moment = new double[n];
+        var deltas = new double[n];
+        for (int k = 0; k < n; k++)
+        {
+            double d = (-180.0 + k * RollSearchStepDeg) * Math.PI / 180.0;
+            deltas[k] = d;
+            // The body rolled by d about +x: its y and z turn by d, so the air in them turns by -d.
+            double c = Math.Cos(d), s = Math.Sin(d);
+            double uy = u.Y * c + u.Z * s, uz = -u.Y * s + u.Z * c;
+            double alpha = Math.Atan2(uz, -u.X), beta = Math.Atan2(uy, -u.X);
+            if (Math.Abs(alpha) > limit || Math.Abs(beta) > limit)
+                return false;
+            aero.BodyMoment.Coefficients(mach, alpha, beta, out double cl, out _, out _);
+            moment[k] = scale * cl;
+        }
+        int zero = n / 2;
+        momentNowNm = moment[zero];
+
+        // Trims: the moment falling through zero as the roll grows, a restoring one. The nearest to the present roll.
+        double best = double.NaN;
+        for (int k = 0; k < n; k++)
+        {
+            int k1 = (k + 1) % n;
+            if (!(moment[k] > 0.0 && moment[k1] <= 0.0))
+                continue;
+            double frac = moment[k] / (moment[k] - moment[k1]);
+            double d = Math.IEEERemainder(deltas[k] + frac * RollSearchStepDeg * Math.PI / 180.0, 2.0 * Math.PI);
+            if (double.IsNaN(best) || Math.Abs(d) < Math.Abs(best))
+                best = d;
+        }
+        if (double.IsNaN(best))
+        {
+            // None: the least moment, the nearer of equals.
+            int at = zero;
+            for (int k = 0; k < n; k++)
+                if (Math.Abs(moment[k]) < Math.Abs(moment[at]) - 1e-9
+                    || (Math.Abs(moment[k]) <= Math.Abs(moment[at]) + 1e-9 && Math.Abs(deltas[k]) < Math.Abs(deltas[at])))
+                    at = k;
+            best = deltas[at];
+            momentAtNm = moment[at];
+        }
+        else
+            momentAtNm = 0.0;
+        deltaRad = best;
+        return true;
+    }
+
     /// <summary>I v for a body-axis vector, the inertia diagonal in the model's axes (mx, my, mz).</summary>
     private static double3 Inertia(double3 v, double3 mx, double3 my, double3 mz, double ixx, double iyy, double izz)
         => ixx * double3.Dot(v, mx) * mx + iyy * double3.Dot(v, my) * my + izz * double3.Dot(v, mz) * mz;

@@ -1603,6 +1603,20 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double3 ReturnRollRefCcf;
 
+    /// <summary>
+    /// Roll entry guidance's glide to the nearest roll at which the air's rolling moment is zero and restoring (GuidanceWindow.UpdateGlideRoll), under AFC's own attitude controller. On by default. The offset it has turned the held wing direction by, rad, about the engine-first axis (ReturnRollRefCci); when it last chose; and the air's rolling moment at the held roll and at the one it heads for then, N m.
+    /// </summary>
+    public bool ThreeDofLeastRollMoment = true;
+
+    /// <summary>Fly the boostback's glide with AFC's own attitude controller too, while the engine is off (ThreeDofOwnAttitude switches both). On by default.</summary>
+    public bool BoostbackGlideOwnAttitude = true;
+
+    /// <summary>The glide's held wing direction, site frame, at its last roll choice (UpdateGlideRoll): touchdown guidance lands with its wings there (TerminalAttitude). Zero for none; a later glide of the same craft replaces it.</summary>
+    internal double3 GlideWingSite;
+    internal double ReturnRollOffsetRad;
+    internal double GlideRollAt = double.NegativeInfinity;
+    internal double GlideRollMomentNm = double.NaN, GlideRollBestNm = double.NaN;
+
     /// <summary>Hold a returning booster at the fixed roll (ReturnRollRefCcf) through the boostback and entry guidance, so the body-axis aero table applies. On by default.</summary>
     public bool BoosterRollHold = true;
 

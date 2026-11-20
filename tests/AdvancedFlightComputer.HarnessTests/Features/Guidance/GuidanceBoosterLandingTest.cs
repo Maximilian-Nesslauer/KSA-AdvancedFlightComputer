@@ -27,7 +27,8 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
     public override bool OptIn => true;
 
     private const BindingFlags PrivateStatic = BindingFlags.NonPublic | BindingFlags.Static;
-    private const string Save = "2stage_controlled";
+    // AFC_LANDING_SAVE flies another save's booster (2stage_KSAero for KSAero's fins, with AFC_LANDING_KSAERO=1).
+    private static string Save => Environment.GetEnvironmentVariable("AFC_LANDING_SAVE") is { Length: > 0 } s ? s : "2stage_controlled";
     private const double StepS = 0.02;
     private const double SampleS = 0.5;
     private const double TimeoutS = 150.0;

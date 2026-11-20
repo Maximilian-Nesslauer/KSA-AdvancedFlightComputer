@@ -201,6 +201,10 @@ public static partial class GuidanceWindow
         _s.GlideFlownAoaDeg = Math.Acos(Math.Clamp(double3.Dot(engine.NormalizeOrZero(), vHat), -1.0, 1.0)) * RadToDeg;
 
         double maxAoa = Math.Clamp(_s.GlideMaxAoaDeg, 0.0, 60.0);
+        // Off under AFC's own attitude controller (BoostbackGlideOwnAttitude): it holds the command against the air itself, where the trim wound out the stock flight computer's lag.
+        bool ownAttitude = OwnsGlideAttitude(vehicle, boostbackGuides: true, threeDofGuides: false);
+        if (ownAttitude)
+            _s.GlideTrimUpDeg = _s.GlideTrimLeftDeg = 0.0;
         double sendUp = _s.GlideTiltUpDeg + _s.GlideTrimUpDeg;
         double sendLeft = _s.GlideTiltLeftDeg + _s.GlideTrimLeftDeg;
         double sendSize = Math.Sqrt(sendUp * sendUp + sendLeft * sendLeft);
@@ -216,7 +220,7 @@ public static partial class GuidanceWindow
         // Only on a steady lag, never through a manoeuvre: during the turn from the burn attitude after cutoff the vehicle is tens of degrees off the command for seconds, and integrating that wound the trim to its limit in under a second and threw the attitude past retrograde when the turn ended.
         double errUp = _s.GlideTiltUpDeg - flownUp;
         double errLeft = _s.GlideTiltLeftDeg - flownLeft;
-        bool steady = Math.Sqrt(errUp * errUp + errLeft * errLeft) <= GlideTrimMaxErrorDeg;
+        bool steady = !ownAttitude && Math.Sqrt(errUp * errUp + errLeft * errLeft) <= GlideTrimMaxErrorDeg;
         if (steady && (!sendLimited || errUp * _s.GlideTrimUpDeg < 0.0))
             _s.GlideTrimUpDeg = Math.Clamp(_s.GlideTrimUpDeg + GlideTrackGain * errUp * dt, -maxAoa, maxAoa);
         if (steady && (!sendLimited || errLeft * _s.GlideTrimLeftDeg < 0.0))
