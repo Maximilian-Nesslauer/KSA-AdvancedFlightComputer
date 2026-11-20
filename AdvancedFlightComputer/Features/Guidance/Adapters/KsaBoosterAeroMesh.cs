@@ -18,6 +18,17 @@ internal static class KsaBoosterAeroMesh
         [NotNullWhen(true)] out PartTree? holder, out ulong geometryHash, out string error)
     {
         holder = null;
+        return TryGather(root, parts, out AeroMeshSource? source, out geometryHash, out error)
+            && TryBuildHolder(source!, out holder, out error);
+    }
+
+    /// <summary>
+    /// The booster's mesh source: its colliders, posed as the vehicle it becomes. Reads the parts, so main thread, between vehicle solver steps; the build from it (TryBuildHolder) reads nothing of the game's and can run on any thread.
+    /// </summary>
+    internal static bool TryGather(Part root, IReadOnlySet<Part> parts,
+        [NotNullWhen(true)] out AeroMeshSource? source, out ulong geometryHash, out string error)
+    {
+        source = null;
         geometryHash = 0;
         error = "";
         if (root.IsSubPart || !parts.Contains(root))
@@ -26,7 +37,6 @@ internal static class KsaBoosterAeroMesh
             return false;
         }
 
-        PartTree? candidate = null;
         try
         {
             var shapes = new AeroShapeSetBuilder();
@@ -84,13 +94,33 @@ internal static class KsaBoosterAeroMesh
 
             // TryAdd uses shared hulls from AeroHulls. The source has no hull pool to clear.
             ulong hash = key == 0 ? 1UL : key;
-            var source = new AeroMeshSource(shapeSet, partNames.ToArray(), hash);
+            source = new AeroMeshSource(shapeSet, partNames.ToArray(), hash);
+            geometryHash = hash;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = $"could not gather the booster aero mesh ({ex.Message})";
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// A private part tree holding the aero mesh built from <paramref name="source"/>: built on the calling thread (no worker pool), and stepped by nothing of the game's, so the aero sweep can fly it from any thread. The caller must dispose the holder.
+    /// </summary>
+    internal static bool TryBuildHolder(AeroMeshSource source, [NotNullWhen(true)] out PartTree? holder, out string error)
+    {
+        holder = null;
+        error = "";
+        PartTree? candidate = null;
+        try
+        {
             using var builder = new AerodynamicsBuilder();
             candidate = new PartTree();
             builder.Start(source, previous: null, shell: null, pool: null);
             if (!builder.TryTakeFinished(out Aerodynamics? aero))
             {
-                error = "the game could not build the booster aero mesh";
+                error = "the game could not build the aero mesh";
                 return false;
             }
 
@@ -98,18 +128,17 @@ internal static class KsaBoosterAeroMesh
             candidate.ExchangeAerodynamics(aero);
             if (aero.Mesh.Surface.FaceCount == 0)
             {
-                error = "the booster aero mesh has no faces";
+                error = "the aero mesh has no faces";
                 return false;
             }
 
             holder = candidate;
             candidate = null;
-            geometryHash = hash;
             return true;
         }
         catch (Exception ex)
         {
-            error = $"could not build the booster aero mesh ({ex.Message})";
+            error = $"could not build the aero mesh ({ex.Message})";
             return false;
         }
         finally

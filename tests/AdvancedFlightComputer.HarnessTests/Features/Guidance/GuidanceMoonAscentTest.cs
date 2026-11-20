@@ -133,9 +133,7 @@ public sealed class GuidanceMoonAscentTest : AfcTest
             t.CheckAbs($"{name}: the hand-over altitude", state.HandoverAltKm, expectKm, 1e-9);
             AmbientState() = state;
 
-            state.AscentPlanRequested = true;
-            driver.Step(0.02);
-            AscentPlanJob? job = state.AscentPlanJob;
+            AscentPlanJob? job = AscentPlanRequests.Start(driver, state);
             if (!t.Check($"{name}: Calculate starts a solve", job != null, $"status '{state.AscentPlanStatus}'"))
                 return;
             var clock = System.Diagnostics.Stopwatch.StartNew();

@@ -170,23 +170,124 @@ public static partial class GuidanceWindow
             _s.AscentPlanStatus = "WAITING FOR AERO MESH...";
             return;
         }
-        _s.AscentPlanRequested = false;
         if (_s.AscentPlanJob != null)
+        {
+            _s.AscentPlanRequested = false;
             return;
+        }
 
-        if (TryStartAscentPlan(vehicle, orbit, parent, out AscentPlanJob started, out string error))
+        // MEASURE FIRST, OFF THE MAIN THREAD (#223): the stack's aero and each returning booster's are swept on their own threads, and the plan starts on the step the last one lands. Swept here, they held the game for a second or more per craft on SOLVE.
+        string error;
+        if (_s.AscentAero == null)
+        {
+            _s.AscentAero = AscentAeroSweeps.Start(vehicle, parent, out error);
+            if (_s.AscentAero == null)
+            {
+                _s.AscentPlanRequested = false;
+                FailAscentPlan(vehicle, "NO DRAG MODEL (" + error + ")");
+                return;
+            }
+        }
+        if (!_s.AscentAero.TryCollect())
+        {
+            _s.AscentPlanStatus = "MEASURING AERO...";
+            return;
+        }
+        AscentAeroSweeps sweeps = _s.AscentAero;
+        _s.AscentAero = null;
+        _s.AscentPlanRequested = false;
+
+        if (TryStartAscentPlan(vehicle, orbit, parent, sweeps, out AscentPlanJob started, out error))
         {
             _s.AscentPlanJob = started;
             _s.AscentPlanStatus = "SOLVING...";
         }
         else
+            FailAscentPlan(vehicle, error);
+    }
+
+    /// <summary>A plan that could not be started: said on the page and in the log, and a launch waiting on it failed.</summary>
+    private static void FailAscentPlan(Vehicle vehicle, string error)
+    {
+        _s.AscentPlanStatus = "NO SOLUTION: " + error + ".";
+        GuidanceLog.Info(vehicle, $"convex ascent not calculated: {GuidanceLog.Cut(error, 39)}.");
+        if (GuidanceLog.Enabled && error.Length > 39)
+            GuidanceLog.DebugWrapped(vehicle, "convex error: ", error);
+        if (_s.ConvexLaunchPending)
+            FailConvexLaunch(vehicle, "NO SOLUTION (CLIMB): " + error + ".");
+    }
+
+    /// <summary>
+    /// The aero sweeps a convex plan needs, each on its own thread (KsaAeroSweep.Job): the stack's, and each returnable booster's as the vehicle it becomes when it separates. Started on SOLVE, collected on the steps after it; the plan starts once all have landed.
+    /// </summary>
+    internal sealed class AscentAeroSweeps
+    {
+        private KsaAeroSweep.Job _stackJob;
+        private readonly Dictionary<uint, KsaAeroSweep.Job> _boosterJobs = new();
+        private readonly Dictionary<uint, (KsaAeroSweep.Result Aero, string Error)> _boosters = new();
+
+        /// <summary>The stack's table, or null with the reason in <see cref="StackError"/>, once collected.</summary>
+        public KsaAeroSweep.Result Stack { get; private set; }
+        public string StackError { get; private set; } = "";
+
+        /// <summary>The sweeps started for this craft now, or null with the reason the stack's could not start.</summary>
+        public static AscentAeroSweeps Start(Vehicle vehicle, IParentBody parent, out string error)
         {
-            _s.AscentPlanStatus = "NO SOLUTION: " + error + ".";
-            GuidanceLog.Info(vehicle, $"convex ascent not calculated: {GuidanceLog.Cut(error, 39)}.");
-            if (GuidanceLog.Enabled && error.Length > 39)
-                GuidanceLog.DebugWrapped(vehicle, "convex error: ", error);
-            if (_s.ConvexLaunchPending)
-                FailConvexLaunch(vehicle, "NO SOLUTION (CLIMB): " + error + ".");
+            if (!KsaAeroSweep.TryStart(vehicle, parent, SimNow(), out KsaAeroSweep.Job stack, out error))
+                return null;
+            var sweeps = new AscentAeroSweeps { _stackJob = stack };
+            foreach (ReturnableStage booster in _s.ReturnableStages)
+            {
+                if (sweeps._boosterJobs.ContainsKey(booster.RootId) || sweeps._boosters.ContainsKey(booster.RootId))
+                    continue;
+                Part root = FindPart(vehicle, booster.RootId);
+                if (root == null)
+                {
+                    sweeps._boosters[booster.RootId] = (null, "BOOSTER NOT FOUND");
+                    continue;
+                }
+                HashSet<Part> leaving = PartsLeavingWith(vehicle, root, booster.SequenceIndex);
+                if (KsaAeroSweep.TryStartBooster(vehicle, root, leaving, parent, SimNow(), out KsaAeroSweep.Job job, out string boosterError))
+                    sweeps._boosterJobs[booster.RootId] = job;
+                else
+                    sweeps._boosters[booster.RootId] = (null, boosterError);
+            }
+            error = "";
+            return sweeps;
+        }
+
+        /// <summary>Takes every sweep that has finished; true once none runs. Main thread: the sweeps write their logs here.</summary>
+        public bool TryCollect()
+        {
+            if (_stackJob != null && _stackJob.TryTake(out KsaAeroSweep.Result stack, out string stackError))
+            {
+                Stack = stack;
+                StackError = stackError;
+                _stackJob = null;
+            }
+            foreach (uint id in _boosterJobs.Keys.ToArray())
+            {
+                if (_boosterJobs[id].TryTake(out KsaAeroSweep.Result aero, out string aeroError))
+                {
+                    _boosters[id] = (aero, aeroError);
+                    _boosterJobs.Remove(id);
+                }
+            }
+            return _stackJob == null && _boosterJobs.Count == 0;
+        }
+
+        /// <summary>The booster's own table, or false with why it has none.</summary>
+        public bool TryBooster(uint rootId, out KsaAeroSweep.Result aero, out string error)
+        {
+            if (_boosters.TryGetValue(rootId, out var swept) && swept.Aero != null)
+            {
+                aero = swept.Aero;
+                error = "";
+                return true;
+            }
+            aero = null;
+            error = swept.Error is { Length: > 0 } e ? e : "BOOSTER NOT SWEPT";
+            return false;
         }
     }
 
@@ -216,6 +317,8 @@ public static partial class GuidanceWindow
         if (_s.AscentPlanJob != null)
             return;
         _s.AscentPlanRequested = true;
+        // A new request sweeps afresh; sweeps of an older one finish on their threads and are dropped.
+        _s.AscentAero = null;
         _s.AscentPlanStatus = "STARTING...";
     }
 
@@ -328,7 +431,7 @@ public static partial class GuidanceWindow
     /// <summary>
     /// Build the problem from the live vehicle and start the solve. Everything the worker reads is copied here: the stage list, the drag table (immutable), the atmosphere (immutable), the lift-off state and the target.
     /// </summary>
-    private static bool TryStartAscentPlan(Vehicle vehicle, Orbit orbit, IParentBody parent,
+    private static bool TryStartAscentPlan(Vehicle vehicle, Orbit orbit, IParentBody parent, AscentAeroSweeps sweeps,
                                            out AscentPlanJob job, out string error)
     {
         job = null;
@@ -339,10 +442,11 @@ public static partial class GuidanceWindow
             return false;
         }
 
-        // Drag and air. The sweep is the game's own force function, whatever drag model is active, measured onto a table, and the atmosphere it mirrors; an airless body comes back with no atmosphere, which is not a failure.
-        if (!KsaAeroSweep.TryBuild(vehicle, parent, SimNow(), out KsaAeroSweep.Result aero, out string aeroError))
+        // Drag and air. The sweep is the game's own force function, whatever drag model is active, measured onto a table, and the atmosphere it mirrors; an airless body comes back with no atmosphere, which is not a failure. Swept before this, off the main thread (AscentAeroSweeps).
+        KsaAeroSweep.Result aero = sweeps.Stack;
+        if (aero == null)
         {
-            error = "NO DRAG MODEL (" + aeroError + ")";
+            error = "NO DRAG MODEL (" + sweeps.StackError + ")";
             return false;
         }
         AtmosphereModel atmosphere = aero.Atmosphere;
@@ -525,7 +629,7 @@ public static partial class GuidanceWindow
             Part boosterRoot = FindPart(vehicle, booster.RootId);
             HashSet<Part> leaving = boosterRoot != null ? PartsLeavingWith(vehicle, boosterRoot, booster.SequenceIndex) : null;
             string boosterAeroError = "BOOSTER NOT FOUND";
-            if (boosterRoot == null || !KsaAeroSweep.TryBuildBooster(vehicle, boosterRoot, leaving, parent, SimNow(), out boosterAero, out boosterAeroError))
+            if (boosterRoot == null || !sweeps.TryBooster(booster.RootId, out boosterAero, out boosterAeroError))
             {
                 boosterAero = aero;
                 recoveryNotes.Add($"'{booster.Name}': STACK AERO FOR ITS RETURN ({boosterAeroError})");

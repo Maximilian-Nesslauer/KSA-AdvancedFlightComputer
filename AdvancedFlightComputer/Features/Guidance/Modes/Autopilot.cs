@@ -1416,7 +1416,7 @@ public static partial class GuidanceWindow
         else if (ViewDemand.Wants(vehicle, ViewDemand.Kind.Aero))
             EnsureBoostbackAero(vehicle, parent);
         if (ViewDemand.ConsumeResample(vehicle))
-            ResampleBoostbackAero(vehicle, parent);
+            ResampleBoostbackAero(vehicle, parent, force: true);
         if (!BoostbackLive && ViewDemand.Wants(vehicle, ViewDemand.Kind.Impact))
             UpdateImpactPrediction(vehicle, orbit, parent, force: false);
         if (ViewDemand.Wants(vehicle, ViewDemand.Kind.Passes))

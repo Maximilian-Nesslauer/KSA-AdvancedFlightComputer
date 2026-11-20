@@ -210,8 +210,8 @@ public static class KsaAeroSweep
     }
 
     /// <summary>
-    /// Measure the focused vehicle's aerodynamics and fit the surrogate.
-    ///  Main thread only: it reads Vehicle.Props, which the sim thread owns and rewrites. That is the same access the rest of the console makes (TotalMass and friends), and it is why the result is a snapshot of plain arrays rather than anything that reaches back into the game.
+    /// Measure the vehicle's aerodynamics and fit the surrogate, on this thread: what <see cref="TryStart"/> prepares, run inline. For callers that need the table before going on (the harness); flight starts a <see cref="Job"/> instead, so the second or so of samples never holds the main thread.
+    ///  Main thread only, as TryStart.
     /// </summary>
     /// <returns>False with a reason in <paramref name="error"/> if the vehicle has no
     /// usable geometry, the game's force function gives no drag, or the game rebuilds the aero mesh (<see cref="RebuildingError"/>). A body with no atmosphere is NOT an error: the game applies no aerodynamic force there, so nothing is measured, Atmosphere comes back null and the tables are zero.</returns>
@@ -227,11 +227,8 @@ public static class KsaAeroSweep
             return false;
         }
 
-        // Extents along the ASSEMBLY axes. x is the long axis for any sane rocket - the one the thrust axis lies along.
-        //  Read through Vehicle's own accessor: the same box Props carries, and what the staleness check reads too, so the two cannot disagree about which box the table was built from.
-        float3 half = vehicle.BoundingBoxHalfExtentsAsmb;
-        return TryBuildFrom(vehicle, vehicle.Props, new double3(half.X * 2.0, half.Y * 2.0, half.Z * 2.0), vehicle.TotalMass,
-                            vehicle.Parts, parent, simTime, out result, out error);
+        return TryPrepareCraft(vehicle, parent, simTime, out Prepared prepared, out error)
+            && Run(prepared, Log, out result, out error);
     }
 
     /// <summary>
@@ -246,41 +243,250 @@ public static class KsaAeroSweep
                                          out Result result, out string error)
     {
         result = null;
-        if (!KsaBoosterGeometry.TryProperties(vehicle, root, parts, out VehicleProperties props, out double3 extents, out error))
-            return false;
-        var clock = Stopwatch.StartNew();
-        PartTree aeroParts = null;
-        ulong geometryHash = 0;
-        try
+        return TryPrepareBooster(vehicle, root, parts, parent, simTime, out Prepared prepared, out error)
+            && Run(prepared, Log, out result, out error);
+    }
+
+    private static void Log(string line) => DefaultCategory.Log.Info(line);
+
+    // ------------------------------------------------------------------ off the main thread
+
+    /// <summary>
+    /// Everything one sweep reads of the game, taken on the main thread (TryPrepareCraft, TryPrepareBooster): plain copies of the physics state and the vehicle properties - all value types - and a private aero mesh source gathered from the parts. Run reads nothing else, so it can run on any thread.
+    /// </summary>
+    internal sealed class Prepared
+    {
+        public string Name;
+        public VehicleProperties Props;
+        public double3 Extents;
+        public double Mass;
+        public IParentBody Parent;
+        public double SimTime;
+        public BubbleOrigin Origin;
+        public KinematicStates Kinematic;
+        public PhysicsEnvironment Environment;
+        /// <summary>The mesh to build and fly, private to this sweep; null where there is no air to measure.</summary>
+        public AeroMeshSource Source;
+        /// <summary>The mesh hash the result carries (Result.MeshHash): the live craft's for a whole-craft sweep, so the staleness check compares like with like; the booster geometry's for a booster.</summary>
+        public ulong MeshHash;
+        /// <summary>A booster sweep logs its whole time under this name; empty for the whole craft.</summary>
+        public string BoosterName = "";
+    }
+
+    private static bool HasAir(IParentBody parent) => parent?.GetPhysicalAtmosphere() is { Height: > 0.0 };
+
+    private static void CopyPhysics(Vehicle vehicle, Prepared p)
+    {
+        p.Origin = vehicle.BubbleOrigin;
+        p.Kinematic = vehicle.KinematicStates;
+        p.Environment = vehicle.PhysicsEnvironment;
+    }
+
+    /// <summary>
+    /// The whole craft's sweep, prepared on the main thread: its properties and physics state copied, and its aero mesh gathered afresh from its parts (AeroMeshSource.Gather, as the game gathers its own), so the sweep flies a mesh of its own. The live mesh cannot be flown off the main thread: the vehicle's physics worker steps its surface flow. False while the game rebuilds the mesh (<see cref="RebuildingError"/>): the parts have not settled.
+    /// </summary>
+    private static bool TryPrepareCraft(Vehicle vehicle, IParentBody parent, double simTime, out Prepared prepared, out string error)
+    {
+        prepared = null;
+        error = "";
+        if (vehicle == null)
         {
-            if (parent?.GetPhysicalAtmosphere() is { Height: > 0.0 }
-                && !KsaBoosterAeroMesh.TryBuild(root, parts, out aeroParts, out geometryHash, out error))
-                return false;
-            if (!TryBuildFrom(vehicle, props, extents, props.TotalMass, aeroParts, parent, simTime, out result, out error))
-                return false;
-            if (result.MeshHash != geometryHash)
+            error = "no vehicle";
+            return false;
+        }
+        PartTree live = vehicle.Parts;
+        if (live != null && live.IsRebuildingAerodynamics)
+        {
+            error = RebuildingError;
+            return false;
+        }
+        bool meshFailed = live != null && live.HasAerodynamicsBuildFailed;
+        if (meshFailed)
+            LogHelper.WarnOnce("afc-aero-build-failed:" + vehicle.Id,
+                $"[AFC] The game could not build the aero mesh of '{vehicle.Id}'. The aero sweep measures the drag the game applies without it.");
+
+        // Extents along the ASSEMBLY axes. x is the long axis for any sane rocket - the one the thrust axis lies along.
+        //  Read through Vehicle's own accessor: the same box Props carries, and what the staleness check reads too, so the two cannot disagree about which box the table was built from.
+        float3 half = vehicle.BoundingBoxHalfExtentsAsmb;
+        prepared = new Prepared
+        {
+            Name = vehicle.Id,
+            Props = vehicle.Props,
+            Extents = new double3(half.X * 2.0, half.Y * 2.0, half.Z * 2.0),
+            Mass = vehicle.TotalMass,
+            Parent = parent,
+            SimTime = simTime,
+            MeshHash = LiveMeshHash(vehicle),
+        };
+        CopyPhysics(vehicle, prepared);
+        if (HasAir(parent) && live != null && !meshFailed)
+        {
+            try
             {
-                error = "the booster sweep did not use its selected aero mesh";
-                result = null;
+                prepared.Source = AeroMeshSource.Gather(live);
+            }
+            catch (Exception ex)
+            {
+                error = $"could not gather the aero mesh ({ex.Message})";
                 return false;
             }
-            result.SweepMillis = clock.Elapsed.TotalMilliseconds;
-            DefaultCategory.Log.Info(FormattableString.Invariant(
-                $"[AFC] Booster aero of '{root.DisplayName}': mesh and sweep {result.SweepMillis:F0} ms."));
+        }
+        return true;
+    }
+
+    /// <summary>The booster's sweep, prepared on the main thread: its properties as the vehicle it becomes (KsaBoosterGeometry) and its mesh source (KsaBoosterAeroMesh.TryGather).</summary>
+    private static bool TryPrepareBooster(Vehicle vehicle, Part root, System.Collections.Generic.HashSet<Part> parts, IParentBody parent, double simTime,
+                                          out Prepared prepared, out string error)
+    {
+        prepared = null;
+        if (!KsaBoosterGeometry.TryProperties(vehicle, root, parts, out VehicleProperties props, out double3 extents, out error))
+            return false;
+        prepared = new Prepared
+        {
+            Name = vehicle.Id,
+            Props = props,
+            Extents = extents,
+            Mass = props.TotalMass,
+            Parent = parent,
+            SimTime = simTime,
+            BoosterName = root.DisplayName,
+        };
+        CopyPhysics(vehicle, prepared);
+        if (HasAir(parent))
+        {
+            if (!KsaBoosterAeroMesh.TryGather(root, parts, out AeroMeshSource source, out ulong hash, out error))
+                return false;
+            prepared.Source = source;
+            prepared.MeshHash = hash;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// A prepared sweep run to its result: the private mesh built (KsaBoosterAeroMesh.TryBuildHolder), flown, and disposed. Reads nothing of the game's but what <paramref name="p"/> holds and the body's atmosphere, which the game's own physics workers read too. <paramref name="log"/> takes the log lines, so a worker can hand them to the main thread.
+    /// </summary>
+    private static bool Run(Prepared p, Action<string> log, out Result result, out string error)
+    {
+        result = null;
+        var clock = Stopwatch.StartNew();
+        PartTree holder = null;
+        try
+        {
+            if (p.Source != null && !KsaBoosterAeroMesh.TryBuildHolder(p.Source, out holder, out error))
+                return false;
+            if (!Sweep(p, holder, log, out result, out error))
+                return false;
+            if (p.BoosterName.Length > 0)
+            {
+                result.SweepMillis = clock.Elapsed.TotalMilliseconds;
+                log(FormattableString.Invariant($"[AFC] Booster aero of '{p.BoosterName}': mesh and sweep {result.SweepMillis:F0} ms."));
+            }
             return true;
+        }
+        catch (Exception ex)
+        {
+            error = $"aero sweep failed ({ex.GetType().Name}: {ex.Message})";
+            result = null;
+            return false;
         }
         finally
         {
-            aeroParts?.Dispose();
+            holder?.Dispose();
         }
     }
 
-    /// <summary>The sweep of one set of vehicle properties, flown through <paramref name="vehicle"/>'s own physics state: <paramref name="extents"/> is the box those properties were built on, along the assembly axes.</summary>
-    private static bool TryBuildFrom(Vehicle vehicle, VehicleProperties props, double3 extents, double mass, PartTree parts, IParentBody parent, double simTime,
-                                     out Result result, out string error)
+    /// <summary>
+    /// One sweep running on its own background thread (#223: each sweep held the main thread for about a second, at SOLVE and at every staging). Started on the main thread (<see cref="TryStart"/>, <see cref="TryStartBooster"/>), which prepares it; taken there too (<see cref="TryTake"/>), which writes its log lines. Its own thread rather than the shared pool, whose queue held entry guidance's solves for seconds (afc-entry-solve).
+    /// </summary>
+    public sealed class Job
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> _log = new();
+        private volatile bool _done;
+        private Result _result;
+        private string _error = "";
+
+        private Job(Prepared prepared)
+        {
+            var thread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    if (Run(prepared, _log.Enqueue, out Result result, out string error))
+                        _result = result;
+                    else
+                        _error = error;
+                }
+                catch (Exception ex)
+                {
+                    _error = $"aero sweep failed ({ex.GetType().Name}: {ex.Message})";
+                }
+                finally
+                {
+                    _done = true;
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "afc-aero-sweep",
+                Priority = System.Threading.ThreadPriority.BelowNormal,
+            };
+            thread.Start();
+        }
+
+        internal static Job StartFor(Prepared prepared) => new(prepared);
+
+        /// <summary>Whether the sweep has finished, with a table or without.</summary>
+        public bool Done => _done;
+
+        /// <summary>
+        /// The finished sweep: true with its result, or with the reason it failed in <paramref name="error"/> and a null result. False while it still runs. Main thread: writes the sweep's log.
+        /// </summary>
+        public bool TryTake(out Result result, out string error)
+        {
+            result = null;
+            error = "";
+            if (!_done)
+                return false;
+            while (_log.TryDequeue(out string line))
+                Log(line);
+            result = _result;
+            error = _result == null ? (_error.Length > 0 ? _error : "aero sweep gave no table") : "";
+            return true;
+        }
+    }
+
+    /// <summary>The whole craft's sweep, started on its own thread. False, with the reason, where it cannot be prepared - <see cref="RebuildingError"/> while the game rebuilds the mesh. Main thread.</summary>
+    public static bool TryStart(Vehicle vehicle, IParentBody parent, double simTime, out Job job, out string error)
+    {
+        job = null;
+        if (!TryPrepareCraft(vehicle, parent, simTime, out Prepared prepared, out error))
+            return false;
+        job = Job.StartFor(prepared);
+        return true;
+    }
+
+    /// <summary>A booster's sweep (TryBuildBooster), started on its own thread. Main thread.</summary>
+    internal static bool TryStartBooster(Vehicle vehicle, Part root, System.Collections.Generic.HashSet<Part> parts, IParentBody parent, double simTime,
+                                         out Job job, out string error)
+    {
+        job = null;
+        if (!TryPrepareBooster(vehicle, root, parts, parent, simTime, out Prepared prepared, out error))
+            return false;
+        job = Job.StartFor(prepared);
+        return true;
+    }
+
+    /// <summary>The sweep of one prepared craft or booster, flown through its private mesh <paramref name="parts"/> (null where there is no air): the box its properties were built on is p.Extents, along the assembly axes.</summary>
+    private static bool Sweep(Prepared p, PartTree parts, Action<string> log, out Result result, out string error)
     {
         result = null;
         error = "";
+        VehicleProperties props = p.Props;
+        double3 extents = p.Extents;
+        double mass = p.Mass;
+        IParentBody parent = p.Parent;
+        double simTime = p.SimTime;
+        string name = p.Name;
         double dx = extents.X;
         double dy = extents.Y;
         double dz = extents.Z;
@@ -317,29 +523,19 @@ public static class KsaAeroSweep
             res.LiftTable = new double[nm * na];
             res.Table = new AeroTable(machGrid, alphaDeg, res.CdTable);
             res.Lift = new AeroTable(machGrid, alphaDeg, res.LiftTable);
-            res.MeshHash = parts?.Aerodynamics?.Source?.Hash ?? 0UL;
+            res.MeshHash = p.MeshHash;
             res.Parent = parent;
             result = res;
             return true;
         }
 
-        // PartTree.RefreshAerodynamics takes the mesh away when a build starts, and PartTree.AwaitAerodynamics blocks until the build ends. The vehicle's own step waits for the new mesh on its worker, and the sweep refuses instead of stalling the main thread, so the caller keeps its old table until then.
-        if (parts != null && parts.IsRebuildingAerodynamics)
-        {
-            error = RebuildingError;
-            return false;
-        }
-        if (parts != null && parts.HasAerodynamicsBuildFailed)
-            LogHelper.WarnOnce("afc-aero-build-failed:" + vehicle.Id,
-                $"[AFC] The game could not build the aero mesh of '{vehicle.Id}'. The aero sweep measures the drag the game applies without it.");
-
         // The air the probe flies through: sea level of this body's own atmosphere. The game reads the Mach number from the speed of sound it is given and the gas properties from the temperature, so both come from the same sea level temperature. The Mach axis is airspeed over the sea level speed of sound, the same scaling the solvers use.
         double seaTemperature = physical.ComputeTemperatureAtAltitude(0.0);
         AtmosphericConditions sea = physical.ComputeConditionsAtAltitude(0.0);
         double speedOfSound = physical.Mixture.ComputeSpeedOfSound(seaTemperature);
-        if (!ForceProbe.TryCreate(vehicle, props, parts, parent, sea.Density, sea.Pressure, seaTemperature, speedOfSound, out ForceProbe probe, out error))
+        if (!ForceProbe.TryCreate(p.Origin, p.Kinematic, p.Environment, props, parts, parent, sea.Density, sea.Pressure, seaTemperature, speedOfSound, out ForceProbe probe, out error))
             return false;
-        using var flow = new SamplingFlow(vehicle, parts);
+        var flow = new SamplingFlow(parts);
 
         // Every direction the grid uses, in body axes, with the force the game applies at a crawl in that direction. Subtracting it removes everything that does not depend on airspeed - buoyancy - and leaves the aerodynamics.
         //  RETROGRADE-FIRST: alpha = 0 means the wind comes at the TAIL, so the velocity in body axes points along -x. This is the sign that carries the whole convention - see AeroTable.AngleOfAttack.
@@ -433,11 +629,10 @@ public static class KsaAeroSweep
             }
         }
         res.SweepMillis = clock.Elapsed.TotalMilliseconds;
-        // Read after the probe, because its first PartTree.AwaitAerodynamics publishes a mesh whose build has ended but was not taken yet.
-        res.MeshHash = parts?.Aerodynamics?.Source?.Hash ?? 0UL;
+        res.MeshHash = p.MeshHash;
         res.Parent = parent;
-        DefaultCategory.Log.Info(FormattableString.Invariant(
-            $"[AFC] Aero sweep of '{vehicle.Id}' over {(parent as Astronomical)?.Id}: {na * RollSamples} directions, {na * RollSamples * (nm + 1)} samples, {res.SweepMillis:F0} ms."));
+        log(FormattableString.Invariant(
+            $"[AFC] Aero sweep of '{name}' over {(parent as Astronomical)?.Id}: {na * RollSamples} directions, {na * RollSamples * (nm + 1)} samples, {res.SweepMillis:F0} ms."));
 
         var cdTable = new double[nm * na];
         var clTable = new double[nm * na];
@@ -554,41 +749,27 @@ public static class KsaAeroSweep
         }
 
         // The measured lift near alpha 0, the angles a booster glides at, so the shape of the curve there can be read off the game log.
-        DefaultCategory.Log.Info(FormattableString.Invariant($"[AFC] Lift near alpha 0 of '{vehicle.Id}' (C_L, roll-averaged, + towards the engine end's tilt): {NearZeroLiftText(res)}."));
+        log(FormattableString.Invariant($"[AFC] Lift near alpha 0 of '{name}' (C_L, roll-averaged, + towards the engine end's tilt): {NearZeroLiftText(res)}."));
         if (res.BodyAero != null)
-            DefaultCategory.Log.Info(FormattableString.Invariant($"[AFC] Body-axis force of '{vehicle.Id}' near retrograde at Mach 0.4 (C_x, C_y, C_z): {BodyAeroText(res.BodyAero, 0.4)}."));
+            log(FormattableString.Invariant($"[AFC] Body-axis force of '{name}' near retrograde at Mach 0.4 (C_x, C_y, C_z): {BodyAeroText(res.BodyAero, 0.4)}."));
         if (res.BodyMoment != null)
-            DefaultCategory.Log.Info(FormattableString.Invariant($"[AFC] Body-axis moment of '{vehicle.Id}' near retrograde at Mach 0.4 (C_l, C_m, C_n about the centre of mass, L {res.ReferenceLength:F1} m): {BodyAeroText(res.BodyMoment, 0.4)}."));
+            log(FormattableString.Invariant($"[AFC] Body-axis moment of '{name}' near retrograde at Mach 0.4 (C_l, C_m, C_n about the centre of mass, L {res.ReferenceLength:F1} m): {BodyAeroText(res.BodyMoment, 0.4)}."));
         // Logged once the moment table exists, which BalanceText reads.
         if (double.IsFinite(worstCp))
-            DefaultCategory.Log.Info(FormattableString.Invariant(
-                $"[AFC] Aero balance of '{vehicle.Id}': {BalanceText(res)}; centre of pressure at {BalanceAlphaDeg:0} deg by Mach: {CentreOfPressureText(res)}."));
+            log(FormattableString.Invariant(
+                $"[AFC] Aero balance of '{name}': {BalanceText(res)}; centre of pressure at {BalanceAlphaDeg:0} deg by Mach: {CentreOfPressureText(res)}."));
         result = res;
         return true;
     }
 
-    private sealed class SamplingFlow : IDisposable
+    /// <summary>The surface flow of a sweep's private mesh, turned to each sample direction before its rows. Nothing else steps it.</summary>
+    private sealed class SamplingFlow
     {
-        private readonly PartTree _parts;
-        private readonly Aerodynamics _product;
         private readonly AeroSurfaceFlow _flow;
-        private readonly Vector3? _restoreWind;
 
-        public SamplingFlow(Vehicle vehicle, PartTree parts)
+        public SamplingFlow(PartTree parts)
         {
-            _parts = parts;
-            _product = parts?.AwaitAerodynamics();
-            _flow = _product?.GetSurfaceFlow();
-            if (!ReferenceEquals(parts, vehicle.Parts))
-                return;
-            BubbleOrigin origin = vehicle.BubbleOrigin;
-            KinematicStates kinematic = vehicle.KinematicStates;
-            PhysicsEnvironment environment = vehicle.PhysicsEnvironment;
-            float3 air = PhysicsStates.ComputeAirVelocityBody(in origin, in kinematic, in environment);
-            var wind = new Vector3(-air.X, -air.Y, -air.Z);
-            float speedSquared = wind.LengthSquared();
-            if (speedSquared > 1e-6f && float.IsFinite(speedSquared))
-                _restoreWind = Vector3.Normalize(wind);
+            _flow = parts?.AwaitAerodynamics()?.GetSurfaceFlow();
         }
 
         public void Prepare(double3 airDirection)
@@ -596,21 +777,11 @@ public static class KsaAeroSweep
             // Stock reuses geometry within one degree. An opposite wind forces fresh geometry for the next sample.
             _flow?.Update(airDirection.ToBepu());
         }
-
-        public void Dispose()
-        {
-            if (!_restoreWind.HasValue || _flow == null || _parts.IsRebuildingAerodynamics
-                || !ReferenceEquals(_parts.Aerodynamics, _product))
-                return;
-            Vector3 wind = _restoreWind.Value;
-            _flow.Update(-wind);
-            _flow.Update(wind);
-        }
     }
 
     /// <summary>
     /// A copy of one vehicle's physics state, with the air set per probe. The force read back is the game's own, from the same ComputeDerivatives the integrator calls, so any mod that patches the forces there is measured with them.
-    /// The tree supplies the aero mesh, either the live craft or a private booster mesh holder. A live tree's AeroSurfaceFlow shares buffers with the physics worker, so the probe runs at the Vehicle.PrepareWorker boundary.
+    /// The tree supplies the aero mesh: a private holder built for the sweep (KsaBoosterAeroMesh.TryBuildHolder), never the live craft's, whose AeroSurfaceFlow the vehicle's physics worker steps.
     /// </summary>
     private sealed class ForceProbe
     {
@@ -623,14 +794,14 @@ public static class KsaAeroSweep
         /// <summary>The airspeed at zero physics velocity - the bubble's own motion against the turning air - in physics axes. Airspeed is this plus the physics velocity.</summary>
         private double3 _frameAirPhys;
 
-        public static bool TryCreate(Vehicle vehicle, VehicleProperties props, PartTree parts, IParentBody parent, double density, double pressure, double temperature, double speedOfSound, out ForceProbe probe, out string error)
+        public static bool TryCreate(BubbleOrigin origin, KinematicStates kinematic, PhysicsEnvironment environment, VehicleProperties props, PartTree parts, IParentBody parent, double density, double pressure, double temperature, double speedOfSound, out ForceProbe probe, out string error)
         {
             probe = new ForceProbe
             {
-                _origin = vehicle.BubbleOrigin,
-                _kinematic = vehicle.KinematicStates,
+                _origin = origin,
+                _kinematic = kinematic,
                 _props = props,
-                _environment = vehicle.PhysicsEnvironment,
+                _environment = environment,
                 _parts = parts,
             };
 

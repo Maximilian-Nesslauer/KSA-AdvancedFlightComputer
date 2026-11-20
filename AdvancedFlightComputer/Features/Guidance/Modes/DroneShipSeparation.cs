@@ -29,9 +29,25 @@ public static partial class GuidanceWindow
     {
         if (booster == null || !booster.OptimalReturn)
             return;
-        if (_s.DroneShipAeroRoot == booster.RootId && _s.DroneShipAero != null)
+        // Its sweep runs on its own thread (KsaAeroSweep.Job, #223); staging waits for the table (ShouldStageForDroneShip).
+        if (_s.DroneShipAeroJob != null)
+        {
+            if (!_s.DroneShipAeroJob.TryTake(out KsaAeroSweep.Result swept, out string sweepError))
+                return;
+            _s.DroneShipAeroJob = null;
+            if (_s.DroneShipAeroRoot == booster.RootId)
+            {
+                if (swept != null)
+                    _s.DroneShipAero = swept;
+                else
+                    GuidanceLog.Info(vehicle, $"drone ship: '{booster.Name}' could not be swept ({sweepError}); it separates on its reserve.");
+                return;
+            }
+        }
+        if (_s.DroneShipAeroRoot == booster.RootId && (_s.DroneShipAero != null || _s.DroneShipAeroTried))
             return;
         _s.DroneShipAeroRoot = booster.RootId;
+        _s.DroneShipAeroTried = true;
         _s.DroneShipAero = null;
         _s.DroneShipLastD = double.NaN;
         _s.DroneShipRate = double.NaN;
@@ -44,9 +60,9 @@ public static partial class GuidanceWindow
         IParentBody parent = vehicle.Orbit?.Parent;
         if (root == null || parent == null)
             return;
-        if (KsaAeroSweep.TryBuildBooster(vehicle, root, PartsLeavingWith(vehicle, root, booster.SequenceIndex), parent, SimNow(),
-                                         out KsaAeroSweep.Result aero, out string error))
-            _s.DroneShipAero = aero;
+        if (KsaAeroSweep.TryStartBooster(vehicle, root, PartsLeavingWith(vehicle, root, booster.SequenceIndex), parent, SimNow(),
+                                         out KsaAeroSweep.Job job, out string error))
+            _s.DroneShipAeroJob = job;
         else
             GuidanceLog.Info(vehicle, $"drone ship: '{booster.Name}' could not be swept ({error}); it separates on its reserve.");
     }

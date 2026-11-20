@@ -495,6 +495,9 @@ public sealed class VehicleAutopilotState
     /// <summary>The solve in progress, or null.</summary>
     public AscentPlanJob AscentPlanJob;
 
+    /// <summary>The aero sweeps a requested convex plan waits on, running on their own threads, or null (GuidanceWindow.AscentAeroSweeps).</summary>
+    internal GuidanceWindow.AscentAeroSweeps AscentAero;
+
     /// <summary>Set by the Calculate button; the sim step builds the problem, since only it may read the part tree.</summary>
     public bool AscentPlanRequested;
 
@@ -1055,6 +1058,10 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public KsaAeroSweep.Result Aero;
 
+    /// <summary>The sweep running for <see cref="Aero"/> on its own thread (KsaAeroSweep.Job), or null; and when a failed one may be tried again, sim time.</summary>
+    public KsaAeroSweep.Job AeroJob;
+    public double AeroRetryAt = double.NegativeInfinity;
+
     /// <summary>Why the last sweep failed, empty if it did not.</summary>
     public string AeroError = "";
 
@@ -1405,6 +1412,9 @@ public sealed class VehicleAutopilotState
     /// <summary>The drone-ship booster next to separate, by root InstanceId, and its own aero, swept once when its reserve arms.</summary>
     public uint DroneShipAeroRoot;
     public AdvancedFlightComputer.Features.Guidance.KsaAeroSweep.Result DroneShipAero;
+    /// <summary>The drone-ship booster's sweep while it runs on its own thread, or null; and whether one was started for DroneShipAeroRoot, so a failed one is not started again every step.</summary>
+    public bool DroneShipAeroTried;
+    public AdvancedFlightComputer.Features.Guidance.KsaAeroSweep.Job DroneShipAeroJob;
     /// <summary>When the live impact was last predicted, sim time; how far the ship lay beyond it along the ground track then, m, and when; and how far off the ship it was, m.</summary>
     public double DroneShipCueAt = double.NegativeInfinity;
     public double DroneShipLastD = double.NaN;
