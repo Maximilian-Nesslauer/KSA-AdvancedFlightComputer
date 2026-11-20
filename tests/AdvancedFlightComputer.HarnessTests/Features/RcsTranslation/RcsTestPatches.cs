@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Reflection.Emit;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using HarmonyLib;
@@ -12,6 +14,18 @@ namespace AdvancedFlightComputer.HarnessTests;
 internal static class RcsTestPatches
 {
     public static Scope Apply() => new();
+
+    // Replace the call in EndExecution so inlining the stock method cannot bypass an injected fault.
+    internal static IEnumerable<CodeInstruction> ReplaceAttitudeReleaseCall(
+        IEnumerable<CodeInstruction> code, MethodInfo replacement)
+    {
+        var stock = AccessTools.Method(typeof(FlightComputer), nameof(FlightComputer.SetNullRot));
+        List<CodeInstruction> instructions = code.ToList();
+        CodeInstruction release = instructions.Single(instruction => instruction.Calls(stock));
+        release.opcode = OpCodes.Call;
+        release.operand = replacement;
+        return instructions;
+    }
 
     internal sealed class Scope : IDisposable
     {

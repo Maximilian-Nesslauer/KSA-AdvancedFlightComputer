@@ -172,6 +172,36 @@ internal static class PlanWords
         => new(double.IsFinite(toKm) ? "AFC: PLAN TO " + Fmt.Km(toKm) : "AFC: PLAN");
 
     public static readonly PlanWord FlyingTurn = new("AFC: GRAVITY TURN");
+
+    public static readonly PlanWord DvShort = new("DV SHORT", Warns: true);
+    public static readonly PlanWord OffPlan = new("OFF PLAN", Warns: true);
+}
+
+/// <summary>What the console head says about the closed loop of a UPFG ascent.</summary>
+internal static class AscentReadout
+{
+    /// <summary>
+    /// The delta-v on board less what the last UPFG solve still asks for, NaN when that difference means nothing.
+    /// Before the closed loop the craft does not fly the UPFG steering and the solve ignores the drag of the low climb, so its velocity to go is not what the climb costs.
+    /// An unconverged solve can ask for any velocity, and with no engine lit, as in the ignition gap of a staging, guidance holds the last solution of a stage model that no longer matches the craft.
+    /// </summary>
+    public static double Margin(bool closedLoop, bool converged, bool thrustOn, double onBoardMs, double toGoMs)
+        => closedLoop && converged && thrustOn && double.IsFinite(onBoardMs) && double.IsFinite(toGoMs) ? onBoardMs - toGoMs : double.NaN;
+
+    /// <summary>
+    /// The word of the closed loop. ON PLAN only when the solve converged, an engine burns, the orbit is still bound and the margin is above zero, the same limit at which the MARGIN value warns.
+    /// An open orbit on the way to a closed one has passed the target, whatever the solve says. <paramref name="marginMs"/> is NaN when no margin is known, which does not count against the plan.
+    /// </summary>
+    public static PlanWord Word(bool converged, bool noPlanLasts, bool thrustOn, bool bound, double marginMs)
+    {
+        if (!bound)
+            return PlanWords.OffPlan;
+        if (!converged)
+            return PlanWords.Of(false, noPlanLasts);
+        if (!thrustOn)
+            return PlanWords.LastPlan;
+        return marginMs <= 0.0 ? PlanWords.DvShort : PlanWords.OnPlan;
+    }
 }
 
 internal enum ImpactInk { Plain, Good, Bad }

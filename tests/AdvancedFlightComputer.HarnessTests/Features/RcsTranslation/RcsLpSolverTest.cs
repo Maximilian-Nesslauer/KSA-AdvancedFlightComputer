@@ -21,12 +21,40 @@ public sealed class RcsLpSolverTest : AfcTest
     {
         CheckDegenerateInputs(t);
         CheckDependentRows(t);
+        CheckNearlyTiedPivotRatios(t);
+        CheckDegenerateInfeasibleTerminates(t);
         CheckCheapThrusterWins(t);
         CheckTorqueNullingPair(t);
         CheckSupportSelection(t);
         CheckPricedTorqueSlack(t);
         CheckInfeasibleDirection(t);
         CheckUnnullableTorque(t);
+    }
+
+    private static void CheckNearlyTiedPivotRatios(TestContext t)
+    {
+        // Each row gives its own upper bound on x. The tighter bound is the second row.
+        double[]? x = RcsLpSolver.Solve(2, 3, [1.0, 1.0, 1.0, 0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0], [1.0 + 4e-10, 1.0]);
+        if (t.Check("the nearly tied pivot ratios produce a solution", x != null))
+            t.CheckAbs("the pivot respects the tighter upper bound", x![0], 1.0, 1e-12);
+    }
+
+    private static void CheckDegenerateInfeasibleTerminates(TestContext t)
+    {
+        // The demand is not in the cone of the columns, so the problem is infeasible. Its near-zero demands make
+        // near-tied ratios in phase one, and a tie rule that takes a larger ratio cycles there without end.
+        double[] columns =
+        [
+            -1.0, 1.0, 1.0,
+            3.0, 0.0, 3.0,
+            -1.0, 0.0, 2.0,
+            0.0, 2.0, -1.0,
+            3.0, -1.0, 0.0,
+            -1.0, 2.0, -1.0,
+        ];
+        double[]? x = RcsLpSolver.Solve(3, 6, columns, [1.0, 3.0, -3.0, -1.0, -3.0, -3.0], [-9e-10, 0.0, 6e-10]);
+        t.Check("a degenerate infeasible problem ends without a solution", x == null);
     }
 
     private static void CheckDegenerateInputs(TestContext t)

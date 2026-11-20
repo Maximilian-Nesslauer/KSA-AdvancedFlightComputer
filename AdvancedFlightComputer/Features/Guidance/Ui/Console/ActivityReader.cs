@@ -195,7 +195,7 @@ public static partial class GuidanceWindow
                     ? PageText.AscentToGo(_s.Upfg.VgoMag, _s.Upfg.Rgo.Length() / 1000.0)
                     : "";
                 bool planFlies = flying ? _s.FlyingPlan != null : _s.FlyConvexAscent && !BackupLaunchChosen;
-                PlanWord word = flying ? AscentWord() : a.ControlAcquired ? default : PlanWords.Yours(_s.LaunchArmed ? "WINDOW" : "LIFTOFF");
+                PlanWord word = flying ? AscentWord(vehicle) : a.ControlAcquired ? default : PlanWords.Yours(_s.LaunchArmed ? "WINDOW" : "LIFTOFF");
                 return new ModeReadout(a, "ASCENT", method, phase,
                     Tone(flying), tgo, flying ? "CUTOFF T-" : "WINDOW T-", flying ? AscentNumbers(vehicle) : Array.Empty<HeadValue>(), card, NumbersHoldOrbit: flying,
                     PhaseList: ascent.Id == AscentMethod.CatsUpfg ? GuidanceModes.AscentPhasesFor(planFlies) : null, Word: word);
@@ -298,11 +298,11 @@ public static partial class GuidanceWindow
     private static HeadValue[] AscentNumbers(Vehicle vehicle)
     {
         Orbit orbit = vehicle?.Orbit;
-        return orbit == null ? [] : PageText.AscentNumbers(orbit.IsBound(), orbit.ApoapsisAltitude / 1000.0, Math.Max(_s.PeKm, _s.ApKm), orbit.PeriapsisAltitude / 1000.0, Math.Min(_s.PeKm, _s.ApKm), AscentMarginMs(), SeparationSecondsNow());
+        return orbit == null ? [] : PageText.AscentNumbers(orbit.IsBound(), orbit.ApoapsisAltitude / 1000.0, Math.Max(_s.PeKm, _s.ApKm), orbit.PeriapsisAltitude / 1000.0, Math.Min(_s.PeKm, _s.ApKm), AscentMarginMs(vehicle), SeparationSecondsNow());
     }
 
-    // The delta-v on board less what the last solve of UPFG still asks for, NaN before a solve. It is an estimate, because the velocity to go assumes the stage model it reads.
-    private static double AscentMarginMs()
+    // The margin is an estimate, because the velocity to go assumes the stage model it reads. AscentReadout.Margin says when it is shown.
+    private static double AscentMarginMs(Vehicle vehicle)
     {
         var stages = _s.UpfgVehicle;
         if (stages == null || stages.Stages.Count == 0 || !(_s.Upfg.Tgo > 0.0))
@@ -313,12 +313,19 @@ public static partial class GuidanceWindow
             StageFigures(stages.Stages[i], out float dv, out _);
             total += dv;
         }
-        return total - _s.Upfg.VgoMag;
+        return AscentReadout.Margin(InClosedLoop(), _s.Upfg.Converged, AscentThrustOn(vehicle), total, _s.Upfg.VgoMag);
     }
 
-    private static PlanWord AscentWord() => _s.Phase switch
+    private static bool InClosedLoop() => _s.Phase is AscentPhase.ClosedLoop or AscentPhase.Terminal;
+
+    // The same test of thrust as the staging cue, and false while the solve holds its last solution for want of thrust.
+    private static bool AscentThrustOn(Vehicle vehicle)
+        => vehicle != null && vehicle.IsAnyEngineActive() && vehicle.IsAnyEnginePropellantAvailable() && _s.Status != NoThrustStatus;
+
+    private static PlanWord AscentWord(Vehicle vehicle) => _s.Phase switch
     {
-        AscentPhase.ClosedLoop or AscentPhase.Terminal => _s.Upfg.Converged ? PlanWords.OnPlan : PlanWords.Of(false, StepFaultLasts),
+        AscentPhase.ClosedLoop or AscentPhase.Terminal => AscentReadout.Word(_s.Upfg.Converged, StepFaultLasts, AscentThrustOn(vehicle),
+            vehicle?.Orbit?.IsBound() ?? true, AscentMarginMs(vehicle)),
         AscentPhase.Profile => PlanWords.FlyingPlan(_s.HandoverAltKm),
         _ => PlanWords.FlyingTurn,
     };

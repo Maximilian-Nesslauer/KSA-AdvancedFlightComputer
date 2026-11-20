@@ -511,14 +511,24 @@ public sealed class RcsDriverFaultTest : AfcTest
         internal FaultScope()
         {
             _harmony = new Harmony("com.maxi.afc.harnesstests.rcs.fault");
-            _harmony.Patch(AccessTools.Method(typeof(RcsExecutor), nameof(RcsExecutor.Tick)),
-                prefix: new HarmonyMethod(typeof(RcsDriverFaultTest), nameof(TickPrefix)));
-            _harmony.Patch(AccessTools.Method(typeof(FlightComputer), nameof(FlightComputer.SetNullRot)),
-                prefix: new HarmonyMethod(typeof(RcsDriverFaultTest), nameof(AttitudePrefix)));
-            _harmony.Patch(AccessTools.Method(typeof(RcsExecutor), "RestoreRcsMode"),
-                prefix: new HarmonyMethod(typeof(RcsDriverFaultTest), nameof(RcsPrefix)));
-            _harmony.Patch(AccessTools.Method(typeof(RcsExecutor), "ComputeFuelSummary"),
-                prefix: new HarmonyMethod(typeof(RcsDriverFaultTest), nameof(TelemetryPrefix)));
+            try
+            {
+                _harmony.Patch(AccessTools.Method(typeof(RcsExecutor), nameof(RcsExecutor.Tick)),
+                    prefix: new HarmonyMethod(typeof(RcsDriverFaultTest), nameof(TickPrefix)));
+                // RestoreRcsMode is small enough to inline, so it is patched before EndExecution is recompiled, and the
+                // new EndExecution calls the patched method instead of a copy of its old body.
+                _harmony.Patch(AccessTools.Method(typeof(RcsExecutor), "RestoreRcsMode"),
+                    prefix: new HarmonyMethod(typeof(RcsDriverFaultTest), nameof(RcsPrefix)));
+                _harmony.Patch(AccessTools.DeclaredMethod(typeof(RcsExecutor), "EndExecution"),
+                    transpiler: new HarmonyMethod(typeof(RcsDriverFaultTest), nameof(InterceptAttitudeRelease)));
+                _harmony.Patch(AccessTools.Method(typeof(RcsExecutor), "ComputeFuelSummary"),
+                    prefix: new HarmonyMethod(typeof(RcsDriverFaultTest), nameof(TelemetryPrefix)));
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
         }
 
         public void Dispose()
@@ -543,11 +553,16 @@ public sealed class RcsDriverFaultTest : AfcTest
         return false;
     }
 
-    private static void AttitudePrefix()
+    private static IEnumerable<CodeInstruction> InterceptAttitudeRelease(IEnumerable<CodeInstruction> code)
+        => RcsTestPatches.ReplaceAttitudeReleaseCall(code,
+            AccessTools.DeclaredMethod(typeof(RcsDriverFaultTest), nameof(ReleaseAttitude)));
+
+    private static void ReleaseAttitude(FlightComputer flightComputer, VehicleReferenceFrame frame)
     {
         _attitudeCalls++;
         if (_failAttitude)
             throw new InvalidOperationException("Injected attitude cleanup fault");
+        flightComputer.SetNullRot(frame);
     }
 
     private static void RcsPrefix()

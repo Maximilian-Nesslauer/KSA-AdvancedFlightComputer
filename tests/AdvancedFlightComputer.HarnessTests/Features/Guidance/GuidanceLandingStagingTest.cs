@@ -290,11 +290,11 @@ public sealed class GuidanceLandingStagingTest : AfcTest
         CheckWaiting(t, fixture, "restart");
 
         Method("AbortLanding").Invoke(null, null);
-        t.Check("an abort ends the previous wait", WaitReset(fixture));
+        t.Check("an abort ends the previous wait", WaitReset(fixture.State));
 
         _now = 200;
         Method("StartGfoldNow").Invoke(null, [fixture.Vehicle]);
-        t.Check("a restart begins without the previous deadline", WaitReset(fixture));
+        t.Check("a restart begins without the previous deadline", WaitReset(fixture.State));
         Step(fixture, 200);
         CheckWaiting(t, fixture, "restarted");
         t.Check("the restart gets its own deadline", fixture.State.LandingEngineWaitStart == 200);
@@ -306,7 +306,7 @@ public sealed class GuidanceLandingStagingTest : AfcTest
 
     private static void WaitStateEndsWithOwnership(TestContext t)
     {
-        foreach (string method in new[] { "ResetFlightComputer", "ClaimVehicle", "HandBackVehicle", "ExecuteLanding" })
+        foreach (string method in new[] { "ResetFlightComputer", "ClaimVehicle", "HandBackVehicle" })
         {
             var fixture = new Fixture(GuidanceWindow.LandingPhase.GfoldDescent, 2);
             Step(fixture, 100);
@@ -319,11 +319,10 @@ public sealed class GuidanceLandingStagingTest : AfcTest
             {
                 "ClaimVehicle" => [Enum.Parse(target.GetParameters()[0].ParameterType, "Ascent"), fixture.Vehicle],
                 "HandBackVehicle" => [fixture.Vehicle],
-                "ExecuteLanding" => [fixture.Vehicle],
                 _ => null,
             };
             target.Invoke(null, args);
-            t.Check($"{method} clears every wait field", WaitReset(fixture));
+            t.Check($"{method} clears every wait field", WaitReset(fixture.State));
         }
     }
 
@@ -365,8 +364,22 @@ public sealed class GuidanceLandingStagingTest : AfcTest
             Program.ControlledVehicle = craft;
             craft.FlightComputer.BurnMode = FlightComputerBurnMode.Manual;
 
+            // ExecuteLanding reads Vehicle.Orbit, which comes from the flight plan that only a spawned craft has, so its
+            // ownership reset is checked here and not on the built craft. The home body has air, which refuses a landing
+            // from orbit, so the case takes the deorbit-only route that such a body offers.
+            VehicleAutopilotState state = VehicleAutopilotState.For(craft);
+            state.DeorbitOnly = true;
+            state.LandingEngineWaitStart = 100;
+            state.LandingEngineWaitProgressTime = 102;
+            state.LandingEngineWaitNextSequence = Empty<Sequence>();
+            typeof(GuidanceWindow).GetField("_s", PrivateStatic)!.SetValue(null, state);
+            Method("ExecuteLanding").Invoke(null, [craft]);
+            t.Check("ExecuteLanding enters deorbit planning and clears every wait field",
+                state.LandingPhase == GuidanceWindow.LandingPhase.DeorbitPlanning && WaitReset(state), state.LandingStatus);
+            VehicleAutopilotState.Remove(craft);
+
             _now = 100;
-            VehicleAutopilotState state = QueuedCoast(craft, burnStartTime: 1000);
+            state = QueuedCoast(craft, burnStartTime: 1000);
             GuidanceWindow.ApplyAutopilot(craft);
             t.Check("a coast survives its first step", state.LandingPhase == GuidanceWindow.LandingPhase.Coast);
             t.Check("a coast waits without the craft",
@@ -536,10 +549,10 @@ public sealed class GuidanceLandingStagingTest : AfcTest
         }
     }
 
-    private static bool WaitReset(Fixture fixture) =>
-        double.IsNaN(fixture.State.LandingEngineWaitStart)
-        && fixture.State.LandingEngineWaitProgressTime == 0
-        && fixture.State.LandingEngineWaitNextSequence == null;
+    private static bool WaitReset(VehicleAutopilotState state) =>
+        double.IsNaN(state.LandingEngineWaitStart)
+        && state.LandingEngineWaitProgressTime == 0
+        && state.LandingEngineWaitNextSequence == null;
 
     private sealed class Fixture
     {
