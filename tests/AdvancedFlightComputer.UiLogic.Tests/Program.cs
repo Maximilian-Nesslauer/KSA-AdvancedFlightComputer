@@ -518,6 +518,29 @@ internal static class Program
         Check("a climb on a plan says what it flies", PlanWords.FlyingPlan(80.0).Text == "AFC: PLAN TO 80 km" && !PlanWords.FlyingPlan(80.0).Good && !PlanWords.FlyingPlan(80.0).Warns);
         Check("no value, no height in the word", PlanWords.FlyingPlan(double.NaN).Text == "AFC: PLAN");
         Check("a simple turn has its word and no green", PlanWords.FlyingTurn.Shows && !PlanWords.FlyingTurn.Good);
+
+        static bool HasMargin(HeadValue[] values) => Array.Exists(values, v => v.Text.StartsWith("MARGIN"));
+        double climbMargin = AscentReadout.Margin(false, false, false, 5313.0, 60000.0);
+        Check("before the closed loop there is no margin", double.IsNaN(climbMargin) && double.IsNaN(AscentReadout.Margin(false, true, true, 5000.0, 3000.0)));
+        Check("a climb in a staging gap shows no margin", !HasMargin(PageText.AscentNumbers(true, 15.0, 420.0, -6000.0, 200.0, climbMargin)));
+        Check("an unconverged solve has no margin", double.IsNaN(AscentReadout.Margin(true, false, true, 5000.0, 60000.0)));
+        Check("an unconverged solve is not on plan", AscentReadout.Word(false, false, true, true, double.NaN) == PlanWords.Planning
+            && AscentReadout.Word(false, true, true, true, double.NaN) == PlanWords.NoPlan);
+        Check("the ignition gap has no margin", double.IsNaN(AscentReadout.Margin(true, true, false, 5000.0, 3000.0)));
+        Check("the ignition gap holds the last plan", AscentReadout.Word(true, false, false, true, double.NaN) == PlanWords.LastPlan);
+        double ahead = AscentReadout.Margin(true, true, true, 5000.0, 3000.0);
+        Check("a converged solve has its margin", ahead == 2000.0 && HeadNumbers.Fit(PageText.AscentNumbers(true, 300.0, 420.0, 50.0, 200.0, ahead), Chars, 2f * Row).Contains("MARGIN +2000 m/s"));
+        Check("a converged solve with margin is on plan", AscentReadout.Word(true, false, true, true, ahead) == PlanWords.OnPlan);
+        Check("no margin known does not count against the plan", AscentReadout.Word(true, false, true, true, double.NaN) == PlanWords.OnPlan);
+        double behind = AscentReadout.Margin(true, true, true, 1000.0, 5502.0);
+        PlanWord shortWord = AscentReadout.Word(true, false, true, true, behind);
+        Check("a converged solve short of delta-v shows it", behind == -4502.0 && HasMargin(PageText.AscentNumbers(true, 2054.0, 420.0, -1200.0, 200.0, behind)));
+        Check("a margin under zero is not on plan", shortWord == PlanWords.DvShort && shortWord.Warns && !shortWord.Good && !shortWord.Text.Contains("ON PLAN"), shortWord.Text);
+        Check("a margin at zero is not on plan", AscentReadout.Word(true, false, true, true, 0.0) == PlanWords.DvShort);
+        PlanWord open = AscentReadout.Word(true, false, true, false, ahead);
+        Check("an open orbit is off plan", open == PlanWords.OffPlan && open.Warns && !open.Good, open.Text);
+        Check("an open orbit is off plan whatever the solve", AscentReadout.Word(false, false, false, false, double.NaN) == PlanWords.OffPlan);
+        Check("the ascent words are ASCII", (PlanWords.DvShort.Text + PlanWords.OffPlan.Text).All(ch => ch < 128));
         Check("a crash on the site reads as a crash", ImpactMarks.Of(0.0, false, false) == new ImpactMark(PageText.ImpactOnSite, ImpactInk.Bad));
         Check("a crash near the site says how far", ImpactMarks.Of(0.5, false, false) == new ImpactMark("IMPACT 0.5 km OFF", ImpactInk.Bad));
         Check("a far crash says how far", ImpactMarks.Of(72.2, false, false).Word == "IMPACT 72.2 km OFF");
