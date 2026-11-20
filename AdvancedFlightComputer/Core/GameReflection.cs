@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using System.Linq.Expressions;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
@@ -305,6 +306,58 @@ internal static class GameReflection
     [UsedBy(Feature.Guidance)]
     public static readonly AccessTools.FieldRef<Vehicle, ManualControlInputs>? Vehicle_manualControlInputsRef =
         InstanceFieldRef<Vehicle, ManualControlInputs>(Vehicle_manualControlInputs);
+
+    #endregion
+
+    #region kFS
+
+    // The kFS flight computer is a game prototype whose members change between builds. AFC reads it only through this delegate, so a renamed member makes VehicleControlOwnership.KfsOwns read false with one warning at load instead of failing every caller.
+    // The delegate is true while the kFS prototype is on and the vehicle's kFS computer holds control, and null when a kFS member is missing.
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly Func<Vehicle, bool>? KfsControlsVehicle = BuildKfsControlsVehicle();
+
+    private static Func<Vehicle, bool>? BuildKfsControlsVehicle()
+    {
+        PropertyInfo? enabled = AccessTools.TypeByName("KSA.Kfs.KfsPrototype") is { } prototype
+            ? AccessTools.Property(prototype, "Enabled")
+            : null;
+        PropertyInfo? kfsHost = AccessTools.Property(typeof(Vehicle), "KfsHost");
+        PropertyInfo? computer = kfsHost != null ? AccessTools.Property(kfsHost.PropertyType, "Computer") : null;
+        PropertyInfo? underControl = computer != null ? AccessTools.Property(computer.PropertyType, "UnderKfsControl") : null;
+
+        string? missing =
+            enabled?.GetMethod is not { IsStatic: true } || enabled.PropertyType != typeof(bool) ? "KSA.Kfs.KfsPrototype.Enabled"
+            : kfsHost?.GetMethod == null ? "Vehicle.KfsHost"
+            : computer?.GetMethod == null ? "KfsVehicleHost.Computer"
+            : underControl?.GetMethod == null || underControl.PropertyType != typeof(bool) ? "VehicleComputer.UnderKfsControl"
+            : null;
+        if (missing != null)
+        {
+            DefaultCategory.Log.Warning($"[AFC] {missing} was not found, so AFC cannot see when a kFS program controls a vehicle.");
+            return null;
+        }
+
+        try
+        {
+            // vehicle => KfsPrototype.Enabled && vehicle.KfsHost != null && vehicle.KfsHost.Computer.UnderKfsControl
+            ParameterExpression vehicle = Expression.Parameter(typeof(Vehicle), "vehicle");
+            ParameterExpression host = Expression.Variable(kfsHost!.PropertyType, "host");
+            Expression body = Expression.AndAlso(
+                Expression.Property(null, enabled!),
+                Expression.Block(
+                    new[] { host },
+                    Expression.Assign(host, Expression.Property(vehicle, kfsHost)),
+                    Expression.AndAlso(
+                        Expression.NotEqual(host, Expression.Constant(null, kfsHost.PropertyType)),
+                        Expression.Property(Expression.Property(host, computer!), underControl!))));
+            return Expression.Lambda<Func<Vehicle, bool>>(body, vehicle).Compile();
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Warning($"[AFC] The kFS control check could not be built, so AFC cannot see when a kFS program controls a vehicle: {ex.Message}");
+            return null;
+        }
+    }
 
     #endregion
 
