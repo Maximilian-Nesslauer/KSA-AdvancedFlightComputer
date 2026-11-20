@@ -176,9 +176,9 @@ internal sealed class LandingEngineLayout
             if (n % 2 == 0 && n > 2)
                 parts.Add((prefix + "PAIR", [ring[0].Key, ring[n / 2].Key]));
             if (n % 3 == 0 && n > 3)
-                parts.Add((prefix + "3", [ring[0].Key, ring[n / 3].Key, ring[2 * n / 3].Key]));
+                parts.Add((prefix + "TRIANGLE", [ring[0].Key, ring[n / 3].Key, ring[2 * n / 3].Key]));
             if (n % 4 == 0 && n > 4)
-                parts.Add((prefix + "4", [ring[0].Key, ring[n / 4].Key, ring[n / 2].Key, ring[3 * n / 4].Key]));
+                parts.Add((prefix + "CROSS", [ring[0].Key, ring[n / 4].Key, ring[n / 2].Key, ring[3 * n / 4].Key]));
             parts.Add((prefix.Length > 0 ? prefix.TrimEnd() + $" {n}" : $"RING {n}", ring.Select(d => d.Key).ToArray()));
         }
 

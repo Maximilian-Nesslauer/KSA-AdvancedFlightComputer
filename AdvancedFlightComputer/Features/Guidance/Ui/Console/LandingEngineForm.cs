@@ -73,30 +73,18 @@ public static partial class GuidanceWindow
             if (onPicture > 0 && DrawEngineMap(vehicle, layout, chosen, craft, editable) is { } clicked)
                 Choose(scope, Toggle(chosen, clicked), options);
             ConsoleUi.MutedWrapped(editable
-                ? "Click an engine to add it to the landing or take it out. Blue engines land."
+                ? "Click an engine to add it to the landing or take it out, or pick a choice below."
                 : "The choice is fixed while AFC flies.");
             DrawOtherEngines(layout, chosen, scope, options, editable);
             DrawEngineChoiceNumbers(layout, chosen, loadedLabel);
-            DrawEngineSuggestions(options, chosen, scope, editable);
+            DrawEngineSuggestions(layout, options, chosen, scope, editable, loadedLabel);
 
-            ImGui.BeginDisabled(!editable);
-            try
+            if (manual && chosen.Count > 0)
             {
-                if (chosen.Count > 0 && ConsoleWidgets.Button("AS STAGED".AsSpan(), "EngineAsStaged".AsSpan(), default))
-                    Choose(scope, [], options);
-                if (manual && chosen.Count > 0)
-                {
-                    if (chosen.Count > 0)
-                        ImGui.SameLine();
-                    if (ConsoleWidgets.Button("APPLY NOW".AsSpan(), "ApplyEngineGroup".AsSpan(), default))
-                        _s.ManualEngineChange = new ManualEngineChange(chosen.ToArray(), null);
-                    if (ImGui.IsItemHovered())
-                        ConsoleUi.Tooltip("Switch on exactly these engines now, for flying by hand. The stock throttle still fires them.");
-                }
-            }
-            finally
-            {
-                ImGui.EndDisabled();
+                if (ConsoleWidgets.Button("APPLY NOW".AsSpan(), "ApplyEngineGroup".AsSpan(), default))
+                    _s.ManualEngineChange = new ManualEngineChange(chosen.ToArray(), null);
+                if (ImGui.IsItemHovered())
+                    ConsoleUi.Tooltip("Switch on exactly these engines now, for flying by hand. The stock throttle still fires them.");
             }
         }
         finally
@@ -122,6 +110,9 @@ public static partial class GuidanceWindow
         dl.AddCircle(middle, outer, ConsoleStyle.ApplyAlpha(Palette.Grid.U32), 0, 1.5f * scale);
 
         ReadOnlySpan<RocketState> states = live ? RocketStates.Of(vehicle.Parts) : default;
+        // A choice row under the mouse in the last frame shows its engines here, because the rows are drawn after the picture.
+        string[]? preview = _enginePreview;
+        _enginePreview = null;
         LandingEngineDot? under = null;
         float r = Math.Max(layout.DotRadius * perMetre, 3f * scale);
         foreach (LandingEngineDot dot in layout.Dots)
@@ -131,8 +122,11 @@ public static partial class GuidanceWindow
             // Seen from behind the stage, so the picture keeps the stage's own left and right.
             var p = new float2(middle.X + dot.X * perMetre, middle.Y - dot.Y * perMetre);
             bool isChosen = chosen.Contains(dot.Key);
+            bool previewed = preview != null && Array.IndexOf(preview, dot.Key) >= 0;
             dl.AddCircleFilled(p, r, ConsoleStyle.ApplyAlpha(isChosen ? Palette.Afc.U32 : Palette.Grid.U32At(0.7f)));
             dl.AddCircle(p, r, ConsoleStyle.ApplyAlpha(isChosen ? Palette.Text.U32 : Palette.Dim.U32), 0, 1.2f * scale);
+            if (previewed)
+                dl.AddCircle(p, r - 2.5f * scale, ConsoleStyle.ApplyAlpha(Palette.Warn.U32), 0, 2.5f * scale);
             if (!dot.Gimballed)
                 dl.AddCircleFilled(p, Math.Max(1.5f * scale, 0.18f * r), ConsoleStyle.ApplyAlpha(Palette.Dim.U32));
             if (live)
@@ -152,9 +146,45 @@ public static partial class GuidanceWindow
                 dl.AddCircle(p, r + 1f * scale, ConsoleStyle.ApplyAlpha(Palette.Text.U32), 0, 2f * scale);
             }
         }
+        DrawEngineLegend(dl, new float2(at.X + size + 10f * scale, at.Y + 6f * scale), live, preview != null);
         if (under != null)
             ConsoleUi.Tooltip(DescribeEngineDot(vehicle, under, live, states));
         return clicked && editable && under != null ? under.Key : null;
+    }
+
+    private static string[]? _enginePreview;
+
+    /// <summary>The key to the picture, in the room to its right.</summary>
+    private static void DrawEngineLegend(ImDrawListPtr dl, float2 at, bool live, bool previewing)
+    {
+        float scale = ImGuiHelper.InterfaceScale;
+        float line = ImGui.GetTextLineHeightWithSpacing();
+        float dot = 5f * scale;
+        float room = ConsoleStyle.ContentAvailWidth() - (at.X - ImGui.GetCursorScreenPos().X);
+        if (room < 90f * scale)
+            return;
+        void Row(int i, uint fill, uint ring, float ringWidth, string text, bool innerDot = false)
+        {
+            var c = new float2(at.X + dot, at.Y + i * line + line * 0.5f);
+            dl.AddCircleFilled(c, dot, ConsoleStyle.ApplyAlpha(fill));
+            if (innerDot)
+                dl.AddCircleFilled(c, 1.5f * scale, ConsoleStyle.ApplyAlpha(Palette.Dim.U32));
+            if (ringWidth > 0f)
+                dl.AddCircle(c, dot + 2f * scale, ConsoleStyle.ApplyAlpha(ring), 0, ringWidth);
+            dl.AddText(new float2(at.X + 3f * dot, at.Y + i * line + (line - ImGui.GetTextLineHeight()) * 0.5f),
+                ConsoleStyle.ApplyAlpha(Palette.Dim.U32), text);
+        }
+        int row = 0;
+        Row(row++, Palette.Afc.U32, 0, 0f, "LANDS");
+        Row(row++, Palette.Grid.U32, 0, 0f, "STAYS OFF");
+        Row(row++, Palette.Grid.U32, 0, 0f, "NO GIMBAL", innerDot: true);
+        if (previewing)
+            Row(row++, Palette.Grid.U32, Palette.Warn.U32, 2f * scale, "IN THE CHOICE");
+        if (!live)
+            return;
+        Row(row++, Palette.Grid.U32, Palette.Text.U32, 1f * scale, "SWITCHED ON");
+        Row(row++, Palette.Grid.U32, Palette.Good.U32, 2f * scale, "FIRING");
+        Row(row, Palette.Grid.U32, Palette.Bad.U32, 2f * scale, "NO PROPELLANT");
     }
 
     private static void DrawOtherEngines(LandingEngineLayout layout, HashSet<string> chosen, string scope, LandingEngineOption[] options, bool editable)
@@ -195,29 +225,38 @@ public static partial class GuidanceWindow
         ConsoleUi.Readout("TWR EMPTY", EngineText($"{s.TwrMinDry:F2} - {s.TwrMaxDry:F2} AT {layout.DryKg / 1e3:F1} t"));
         if (double.IsFinite(layout.LoadedKg))
             ConsoleUi.Readout("TWR " + loadedLabel, EngineText($"UP TO {s.TwrMaxLoaded:F2} AT {layout.LoadedKg / 1e3:F1} t"));
-        (string text, float4 ink) = VerdictText(s);
-        ConsoleUi.Readout("LANDING", text, in ink);
+        (string shortText, string text, float4 ink) = VerdictText(s);
+        ConsoleUi.Readout("LANDING", shortText, in ink);
+        if (ImGui.IsItemHovered())
+            ConsoleUi.Tooltip(text);
     }
 
-    private static void DrawEngineSuggestions(LandingEngineOption[] options, HashSet<string> chosen, string scope, bool editable)
+    private static void DrawEngineSuggestions(LandingEngineLayout layout, LandingEngineOption[] options, HashSet<string> chosen,
+                                              string scope, bool editable, string loadedLabel)
     {
-        if (options.Length == 0)
+        string[] staged = layout.Dots.Where(d => d.Engine.Sequence > 0).Select(d => d.Key).ToArray();
+        if (options.Length == 0 && staged.Length == 0)
             return;
+        bool loaded = double.IsFinite(layout.LoadedKg);
         ConsoleUi.Gap();
-        ConsoleUi.MutedWrapped("Balanced choices (TWR from empty at minimum throttle to the start of the burn at full throttle):");
+        ConsoleUi.MutedWrapped(loaded
+            ? $"HOVER is the TWR at minimum throttle when empty, under 1 can hover. BRAKE is the TWR at full throttle {loadedLabel.ToLowerInvariant()}."
+            : "HOVER is the TWR at minimum throttle when empty, under 1 can hover. BRAKE is the TWR at full throttle when empty; solve the climb to see it with the reserve.");
+        ImGui.TextColored(in ConsoleStyle.TextMuted, EngineText($"{"CHOICE",-17}{"N",2}  {"HOVER",5}  {"BRAKE",5}").AsSpan());
         ImGui.BeginDisabled(!editable);
         try
         {
+            if (staged.Length > 0)
+            {
+                LandingEngineStats s = layout.Stats(staged);
+                if (SuggestionRow("AS STAGED", s, "", chosen.Count == 0, staged))
+                    Choose(scope, [], options);
+            }
             foreach (LandingEngineOption option in options)
             {
                 bool isChosen = option.Keys.Length == chosen.Count && option.Keys.All(chosen.Contains);
-                string row = EngineText($"{option.Name,-16} {option.Stats.Engines,2}  {option.Stats.TwrMinDry,4:F1}-{option.Stats.TwrMaxLoaded,-4:F1}  {ShortVerdict(option)}");
-                ImGui.PushID(option.Name);
-                if (ImGui.Selectable(row.AsSpan(), isChosen, ImGuiSelectableFlags.None, (float2?)null))
+                if (SuggestionRow(option.Name, option.Stats, option.Recommended ? "BEST" : "", isChosen, option.Keys))
                     Choose(scope, option.Keys, [option]);
-                if (ImGui.IsItemHovered())
-                    ConsoleUi.Tooltip(VerdictText(option.Stats).Text);
-                ImGui.PopID();
             }
         }
         finally
@@ -226,22 +265,38 @@ public static partial class GuidanceWindow
         }
     }
 
-    private static string ShortVerdict(LandingEngineOption option) => (option.Recommended ? "BEST " : "") + option.Stats.Verdict switch
+    /// <summary>One clickable row of the choice table. Under the mouse, the picture marks its engines on the next frame.</summary>
+    private static bool SuggestionRow(string name, LandingEngineStats s, string tag, bool isChosen, string[] keys)
     {
-        LandingEngineVerdict.Good => "HOVERS",
+        string row = EngineText($"{name,-17}{s.Engines,2}  {s.TwrMinDry,5:F2}  {s.TwrMaxLoaded,5:F2}  {ShortVerdict(s.Verdict)}{(tag.Length > 0 ? "  " + tag : "")}");
+        ImGui.PushID(name);
+        bool picked = ImGui.Selectable(row.AsSpan(), isChosen, ImGuiSelectableFlags.None, (float2?)null);
+        if (ImGui.IsItemHovered())
+        {
+            _enginePreview = keys;
+            ConsoleUi.Tooltip(VerdictText(s).Text);
+        }
+        ImGui.PopID();
+        return picked;
+    }
+
+    private static string ShortVerdict(LandingEngineVerdict verdict) => verdict switch
+    {
+        LandingEngineVerdict.Good => "OK",
         LandingEngineVerdict.NoHover => "NO HOVER",
         LandingEngineVerdict.Weak => "WEAK",
         LandingEngineVerdict.TooWeak => "TOO WEAK",
         _ => "OFF AXIS",
     };
 
-    private static (string Text, float4 Ink) VerdictText(LandingEngineStats s) => s.Verdict switch
+    private static (string Short, string Text, float4 Ink) VerdictText(LandingEngineStats s) => s.Verdict switch
     {
-        LandingEngineVerdict.Good => ("CAN HOVER AND BRAKE", Palette.Good.F4),
-        LandingEngineVerdict.NoHover => ("CANNOT HOVER: MINIMUM THRUST OVER WEIGHT", Palette.Warn.F4),
-        LandingEngineVerdict.Weak => ("LITTLE BRAKING MARGIN", Palette.Warn.F4),
-        LandingEngineVerdict.TooWeak => ("TOO WEAK TO BRAKE", Palette.Bad.F4),
-        _ => (EngineText($"THRUST {s.OffsetM:F2} m OFF THE AXIS: TURNS THE STAGE"), Palette.Bad.F4),
+        LandingEngineVerdict.Good => ("CAN HOVER AND BRAKE", "Can hover near the ground and has braking margin.", Palette.Good.F4),
+        LandingEngineVerdict.NoHover => ("CANNOT HOVER",
+            "Even minimum thrust lifts the empty stage, so the burn has to end exactly at the ground. Fewer engines can hover.", Palette.Warn.F4),
+        LandingEngineVerdict.Weak => ("LITTLE BRAKING MARGIN", "Under 1.5 TWR at full throttle at the start of the burn: the burn starts low and long.", Palette.Warn.F4),
+        LandingEngineVerdict.TooWeak => ("TOO WEAK TO BRAKE", "Full thrust does not lift the stage. AFC refuses this choice.", Palette.Bad.F4),
+        _ => (EngineText($"{s.OffsetM:F2} m OFF AXIS"), "The thrust center is off the stage axis, so the engines turn the stage. Choose a balanced set.", Palette.Bad.F4),
     };
 
     private static string DescribeEngineDot(Vehicle vehicle, LandingEngineDot dot, bool live, ReadOnlySpan<RocketState> states)
