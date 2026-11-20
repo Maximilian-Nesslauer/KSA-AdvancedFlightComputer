@@ -12,7 +12,7 @@ namespace AdvancedFlightComputer.HarnessTests;
 // Starts with Auto already set because the normal intercepted Auto click does not write that value.
 public sealed class RcsBurnModeTest : AfcTest
 {
-    private static bool _failAttitude;
+    private static FlightComputer? _refusedAttitude;
 
     public override string Name => "afc-rcs-burn-mode";
 
@@ -28,12 +28,23 @@ public sealed class RcsBurnModeTest : AfcTest
         }
 
         using RcsTestPatches.Scope patches = RcsTestPatches.Apply();
-        AReleaseGivesTheModeBack(t, home, saves[0]);
-        AUserStopKeepsManual(t, home, saves[0]);
-        ACompletedBurnKeepsManual(t, home, saves[0]);
-        AFailedCleanupHoldsTheModeUntilItSucceeds(t, home, saves[0]);
-        AStopDuringPendingCleanupKeepsManual(t, home, saves[0]);
-        TheCaptureSurvivesSaveAndLoad(t);
+        Harmony fault = new("com.maxi.afc.harnesstests.burnmode");
+        try
+        {
+            fault.Patch(AccessTools.DeclaredMethod(typeof(RcsExecutor), "EndExecution"),
+                transpiler: new HarmonyMethod(typeof(RcsBurnModeTest), nameof(InterceptAttitudeRelease)));
+            AReleaseGivesTheModeBack(t, home, saves[0]);
+            AUserStopKeepsManual(t, home, saves[0]);
+            ACompletedBurnKeepsManual(t, home, saves[0]);
+            AFailedCleanupHoldsTheModeUntilItSucceeds(t, home, saves[0]);
+            AStopDuringPendingCleanupKeepsManual(t, home, saves[0]);
+            TheCaptureSurvivesSaveAndLoad(t);
+        }
+        finally
+        {
+            _refusedAttitude = null;
+            fault.UnpatchAll(fault.Id);
+        }
     }
 
     private static void AReleaseGivesTheModeBack(TestContext t, IParentBody home, string save)
@@ -97,14 +108,11 @@ public sealed class RcsBurnModeTest : AfcTest
             if (!Engage(t, vehicle, driver, out RcsExecution? exec))
                 return;
 
-            Harmony harmony = new("com.maxi.afc.harnesstests.burnmode");
-            harmony.Patch(AccessTools.Method(typeof(FlightComputer), nameof(FlightComputer.SetNullRot)),
-                prefix: new HarmonyMethod(typeof(RcsBurnModeTest), nameof(RefuseAttitudeRelease)));
             try
             {
                 // The injected failure needs a commanded tracker for cleanup to attempt its release.
                 exec.AlignCommanded = true;
-                _failAttitude = true;
+                _refusedAttitude = fc;
                 RcsExecutor.RequestCancel(exec, "no usable translation");
                 RcsDriverPatch.TickVehicle(vehicle);
                 t.Check("a failed cleanup keeps the mode in Manual",
@@ -113,8 +121,7 @@ public sealed class RcsBurnModeTest : AfcTest
             }
             finally
             {
-                _failAttitude = false;
-                harmony.UnpatchAll(harmony.Id);
+                _refusedAttitude = null;
             }
 
             RcsDriverPatch.TickVehicle(vehicle);
@@ -135,13 +142,10 @@ public sealed class RcsBurnModeTest : AfcTest
             if (!Engage(t, vehicle, driver, out RcsExecution? exec))
                 return;
 
-            Harmony harmony = new("com.maxi.afc.harnesstests.burnmode.pending");
-            harmony.Patch(AccessTools.Method(typeof(FlightComputer), nameof(FlightComputer.SetNullRot)),
-                prefix: new HarmonyMethod(typeof(RcsBurnModeTest), nameof(RefuseAttitudeRelease)));
             try
             {
                 exec.AlignCommanded = true;
-                _failAttitude = true;
+                _refusedAttitude = fc;
                 RcsExecutor.RequestCancel(exec, "no usable translation");
                 RcsDriverPatch.TickVehicle(vehicle);
                 if (!t.Check("the cleanup is pending for this case", exec.CleanupPending))
@@ -153,8 +157,7 @@ public sealed class RcsBurnModeTest : AfcTest
             }
             finally
             {
-                _failAttitude = false;
-                harmony.UnpatchAll(harmony.Id);
+                _refusedAttitude = null;
             }
 
             RcsDriverPatch.TickVehicle(vehicle);
@@ -241,9 +244,14 @@ public sealed class RcsBurnModeTest : AfcTest
             }
         });
 
-    private static void RefuseAttitudeRelease()
+    private static IEnumerable<CodeInstruction> InterceptAttitudeRelease(IEnumerable<CodeInstruction> code)
+        => RcsTestPatches.ReplaceAttitudeReleaseCall(code,
+            AccessTools.DeclaredMethod(typeof(RcsBurnModeTest), nameof(ReleaseAttitude)));
+
+    private static void ReleaseAttitude(FlightComputer flightComputer, VehicleReferenceFrame frame)
     {
-        if (_failAttitude)
+        if (ReferenceEquals(flightComputer, _refusedAttitude))
             throw new InvalidOperationException("Injected attitude cleanup fault");
+        flightComputer.SetNullRot(frame);
     }
 }
