@@ -240,9 +240,9 @@ public static partial class GuidanceWindow
         bool loaded = double.IsFinite(layout.LoadedKg);
         ConsoleUi.Gap();
         ConsoleUi.MutedWrapped(loaded
-            ? $"HOVER is the TWR at minimum throttle when empty, under 1 can hover. BRAKE is the TWR at full throttle {loadedLabel.ToLowerInvariant()}."
-            : "HOVER is the TWR at minimum throttle when empty, under 1 can hover. BRAKE is the TWR at full throttle when empty; solve the climb to see it with the reserve.");
-        ImGui.TextColored(in ConsoleStyle.TextMuted, EngineText($"{"CHOICE",-17}{"N",2}  {"HOVER",5}  {"BRAKE",5}").AsSpan());
+            ? $"HOVER: TWR at minimum throttle, empty (under 1 hovers). BRAKE: TWR at full throttle, {loadedLabel.ToLowerInvariant()}."
+            : "HOVER: TWR at minimum throttle, empty (under 1 hovers). BRAKE: TWR at full throttle, empty until the climb is solved.");
+        ImGui.TextColored(in ConsoleStyle.TextMuted, EngineText($"  {"CHOICE",-17}{"N",2}  {"HOVER",5}  {"BRAKE",5}").AsSpan());
         ImGui.BeginDisabled(!editable);
         try
         {
@@ -268,9 +268,13 @@ public static partial class GuidanceWindow
     /// <summary>One clickable row of the choice table. Under the mouse, the picture marks its engines on the next frame.</summary>
     private static bool SuggestionRow(string name, LandingEngineStats s, string tag, bool isChosen, string[] keys)
     {
-        string row = EngineText($"{name,-17}{s.Engines,2}  {s.TwrMinDry,5:F2}  {s.TwrMaxLoaded,5:F2}  {ShortVerdict(s.Verdict)}{(tag.Length > 0 ? "  " + tag : "")}");
+        string row = EngineText($"{(isChosen ? ">" : " ")} {name,-17}{s.Engines,2}  {s.TwrMinDry,5:F2}  {s.TwrMaxLoaded,5:F2}  {ShortVerdict(s.Verdict)}{(tag.Length > 0 ? "  " + tag : "")}");
         ImGui.PushID(name);
+        if (isChosen)
+            ImGui.PushStyleColor(ImGuiCol.Text, Palette.Afc.F4);
         bool picked = ImGui.Selectable(row.AsSpan(), isChosen, ImGuiSelectableFlags.None, (float2?)null);
+        if (isChosen)
+            ImGui.PopStyleColor();
         if (ImGui.IsItemHovered())
         {
             _enginePreview = keys;

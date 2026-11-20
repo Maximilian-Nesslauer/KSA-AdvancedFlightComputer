@@ -153,6 +153,26 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
         t.Check("a new craft keeps its defaults", !VehicleAutopilotState.TryGet(other, out _));
     }
 
+    // The landing engine picture of the nine-engine bay: the center and one ring of eight on it, the upper stage engine off it, and balanced choices with the center alone recommended at an empty booster's mass.
+    private static void CheckEnginePicture(TestContext t, Vehicle craft, Dictionary<string, EngineController?> candidates)
+    {
+        var layout = LandingEngineLayout.Build(craft, candidates, 101325.0, 9.81, 7000.0, double.NaN);
+        LandingEngineDot[] plane = layout.Dots.Where(d => d.AftPlane).ToArray();
+        float reach = plane.Length == 0 ? 0f : plane.Max(d => MathF.Sqrt(d.X * d.X + d.Y * d.Y));
+        int center = plane.Count(d => MathF.Sqrt(d.X * d.X + d.Y * d.Y) < 0.15f * reach);
+        t.Check("the engine picture holds the nine bay engines and not the upper stage engine",
+            plane.Length == 9 && center == 1 && plane.All(d => d.Engine.Parent.FullPart.Template.Id == "AltairEngineA_Prefab_EngineBay"),
+            $"{plane.Length} on the picture, {center} at the center, {layout.Dots.Length} in all");
+        LandingEngineOption[] options = layout.Suggestions();
+        string names = string.Join(", ", options.Select(o => $"{o.Name} {o.Stats.TwrMinDry:F2}-{o.Stats.TwrMaxLoaded:F2} {o.Stats.Verdict}{(o.Recommended ? " best" : "")}"));
+        t.Check("the choices are the center, center and pair, and all nine, all balanced",
+            options.Any(o => o.Name == "CENTER" && o.Stats.Engines == 1)
+            && options.Any(o => o.Name == "CENTER + PAIR" && o.Stats.Engines == 3)
+            && options.Any(o => o.Name == "ALL 9" && o.Stats.Engines == 9)
+            && options.All(o => o.Stats.OffsetM <= LandingEngineLayout.BalancedOffsetM), names);
+        t.Check("the center alone is recommended for an empty booster of 7 t", options.SingleOrDefault(o => o.Recommended)?.Name == "CENTER", names);
+    }
+
     private static void CheckEngineGroupRoundTrip(TestContext t, Vehicle craft, Vehicle rebuilt, DirectoryInfo save, bool prisma = false)
     {
         VehicleAutopilotState state = VehicleAutopilotState.For(craft);
@@ -167,6 +187,7 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
                 && bay.All(item => item.Value!.Rockets.Length == 1), string.Join(", ", names));
             keys = bay.Where(item => item.Value?.TemplateId is "AltairCenter" or "AltairRing1")
                 .OrderBy(item => item.Value!.TemplateId).Select(item => item.Key).ToArray();
+            CheckEnginePicture(t, craft, original);
         }
         else
             keys = original.Where(item => item.Value != null).Select(item => item.Key).Take(2).ToArray();
