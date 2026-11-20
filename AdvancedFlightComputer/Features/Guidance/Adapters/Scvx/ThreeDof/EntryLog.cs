@@ -57,7 +57,7 @@ internal static class EntryLog
             _rows.Clear();
             _rows.AppendLine("# navbox entry guidance run " + name + "   vehicle: " + vehicleName + "   body: " + bodyName);
             _rows.AppendLine("# accelerations in m/s^2, site frame: meas* is the measured non-gravitational acceleration, pred* the model's at the thrust axis flown, without the learned bias (predLiftBody, predSideBody: at the body axis), live* the game's own aerodynamic force on the craft as it is (KsaAeroSweep.TryLiveAero) over its mass; drag is along the airflow, lift along the thrust axis's predicted lift, side across both. meas - live is what is not aerodynamic; live - pred is the model's error");
-            _rows.AppendLine("# rcsFlowKgS, rcsFiring: the RCS as fired this step, whoever commanded it (the stock flight computer or AFC's own attitude controller); ownAtt = AFC's own attitude controller flew (AttitudeController), its ac* columns in the model's axes (x, y across, z the thrust axis), N m: demand = feedback + gyroscopic - air, air its feedforward, surf what the control surfaces gave, rcsAsk/rcs what the RCS was asked for and gave");
+            _rows.AppendLine("# rcsFlowKgS, rcsFiring: the RCS as fired this step, whoever commanded it (the stock flight computer or AFC's own attitude controller); ownAtt = AFC's own attitude controller flew (AttitudeController), its ac* columns in the model's axes (x, y across, z the thrust axis), N m: demand = feedback + gyroscopic - air, air its feedforward, surf what the control surfaces gave, rcsAsk/rcs what the RCS was asked for and gave, int the integral term; fins = control surfaces the controller drives, finNCmd the deflection commanded this step and finNDeg where the surface was when it was commanded, degrees (the first four)");
             _rows.AppendLine("# angles in degrees; past = flown beyond the command along its angle of attack (+ away from the airflow); lag = flown along the command's motion (- behind it); aeroAccel = predicted aero moment / transverse inertia, rad/s^2, + turning the craft further off the airflow");
             _rows.AppendLine(string.Join(",",
                 "t", "phase", "onPlan", "alt", "speed", "mach", "q",
@@ -75,7 +75,8 @@ internal static class EntryLog
                 "liveMxNm", "liveMyNm", "liveMzNm", "predMxNm", "predMyNm", "predMzNm", "solveWaitMs", "solveRunMs",
                 "rcsFlowKgS", "rcsFiring", "ownAtt", "acErrDeg", "acRateErrDegS", "acDeadband", "acAirKnown",
                 "acDemandX", "acDemandY", "acDemandZ", "acAirX", "acAirY", "acAirZ", "acSurfX", "acSurfY", "acSurfZ",
-                "acRcsAskX", "acRcsAskY", "acRcsAskZ", "acRcsX", "acRcsY", "acRcsZ", "acRcsFlowKgS", "solver"));
+                "acRcsAskX", "acRcsAskY", "acRcsAskZ", "acRcsX", "acRcsY", "acRcsZ", "acRcsFlowKgS",
+                "acIntX", "acIntY", "acIntZ", "fins", "fin1Cmd", "fin2Cmd", "fin3Cmd", "fin4Cmd", "fin1Deg", "fin2Deg", "fin3Deg", "fin4Deg", "solver"));
             _pendingRows = 0;
             _failedFlushes = 0;
             _lastRow = double.NegativeInfinity;
@@ -142,6 +143,12 @@ internal static class EntryLog
             F(sb, r.AcSurf.X); F(sb, r.AcSurf.Y); F(sb, r.AcSurf.Z);
             F(sb, r.AcRcsAsk.X); F(sb, r.AcRcsAsk.Y); F(sb, r.AcRcsAsk.Z);
             F(sb, r.AcRcs.X); F(sb, r.AcRcs.Y); F(sb, r.AcRcs.Z); F(sb, r.AcRcsFlowKgS);
+            F(sb, r.AcInt.X); F(sb, r.AcInt.Y); F(sb, r.AcInt.Z);
+            sb.Append(r.FinCommandDeg?.Length ?? 0).Append(',');
+            for (int i = 0; i < 4; i++)
+                F(sb, r.FinCommandDeg != null && i < r.FinCommandDeg.Length ? r.FinCommandDeg[i] : double.NaN);
+            for (int i = 0; i < 4; i++)
+                F(sb, r.FinNowDeg != null && i < r.FinNowDeg.Length ? r.FinNowDeg[i] : double.NaN);
             sb.Append(Csv(r.Solver)).AppendLine();
             if (++_pendingRows >= FlushEveryRows)
                 Flush();
@@ -223,6 +230,9 @@ internal static class EntryLog
         /// <summary>AFC's own attitude controller (AttitudeController.Report), when it flew this step (OwnAtt); torques in the model's axes, N m.</summary>
         public bool OwnAtt, AcDeadband, AcAirKnown;
         public double AcErrDeg, AcRateErrDegS, AcRcsFlowKgS;
-        public Brutal.Numerics.double3 AcDemand, AcAir, AcSurf, AcRcsAsk, AcRcs;
+        public Brutal.Numerics.double3 AcDemand, AcAir, AcSurf, AcRcsAsk, AcRcs, AcInt;
+
+        /// <summary>The control surfaces the controller drives: commanded this step, and where they were then, degrees.</summary>
+        public double[] FinCommandDeg, FinNowDeg;
     }
 }

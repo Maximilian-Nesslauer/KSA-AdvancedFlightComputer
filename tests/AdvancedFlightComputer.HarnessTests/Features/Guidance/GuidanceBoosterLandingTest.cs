@@ -404,7 +404,8 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                 t.Info($"  t {sim,6:F2}  | {line}");
             if (mode != lastMode)
             {
-                t.Info($"  t {sim,6:F2}  -> {mode}  ({(state.Active ? state.Error : threeDof ? state.ThreeDofStatus : state.LandingStatus)})");
+                t.Info($"  t {sim,6:F2}  -> {mode}  ({(state.Active ? state.Error : threeDof ? state.ThreeDofStatus : state.LandingStatus)})"
+                       + (threeDof || state.Active ? "" : $"  [entry: '{state.ThreeDofStatus}', pending {state.ThreeDofEngagePending}, acquired {state.ControlAcquired}, takeover '{state.TakeoverReason}']"));
                 lastMode = mode;
             }
             if (sim >= nextSample)

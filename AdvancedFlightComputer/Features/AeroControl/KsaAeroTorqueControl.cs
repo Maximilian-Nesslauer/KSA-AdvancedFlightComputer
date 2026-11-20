@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance;
+using AdvancedFlightComputer.Features.RcsTorque;
 
 /// <summary>
 /// Commands a vehicle's aerodynamic control surfaces (ControlSurfaces) for a torque, and says how much torque they can give, the way KsaRcsTorqueControl does for the thrusters. Separate from the stock flight computer, which allocates torque to gimbals and RCS only, and usable by any mode.
@@ -25,7 +26,11 @@ internal static class KsaAeroTorqueControl
     /// <summary>The flight condition the surfaces were read at, and the last command: surfaces commanded, the torque they give and how far short of the demand, the force with it (frame of the command), Mach, q, alpha and beta (deg), and whether that was inside the tables.</summary>
     internal readonly record struct Report(
         int Surfaces, double3 GivenNm, double ShortfallNm, double3 ForceN,
-        double Mach, double QPa, double AlphaDeg, double BetaDeg, bool InTable);
+        double Mach, double QPa, double AlphaDeg, double BetaDeg, bool InTable,
+        double[] CommandDeg = null, double[] NowDeg = null);
+
+    /// <summary>What the best RCS thruster's torque costs against the surfaces' shortfall, per N m (a shortfall costs one at priority 1, a degree of surface about a thousandth): the RCS is spent before any demand goes unmet, and only on what the surfaces cannot give.</summary>
+    private const double BackupPricePerNm = 0.02;
 
     private sealed class Slot
     {
@@ -143,8 +148,11 @@ internal static class KsaAeroTorqueControl
     /// <summary>
     /// Commands the surfaces for a torque (asmb axes, N m), allocated in the frame (mx, my, mz) with <paramref name="priority"/> weighting each of its axes' shortfall. With nothing to steer with, every surface is sent home. Returns what was given.
     /// </summary>
+    /// <param name="stepS">The time to the next command, s: each surface is asked only for what its rate reaches by then, from where it is now (AeroTorqueAllocator.Allocate). Not positive: anywhere in its range.</param>
+    /// <param name="backup">The RCS thrusters in the frame (mx, my, mz) (KsaRcsTorqueControl.Measure), to share the demand with in one programme: the surfaces then take the axes the RCS finds dear. The RCS is not fired here; the caller gives it what the surfaces leave.</param>
     internal static Report Command(Vehicle vehicle, KsaAeroSweep.Result aero, double3 torqueAsmb,
-                                   double3 mx, double3 my, double3 mz, ReadOnlySpan<double> priority, double momentLimiterPerPa)
+                                   double3 mx, double3 my, double3 mz, ReadOnlySpan<double> priority, double momentLimiterPerPa,
+                                   double stepS = 0.0, RcsTorqueAllocator backup = null)
     {
         Slot slot = SlotOf(vehicle);
         AeroTorqueAllocator allocator = Measure(vehicle, aero, mx, my, mz, momentLimiterPerPa, slot.Surfaces, out Report condition);
@@ -155,8 +163,18 @@ internal static class KsaAeroTorqueControl
             return slot.Last;
         }
         double dx = double3.Dot(torqueAsmb, mx), dy = double3.Dot(torqueAsmb, my), dz = double3.Dot(torqueAsmb, mz);
-        Span<double> deflection = allocator.Count <= 64 ? stackalloc double[allocator.Count] : new double[allocator.Count];
-        AeroTorqueAllocator.Result r = allocator.Allocate(dx, dy, dz, priority, deflection);
+        int count = allocator.Count;
+        var deflection = new double[count];
+        var now = new double[count];
+        var reach = new double[count];
+        for (int i = 0; i < count; i++)
+        {
+            now[i] = slot.Surfaces[i].DeflectionDeg;
+            reach[i] = stepS > 0.0 && slot.Surfaces[i].RateDegS > 0.0 ? slot.Surfaces[i].RateDegS * stepS : 0.0;
+        }
+        BackupColumns(backup, out double[] backupTorque, out double[] backupCost);
+        AeroTorqueAllocator.Result r = allocator.Allocate(dx, dy, dz, priority, deflection, now, reach,
+                                                          backupTorque, backupCost, new double[backupCost.Length]);
         if (!r.Solved)
         {
             Release(vehicle);
@@ -170,8 +188,48 @@ internal static class KsaAeroTorqueControl
             GivenNm = new double3(r.TorqueX, r.TorqueY, r.TorqueZ),
             ShortfallNm = r.ShortfallNm,
             ForceN = new double3(r.ForceX, r.ForceY, r.ForceZ),
+            CommandDeg = deflection,
+            NowDeg = now,
         };
         return slot.Last;
+    }
+
+    /// <summary>The RCS thrusters as backup columns for the surfaces' programme: each one's torque at full duty, and its propellant priced so the best of them costs BackupPricePerNm a newton metre. Empty without a backup.</summary>
+    private static void BackupColumns(RcsTorqueAllocator backup, out double[] torque, out double[] cost)
+    {
+        if (backup == null || backup.Count == 0)
+        {
+            torque = [];
+            cost = [];
+            return;
+        }
+        int m = backup.Count;
+        torque = new double[3 * m];
+        cost = new double[m];
+        double best = double.PositiveInfinity;
+        for (int i = 0; i < m; i++)
+        {
+            double t = Math.Sqrt(backup.Torque[3 * i] * backup.Torque[3 * i] + backup.Torque[3 * i + 1] * backup.Torque[3 * i + 1]
+                                 + backup.Torque[3 * i + 2] * backup.Torque[3 * i + 2]);
+            double flow = backup.Flow[i];
+            if (flow > 0.0 && double.IsFinite(flow) && t > 0.0 && double.IsFinite(t))
+                best = Math.Min(best, flow / t);
+        }
+        if (!double.IsFinite(best))
+        {
+            torque = [];
+            cost = [];
+            return;
+        }
+        double perKgS = BackupPricePerNm / best;
+        for (int i = 0; i < m; i++)
+        {
+            double flow = backup.Flow[i];
+            bool usable = flow > 0.0 && double.IsFinite(flow);
+            for (int r = 0; r < 3; r++)
+                torque[3 * i + r] = usable ? backup.Torque[3 * i + r] : 0.0;
+            cost[i] = usable ? flow * perKgS : double.NaN;
+        }
     }
 
     /// <summary>Sends every surface on the vehicle home. Main thread.</summary>

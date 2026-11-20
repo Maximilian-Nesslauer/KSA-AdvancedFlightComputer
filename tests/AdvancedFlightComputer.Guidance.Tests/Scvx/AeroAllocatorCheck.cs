@@ -53,6 +53,38 @@ internal static class AeroAllocatorCheck
         double expect = Curve(10.0) * Slope + Curve(25.0) * Slope;
         ok &= Check($"deflections {Text(set)} give {e.TorqueX:F0} N m of pitch against {expect:F0} off the curves", Near(e.TorqueX, expect, 1e-6));
 
+        // FROM WHERE THE FINS ARE. Rate-bound: from rest with 2 deg of reach, a big pitch demand gets each pitch fin 2 deg and no more.
+        double[] rest = [0.0, 0.0, 0.0, 0.0], reach2 = [2.0, 2.0, 2.0, 2.0];
+        r = a.Allocate(36_000.0, 0.0, 0.0, priority, d, rest, reach2, default, default, default);
+        ok &= Check($"36 kN m of pitch with 2 deg of reach: gives {r.TorqueX:F0} N m, deflections {Text(d)}",
+                    Near(d[0], 2.0, 1e-6) && Near(d[2], 2.0, 1e-6) && Near(r.TorqueX, 4000.0, 1.0));
+
+        // Sticky: fins already giving the demand stay put, even in a split the cheapest answer from rest would not choose (8 and 4 deg, not 6 and 6).
+        double[] split = [8.0, 0.0, 4.0, 0.0];
+        AeroTorqueAllocator.Result held = a.Evaluate(split, 0.0, 0.0, 0.0);
+        r = a.Allocate(held.TorqueX, held.TorqueY, held.TorqueZ, priority, d, split, reach2, default, default, default);
+        ok &= Check($"a demand the fins already give moves nothing: deflections {Text(d)}",
+                    Near(d[0], 8.0, 1e-6) && Near(d[1], 0.0, 1e-6) && Near(d[2], 4.0, 1e-6) && Near(d[3], 0.0, 1e-6));
+
+        // Home: with nothing asked, every fin heads for rest at its reach.
+        double[] out5 = [5.0, 5.0, 5.0, 5.0], reach1 = [1.0, 1.0, 1.0, 1.0];
+        r = a.Allocate(0.0, 0.0, 0.0, priority, d, out5, reach1, default, default, default);
+        ok &= Check($"no demand takes the fins 1 deg toward rest: deflections {Text(d)}",
+                    Near(d[0], 4.0, 1e-6) && Near(d[1], 4.0, 1e-6) && Near(d[2], 4.0, 1e-6) && Near(d[3], 4.0, 1e-6));
+
+        // WITH A BACKUP: two thruster columns, one pure roll (5 kN m), one pure pitch (5 kN m), at 0.02 a newton metre.
+        double[] backupTorque = [0.0, 0.0, 5000.0, 5000.0, 0.0, 0.0], backupCost = [100.0, 100.0];
+        var duty = new double[2];
+        // Within the fins' reach: the fins take it all, the thrusters stay off.
+        r = a.Allocate(12_000.0, 0.0, 6_000.0, rollLast, d, rest, default, backupTorque, backupCost, duty);
+        ok &= Check($"12 kN m pitch + 6 kN m roll with a backup: fins {r.TorqueX:F0}/{r.TorqueZ:F0} N m, duties {Text(duty)}",
+                    Near(r.TorqueX, 12_000.0, 1.0) && Near(r.TorqueZ, 6_000.0, 1.0) && duty[0] < 1e-6 && duty[1] < 1e-6);
+        // Past the fins: they give all the pitch they can and the roll goes to the backup, where a fixed order would have left it short.
+        r = a.Allocate(45_000.0, 0.0, 10_000.0, rollLast, d, rest, default, backupTorque, backupCost, duty);
+        double roll = r.TorqueZ + 5000.0 * duty[0], pitch = r.TorqueX + 5000.0 * duty[1];
+        ok &= Check($"45 kN m pitch + 10 kN m roll with a backup: pitch {pitch:F0}, roll {roll:F0} N m (fins {r.TorqueX:F0}/{r.TorqueZ:F0}), duties {Text(duty)}",
+                    Near(pitch, 45_000.0, 1.0) && Near(roll, 10_000.0, 1.0) && duty[0] > 0.0);
+
         Console.WriteLine();
         Console.WriteLine(ok ? "PASS - the aero torque allocator" : "FAIL - the aero torque allocator");
         return ok ? 0 : 1;

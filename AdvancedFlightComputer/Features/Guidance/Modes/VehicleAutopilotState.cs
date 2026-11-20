@@ -1633,11 +1633,11 @@ public sealed class VehicleAutopilotState
     public bool ThreeDofTrim = true;
 
     /// <summary>
-    /// Fly entry guidance's glide with AFC's own attitude controller (AttitudeController): a feedforward of the air's moment from the sweep's tables plus PD feedback, spent on the control surfaces first and the RCS for the rest, with a deadband inside which the RCS holds only the air's moment. Off points the craft through the stock flight computer, as before 2026-11-20, which fired the RCS every way against the air it knows nothing of. The controller's natural frequency, rad/s, and its deadband, degrees.
+    /// Fly entry guidance's glide with AFC's own attitude controller (AttitudeController): a feedforward of the air's moment from the sweep's tables plus filtered PD feedback and a slow integral, shared between the control surfaces and the RCS in one programme that spends the RCS only on what the fins cannot give, with an optional deadband (0, off, by default) inside which only the feedforward and integral fly. Off points the craft through the stock flight computer, as before 2026-11-20, which fired the RCS every way against the air it knows nothing of. The controller's natural frequency, rad/s, and its deadband, degrees.
     /// </summary>
     public bool ThreeDofOwnAttitude = true;
     public double AttitudeBandwidthRadS = 1.0;
-    public double AttitudeDeadbandDeg = 0.5;
+    public double AttitudeDeadbandDeg = 0.0;
 
     /// <summary>Whether AFC's own attitude controller flew the last step (Autopilot.FlyOwnAttitude), so its actuators are let go when it stops.</summary>
     internal bool OwnAttitudeFlying;

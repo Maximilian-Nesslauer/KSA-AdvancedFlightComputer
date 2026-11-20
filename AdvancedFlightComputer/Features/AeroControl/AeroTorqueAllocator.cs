@@ -24,6 +24,9 @@ internal sealed class AeroTorqueAllocator
     /// <summary>Deflections under this, degrees, are the solver's round-off and are dropped: far below any actuator's step (KSAero's is 0.1 deg).</summary>
     private const double DeflectionFloorDeg = 1.0e-3;
 
+    /// <summary>The price of a degree moved, as a share of the torque the most effective degree gives (Allocate from where the surfaces are): half a degree's price away from rest, so a surface holds still unless moving buys torque, and still goes home when nothing needs it.</summary>
+    private const double ChangePriceShare = 0.5e-3;
+
     private readonly double[][] _deflection;
     private readonly double[][] _torque;
     private readonly double[][] _force;
@@ -113,24 +116,59 @@ internal sealed class AeroTorqueAllocator
     }
 
     /// <summary>
-    /// The deflections for a torque demand in N m, written into <paramref name="deflectionDeg"/> (Count long). <paramref name="priority"/> weights each axis's shortfall: the axis with the smallest weight gives way first when the demand is out of reach.
+    /// The deflections for a torque demand in N m, written into <paramref name="deflectionDeg"/> (Count long). <paramref name="priority"/> weights each axis's shortfall: the axis with the smallest weight gives way first when the demand is out of reach. Every surface from rest over its whole range.
     /// </summary>
     public Result Allocate(double demandX, double demandY, double demandZ,
                            ReadOnlySpan<double> priority, Span<double> deflectionDeg)
+        => Allocate(demandX, demandY, demandZ, priority, deflectionDeg, default, default, default, default, default);
+
+    /// <summary>
+    /// The deflections for a torque demand in N m, as <see cref="Allocate(double, double, double, ReadOnlySpan{double}, Span{double})"/>, from where each surface is now and as far as it can go this step, alongside a backup that shares the demand.
+    ///
+    /// FROM WHERE THEY ARE. <paramref name="currentDeg"/> is each surface's deflection now (empty: all at rest), and <paramref name="maxStepDeg"/> how far each can move before the next call, its rate times the step (empty or not positive: anywhere in its range). A surface is only ever asked for a deflection it reaches by the next call, so what this reports it gives is what it does give then, and whatever shares the demand is told the truth. The curve is split at its swept deflections, at rest and at the reach, outward from the present deflection each way.
+    ///
+    /// STICKY. Each degree moved costs <see cref="ChangePriceShare"/> of the best slope, on top of the price of a degree away from rest (<see cref="DegreePriceShare"/>, earned back moving toward rest): a surface stays where it is unless moving buys torque, and a demand that four surfaces can meet many ways does not swap between them from one call to the next. A surface the demand does not need goes home at its rate, since a degree toward rest is worth more than a degree moved costs.
+    ///
+    /// THE BACKUP (optional): <paramref name="backupTorque"/> (three per column) and <paramref name="backupCost"/>, columns between 0 and 1 that give torque at a price in the shortfall's units (one per N m at priority 1) - the RCS thrusters at full duty, priced by their propellant. The surfaces and the backup share the demand in one programme, so the surfaces take whatever axis the backup finds dear, rather than what a fixed priority leaves them. Their duties go to <paramref name="backupDuty"/>; the result reports the surfaces' torque alone.
+    /// </summary>
+    public Result Allocate(double demandX, double demandY, double demandZ,
+                           ReadOnlySpan<double> priority, Span<double> deflectionDeg,
+                           ReadOnlySpan<double> currentDeg, ReadOnlySpan<double> maxStepDeg,
+                           ReadOnlySpan<double> backupTorque, ReadOnlySpan<double> backupCost, Span<double> backupDuty)
     {
         deflectionDeg[..Count].Clear();
-        List<Segment> segments = Segments();
-        int n = segments.Count;
-        if (n == 0)
-            return Evaluate(deflectionDeg, demandX, demandY, demandZ, solved: true);
+        int m = backupCost.Length;
+        if (backupTorque.Length < 3 * m)
+            throw new ArgumentException("The backup needs three torques per column.");
+        if (backupDuty.Length >= m)
+            backupDuty[..m].Clear();
 
-        // Columns: n segments, n slacks, six shortfalls. Rows: three torque, n widths.
-        int rows = 3 + n, cols = 2 * n + 6;
+        // The present deflections, on each curve, and the torque they give already.
+        var start = new double[Count];
+        double baseX = 0.0, baseY = 0.0, baseZ = 0.0;
+        for (int i = 0; i < Count; i++)
+        {
+            double[] d = _deflection[i];
+            start[i] = Math.Clamp(currentDeg.Length > i && double.IsFinite(currentDeg[i]) ? currentDeg[i] : 0.0, d[0], d[^1]);
+            At(i, start[i], out double tx, out double ty, out double tz, out _, out _, out _);
+            baseX += tx; baseY += ty; baseZ += tz;
+        }
+        List<Segment> segments = SegmentsFrom(start, maxStepDeg);
+        int n = segments.Count;
+        if (n == 0 && m == 0)
+        {
+            start.CopyTo(deflectionDeg);
+            return Evaluate(deflectionDeg, demandX, demandY, demandZ, solved: true);
+        }
+
+        // Columns: n segments, n slacks, m backups, m slacks, six shortfalls. Rows: three torque, n widths, m bounds.
+        int rows = 3 + n + m, cols = 2 * n + 2 * m + 6;
         var a = new double[rows * cols];
         var cost = new double[cols];
         var b = new double[rows];
-        b[0] = demandX; b[1] = demandY; b[2] = demandZ;
-        double degree = DegreePrice(segments);
+        b[0] = demandX - baseX; b[1] = demandY - baseY; b[2] = demandZ - baseZ;
+        double degree = DegreePrice(segments.Count > 0 ? segments : Segments());
+        double change = degree * ChangePriceShare / DegreePriceShare;
         for (int j = 0; j < n; j++)
         {
             Segment s = segments[j];
@@ -138,20 +176,35 @@ internal sealed class AeroTorqueAllocator
             a[j * rows + 3 + j] = 1.0;
             a[(n + j) * rows + 3 + j] = 1.0;
             b[3 + j] = Math.Abs(s.Width);
-            cost[j] = degree;
+            // Away from rest the segment's far end is further out than its near end; the segments never cross rest.
+            bool outward = Math.Abs(s.From + s.Width) > Math.Abs(s.From);
+            cost[j] = change + (outward ? degree : -degree);
         }
+        for (int k = 0; k < m; k++)
+        {
+            int col = 2 * n + k, slack = 2 * n + m + k, row = 3 + n + k;
+            bool usable = double.IsFinite(backupCost[k]) && backupCost[k] >= 0.0;
+            for (int r = 0; r < 3; r++)
+                a[col * rows + r] = usable && double.IsFinite(backupTorque[3 * k + r]) ? backupTorque[3 * k + r] : 0.0;
+            a[col * rows + row] = 1.0;
+            a[slack * rows + row] = 1.0;
+            b[row] = usable ? 1.0 : 0.0;
+            cost[col] = usable ? backupCost[k] : 0.0;
+        }
+        int sf = 2 * n + 2 * m;
         for (int r = 0; r < 3; r++)
         {
             double w = priority.Length > r && priority[r] > 0.0 ? priority[r] : 1.0;
-            a[(2 * n + 2 * r) * rows + r] = 1.0;
-            a[(2 * n + 2 * r + 1) * rows + r] = -1.0;
-            cost[2 * n + 2 * r] = w;
-            cost[2 * n + 2 * r + 1] = w;
+            a[(sf + 2 * r) * rows + r] = 1.0;
+            a[(sf + 2 * r + 1) * rows + r] = -1.0;
+            cost[sf + 2 * r] = w;
+            cost[sf + 2 * r + 1] = w;
         }
 
         double[]? x = RcsLpSolver.Solve(rows, cols, a, cost, b);
         if (x == null)
             return default;
+        start.CopyTo(deflectionDeg);
         for (int j = 0; j < n; j++)
         {
             Segment s = segments[j];
@@ -159,9 +212,59 @@ internal sealed class AeroTorqueAllocator
             deflectionDeg[s.Surface] += Math.Sign(s.Width) * travel;
         }
         for (int i = 0; i < Count; i++)
+        {
+            double[] d = _deflection[i];
+            deflectionDeg[i] = Math.Clamp(deflectionDeg[i], d[0], d[^1]);
             if (Math.Abs(deflectionDeg[i]) < DeflectionFloorDeg)
                 deflectionDeg[i] = 0.0;
+        }
+        if (backupDuty.Length >= m)
+            for (int k = 0; k < m; k++)
+                backupDuty[k] = Math.Clamp(x[2 * n + k], 0.0, 1.0);
         return Evaluate(deflectionDeg, demandX, demandY, demandZ, solved: true);
+    }
+
+    /// <summary>
+    /// The segments each surface can move along from <paramref name="start"/> by the next call: up to its reach each way (its range where <paramref name="maxStepDeg"/> gives none), split at its swept deflections and at rest, each starting at the end nearer the start.
+    /// </summary>
+    private List<Segment> SegmentsFrom(double[] start, ReadOnlySpan<double> maxStepDeg)
+    {
+        var segments = new List<Segment>();
+        var points = new List<double>();
+        for (int i = 0; i < Count; i++)
+        {
+            double[] d = _deflection[i];
+            double c = start[i];
+            double step = maxStepDeg.Length > i && maxStepDeg[i] > 0.0 && double.IsFinite(maxStepDeg[i]) ? maxStepDeg[i] : double.PositiveInfinity;
+            double lo = Math.Max(d[0], c - step), hi = Math.Min(d[^1], c + step);
+            points.Clear();
+            points.Add(c); points.Add(lo); points.Add(hi);
+            foreach (double p in d)
+                if (p > lo && p < hi)
+                    points.Add(p);
+            if (0.0 > lo && 0.0 < hi)
+                points.Add(0.0);
+            points.Sort();
+            int ci = points.IndexOf(c);
+            for (int k = ci; k + 1 < points.Count; k++)
+                AddSegmentAt(segments, i, points[k], points[k + 1]);
+            for (int k = ci; k - 1 >= 0; k--)
+                AddSegmentAt(segments, i, points[k], points[k - 1]);
+        }
+        return segments;
+    }
+
+    private void AddSegmentAt(List<Segment> into, int surface, double from, double to)
+    {
+        double width = Math.Abs(to - from);
+        if (!(width > 1e-9))
+            return;
+        At(surface, from, out double ax, out double ay, out double az, out _, out _, out _);
+        At(surface, to, out double bx, out double by, out double bz, out _, out _, out _);
+        double sx = (bx - ax) / width, sy = (by - ay) / width, sz = (bz - az) / width;
+        if (!double.IsFinite(sx) || !double.IsFinite(sy) || !double.IsFinite(sz))
+            return;
+        into.Add(new Segment(surface, from, to - from, sx, sy, sz));
     }
 
     /// <summary>

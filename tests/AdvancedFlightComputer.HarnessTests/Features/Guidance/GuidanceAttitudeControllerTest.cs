@@ -54,7 +54,10 @@ public sealed class GuidanceAttitudeControllerTest : AfcTest
         try
         {
             VehicleCommandSink.ApplyPatches(harmony);
-            // Not the guidance step hook: the test state is no engaged mode, so it would release the craft every step.
+            // The guidance step hook, installed as every guidance test does, but its step skipped (SkipGuidanceStep): the test state is no engaged mode, so a step would release the craft. Installed all the same because a test that steps the sim long with PrepareWorker unpatched lets the JIT inline it into its caller, and a later test's patch then never runs (the booster landing test after this one, 2026-11-20).
+            GuidanceFeature.ApplyDriverPatches(harmony);
+            harmony.Patch(AccessTools.Method(typeof(GuidanceWindow), nameof(GuidanceWindow.ApplyAutopilot)),
+                prefix: new HarmonyMethod(typeof(GuidanceAttitudeControllerTest), nameof(SkipGuidanceStep)));
             SharedVehicleHooks.GuidanceEnabled = true;
             GuidanceWindow.SetModActive(true);
 
@@ -92,6 +95,9 @@ public sealed class GuidanceAttitudeControllerTest : AfcTest
 
     private static Score? Trial(TestContext t, IParentBody home, string name, bool own, bool fins, HashSet<string> preexisting)
     {
+        string only = Environment.GetEnvironmentVariable("AFC_ATT_TRIALS") ?? "";
+        if (only.Length > 0 && !only.Contains(own ? fins ? "fins" : "own" : "stock", StringComparison.Ordinal))
+            return new Score(name, 0, 0, 0, 0, 0, 0, 0, 0);
         SimDriver driver = t.Session.CreateDriver();
         // Engine first: body +X (the thrust axis) up, falling. The spawn puts the body axes on the planet-fixed axes (identity body to CCE), so the craft is placed over planet-fixed +X.
         double3 up = double3.Normalize(double3.UnitX.Transform(doubleQuat.Inverse(home.GetCci2Cce())));
@@ -126,6 +132,9 @@ public sealed class GuidanceAttitudeControllerTest : AfcTest
             if (!fins)
                 aero.Surfaces = [];
             state.Aero = aero;
+            // AFC_ATT_DEADBAND sets the controller's deadband, degrees (VehicleAutopilotState.AttitudeDeadbandDeg).
+            if (double.TryParse(Environment.GetEnvironmentVariable("AFC_ATT_DEADBAND"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double deadbandDeg))
+                state.AttitudeDeadbandDeg = deadbandDeg;
 
             // The order: the nose 3 deg off the vertical toward east, wings level to it, held still.
             double tilt = TiltDeg * Math.PI / 180.0;
@@ -139,7 +148,9 @@ public sealed class GuidanceAttitudeControllerTest : AfcTest
             MethodInfo command = Method("CommandAttitude");
 
             double rcsKg = 0.0, holdKg = 0.0, errSum = 0.0, errMax = 0.0, deadband = 0.0, surfaceNm = 0.0, demandNm = 0.0;
-            int reversals = 0, holdReversals = 0, samples = 0, ownSteps = 0;
+            int reversals = 0, holdReversals = 0, samples = 0, ownSteps = 0, finReversals = 0;
+            double[]? lastFin = null;
+            int[] finDir = new int[8];
             var lastSign = new int[2];
             int steps = (int)Math.Round(TrialS / StepS);
             for (int i = 0; i < steps; i++)
@@ -184,6 +195,22 @@ public sealed class GuidanceAttitudeControllerTest : AfcTest
                     if (rep.InDeadband)
                         deadband++;
                     surfaceNm += rep.SurfacesNm.Length();
+                    // Fin chatter: how often a fin's commanded deflection turns back, moves under 0.05 deg ignored.
+                    if (rep.FinCommandDeg is { } fin)
+                    {
+                        if (lastFin != null && lastFin.Length == fin.Length)
+                            for (int f = 0; f < Math.Min(fin.Length, finDir.Length); f++)
+                            {
+                                double move = fin[f] - lastFin[f];
+                                if (Math.Abs(move) < 0.05)
+                                    continue;
+                                int dir = Math.Sign(move);
+                                if (finDir[f] != 0 && dir != finDir[f])
+                                    finReversals++;
+                                finDir[f] = dir;
+                            }
+                        lastFin = (double[])fin.Clone();
+                    }
                     demandNm += rep.DemandNm.Length();
                 }
                 if (i == 10 || i == 100)
@@ -205,6 +232,8 @@ public sealed class GuidanceAttitudeControllerTest : AfcTest
                 }
             }
             double alt = craft.Orbit.StateVectors.PositionCci.Length() - home.MeanRadius;
+            if (fins)
+                t.Info($"{name}: fin commands turned back {finReversals} times in {TrialS:F0} s");
             t.Info($"{name}: ended at {alt:F0} m, {craft.Orbit.StateVectors.VelocityCci.Length():F0} m/s (inertial); moment limiter {state.MomentLimiterPerPa * 1e3:F3} per kPa");
             return new Score(name, errSum / Math.Max(samples, 1), errMax, rcsKg, holdKg, reversals, holdReversals,
                 ownSteps > 0 ? deadband / ownSteps : 0.0, demandNm > 0.0 ? surfaceNm / demandNm : 0.0);
@@ -217,6 +246,8 @@ public sealed class GuidanceAttitudeControllerTest : AfcTest
             TestSupport.DespawnNewVehicles(t.System, preexisting);
         }
     }
+
+    private static bool SkipGuidanceStep() => false;
 
     private static MethodInfo Method(string name)
         => typeof(GuidanceWindow).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static)

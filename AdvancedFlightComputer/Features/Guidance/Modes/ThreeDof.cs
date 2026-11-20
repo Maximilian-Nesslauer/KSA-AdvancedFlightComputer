@@ -608,6 +608,9 @@ public static partial class GuidanceWindow
                 AcRcsAsk = ownAtt ? ac.RcsAskedNm : new double3(double.NaN, double.NaN, double.NaN),
                 AcRcs = ownAtt ? ac.RcsNm : new double3(double.NaN, double.NaN, double.NaN),
                 AcRcsFlowKgS = ownAtt ? ac.RcsFlowKgS : double.NaN,
+                AcInt = ownAtt ? ac.IntegralNm : new double3(double.NaN, double.NaN, double.NaN),
+                FinCommandDeg = ownAtt ? ac.FinCommandDeg : null,
+                FinNowDeg = ownAtt ? ac.FinNowDeg : null,
                 // Guidance results are the worker's while it solves; -1 then.
                 Refusals = g == null ? 0 : ThreeDofBusy ? -1 : g.ConsecutiveRefusals,
                 AxisOffsetDeg = axisOffset * Deg,
