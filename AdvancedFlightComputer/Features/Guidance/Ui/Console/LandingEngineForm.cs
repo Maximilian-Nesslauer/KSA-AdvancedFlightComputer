@@ -24,7 +24,8 @@ public static partial class GuidanceWindow
         ImGui.PushID(scope.Length > 0 ? scope : "CraftEngineGroups");
         try
         {
-            if (!ConsoleUi.Fold("LANDING ENGINES  " + (settings.Chosen?.Name ?? "AS STAGED"), "EngineGroups", false))
+            // One fold state per scope, so each booster row and the LAND page open on their own.
+            if (!ConsoleUi.Fold("LANDING ENGINES  " + (settings.Chosen?.Name ?? "AS STAGED"), LandingEngineFoldId(scope), false))
                 return;
             var candidates = LandingEngineGroups.Controllers(vehicle, root, allowed);
             if (settings.Chosen is { } selected && !LandingEngineGroups.Resolve(selected, candidates, out _))
@@ -112,6 +113,8 @@ public static partial class GuidanceWindow
             ImGui.PopID();
         }
     }
+
+    internal static string LandingEngineFoldId(string scope) => "EngineGroups:" + scope;
 
     private static void SetLandingEngineGroups(string scope, LandingEngineGroups settings)
     {
