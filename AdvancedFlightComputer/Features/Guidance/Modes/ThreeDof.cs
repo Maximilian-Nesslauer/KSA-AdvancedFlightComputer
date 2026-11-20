@@ -758,9 +758,10 @@ public static partial class GuidanceWindow
         bool fixedCoast = _s.ThreeDofTurnAccelDegS2 == 0.0 && coastTurn == 0.0;
         Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: 12, _s.GlideMaxAoaDeg,
             _s.VehicleHeightM, settings.GlideAccelMax(LandingAccelLimitMs2), _s.LandingPlanFloorMargin, turn,
-            fixedGlideAttitude: fixedCoast);
+            fixedGlideAttitude: fixedCoast, burnTiltPerSDeg: _s.ThreeDofBurnTiltPerSDeg);
         Scvx3DofConfig burn = Ksa3DofSetup.Config(vehicle, nodes: 20, glideIntervals: 0, _s.GlideMaxAoaDeg,
-                                                   _s.VehicleHeightM, LandingAccelLimitMs2, _s.LandingPlanFloorMargin, turn);
+                                                   _s.VehicleHeightM, LandingAccelLimitMs2, _s.LandingPlanFloorMargin, turn,
+                                                   burnTiltPerSDeg: _s.ThreeDofBurnTiltPerSDeg);
         var g = new Guidance3Dof(glide, burn, _s.ThreeDofEstimator.Apply(_s.ThreeDofNominal), settings);
         _s.ThreeDofWorker ??= new Ksa3DofWorker();
         // Zero/zero: the legs on the pad, at rest. The plan flies the CoM, VehicleHeightM above the legs.
@@ -832,18 +833,31 @@ public static partial class GuidanceWindow
     ///  WHY. The hand-over is ThreeDofSixDofTimeS (5 s) before the pad and the standby used to start at ignition. A landing burn ran 6.6-7.1 s, so the standby had two seconds and took the burn at 250 m and 104 m/s with a converged plan. KSA 5901's aerodynamics gave the boosters about 60 % more drag: they arrive at 103 m/s where they came at 125, the burn is 4.8-5.0 s, ignition and the hand-over time coincide, and the standby solved from cold through the hardest braking and took over 1-1.6 s in, at half the height (2026-11-18).
     ///  The standby is given the forecast as its state and the ignition time as its clock, so nothing in it knows the difference; only the bias estimator and the drift restart, which read the craft's motion, wait for the real thing (SixDofStandbyPredicted).
     /// </summary>
+    /// <summary>How often the standby's forecast is renewed while the craft glides, s.</summary>
+    private const double SixDofStandbyGlideForecastS = 0.1;
+
     private static void StepEntryTouchdownPrepare(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                                   double[] x, double[] x14, double now)
     {
         Guidance3Dof g = _s.ThreeDofGuidance;
         Plan3Dof plan = g?.Published;
-        Plan3Dof locked = g?.LockPlan;
-        if (!_s.ThreeDofSixDofHandover || !_s.ThreeDofTouchdownPrepare || plan == null || locked == null
-            || plan.Phase != Phase3Dof.Locked || now >= plan.IgnitionTime || _s.ThreeDofNominal == null)
+        Plan3Dof lockPlan = g?.LockPlan;
+        if (!_s.ThreeDofSixDofHandover || !_s.ThreeDofTouchdownPrepare || plan == null
+            || now >= plan.IgnitionTime || _s.ThreeDofNominal == null)
             return;
-        KsaPointMassModel model = plan.Model ?? locked.Model ?? _s.ThreeDofNominal;
+        // In the lock window the craft flies the lock plan open loop, so the forecast follows it. EARLIER, in the glide, once ignition is ThreeDofTouchdownPrepareS away, the forecast follows the glide plan: the standby's cold solve then has seconds of glide to converge in rather than the 2.4 s of the lock, and re-solves warm on a forecast that sharpens as ignition nears. On 2026-11-20 a cold solve with RCS took 4-7 s offline, longer than the lock window.
+        bool locked = plan.Phase == Phase3Dof.Locked && lockPlan != null;
+        bool gliding = plan.Phase == Phase3Dof.Glide && plan.IgnitionTime - now <= _s.ThreeDofTouchdownPrepareS;
+        if (!locked && !gliding)
+            return;
+        // Forecast at the standby's own cadence while gliding; every step in the lock, as before.
+        if (gliding && now - _s.ThreeDofPrepareForecastAt < SixDofStandbyGlideForecastS)
+            return;
+        _s.ThreeDofPrepareForecastAt = now;
+        Plan3Dof flown = locked ? lockPlan : plan;
+        KsaPointMassModel model = plan.Model ?? flown.Model ?? _s.ThreeDofNominal;
         double ignition = plan.IgnitionTime;
-        double[] predicted = g.PredictAlong(model, x, locked, now, ignition - now, out double[] opening, out _);
+        double[] predicted = g.PredictAlong(model, x, flown, now, ignition - now, out double[] opening, out _);
 
         // The 14-state at ignition: the predicted position and velocity, the attitude turned the shortest way from the thrust axis now onto the plan's there, the body rates and the mass as they are.
         double[] xi = (double[])x14.Clone();

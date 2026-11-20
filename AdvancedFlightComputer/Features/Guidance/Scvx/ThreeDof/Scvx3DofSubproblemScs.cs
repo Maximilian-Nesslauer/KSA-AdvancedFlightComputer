@@ -64,6 +64,8 @@ public sealed class Scvx3DofSubproblemScs
     private readonly int _oX, _oU, _oW, _iSigB, _iSigG, _oTm, _nTmPos, _nTmVel, _nTm, _nVars;
     private readonly int _oSa, _oSr, _oSb, _oSw, _oSn, _oSc, _oSt, _nSa, _nSr, _nSb, _nSw, _nSn, _nSc, _nSt, _nSlack;
     private readonly int _nAc;
+    // The burn's tilt limit: one row per burn node but the last, which the terminal attitude holds, and its slack when soft.
+    private readonly int _nTi, _nSi, _oSi;
     private readonly int[] _minChannels, _maxChannels;
     private readonly bool _terminalAttitude, _rateLimit;
     private readonly int _nEq, _lDim, _nRows;
@@ -128,7 +130,9 @@ public sealed class Scvx3DofSubproblemScs
         _nSc = soft ? _nAc : 0;
         // The turn-acceleration cones: one per node, node 0's from the measured turn rate and the last's to a stop.
         _nSt = soft && _accelLimit ? _n : 0;
-        _nSlack = _nSa + _nSr + _nSb + _nSw + _nSn + _nSc + _nSt;
+        _nTi = cfg.BurnTiltPerS > 0.0 ? cfg.BurnIntervals : 0;
+        _nSi = soft ? _nTi : 0;
+        _nSlack = _nSa + _nSr + _nSb + _nSw + _nSn + _nSc + _nSt + _nSi;
         _oSa = _oTm + _nTm;
         _oSr = _oSa + _nSa;
         _oSb = _oSr + _nSr;
@@ -136,13 +140,15 @@ public sealed class Scvx3DofSubproblemScs
         _oSn = _oSw + _nSw;
         _oSc = _oSn + _nSn;
         _oSt = _oSc + _nSc;
-        _nVars = _oSt + _nSt;
+        _oSi = _oSt + _nSt;
+        _nVars = _oSi + _nSi;
 
         int sigmas = _k > 0 ? 2 : 1;
         _nEq = NX + 6 + (_terminalAttitude ? 3 : 0) + (_n - 1) * NX
              + (_terminalAttitude ? _n - 1 : _n) + _k;
         _lDim = 2 * (_n - _k)
               + _nAc
+              + _nTi
               + (cfg.Retrograde ? _n : 0)
               + (_n - 1) * (_minChannels.Length + _maxChannels.Length)
               + 2 * _n * NX + 2 * _n * NU
@@ -473,6 +479,20 @@ public sealed class Scvx3DofSubproblemScs
                 AddA(row, IX(k, PointMass3Dof.IR + i), limited ? -lossGradient[k * 3 + i] / slope : 0.0);
             if (_nSc > 0) AddA(row, _oSc + (k - _k), -1.0);
             _b[row++] = limited ? lossConstant[k] / slope : 1.0;
+        }
+
+        // THE BURN'S TILT LIMIT (Scvx3DofConfig.BurnTiltPerS): b_z,k >= cos(limit(t_left)), with t_left = sigma_B (1 - tau) and the cosine's tangent in sigma_B at the reference: -b_z - g sigma_B - s <= -cos(limit_bar) - g sigma_B_bar, g = sin(limit_bar) * rate * (1 - tau).
+        for (int j = 0; j < _nTi; j++)
+        {
+            int k = _k + j;
+            double share = 1.0 - j * _dtauB;
+            double limit = _cfg.BurnTiltLimit(sigBBar * share);
+            // Past the cap the limit no longer moves with the burn time.
+            double g = limit < Math.PI / 3.0 - 1e-12 ? Math.Sin(limit) * _cfg.BurnTiltPerS * share : 0.0;
+            AddA(row, IU(k, PointMass3Dof.IB + 2), -1.0);
+            AddA(row, _iSigB, -g);
+            if (_nSi > 0) AddA(row, _oSi + j, -1.0);
+            _b[row++] = -Math.Cos(limit) - g * sigBBar;
         }
 
         // Retrograde: b_k . v_hat_bar_k <= 0, vacuous below the speed threshold.

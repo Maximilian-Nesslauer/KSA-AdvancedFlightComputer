@@ -871,6 +871,10 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool SixDofSeenDescending, SixDofToContact, SixDofTookBurn;
 
+    /// <summary>How many times the engine has been relit while flying to contact after the plan (GuidanceWindow.LimitContactRelights), and whether it was lit on the last step.</summary>
+    internal int SixDofContactRelights;
+    internal bool SixDofContactEngineLit;
+
     /// <summary>
     /// Set while a COLD restart converges: the last plan is flown open loop, without the tracker, until the new plan lands. A cold restart means the plan was abandoned - the vehicle drifted off it, or the target moved, which moves the frame so the plan reads as hundreds of metres off - and tracking an abandoned plan pushes the vehicle around for an error that is not one (throttle 0.01 then 1.0 after a 250 m move, 2026-10-13 08:40). A warm restart keeps the plan it is refining, and keeps tracking it.
     /// </summary>
@@ -945,15 +949,29 @@ public sealed class VehicleAutopilotState
     public bool SixDofRcs = true;
 
     /// <summary>Price on touchdown guidance's RCS torque, Scvx6DofConfig.RcsWeight: how much the plan leans on the gimbals, which cost no propellant, before the thrusters.</summary>
-    public double SixDofRcsWeight = 0.0;
+    public double SixDofRcsWeight = 0.1;
+
+    /// <summary>Touchdown guidance's turn-rate limit, deg/s, roll included, or 0 for none (Scvx6DofConfig.RateMaxRadS).</summary>
+    public double SixDofRateMaxDegS = 15.0;
 
     /// <summary>Touchdown guidance's plan holds its lateral thrust to the gimbal's slew rate (Scvx6DofConfig.GimbalSlewPerS). On; off flies the plan as before 2026-11-18, free to jump between nodes.</summary>
     public bool SixDofGimbalRateLimit = true;
 
     /// <summary>
+    /// Entry guidance's burn plan may lean no more than 2 deg plus this many degrees per second of burn left (Scvx3DofConfig.BurnTiltPerS): 12 deg with 5 s left, 6 with 2. It bounds the sideways speed the burn can take off, so the glide has to bend towards vertical before ignition. 0 for no limit.
+    /// </summary>
+    public double ThreeDofBurnTiltPerSDeg = 0.0;
+
+    /// <summary>
     /// Touchdown guidance's standby starts in entry guidance's lock window, on the state predicted at the committed ignition, so its plan is converged when the engine lights (GuidanceWindow.StepEntryTouchdownPrepare). On. Off, it starts at ignition, as it did while a landing burn ran two seconds longer than the hand-over time.
     /// </summary>
     public bool ThreeDofTouchdownPrepare = true;
+
+    /// <summary>How long before entry guidance's planned ignition touchdown guidance's standby starts, s, on the state forecast at ignition along the glide plan (GuidanceWindow.StepEntryTouchdownPrepare); the lock window takes over from there. 0 starts it at the lock, as before.</summary>
+    public double ThreeDofTouchdownPrepareS = 15.0;
+
+    /// <summary>When the standby's forecast was last renewed in the glide.</summary>
+    internal double ThreeDofPrepareForecastAt = double.NegativeInfinity;
 
     /// <summary>The standby is running on the predicted ignition state and the ignition time, not on the craft as it is: set through the lock window, cleared at the first burn step.</summary>
     internal bool SixDofStandbyPredicted;
@@ -1497,7 +1515,7 @@ public sealed class VehicleAutopilotState
     public double SixDofEntryBlendThrottle;
 
     /// <summary>Hand over with this much of the 3-DOF burn plan left, s. By time rather than speed: a light booster falls slower than any useful hand-over speed, and 6-DOF, with no coast and no drag model, cannot fly a long burn (see ThreeDof.cs).</summary>
-    public double ThreeDofSixDofTimeS = 5.0;
+    public double ThreeDofSixDofTimeS = 30.0;
 
     /// <summary>The live guidance, its solver thread, its model corrections and its nominal model, or null before the first solve.</summary>
     public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Guidance3Dof ThreeDofGuidance;

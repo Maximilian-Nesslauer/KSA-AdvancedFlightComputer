@@ -463,7 +463,7 @@ public static partial class GuidanceWindow
                                    out Dynamics6Dof.Params dyn, out _, LandingAccelLimitMs2,
                                    floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero,
                                    keptRollFree: _s.Guidance.TerminalRollFree, bodyAero: _s.SixDofBodyAero,
-                                   gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight))
+                                   gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight, rateMaxDegS: _s.SixDofRateMaxDegS))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -1123,6 +1123,8 @@ public static partial class GuidanceWindow
             GuidanceLog.Info(vehicle, why);
             _s.DiagError(why);
             _s.SixDofToContact = true;
+            _s.SixDofContactRelights = 0;
+            _s.SixDofContactEngineLit = ManualInputs(vehicle).EngineOn;
             StepSixDofToContact(vehicle, parent, siteCci, now, x);
             return true;
         }
@@ -1148,6 +1150,8 @@ public static partial class GuidanceWindow
     private static void CutSixDofEngine(Vehicle vehicle, IParentBody parent, double3 siteCci, double now, double[] x, double minTwr)
     {
         _s.SixDofToContact = true;
+        _s.SixDofContactRelights = 0;
+        _s.SixDofContactEngineLit = false;
         ref ManualControlInputs manual = ref ManualInputs(vehicle);
         manual.EngineOn = false;
         manual.EngineThrottle = 0f;
@@ -1200,6 +1204,7 @@ public static partial class GuidanceWindow
         if (!(TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) > SixDofHoverMaxMinTwr))
         {
             SinkToContact(vehicle, parent, siteCci, x);
+            LimitContactRelights(vehicle, now);
             return;
         }
 
@@ -1209,11 +1214,43 @@ public static partial class GuidanceWindow
         if (Math.Sqrt(sink * sink + 2.0 * gravity * legs) > SixDofSafeDropMs)
         {
             FlyWithoutPlan(vehicle, parent, siteCci, x, "STOPPED SHORT");
+            LimitContactRelights(vehicle, now);
             return;
         }
         manual.EngineOn = false;
         manual.EngineThrottle = 0f;
         _s.LastThrottle = 0.0;
+        _s.SixDofContactEngineLit = false;
+    }
+
+    /// <summary>Relights allowed while flying to contact after the plan.</summary>
+    private const int SixDofMaxContactRelights = 1;
+
+    /// <summary>
+    /// ONE RELIGHT, THEN NONE. Flying to contact, both rules above cut the engine whenever holding the sink would need less than its minimum thrust while the craft climbs, and light it again as it sinks: on a booster whose minimum thrust is about its weight that is a cut and a relight every second or two, all the way down (2026-11-20: 6.6 s of it, drifting to 14.9 m from the target). A real engine cannot relight like that. Once it has been relit once here, a cut is final and the craft falls the rest of the way.
+    /// </summary>
+    private static void LimitContactRelights(Vehicle vehicle, double now)
+    {
+        ref ManualControlInputs manual = ref ManualInputs(vehicle);
+        bool lit = manual.EngineOn && manual.EngineThrottle > 0f;
+        if (lit && !_s.SixDofContactEngineLit)
+        {
+            if (_s.SixDofContactRelights >= SixDofMaxContactRelights)
+            {
+                manual.EngineOn = false;
+                manual.EngineThrottle = 0f;
+                _s.LastThrottle = 0.0;
+                lit = false;
+            }
+            else
+            {
+                _s.SixDofContactRelights++;
+                string why = FormattableString.Invariant($"RELIGHT {_s.SixDofContactRelights} OF {SixDofMaxContactRelights} FLYING TO CONTACT: the next cut is final.");
+                SixDofLog.Event(_s, now, why);
+                GuidanceLog.Info(vehicle, "Touchdown guidance: " + why);
+            }
+        }
+        _s.SixDofContactEngineLit = lit;
     }
 
     /// <summary>The engine holds a sink rate down to contact: SixDofTouchdownSinkMs at and below the plan end, faster above it. Asked for less than the minimum thrust while climbing, the engine goes off and gravity takes the climb out.</summary>
@@ -1826,7 +1863,7 @@ public static partial class GuidanceWindow
                                      _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                      x, xf, out cfg, out dyn, out error, LandingAccelLimitMs2,
                                      floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero, bodyAero: _s.SixDofBodyAero,
-                                     gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight);
+                                     gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight, rateMaxDegS: _s.SixDofRateMaxDegS);
     }
 
     /// <summary>

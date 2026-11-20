@@ -112,6 +112,18 @@ public sealed class Scvx3DofConfig
     public double VirtualControlScaleOf(int i)
         => VirtualControlScale is { } s && i < s.Length && s[i] > 0.0 ? s[i] : XScale[i];
 
+    /// <summary>
+    /// THE BURN'S TILT LIMIT, TIGHTENING TOWARDS THE PAD: a burn node with t seconds of the burn left may lean its body axis no more than BurnTiltFloor + BurnTiltPerS * t off vertical, radians and radians per second; 0 for none. A path constraint like the others, soft with them.
+    ///  WHAT IT IS FOR IS THE GLIDE. The burn must end at rest over the pad, and its sideways push is its thrust times the sine of its lean, so a burn held to this lean can take off only so much sideways speed: at 3 g and 2 deg + 2 deg per second, about 18 m/s over a 5 s burn. A plan that would arrive at ignition with more has to bend its glide towards vertical first. Nothing else in the problem prices how slanted the craft arrives: on KSA 5901 boosters reached ignition 18 deg off vertical with 31 m/s sideways, where they came at 10 deg and 18 m/s, and touchdown guidance, handed the burn there, was still leaning 17.6 deg with 2.9 s left - more than its gimbals could take off in the time (2026-11-18).
+    ///  The limit's cosine is not affine in the burn time; each row takes its tangent at the reference, as the turn-acceleration cone does.
+    /// </summary>
+    public double BurnTiltPerS { get; init; }
+    public double BurnTiltFloor { get; init; } = 2.0 * Math.PI / 180.0;
+
+    /// <summary>The tilt limit, radians, with <paramref name="leftS"/> seconds of the burn left; never past 60 deg, where the constraint stops meaning anything.</summary>
+    public double BurnTiltLimit(double leftS)
+        => Math.Min(BurnTiltFloor + BurnTiltPerS * Math.Max(leftS, 0.0), Math.PI / 3.0);
+
     public double WThrottleRate { get; init; } = 0.05;
     public double WAttitudeRate { get; init; } = 0.10;
 

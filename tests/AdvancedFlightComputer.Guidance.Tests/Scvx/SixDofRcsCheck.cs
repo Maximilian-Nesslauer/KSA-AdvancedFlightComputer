@@ -38,6 +38,9 @@ internal static class SixDofRcsCheck
     // --rcs-weight w: Scvx6DofConfig.RcsWeight for the plans, 0 for none.
     private static double RcsWeight;
 
+    // Probes of the SCS slowdown (2026-11-20), harness only: --eps e (SCS tolerance), --anderson n (acceleration memory; 0 off), --uscale-rcs f (RCS controls' column scale times f), --wdu w, --prox w.
+    private static double ProbeEps = 3e-4, ProbeUScaleRcs = 1.0, ProbeWdu = 0.05, ProbeProx = 0.05, RateMaxDegS;
+
     // Diagnostics of the SCS slowdown with RCS (2026-11-19): --diag runs only the fast case's closed loop and prints the first warm re-solves' SCS outcome; with it, --rcs-scale f scales the RCS authority, --rcs-noforce drops its side force, --gimbal flies gimbals alone, --nowarm turns SCS's warm start off.
     private static double RcsScale = 1.0;
     private static bool Diag;
@@ -50,7 +53,17 @@ internal static class SixDofRcsCheck
         int si = Array.IndexOf(args, "--rcs-scale");
         RcsScale = si >= 0 && si + 1 < args.Length ? double.Parse(args[si + 1], CultureInfo.InvariantCulture) : 1.0;
         Diag = args.Contains("--diag");
-        Console.WriteLine($"RCS weight {RcsWeight}, authority x{RcsScale}");
+        double Num(string flag, double dflt) { int i = Array.IndexOf(args, flag); return i >= 0 && i + 1 < args.Length ? double.Parse(args[i + 1], CultureInfo.InvariantCulture) : dflt; }
+        ProbeEps = Num("--eps", 3e-4);
+        ProbeUScaleRcs = Num("--uscale-rcs", 1.0);
+        ProbeWdu = Num("--wdu", 0.05);
+        ProbeProx = Num("--prox", 0.05);
+        RateMaxDegS = Num("--rate-max", 0.0);
+        int ai = Array.IndexOf(args, "--anderson");
+        if (ai >= 0 && ai + 1 < args.Length) AdvancedFlightComputer.Guidance.Conic.ScsWorkspace.AccelerationLookback = int.Parse(args[ai + 1], CultureInfo.InvariantCulture);
+        Console.WriteLine($"RCS weight {RcsWeight}, authority x{RcsScale}, eps {ProbeEps}, uscale-rcs x{ProbeUScaleRcs}, WDu {ProbeWdu}, prox {ProbeProx}, anderson {AdvancedFlightComputer.Guidance.Conic.ScsWorkspace.AccelerationLookback?.ToString() ?? "default"}");
+        if (args.Contains("--rcs-fd"))
+            return RcsColumnsAgainstDifferences();
         if (Diag && args.Contains("--gimbal"))
         {
             var st0 = States[0];
@@ -63,8 +76,19 @@ internal static class SixDofRcsCheck
             Dynamics6Dof.RcsModel m = RcsModel();
             for (int a = 0; a < 3; a++) { m.MaxPosNm[a] *= RcsScale; m.MaxNegNm[a] *= RcsScale; }
             if (args.Contains("--rcs-noforce")) Array.Clear(m.ForcePerNm);
-            var st = States[0];
+            int sti = Array.IndexOf(args, "--state");
+            var st = States[sti >= 0 && sti + 1 < args.Length ? int.Parse(args[sti + 1], CultureInfo.InvariantCulture) : 0];
             double[] x0 = State(st.h, st.r, st.v, st.tiltDeg, 16_400.0);
+            if (args.Contains("--demand"))
+            {
+                (Dynamics6Dof.Params ddyn, Dynamics6Dof.Params dplant, Mixer mixer) = DemandSetup(m);
+                Demand = true;
+                mixer.Frozen = args.Contains("--freeze");
+                mixer.Reset(ddyn);
+                Console.WriteLine("    " + Loop(ddyn, dplant, x0, st.sigma, false, mixer.Mix, u => mixer.UpdateEffective(ddyn, u))
+                                  + $"; RCS gave up to {mixer.PeakRcs / 1e3:F0} kN m, gimbals {mixer.PeakGimbal / 1e3:F0}");
+                return 0;
+            }
             Console.WriteLine("    " + Loop(Params(MomentPerDeg(1.0), m), Params(MomentPerDeg(PlantMomentFactor), m), x0, st.sigma, false));
             return 0;
         }
@@ -188,6 +212,17 @@ internal static class SixDofRcsCheck
                 string loop = Loop(dyn, plant, x0, sigma, verbose);
                 Console.WriteLine($"    {label,-16} cold: {cold}");
                 Console.WriteLine($"    {"",-16} loop: {loop}");
+            }
+            {
+                (Dynamics6Dof.Params dyn, Dynamics6Dof.Params plant, Mixer mixer) = DemandSetup(rcs);
+                Demand = true;
+                mixer.Reset(dyn);
+                string cold = Cold(dyn, x0, sigma, verbose);
+                mixer.Reset(dyn);
+                string loop = Loop(dyn, plant, x0, sigma, verbose, mixer.Mix, u => mixer.UpdateEffective(dyn, u));
+                Demand = false;
+                Console.WriteLine($"    {"torque demand",-16} cold: {cold}");
+                Console.WriteLine($"    {"",-16} loop: {loop}; RCS gave up to {mixer.PeakRcs / 1e3:F0} kN m, gimbals {mixer.PeakGimbal / 1e3:F0}");
             }
         }
     }
@@ -337,15 +372,17 @@ internal static class SixDofRcsCheck
             Tmax = Tmax,
             ThrottleFloor = Floor,
             GimbalMaxDeg = GimbalDeg,
-            GimbalSlewPerS = SlewPerS,
+            GimbalArm = Environment.GetCommandLineArgs().Contains("--old-scale") ? 0.0 : Arm,
+            GimbalSlewPerS = Environment.GetCommandLineArgs().Contains("--noslew") ? 0.0 : SlewPerS,
             TauRollMax = 1.0e4,
             TerminalRollFree = true,
             TiltMaxDeg = 60.0,
             GroundFloor = -1.0,
             AccelMax = AccelMax,
             WW = 0.002 / (n * 3.0 * omegaScale * omegaScale),
-            WDu = 0.05,
-            ProximalWeight = 0.05,
+            WDu = ProbeWdu,
+            ProximalWeight = ProbeProx,
+            UScale = ProbeUScale(dyn),
             GlideSlopeDeg = 0.0,
             VzMax = 0.0,
             TerminalMissWeight = 1.0e5,
@@ -356,14 +393,33 @@ internal static class SixDofRcsCheck
             RcsMaxPosNm = dyn.Rcs?.MaxPosNm,
             RcsMaxNegNm = dyn.Rcs?.MaxNegNm,
             RcsWeight = RcsWeight,
+            RateMaxRadS = RateMaxDegS * Math.PI / 180.0,
+            TorqueDemand = Demand,
+            DemandTorquePerN = Demand ? GimbalTorquePerN : 0.0,
+            DemandRollPerN = Demand ? RollTorquePerN : 0.0,
             VirtualControlScale = [0, 0, 0, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0],
             XScale = [length, length, length, velocity, velocity, velocity, 1, 1, 1, 1, 1, 1, 1, x0[13]],
         };
     }
 
+    /// <summary>The control scales as Scvx6DofConfig.ResolvedUScale would make them, with the RCS controls' times --uscale-rcs; null (the default) when that is 1.</summary>
+    private static double[]? ProbeUScale(Dynamics6Dof.Params dyn)
+    {
+        if (ProbeUScaleRcs == 1.0 || dyn.Rcs == null || Demand)
+            return null;
+        double tan = Math.Tan(GimbalDeg * Math.PI / 180.0);
+        var us = new double[NU];
+        us[0] = us[1] = Tmax * tan;
+        us[2] = Tmax;
+        us[3] = 1.0e4;
+        for (int a = 0; a < Dynamics6Dof.NRCS; a++)
+            us[Dynamics6Dof.IRCS + a] = ProbeUScaleRcs * Math.Max(dyn.Rcs.MaxPosNm[a], dyn.Rcs.MaxNegNm[a]);
+        return us;
+    }
+
     private static Scvx6DofSolver Solver(Scvx6DofConfig cfg, Dynamics6Dof.Params dyn)
     {
-        var s = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = 3e-4, WarmStart = !Environment.GetCommandLineArgs().Contains("--nowarm") };
+        var s = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = ProbeEps, WarmStart = !Environment.GetCommandLineArgs().Contains("--nowarm") };
         s.MaxSubproblemIterations = 9000;
         s.EscalatedSubproblemIterations = 9000;
         return s;
@@ -420,7 +476,8 @@ internal static class SixDofRcsCheck
         return peak;
     }
 
-    private static string Loop(Dynamics6Dof.Params dyn, Dynamics6Dof.Params plant, double[] x0, double sigma, bool verbose)
+    private static string Loop(Dynamics6Dof.Params dyn, Dynamics6Dof.Params plant, double[] x0, double sigma, bool verbose,
+                               Func<double[], double[]>? mix = null, Action<double[]>? onPlan = null)
     {
         const int n = 15;
         const double cycle = 0.1, dt = 0.01;
@@ -441,12 +498,13 @@ internal static class SixDofRcsCheck
         }
 
         double[] fx = (double[])s.ReferenceX.Clone(), fu = (double[])s.ReferenceU.Clone();
+        onPlan?.Invoke(Sample(fu, NU, s.Sigma, n, 0.0));
         double fs = s.Sigma, f0 = 0.0;
         double[] x = (double[])x0.Clone();
         int refused = 0, kept = 0;
         var gates = new List<double>();
         var loopAdmm = new List<int>();
-        double t = 0.0, maxOff = 0.0, mass0 = x0[13];
+        double t = 0.0, maxOff = 0.0, mass0 = x0[13], peakRate = 0.0;
         while (t < 20.0)
         {
             double left = fs - (t - f0);
@@ -471,6 +529,7 @@ internal static class SixDofRcsCheck
                 {
                     fx = (double[])s.ReferenceX.Clone();
                     fu = (double[])s.ReferenceU.Clone();
+                    onPlan?.Invoke(Sample(fu, NU, s.Sigma, n, 0.0));
                     fs = s.Sigma;
                     f0 = t;
                     kept++;
@@ -485,8 +544,10 @@ internal static class SixDofRcsCheck
             for (double h = 0; h < cycle - 1e-9; h += dt)
             {
                 double[] u = Sample(fu, NU, fs, n, t - f0);
+                if (mix != null) u = mix(u);
                 Step(x, u, plant, dt);
                 maxOff = Math.Max(maxOff, OffAir(x) * 180.0 / Math.PI);
+                peakRate = Math.Max(peakRate, Math.Sqrt(x[10] * x[10] + x[11] * x[11] + x[12] * x[12]) * 180.0 / Math.PI);
                 t += dt;
                 if (x[2] <= TargetZ || (x[5] > 0.0 && x[2] < TargetZ + 20.0)) { landed = true; break; }
             }
@@ -497,7 +558,7 @@ internal static class SixDofRcsCheck
         double miss = Math.Sqrt(x[0] * x[0] + x[1] * x[1]);
         double side = Math.Sqrt(x[3] * x[3] + x[4] * x[4]);
         return string.Create(CultureInfo.InvariantCulture,
-            $"first plan {(planned ? "inside" : "OUTSIDE")} the gate; {kept} kept, {refused} refused, median gate {med:F2}x, SCS {Median(loopAdmm)}/iteration; ends {x[2]:F1} m up, {miss:F1} m off, {-x[5]:F1} m/s down, {side:F1} m/s sideways; {mass0 - x[13]:F0} kg burned");
+            $"first plan {(planned ? "inside" : "OUTSIDE")} the gate; {kept} kept, {refused} refused, median gate {med:F2}x, SCS {Median(loopAdmm)}/iteration; ends {x[2]:F1} m up, {miss:F1} m off, {-x[5]:F1} m/s down, {side:F1} m/s sideways; {mass0 - x[13]:F0} kg burned; peak rate {peakRate:F1} deg/s");
     }
 
     private static int Median(List<int> v)
@@ -506,6 +567,134 @@ internal static class SixDofRcsCheck
         var c = new List<int>(v);
         c.Sort();
         return c[c.Count / 2];
+    }
+
+    // ------------------------------------------------------------------- the RCS columns of B
+
+    /// <summary>--rcs-fd: Dynamics6Dof.Jacobian writes the RCS columns of B by hand (RcsColumns); they must equal central differences of Eval in the RCS controls, at tilted, spinning states with RCS in use.</summary>
+    private static int RcsColumnsAgainstDifferences()
+    {
+        Dynamics6Dof.Params p = Params(MomentPerDeg(1.0), RcsModel());
+        double worst = 0.0;
+        foreach (double tilt in new[] { 3.0, 12.0, 25.0 })
+        {
+            double[] x = State(200.0, [10.0, -5.0], [-8.0, 4.0, -80.0], tilt, 16_400.0);
+            x[10] = 0.05; x[11] = -0.08; x[12] = 0.2;
+            double[] u = [12e3, -9e3, 600e3, 2e3, 150e3, -90e3, 20e3];
+            var A = new double[NX * NX];
+            var B = new double[NX * NU];
+            Dynamics6Dof.Jacobian(x, u, p, new double[NX], A, B);
+            for (int j = Dynamics6Dof.IRCS; j < NU; j++)
+            {
+                double h = 10.0;
+                double[] up = (double[])u.Clone(), um = (double[])u.Clone();
+                up[j] += h; um[j] -= h;
+                var fp = new double[NX];
+                var fm = new double[NX];
+                Dynamics6Dof.Eval(x, up, p, fp);
+                Dynamics6Dof.Eval(x, um, p, fm);
+                for (int r = 0; r < NX; r++)
+                {
+                    double fd = (fp[r] - fm[r]) / (2.0 * h);
+                    double scale = Math.Max(Math.Abs(fd), 1e-9);
+                    double err = Math.Abs(B[r * NU + j] - fd) / Math.Max(scale, 1e-6);
+                    if (Math.Abs(fd) > 1e-12 || Math.Abs(B[r * NU + j]) > 1e-12)
+                        worst = Math.Max(worst, err);
+                    if (err > 1e-6 && (Math.Abs(fd) > 1e-12 || Math.Abs(B[r * NU + j]) > 1e-12))
+                        Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"  tilt {tilt}: B[{r},{j}] = {B[r * NU + j]:E4}, differences {fd:E4}"));
+                }
+            }
+        }
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"RCS columns of B against central differences: worst relative error {worst:E2}"));
+        return worst < 1e-6 ? 0 : 1;
+    }
+
+    // ------------------------------------------------------------------- torque demand
+
+    // The plan's torque-demand envelope, as the mixer reports it: the gimbals' pitch/yaw and roll torque per newton of axial thrust.
+    private static double GimbalTorquePerN => Arm * Math.Tan(GimbalDeg * Math.PI / 180.0);
+    private const double RollTorquePerN = 1.0e4 / Tmax;   // Config's TauRollMax at Tmax
+    private static bool Demand;
+
+    /// <summary>The plan for a torque demand: three torque controls carrying the whole control torque, bounded by the gimbals' share at the thrust plus the RCS's; the side force they bring, an effective factor the mixer refreshes. The plant flies the real split.</summary>
+    private static (Dynamics6Dof.Params dyn, Dynamics6Dof.Params plant, Mixer mixer) DemandSetup(Dynamics6Dof.RcsModel rcs)
+    {
+        var envelope = new Dynamics6Dof.RcsModel
+        {
+            MaxPosNm = (double[])rcs.MaxPosNm.Clone(),
+            MaxNegNm = (double[])rcs.MaxNegNm.Clone(),
+            ForcePerNm = new double[9],
+            FlowPerNm = (double[])rcs.FlowPerNm.Clone(),
+        };
+        return (Params(MomentPerDeg(1.0), envelope), Params(MomentPerDeg(PlantMomentFactor), rcs), new Mixer(rcs));
+    }
+
+    /// <summary>
+    /// The mixer, gimbals first: each step it splits the plan's torque, the gimbals taking what they can at the thrust and the RCS the rest, and turns the gimbals' share into lateral thrust and roll torque for the plant. Between re-solves it gives the plan the side force per newton metre its split brings (UpdateEffective): the gimbals' share pushes the bottom of the booster one way (1/arm), the RCS's the top the other (its own factor).
+    /// </summary>
+    private sealed class Mixer(Dynamics6Dof.RcsModel rcs)
+    {
+        public double PeakRcs, PeakGimbal;
+
+        /// <summary>Hold the side-force factor at the first plan's split instead of refreshing it with every plan kept, so consecutive plans share one model.</summary>
+        public bool Frozen;
+        private bool _set;
+
+        private (double[] gimbal, double[] rest) Split(double[] u)
+        {
+            double t = Math.Max(u[Dynamics6Dof.IT], 0.0);
+            double tx = u[Dynamics6Dof.IRCS], ty = u[Dynamics6Dof.IRCS + 1], tz = u[Dynamics6Dof.IRCS + 2];
+            double cap = GimbalTorquePerN * t, mag = Math.Sqrt(tx * tx + ty * ty);
+            double k = mag > cap && mag > 0.0 ? cap / mag : 1.0;
+            double rollCap = RollTorquePerN * t;
+            var g = new[] { tx * k, ty * k, Math.Clamp(tz, -rollCap, rollCap) };
+            var r = new double[3];
+            double[] want = { tx - g[0], ty - g[1], tz - g[2] };
+            for (int a = 0; a < 3; a++)
+                r[a] = Math.Clamp(want[a], -rcs.MaxNegNm[a], rcs.MaxPosNm[a]);
+            return (g, r);
+        }
+
+        public double[] Mix(double[] u)
+        {
+            (double[] g, double[] r) = Split(u);
+            var p = new double[NU];
+            p[Dynamics6Dof.IT] = u[Dynamics6Dof.IT];
+            // tau_x = L tdy, tau_y = -L tdx (Dynamics6Dof).
+            p[Dynamics6Dof.ITDX] = -g[1] / Arm;
+            p[Dynamics6Dof.ITDY] = g[0] / Arm;
+            p[Dynamics6Dof.ITAU] = g[2];
+            for (int a = 0; a < 3; a++)
+                p[Dynamics6Dof.IRCS + a] = r[a];
+            PeakRcs = Math.Max(PeakRcs, Math.Sqrt(r[0] * r[0] + r[1] * r[1]));
+            PeakGimbal = Math.Max(PeakGimbal, Math.Sqrt(g[0] * g[0] + g[1] * g[1]));
+            return p;
+        }
+
+        /// <summary>The plan's side force per newton metre on each axis from the split of torque <paramref name="u"/>: the gimbals' share at their factor, the rest at the RCS's.</summary>
+        public void UpdateEffective(Dynamics6Dof.Params plan, double[] u)
+        {
+            if (Frozen && _set)
+                return;
+            _set = true;
+            (double[] g, double[] r) = Split(u);
+            double[][] gimbalK = { new[] { 0.0, 1.0 / Arm, 0.0 }, new[] { -1.0 / Arm, 0.0, 0.0 }, new[] { 0.0, 0.0, 0.0 } };
+            for (int a = 0; a < 3; a++)
+            {
+                double total = Math.Abs(g[a]) + Math.Abs(r[a]);
+                double share = total > 1.0 ? Math.Abs(g[a]) / total : 1.0;
+                for (int i = 0; i < 3; i++)
+                    plan.Rcs!.ForcePerNm[3 * a + i] = share * gimbalK[a][i] + (1.0 - share) * rcs.ForcePerNm[3 * a + i];
+            }
+        }
+
+        public void Reset(Dynamics6Dof.Params plan)
+        {
+            PeakRcs = PeakGimbal = 0.0;
+            _set = false;
+            UpdateEffective(plan, new double[NU]);
+            _set = false;
+        }
     }
 
     private static void Shift(double[] X, double[] U, double sigma, double elapsed, int n, out double[] sx, out double[] su, out double ss)

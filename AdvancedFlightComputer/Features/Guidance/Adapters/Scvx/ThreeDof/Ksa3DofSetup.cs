@@ -146,7 +146,8 @@ public static class Ksa3DofSetup
     /// <param name="floorMargin">Throttle the plan keeps in hand above the engines' minimum, for the burn tracker; see VehicleAutopilotState.LandingPlanFloorMargin.</param>
     public static Scvx3DofConfig Config(Vehicle vehicle, int nodes, int glideIntervals, double alphaMaxDeg,
                                         double comFloorM = 0.0, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
-                                        double turnAccelRadS2 = 0.0, bool fixedGlideAttitude = false)
+                                        double turnAccelRadS2 = 0.0, bool fixedGlideAttitude = false,
+                                        double burnTiltPerSDeg = 0.0)
     {
         var min = new double[PointMass3Dof.NX];
         var max = new double[PointMass3Dof.NX];
@@ -171,6 +172,7 @@ public static class Ksa3DofSetup
             TerminalAttitude = [0, 0, 1],
             AttitudeRateMax = PlanRateMax(vehicle),
             AttitudeAccelMax = Math.Max(turnAccelRadS2, 0.0),
+            BurnTiltPerS = Math.Max(burnTiltPerSDeg, 0.0) * Math.PI / 180.0,
             // Virtual control stays on XScale here, unlike 6-DOF's (Ksa6DofSetup.VirtualControlVelocityScaleMs). Priced at 5 m/s, the 2026-10-13 headless 7 t booster's locked burn solves ran out of ADMM iterations twelve times before ignition and handed 6-DOF a burn it had no plan for, and offline the 2 km cross-range cold solve gave up at both engine scales.
             AttitudeAnchor = true,
             PathSlackWeight = 1e3,

@@ -446,7 +446,7 @@ public sealed class Ksa6DofGuidance
         _lateralTorqueLeadS = lateralTorqueLeadS;
         // The price the config asks for is where pricing ends up, not where it starts; see PricingStage.
         _vcTarget = cfg.VirtualControlScale is { } target ? (double[])target.Clone() : null;
-        _solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        _solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEpsFor(dyn, cfg.Nodes) };
         _solver.MaxSubproblemIterations = ColdAdmmCap;
         _solver.EscalatedSubproblemIterations = EscalatedAdmmCap;
         SetPricingStage(0);
@@ -763,7 +763,7 @@ public sealed class Ksa6DofGuidance
 
         // Back to flight accuracy for everything after this. The looser tolerance is only defensible while the answer is a seed for the next solve rather than a trajectory the vehicle is about to fly.
         if (ok)
-            _solver.SubproblemEps = Scvx6DofSolver.RealTimeEps;
+            _solver.SubproblemEps = Scvx6DofSolver.RealTimeEpsFor(_dyn, _n);
 
         // STUCK: a run of refused iterations - what the log shows as a defect of infinity, there being no accepted step to measure. Each refusal halves the trust region and the re-anchoring above carries it into the next iteration, so the run pins it at its floor, and the re-anchoring moves the reference's position but not its time: the vehicle flies on while nodes 1..n stay where the solve began, and the gap at interval 0 grows faster than a floor-sized step can close it. The 2026-10-13 moon_des retarget's third restart sat there from 338 m - 6x, then 12x the attitude tolerance at interval 0 - until its plan ran out 7 m over the pad.
         //  So it starts again: from the vehicle's state now, the trust region wide open, the price loose, and a seed made now - the plan resampled to this moment for a solve that started from the plan, a new straight line for one that did not.

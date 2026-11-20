@@ -136,6 +136,21 @@ public sealed class Scvx6DofSolver
     public const double RealTimeEps = 1e-4;
 
     /// <summary>
+    /// The flight tolerance for a plan with RCS torque. 1e-3 was turned down above because, with the gimbals alone, it bought little over 1e-4. With the RCS in the plan it buys a great deal: the warm re-solves of a 103 m/s hand-over took SCS 825 iterations at 1e-3 against 7,800 at 3e-4, and with the RCS controls on the axis's whole torque (Scvx6DofConfig.ResolvedUScale) 100-775 against 1,700-3,400 at 1e-4, landing within 1-2 m either way (offline --6dof-rcs, 2026-11-20). The nonlinear defect gate still judges every plan.
+    /// </summary>
+    public const double RealTimeEpsWithRcs = 1e-3;
+
+    /// <summary>Node counts up to this keep <see cref="RealTimeEps"/> even with RCS in the plan.</summary>
+    public const int TightEpsMaxNodes = 10;
+
+    /// <summary>
+    /// The flight tolerance for these dynamics at <paramref name="nodes"/> nodes: <see cref="RealTimeEpsWithRcs"/> with RCS torque in the plan above <see cref="TightEpsMaxNodes"/> nodes, <see cref="RealTimeEps"/> otherwise.
+    ///  The last rungs keep the tight tolerance: at 1e-3 a 5-node plan could not get its attitude under the gate at the last interval (1.4-2.1x, every iteration accepted), every re-solve near the ground was refused, and the booster flew a stale plan to a stop 1.6 m short (2026-11-20). At 5-10 nodes an SCS iteration costs 13-30 microseconds, so the extra iterations cost milliseconds.
+    /// </summary>
+    public static double RealTimeEpsFor(Dynamics6Dof.Params dyn, int nodes)
+        => dyn.Rcs != null && nodes > TightEpsMaxNodes ? RealTimeEpsWithRcs : RealTimeEps;
+
+    /// <summary>
     /// Hard cap on ADMM iterations per subproblem. THE REAL-TIME PATH MUST HAVE A
     /// BOUNDED WORST CASE - a mean is not a guarantee.
     ///
@@ -515,19 +530,42 @@ public sealed class Scvx6DofSolver
             fk1.CopyTo(fk);
         }
 
-        return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq + AccelerationViolationCost(x, u), worst);
+        return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq + AccelerationViolationCost(x, u) + RateViolationCost(x), worst);
     }
 
     /// <summary>A seeded RCS control is put inside its bounds (Scvx6DofConfig.RcsBounds). A plan resampled from one built with more RCS, or with RCS where there is none now, would otherwise ask the first subproblem for a step its trust region cannot take.</summary>
     private void ClampRcsSeed(double[] u)
     {
         for (int k = 0; k < _n; k++)
+        {
             for (int a = 0; a < Dynamics6Dof.NRCS; a++)
             {
                 int i = k * NU + Dynamics6Dof.IRCS + a;
-                (double pos, double neg) = _cfg.RcsBounds(a);
+                (double pos, double neg) = _cfg.ControlTorqueBounds(a, u[k * NU + Dynamics6Dof.IT]);
                 u[i] = Math.Clamp(double.IsFinite(u[i]) ? u[i] : 0.0, -neg, pos);
             }
+            // TorqueDemand pins the gimbals' own controls at zero.
+            if (_cfg.TorqueDemand)
+            {
+                u[k * NU + Dynamics6Dof.ITDX] = 0.0;
+                u[k * NU + Dynamics6Dof.ITDY] = 0.0;
+                u[k * NU + Dynamics6Dof.ITAU] = 0.0;
+            }
+        }
+    }
+
+    /// <summary>The turn-rate limit's price on the trajectory, as the subproblem's slacks pay it (Scvx6DofConfig.RateMaxRadS).</summary>
+    private double RateViolationCost(double[] x)
+    {
+        if (!_cfg.RateLimitEnabled)
+            return 0.0;
+        double violation = 0.0;
+        for (int k = 1; k < _n; k++)
+        {
+            double wx = x[k * NX + Dynamics6Dof.IW], wy = x[k * NX + Dynamics6Dof.IW + 1], wz = x[k * NX + Dynamics6Dof.IW + 2];
+            violation += Math.Max(0.0, Math.Sqrt(wx * wx + wy * wy + wz * wz) - _cfg.RateMaxRadS);
+        }
+        return _cfg.RateWeight * violation / _cfg.XScale[Dynamics6Dof.IW];
     }
 
     private double AccelerationViolationCost(double[] x, double[] u)

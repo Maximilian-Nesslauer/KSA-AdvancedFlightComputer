@@ -213,6 +213,17 @@ public sealed class Scvx6DofConfig
     public double AccelWeight { get; init; } = 300;
     public bool AccelLimitEnabled => AccelMax > 0.0;
 
+    /// <summary>
+    /// THE TURN-RATE LIMIT, rad/s, or 0 for none: |w_k| &lt;= RateMaxRadS at every node from node 1 on, the body rate's whole magnitude, roll included. An exact second-order cone, soft like the glideslope with an L1 slack at <see cref="RateWeight"/>, so a craft handed over turning faster than this is brought back under it rather than given no plan.
+    ///  WHY. Before the RCS, the gimbals' small authority kept the plan's turns gentle. With the RCS the craft can turn hard, nothing in the objective objects (the rate penalty WW is tuned small in flight), and the cheapest plan used it: on 2026-11-20 the booster swung out to 23 deg of tilt and 25 deg/s of roll with the RCS slammed between its limits.
+    /// </summary>
+    public double RateMaxRadS { get; init; }
+
+    /// <summary>The turn-rate slack's price per rad/s over the limit, per node.</summary>
+    public double RateWeight { get; init; } = 1e3;
+
+    public bool RateLimitEnabled => RateMaxRadS > 0.0;
+
     /// <summary>cot of the glideslope half-angle: the cone's horizontal run per unit of height.</summary>
     public double CotGlideSlope => 1.0 / Math.Tan(Math.Clamp(GlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
 
@@ -260,7 +271,38 @@ public sealed class Scvx6DofConfig
     /// <summary>RCS axis <paramref name="a"/>'s bounds, N m: the most it may give the positive way, and the negative way as a magnitude; zeros for none.</summary>
     public (double Pos, double Neg) RcsBounds(int a) => (Bound(RcsMaxPosNm, a), Bound(RcsMaxNegNm, a));
 
-    /// <summary>The control scales: the gimbal, thrust and roll ones from UScale or Tmax, then one per RCS control, its own authority, or the roll scale for a control pinned at zero (any positive figure would do there).</summary>
+    /// <summary>
+    /// TORQUE DEMAND (a prototype, issue #222): the plan asks for one torque per body axis and a mixer outside the plan splits it between the gimbals and the RCS (and later the fins). The three torque controls (Dynamics6Dof.IRCS) then carry the WHOLE control torque; the gimbals' lateral thrust and roll torque controls are pinned at zero; the side force the torque brings is Dynamics6Dof.RcsModel.ForcePerNm, an effective factor the caller sets from the mixer's split.
+    ///  What the plan sees of the mixer is its envelope: per axis, the gimbals' torque per newton of axial thrust (<see cref="DemandTorquePerN"/> on pitch and yaw, <see cref="DemandRollPerN"/> on roll) times the thrust, plus the RCS's own bounds (<see cref="RcsBounds"/>); and how fast that torque can change, the gimbals' slew (GimbalSlewPerS) on their share plus what the RCS can jump.
+    ///  WHY. With the gimbals and the RCS both free in the plan, two torque sources that cost about the same stand in for each other, and SCS takes 5-20 times the iterations on the warm re-solves (2026-11-19/20). One torque per axis leaves nothing to trade.
+    /// </summary>
+    public bool TorqueDemand { get; init; }
+
+    /// <summary>The gimbals' pitch and yaw torque per newton of axial thrust, N m per N (engine arm times tan of the gimbal limit), for <see cref="TorqueDemand"/>.</summary>
+    public double DemandTorquePerN { get; init; }
+
+    /// <summary>The gimbals' roll torque per newton of axial thrust, N m per N, for <see cref="TorqueDemand"/>.</summary>
+    public double DemandRollPerN { get; init; }
+
+    /// <summary>The control torque's bounds on axis <paramref name="a"/> at axial thrust <paramref name="thrust"/>: the RCS's alone, or in <see cref="TorqueDemand"/> the gimbals' share at that thrust plus the RCS's.</summary>
+    public (double Pos, double Neg) ControlTorqueBounds(int a, double thrust)
+    {
+        (double pos, double neg) = RcsBounds(a);
+        if (!TorqueDemand)
+            return (pos, neg);
+        double g = (a < 2 ? DemandTorquePerN : DemandRollPerN) * Math.Max(thrust, 0.0);
+        return (pos + g, neg + g);
+    }
+
+    /// <summary>
+    /// The engine's arm from the centre of mass to the gimbal pivot, m (Dynamics6Dof.Params.LArm), for the RCS controls' scale; 0 leaves it out.
+    /// </summary>
+    public double GimbalArm { get; init; }
+
+    /// <summary>
+    /// The control scales: the gimbal, thrust and roll ones from UScale or Tmax, then one per RCS control: ALL the control torque on that axis, the RCS's authority plus the gimbals' at full thrust (Tmax tan(gimbal) GimbalArm on pitch and yaw, TauRollMax on roll), or the roll scale for a control pinned at zero (any positive figure would do there).
+    ///  WHY THE AXIS'S WHOLE TORQUE AND NOT THE RCS'S ALONE. Scaled by its own authority, an RCS control's trust region (TrustRegion x scale) was a tenth of what the RCS can give per iteration, and the warm re-solves kept running into it: SCS took 5-20 times the iterations it needs with the gimbals alone, often its cap (2026-11-19/20). On the axis's whole torque (about 3x the RCS's on the 2026-11-18 booster) it took 325 at 3e-4 and 100-775 at RealTimeEpsWithRcs, against 350-575 for the gimbals alone, and landed as well (offline --6dof-rcs). The torques the plan trades against each other share one scale.
+    /// </summary>
     public double[] ResolvedUScale
     {
         get
@@ -273,9 +315,12 @@ public sealed class Scvx6DofConfig
             double fallback = TauRollMax > 0.0 && double.IsFinite(TauRollMax) ? TauRollMax : 1.0;
             for (int a = 0; a < Dynamics6Dof.NRCS; a++)
             {
-                (double pos, double neg) = RcsBounds(a);
+                (double pos, double neg) = ControlTorqueBounds(a, Tmax);
                 double max = Math.Max(pos, neg);
-                all[Dynamics6Dof.IRCS + a] = max > 0.0 ? max : fallback;
+                // TorqueDemand's bounds already hold the gimbals' share.
+                double gimbal = TorqueDemand || !(GimbalArm > 0.0) ? 0.0
+                    : a < 2 ? Tmax * TanGimbal * GimbalArm : Math.Max(TauRollMax, 0.0);
+                all[Dynamics6Dof.IRCS + a] = max > 0.0 ? max + gimbal : fallback;
             }
             return all;
         }

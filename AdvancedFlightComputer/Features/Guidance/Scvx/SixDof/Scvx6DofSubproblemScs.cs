@@ -38,8 +38,8 @@ public sealed class Scvx6DofSubproblemScs
     private readonly double _dtau;
     private readonly double[] _xs, _us;
 
-    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _oAc, _nVars;
-    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nAc;
+    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _oAc, _oRr, _nVars;
+    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nAc, _nRr;
     private readonly int _nEq, _lDim, _nCone;   // _nCone = total rows = nEq + lDim + sum(soc)
     private readonly int[] _socDims;
 
@@ -52,6 +52,7 @@ public sealed class Scvx6DofSubproblemScs
     private bool _frozen;
     private int _row;   // cone-row cursor
     private readonly int _nSlew;
+    private readonly int _nPin;   // TorqueDemand: two rows per node for each of the gimbals' lateral thrusts and roll torque, pinning them at zero
 
     public int VariableCount => _nVars;
     public int EqualityCount => _nEq;
@@ -100,7 +101,10 @@ public sealed class Scvx6DofSubproblemScs
         // The acceleration limit's slacks, one per node and LAST, so every earlier block keeps its offset.
         _nAc = cfg.AccelLimitEnabled ? _n : 0;
         _oAc = _oTm + _nTm;
-        _nVars = _oAc + _nAc;
+        // The turn-rate limit's slacks, one per node from node 1, LAST again (Scvx6DofConfig.RateMaxRadS).
+        _nRr = cfg.RateLimitEnabled ? _n - 1 : 0;
+        _oRr = _oAc + _nAc;
+        _nVars = _oRr + _nRr;
 
         // With the terminal roll free, three terminal rows go (qw, qz, wz) and the last node gets a tangent-plane row.
         _nEq = NX + (NX - 1) + (_n - 1) * NX + (_n - 2) - (cfg.TerminalRollFree ? 2 : 0);
@@ -110,13 +114,16 @@ public sealed class Scvx6DofSubproblemScs
         // + four rows per interval for the gimbal's slew rate, the last of the orthant rows.
         _nSlew = cfg.GimbalSlewPerS > 0.0 ? 4 * (_n - 1) : 0;
         // + two rows per node for each RCS control's bounds, 0 <= u <= its authority, the last orthant rows of all.
+        _nPin = cfg.TorqueDemand ? 6 * _n : 0;
         _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm + 2 * _nAc + _nSlew
-                + 2 * _n * Dynamics6Dof.NRCS;
-        _socDims = new int[_n + _nGs + _n];
+                + 2 * _n * Dynamics6Dof.NRCS + _nPin + _nRr;
+        _socDims = new int[_n + _nGs + _n + _nRr];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
         // Tilt cones LAST, so adding them leaves every pre-existing block at the row offset it already had - anything reading a cone index keeps its meaning.
         for (int k = 0; k < _n; k++) _socDims[_n + _nGs + k] = 3; // tilt cone per node
+        // ...and the turn-rate cones after them, for the same reason.
+        for (int k = 0; k < _nRr; k++) _socDims[_n + _nGs + _n + k] = 4; // |w| per node from node 1
         _nCone = _nEq + _lDim + _socDims.Sum();
 
         _A = new CcsAssembler(_nCone, _nVars);
@@ -140,6 +147,7 @@ public sealed class Scvx6DofSubproblemScs
         for (int i = 0; i < _nTmPos; i++) _colScale[_oTm + i] = _xs[Dynamics6Dof.IR];
         for (int i = 0; i < _nTmVel; i++) _colScale[_oTm + _nTmPos + i] = _xs[Dynamics6Dof.IV];
         for (int k = 0; k < _nAc; k++) _colScale[_oAc + k] = _us[Dynamics6Dof.IT];
+        for (int k = 0; k < _nRr; k++) _colScale[_oRr + k] = _xs[Dynamics6Dof.IW];
     }
 
     private void AddA(int row, int col, double value) => _A.Add(row, col, value * _colScale[col]);
@@ -376,6 +384,8 @@ public sealed class Scvx6DofSubproblemScs
                 _cfg.TerminalSpeedWeight * _colScale[_oTm + _nTmPos + i] / _xs[Dynamics6Dof.IV];
         for (int k = 0; k < _nAc; k++)
             _c[_oAc + k] += _cfg.AccelWeight * _colScale[_oAc + k] / _us[Dynamics6Dof.IT];
+        for (int k = 0; k < _nRr; k++)
+            _c[_oRr + k] += _cfg.RateWeight * _colScale[_oRr + k] / _xs[Dynamics6Dof.IW];
     }
 
     // -------------------------------------------------------------- equalities
@@ -565,20 +575,23 @@ public sealed class Scvx6DofSubproblemScs
         _b[row++] = _cfg.SigmaMax;
 
         // THE GIMBAL'S SLEW RATE (Scvx6DofConfig.GimbalSlewPerS): |td_{k+1} - td_k| <= rate * dt * tan(gimbal) * (T_k + T_{k+1}) / 2 on each lateral axis, with dt at the reference burn time as the dynamics take it.
+        // In TorqueDemand the same limit falls on the pitch and yaw torque: the gimbals' share slews at their rate, |tau_{k+1} - tau_k| <= rate * dt * DemandTorquePerN * (T_k + T_{k+1}) / 2 + what the RCS can jump, from one bound to the other.
         if (_nSlew > 0)
         {
-            double reach = 0.5 * _cfg.GimbalSlewPerS * _dtau * sigBar * _cfg.TanGimbal;
+            double perN = _cfg.TorqueDemand ? _cfg.DemandTorquePerN : _cfg.TanGimbal;
+            double reach = 0.5 * _cfg.GimbalSlewPerS * _dtau * sigBar * perN;
             for (int k = 0; k < _n - 1; k++)
                 for (int axis = 0; axis < 2; axis++)
                 {
-                    int j = axis == 0 ? Dynamics6Dof.ITDX : Dynamics6Dof.ITDY;
+                    int j = _cfg.TorqueDemand ? Dynamics6Dof.IRCS + axis : axis == 0 ? Dynamics6Dof.ITDX : Dynamics6Dof.ITDY;
+                    (double pos, double neg) = _cfg.TorqueDemand ? _cfg.RcsBounds(axis) : (0.0, 0.0);
                     for (int sign = 1; sign >= -1; sign -= 2)
                     {
                         AddA(row, IU(k + 1, j), sign);
                         AddA(row, IU(k, j), -sign);
                         AddA(row, IU(k, Dynamics6Dof.IT), -reach);
                         AddA(row, IU(k + 1, Dynamics6Dof.IT), -reach);
-                        _b[row++] = 0.0;
+                        _b[row++] = pos + neg;
                     }
                 }
         }
@@ -589,14 +602,53 @@ public sealed class Scvx6DofSubproblemScs
             {
                 int col = IU(k, Dynamics6Dof.IRCS + a);
                 (double pos, double neg) = _cfg.RcsBounds(a);
+                // In TorqueDemand the gimbals' share grows with the thrust (Scvx6DofConfig.ControlTorqueBounds): -tau - perN T <= neg, tau - perN T <= pos.
+                double perN = !_cfg.TorqueDemand ? 0.0 : a < 2 ? _cfg.DemandTorquePerN : _cfg.DemandRollPerN;
                 AddA(row, col, -1.0);
+                if (perN > 0.0) AddA(row, IU(k, Dynamics6Dof.IT), -perN);
                 _b[row++] = neg;
                 AddA(row, col, 1.0);
+                if (perN > 0.0) AddA(row, IU(k, Dynamics6Dof.IT), -perN);
                 _b[row++] = pos;
             }
 
+        // The turn-rate slacks are non-negative.
+        for (int k = 0; k < _nRr; k++)
+        {
+            AddA(row, _oRr + k, -1.0);
+            _b[row++] = 0.0;
+        }
+
+        // TorqueDemand: the gimbals' lateral thrust and roll torque at zero; the control torque carries it all.
+        if (_nPin > 0)
+            for (int k = 0; k < _n; k++)
+                foreach (int j in new[] { Dynamics6Dof.ITDX, Dynamics6Dof.ITDY, Dynamics6Dof.ITAU })
+                {
+                    AddA(row, IU(k, j), 1.0);
+                    _b[row++] = 0.0;
+                    AddA(row, IU(k, j), -1.0);
+                    _b[row++] = 0.0;
+                }
+
+        // In TorqueDemand the same cone bounds the pitch and yaw torque as the mixer can give it together: ||(tau_x, tau_y)|| <= DemandTorquePerN T + the largest disc inside the RCS's box. The gimbals' share is a disc (they tilt one nozzle), so the box rows alone would promise up to 1.4 times the gimbals' torque at its corners.
         for (int k = 0; k < _n; k++)
         {
+            if (_cfg.TorqueDemand)
+            {
+                double disc = double.PositiveInfinity;
+                for (int a = 0; a < 2; a++)
+                {
+                    (double pos, double neg) = _cfg.RcsBounds(a);
+                    disc = Math.Min(disc, Math.Min(pos, neg));
+                }
+                AddA(row, IU(k, Dynamics6Dof.IT), -_cfg.DemandTorquePerN);
+                _b[row++] = double.IsFinite(disc) ? disc : 0.0;
+                AddA(row, IU(k, Dynamics6Dof.IRCS), -1.0);
+                _b[row++] = 0;
+                AddA(row, IU(k, Dynamics6Dof.IRCS + 1), -1.0);
+                _b[row++] = 0;
+                continue;
+            }
             AddA(row, IU(k, Dynamics6Dof.IT), -_cfg.TanGimbal);
             _b[row++] = 0;
             AddA(row, IU(k, Dynamics6Dof.ITDX), -1.0);
@@ -678,6 +730,18 @@ public sealed class Scvx6DofSubproblemScs
 
             AddA(row, IX(k, Dynamics6Dof.IQ + 2), -1.0);
             _b[row++] = 0.0;
+        }
+
+        // TURN RATE, from node 1 on: ||w_k|| <= RateMaxRadS + r_k (Scvx6DofConfig.RateMaxRadS). Node 0 is the measured rate, which the plan cannot change.
+        for (int k = 0; k < _nRr; k++)
+        {
+            AddA(row, _oRr + k, -1.0);
+            _b[row++] = _cfg.RateMaxRadS;
+            for (int i = 0; i < 3; i++)
+            {
+                AddA(row, IX(k + 1, Dynamics6Dof.IW + i), -1.0);
+                _b[row++] = 0.0;
+            }
         }
 
         if (row != _nCone)

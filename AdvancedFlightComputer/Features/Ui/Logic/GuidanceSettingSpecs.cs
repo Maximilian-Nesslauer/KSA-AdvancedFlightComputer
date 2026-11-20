@@ -241,7 +241,7 @@ internal static class GuidanceSettingSpecs
 
     public static readonly SettingSpec ThreeDofEngageTgoS = new("ThreeDofEngageTgoS", "AT IMPACT T-", "s", P, 45.0, 0.0, 1e4, "%.1f",
         "Predicted time to impact at which ENTRY takes over a boostback glide.");
-    public static readonly SettingSpec ThreeDofSixDofTimeS = new("ThreeDofSixDofTimeS", "AT BURN LEFT", "s", P, 5.0, 0.0, 1e3, "%.1f",
+    public static readonly SettingSpec ThreeDofSixDofTimeS = new("ThreeDofSixDofTimeS", "AT BURN LEFT", "s", P, 30.0, 0.0, 1e3, "%.1f",
         "Burn left in the plan at which TOUCHDOWN takes over the burn, once its standby plan is ready.");
     public static readonly SettingSpec ThreeDofSmoothTau = new("ThreeDofSmoothTau", "COMMAND SMOOTHING", "s", T, 0.05, 0.0, 60.0, "%.2f",
         "Time constant of the low-pass filter on the plan attitude and throttle. 0 switches it off.");

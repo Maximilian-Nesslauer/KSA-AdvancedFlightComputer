@@ -380,7 +380,8 @@ public static class Ksa6DofSetup
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
                                 out string error, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
                                 KsaAeroSweep.Result aero = null, bool? keptRollFree = null, bool bodyAero = true,
-                                bool gimbalRateLimit = true, Dynamics6Dof.RcsModel rcs = null, double rcsWeight = 0.0)
+                                bool gimbalRateLimit = true, Dynamics6Dof.RcsModel rcs = null, double rcsWeight = 0.0,
+                                double rateMaxDegS = 0.0)
     {
         cfg = null!;
         dyn = null!;
@@ -561,12 +562,16 @@ public static class Ksa6DofSetup
             Tmax = thrust,
             ThrottleFloor = throttleFloor,
             GimbalMaxDeg = gimbalDeg,
+            // The RCS controls are scaled on each axis's whole control torque (Scvx6DofConfig.ResolvedUScale).
+            GimbalArm = arm,
             GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) : 0.0,
             TauRollMax = tauRoll,
             RollTorqueFollowsThrust = true,
             RcsMaxPosNm = rcs?.MaxPosNm,
             RcsMaxNegNm = rcs?.MaxNegNm,
             RcsWeight = rcsWeight,
+            // The turn-rate limit (Scvx6DofConfig.RateMaxRadS).
+            RateMaxRadS = Math.Max(rateMaxDegS, 0.0) * Math.PI / 180.0,
             TerminalRollFree = rollFree,
             // WIDENED TO ADMIT THE CURRENT ATTITUDE. The tilt cone is applied at every node INCLUDING node 0, and node 0 is pinned by an equality to the measured state - so a cap below the vehicle's present tilt asks for a quaternion that is simultaneously exactly the measured one and inside a cone the measured one is outside. That is infeasible by construction, not merely expensive: measured offline from the the recorded run entry at 92.1 degrees with a 60-degree cap, NO node count solves at all - infinite defect at 15, 30 and 50 nodes, never reaching even the loose cold gate. Raise the cap above the entry attitude and the same problem solves at every one of them.
             //  This is the same failure the trust-region box had before it was moved off node 0, and the reason the glideslope and climb-rate constraints start at node 1. Widening rather than restructuring the rows, because the row layout is what the Python reference comparison checks.

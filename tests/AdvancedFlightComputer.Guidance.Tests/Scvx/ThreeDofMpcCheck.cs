@@ -83,6 +83,8 @@ internal static class ThreeDofMpcCheck
         BodyUp = Num("--body-up", 0.0);
         BodyTruthOnly = args.Contains("--body-truth-only");
         // --budget / --recovery-budget: the game's wall-clock caps per warm cycle and after a refusal, ms (60 and 200 in flight); 0, the default, for none, so the flight does not depend on the machine.
+        // --burn-tilt: the burn's tilt limit, degrees per second of burn left (Scvx3DofConfig.BurnTiltPerS), 0 for none.
+        BurnTilt = Num("--burn-tilt", 0.0);
         CycleBudget = Num("--budget", 0.0);
         RecoveryBudget = Num("--recovery-budget", 0.0);
         Console.WriteLine($"burn tracking {(flight.Tracker is { } k ? $"Kp {k.Kp:F2} Kd {k.Kd:F2} tilt {k.MaxTiltRad * 180.0 / Math.PI:F0} deg" : "off")}, " +
@@ -122,7 +124,7 @@ internal static class ThreeDofMpcCheck
 
     private static double BodySide = double.NaN, BodyUp;
     private static bool BodyTruthOnly;
-    private static double CycleBudget, RecoveryBudget;
+    private static double CycleBudget, RecoveryBudget, BurnTilt;
 
     private sealed record Result(bool Pass, bool Flown, double Miss, double Vz, int Refused, double AdmmPerCycle, double P50, double Max);
 
@@ -167,8 +169,8 @@ internal static class ThreeDofMpcCheck
             LiftScale = c.Lift,
             VacuumThrust = nominal.VacuumThrust * c.Thrust,
         };
-        Scvx3DofConfig glide = ThreeDofScenario.Config(anchor: true, accelMax: new Guidance3Dof.Settings().GlideAccelMax(flight.AccelMax), turnAccel: flight.TurnAccel, vcVelocity: flight.VcVelocity);
-        Scvx3DofConfig burn = ThreeDofScenario.Config(nodes: 20, glideIntervals: 0, anchor: true, accelMax: flight.AccelMax, turnAccel: flight.TurnAccelBurn, vcVelocity: flight.VcVelocity);
+        Scvx3DofConfig glide = ThreeDofScenario.Config(anchor: true, accelMax: new Guidance3Dof.Settings().GlideAccelMax(flight.AccelMax), turnAccel: flight.TurnAccel, vcVelocity: flight.VcVelocity, burnTiltPerSDeg: BurnTilt);
+        Scvx3DofConfig burn = ThreeDofScenario.Config(nodes: 20, glideIntervals: 0, anchor: true, accelMax: flight.AccelMax, turnAccel: flight.TurnAccelBurn, vcVelocity: flight.VcVelocity, burnTiltPerSDeg: BurnTilt);
         // No wall-clock deadlines offline: they make the iteration count, and so the flight, depend on the machine's speed. The iteration caps still bound every cycle.
         // Anchored on the last command, tight, as the game flies it.
         var guidance = new Guidance3Dof(glide, burn, nominal, new Guidance3Dof.Settings
@@ -208,6 +210,7 @@ internal static class ThreeDofMpcCheck
         double throttle = 0.0;
         bool engine = false, lit = false, cut = false;
         double commanded = double.NaN, cutHeight = double.NaN, peakAccel = 0.0;
+        double ignitionSlant = double.NaN, ignitionSideways = double.NaN, tiltAt2 = double.NaN;
         Plan3Dof? lastGlidePlan = guidance.Published;
         while (t < 400)
         {
@@ -248,7 +251,18 @@ internal static class ThreeDofMpcCheck
             double[] xp = new double[NX], up = new double[4];
             plan.Sample(t, xp, up);
             engine = t >= plan.IgnitionTime;
-            if (engine && double.IsNaN(commanded)) commanded = t;
+            if (engine && double.IsNaN(commanded))
+            {
+                commanded = t;
+                ignitionSlant = Math.Atan2(Math.Sqrt(x[3] * x[3] + x[4] * x[4]), -x[5]) * 180.0 / Math.PI;
+                ignitionSideways = Math.Sqrt(x[3] * x[3] + x[4] * x[4]);
+            }
+            if (engine && !cut)
+            {
+                double tiltNow = Math.Acos(Math.Clamp(att[2], -1.0, 1.0)) * 180.0 / Math.PI;
+                double left = plan.EndTime - t;
+                if (left <= 2.0 && left > 1.9) tiltAt2 = tiltNow;
+            }
             if (engine && flight.Tracker != null)
             {
                 // The game's command: the tracker's thrust, as the throttle that gives it by the engine as now learned, inside what the engine can do.
@@ -304,7 +318,7 @@ internal static class ThreeDofMpcCheck
         bool landed = x[2] <= Xf[2] + 1.0;
         bool pass = landed && miss < 15.0 && vh < 2.0 && Math.Abs(vz - Xf[5]) < 2.0 && x[6] > ThreeDofScenario.DryMass;
         double admmPerCycle = solveMs.Count > 0 ? (double)admm / solveMs.Count : double.NaN;
-        Console.WriteLine($"{c.Name,-18} {miss,7:F1} {vh,7:F2} {vz,7:F2} {prop,8:F0} {drift,11:F2} {refused,7} {admmPerCycle,8:F0} {p50,8:F0}/{max,-8:F0} {swapJump,11:F1} {(cut ? cutHeight.ToString("F1") : "-"),6} {peakAccel / 9.80665,6:F2} {t - commanded,6:F1}  " +
+        Console.WriteLine($"{c.Name,-18} {miss,7:F1} {vh,7:F2} {vz,7:F2} {prop,8:F0} {drift,11:F2} {refused,7} {admmPerCycle,8:F0} {p50,8:F0}/{max,-8:F0} {swapJump,11:F1} {(cut ? cutHeight.ToString("F1") : "-"),6} {peakAccel / 9.80665,6:F2} {t - commanded,6:F1}  slant {ignitionSlant,4:F1} deg {ignitionSideways,4:F0} m/s, tilt@2s {tiltAt2,4:F1}  " +
                           $"{(pass ? "ok" : landed ? "OFF TARGET" : $"FAILED at {x[2]:F0} m: {guidance.Error}")}");
         return new Result(pass, true, miss, vz, refused, admmPerCycle, p50, max);
     }
