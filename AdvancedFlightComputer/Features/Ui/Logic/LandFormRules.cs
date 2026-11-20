@@ -76,7 +76,7 @@ internal static class LandChain
 internal readonly record struct DescentFacts(
     bool Known, double ThrustN, double VacuumN, double WeightN, double GravityMs2, double AmbientPa,
     double Floor, double CraftFloor, double TwrAtFloor, double TwrAtCraftMin, double NeedTiltDeg, double TiltLimitDeg,
-    double DescentMs, double AltToGoM, bool NoGimbal = false, double SinkMs = double.NaN, double HeightM = double.NaN)
+    double DescentMs, double AltToGoM, bool NoSteering = false, double SinkMs = double.NaN, double HeightM = double.NaN)
 {
     public double TwrMax => WeightN > 0.0 ? ThrustN / WeightN : 0.0;
 

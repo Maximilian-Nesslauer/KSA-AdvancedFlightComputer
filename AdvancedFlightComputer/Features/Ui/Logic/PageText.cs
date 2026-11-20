@@ -873,7 +873,8 @@ internal static class PageText
 
     public const string HoverNoEngine = "NO HOVER: NO LIT LIQUID ENGINE.";
 
-    public const string NoGimbalFact = "NO GIMBAL: NO LANDING GUIDANCE CAN FLY THIS CRAFT.";
+    /// <summary>A craft with neither a gimbal nor RCS that turns it about pitch and yaw: touchdown guidance cannot point its thrust, and G-FOLD needs a gimbal.</summary>
+    public const string NoSteeringFact = "NO GIMBAL OR RCS: NO LANDING GUIDANCE CAN FLY THIS CRAFT.";
 
     /// <summary>The refusal of a landing that neither touchdown guidance nor G-FOLD can fly, with the reason of each.</summary>
     public static string LandingRefused(string touchdown, string gfold)

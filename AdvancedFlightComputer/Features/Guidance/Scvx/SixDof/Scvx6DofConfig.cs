@@ -359,7 +359,9 @@ public sealed class Scvx6DofConfig
     {
         get
         {
-            double[] head = UScale ?? [Tmax * TanGimbal, Tmax * TanGimbal, Tmax, TauRollMax];
+            // A craft with no gimbal has a zero cone, which pins its gimbal controls; their scale still has to be positive, so they take a hundredth of the thrust.
+            double gimbalScale = Tmax * TanGimbal > 0.0 ? Tmax * TanGimbal : 0.01 * Tmax;
+            double[] head = UScale ?? [gimbalScale, gimbalScale, Tmax, TauRollMax];
             if (head.Length >= Dynamics6Dof.NU)
                 return head;
             var all = new double[Dynamics6Dof.NU];

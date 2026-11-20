@@ -86,9 +86,9 @@ internal static class LandSolvers
                 return new RowNote("NEEDS AIR", Stops: true);
             case LandSolver.Gfold when f.HasAir:
                 return new RowNote(f.Body.Length > 0 ? f.Body + " HAS AIR" : "HAS AIR", Stops: true);
-            // No gimbal stops the landing, because G-FOLD needs one too (GuidanceWindow.GfoldCanFly). G-FOLD flies a craft whose floor is too high, so that note stops nothing.
-            case LandSolver.Touchdown when f.Descent.Known && f.Descent.NoGimbal:
-                return new RowNote("NO GIMBAL", Stops: true);
+            // Neither a gimbal nor RCS that steers stops the landing: touchdown guidance points its thrust with either (Ksa6DofSetup.RcsSteers), and G-FOLD needs a gimbal (GuidanceWindow.GfoldCanFly). G-FOLD flies a craft whose floor is too high, so that note stops nothing.
+            case LandSolver.Touchdown when f.Descent.Known && f.Descent.NoSteering:
+                return new RowNote("NO GIMBAL OR RCS", Stops: true);
             case LandSolver.Touchdown when f.Descent.Known && f.Descent.OverPowered:
                 return new RowNote("FLOOR TOO HIGH");
             case LandSolver.Touchdown when f.Descent.Known && f.Descent.TwrAtFloor > 1.0:

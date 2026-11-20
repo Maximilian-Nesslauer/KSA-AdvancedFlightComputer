@@ -54,6 +54,8 @@ internal static class SixDofRcsCheck
     private static double RcsScale = 1.0;
     private static bool Diag;
 
+    internal static bool NoGimbal => Environment.GetCommandLineArgs().Contains("--no-gimbal");
+
     internal static int Run(bool verbose)
     {
         string[] args = Environment.GetCommandLineArgs();
@@ -102,6 +104,7 @@ internal static class SixDofRcsCheck
             return 0;
         }
         Console.WriteLine("TOUCHDOWN GUIDANCE WITH RCS TORQUE");
+        if (NoGimbal) Console.WriteLine("  --no-gimbal: no gimbal on the craft. \"gimbals alone\" has no torque at all, \"gimbals and RCS\" is the RCS alone.");
         bool ok = Allocator();
         Landings(verbose);
         Console.WriteLine();
@@ -383,8 +386,9 @@ internal static class SixDofRcsCheck
             CoastIntervals = coastIntervals,
             Tmax = Tmax,
             ThrottleFloor = Floor,
-            GimbalMaxDeg = GimbalDeg,
-            GimbalArm = Environment.GetCommandLineArgs().Contains("--old-scale") ? 0.0 : Arm,
+            // --no-gimbal: a craft that points its thrust with the RCS alone, as Ksa6DofSetup plans one (a zero cone and no arm).
+            GimbalMaxDeg = NoGimbal ? 0.0 : GimbalDeg,
+            GimbalArm = Environment.GetCommandLineArgs().Contains("--old-scale") || NoGimbal ? 0.0 : Arm,
             GimbalSlewPerS = Environment.GetCommandLineArgs().Contains("--noslew") ? 0.0 : SlewPerS,
             // --roll-pinned (coast check): as the 12:20-12:53 boosters flew - their engine gives 88.8 kN m of roll at full thrust, so the plan holds the heading to the end (Ksa6DofSetup.RollModel).
             TauRollMax = RollPinned ? 88_833.0 : 1.0e4,

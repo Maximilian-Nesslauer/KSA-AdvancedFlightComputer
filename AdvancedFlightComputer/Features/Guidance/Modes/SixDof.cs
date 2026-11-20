@@ -2153,7 +2153,7 @@ public static partial class GuidanceWindow
         return new Ui.Logic.DescentFacts(
             Known: true, ThrustN: thrust, VacuumN: KsaEnginePerf.AtPressure(vehicle, 0.0).thrust, WeightN: weight, GravityMs2: g, AmbientPa: ambientPa,
             Floor: floor, CraftFloor: craftFloor, TwrAtFloor: twrAtFloor, TwrAtCraftMin: twrAtCraftMin, NeedTiltDeg: needTilt, TiltLimitDeg: _s.SixDofTiltDeg,
-            DescentMs: -xNow[5], AltToGoM: xNow[2] - _s.SixDofTargetComAltM, NoGimbal: Ksa6DofSetup.GimbalLimitDeg(vehicle) <= 0.0,
+            DescentMs: -xNow[5], AltToGoM: xNow[2] - _s.SixDofTargetComAltM, NoSteering: Ksa6DofSetup.GimbalLimitDeg(vehicle) <= 0.0 && !Ksa6DofSetup.RcsSteers(PlanRcs(vehicle)),
             SinkMs: -double3.Dot(orbit.StateVectors.VelocityCci, double3.Normalize(r)), HeightM: TerminalHeight(orbit, parent, parent.MeanRadius));
     }
 }

@@ -174,7 +174,7 @@ internal static class PageKit
         Vehicle subject = ctx.Subject;
         CommitGates gates = GuidanceWindow.CommitGatesFor(subject, mode, in ctx.Frame.Situation);
         // A craft that no landing guidance can fly keeps that fact after a refusal, because a second press cannot fly it either.
-        bool noGuidance = gates.PageFact == PageText.NoGimbalFact;
+        bool noGuidance = gates.PageFact == PageText.NoSteeringFact;
         if (!noGuidance && ctx.Frame.FailureWhat.Length > 0 && PageText.FailureOf(ctx.Frame.FailureWhat, mode))
             gates = gates with { PageFact = PageText.TriesAgain, PageFactNext = null, PageFactSolver = null, PageFactCalm = true };
         CraftActivity activity = ctx.Frame.Activity;

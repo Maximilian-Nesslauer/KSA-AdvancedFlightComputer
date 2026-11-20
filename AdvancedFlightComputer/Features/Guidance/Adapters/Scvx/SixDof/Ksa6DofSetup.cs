@@ -39,13 +39,25 @@ public static class Ksa6DofSetup
     internal const double ModelRollTorqueFloorNm = 1.0e-3;
 
     /// <summary>
-    /// The roll part of the model for gimbals that give <paramref name="tauRoll"/> N m at full thrust about a roll inertia of <paramref name="izz"/>: whether the plan leaves the roll free, and the roll torque bound. A choice made for an earlier plan of the same landing comes in as <paramref name="keptRollFree"/> and stands, because the roll inertia falls with the propellant and a craft near the floor would otherwise change the end condition between two plans.
+    /// The roll part of the model for gimbals that give <paramref name="tauRoll"/> N m at full thrust, and RCS that gives <paramref name="rcsRollNm"/> N m either way, about a roll inertia of <paramref name="izz"/>: whether the plan leaves the roll free, and the gimbals' roll torque bound. The roll is held when the two together can stop it; the RCS's roll is its own control (Scvx6DofConfig.RcsMaxPosNm), not part of the bound. A choice made for an earlier plan of the same landing comes in as <paramref name="keptRollFree"/> and stands, because the roll inertia falls with the propellant and a craft near the floor would otherwise change the end condition between two plans.
     /// </summary>
-    internal static void RollModel(double tauRoll, double izz, bool? keptRollFree, out bool rollFree, out double modelTauRoll)
+    internal static void RollModel(double tauRoll, double izz, bool? keptRollFree, out bool rollFree, out double modelTauRoll, double rcsRollNm = 0.0)
     {
-        rollFree = keptRollFree ?? tauRoll < RollAuthorityFloorRadS2 * izz;
+        rollFree = keptRollFree ?? tauRoll + Math.Max(rcsRollNm, 0.0) < RollAuthorityFloorRadS2 * izz;
         modelTauRoll = Math.Max(tauRoll, ModelRollTorqueFloorNm);
     }
+
+    /// <summary>Whether the RCS turns the craft both ways about pitch and yaw (model x and y), so a plan can point its thrust with it alone.</summary>
+    internal static bool RcsSteers(Dynamics6Dof.RcsModel rcs)
+    {
+        if (rcs?.MaxPosNm is not { Length: >= 2 } pos || rcs.MaxNegNm is not { Length: >= 2 } neg)
+            return false;
+        return pos[0] > 0.0 && neg[0] > 0.0 && pos[1] > 0.0 && neg[1] > 0.0;
+    }
+
+    /// <summary>The RCS's roll torque the weaker way, N m; 0 without RCS roll.</summary>
+    internal static double RcsRollNm(Dynamics6Dof.RcsModel rcs)
+        => rcs?.MaxPosNm is { Length: >= 3 } pos && rcs.MaxNegNm is { Length: >= 3 } neg ? Math.Max(Math.Min(pos[2], neg[2]), 0.0) : 0.0;
     public static double LastVacuumThrustN { get; private set; }
     public static double LastPressureThrustN { get; private set; }
 
@@ -450,10 +462,12 @@ public static class Ksa6DofSetup
         // Tmax is the thrust of every engine the craft runs, because no engine is shut down for the landing. The throttle command is T / Tmax of the model, so a plan built against a smaller Tmax would command full throttle for part of the thrust and overshoot every plan.
         // An over-powered vehicle is a real situation, not something to model around. The feasibility readout reports it and names the throttle floor that would work.
 
+        // NO GIMBAL: the plan points the thrust with the RCS alone, where it turns the craft both ways about pitch and yaw (RcsSteers). The gimbal's controls are then pinned at zero by their own cone (a zero angle), and its arm and roll play no part.
         double gimbalDeg = GimbalLimitDeg(vehicle);
-        if (gimbalDeg <= 0.0)
+        bool noGimbal = gimbalDeg <= 0.0;
+        if (noGimbal && !RcsSteers(rcs))
         {
-            error = "no gimballed engine - touchdown guidance needs thrust vectoring";
+            error = "no gimballed engine and no RCS torque on pitch and yaw - nothing to point the thrust with";
             return false;
         }
 
@@ -465,8 +479,8 @@ public static class Ksa6DofSetup
         if (planningThrust > 0.0)
             tauRoll *= thrust / planningThrust;
 
-        double arm = EngineArm(vehicle);
-        if (arm <= 0.0)
+        double arm = noGimbal ? 0.0 : EngineArm(vehicle);
+        if (!noGimbal && arm <= 0.0)
         {
             error = "engine thrust point coincides with the centre of mass";
             return false;
@@ -488,7 +502,7 @@ public static class Ksa6DofSetup
             error = "vehicle inertia is degenerate";
             return false;
         }
-        RollModel(tauRoll, izz, keptRollFree, out bool rollFree, out tauRoll);
+        RollModel(tauRoll, izz, keptRollFree, out bool rollFree, out tauRoll, RcsRollNm(rcs));
 
         // THE TORQUE MARGIN (Scvx6DofConfig.PlanTorqueShare): the plan gets this share of the gimbals' torque, their roll and the RCS's, and the attitude feedback the rest (AttitudeFeedback6Dof). The cone is shrunk in torque, through its tangent; the gimbals' slew, in full deflections a second, is widened by as much so it stays the hardware's rate in degrees. After the roll model, so a margin cannot by itself decide the roll is left free.
         double torqueShare = Math.Clamp(1.0 - (double.IsFinite(torqueMargin) ? torqueMargin : 0.0), 0.5, 1.0);
@@ -660,11 +674,11 @@ public static class Ksa6DofSetup
         //  The realistic path is not exotic: `gScale = Mu / |siteCci|^2` is Infinity if the site has not resolved yet, and `Math.Max(NaN, x)` RETURNS NaN, so a single bad intermediate propagates silently through the scale chain.
         (string Name, double Value)[] mustBeFinitePositive =
         [
-            ("Tmax", cfg.Tmax), ("Tmin", cfg.Tmin), ("gimbal limit", cfg.GimbalMaxDeg),
+            ("Tmax", cfg.Tmax), ("Tmin", cfg.Tmin), ("gimbal limit", noGimbal ? 1.0 : cfg.GimbalMaxDeg),
             ("tau_roll max", cfg.TauRollMax), ("tilt limit", cfg.TiltMaxDeg),
             ("sigma scale", cfg.SigmaScale), ("sigma min", cfg.SigmaMin), ("sigma max", cfg.SigmaMax),
             ("length scale", lengthScale), ("velocity scale", velocityScale),
-            ("gravity", -dyn.Gz), ("Isp", dyn.Isp), ("L_arm", dyn.LArm),
+            ("gravity", -dyn.Gz), ("Isp", dyn.Isp), ("L_arm", noGimbal ? 1.0 : dyn.LArm),
             ("Ixx", dyn.Ixx), ("Iyy", dyn.Iyy), ("Izz", dyn.Izz),
             ("mass", mass),
         ];
