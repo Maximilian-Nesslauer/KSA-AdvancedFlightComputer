@@ -1581,7 +1581,7 @@ public sealed class VehicleAutopilotState
     public double3 ThreeDofMeasuredAccel;
 
     /// <summary>
-    /// A returning booster's roll reference, body-fixed (CCF): 45 deg below the horizon towards its site, from where it was first commanded, frozen (GuidanceWindow.ReturnRollRefCci says why). The body's +y is held along (axis x this), wings level along the ground track (KsaPointMassModel.RollRef). Zero until set.
+    /// A returning booster's roll reference, body-fixed (CCF): the wing direction up x d, horizontal and square to the ground track to its site, from where it was first commanded, frozen (GuidanceWindow.ReturnRollRefCci says why). The body's +y is held along its part square to the axis, wings level to the local vertical (KsaPointMassModel.RollRef). Zero until set.
     /// </summary>
     public double3 ReturnRollRefCcf;
 

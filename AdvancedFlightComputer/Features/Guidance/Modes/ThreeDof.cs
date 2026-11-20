@@ -450,12 +450,12 @@ public static partial class GuidanceWindow
             double rollDeg = yAcross.Length() > 0.5 && liftAcross.Length() > 0.5
                 ? Math.Atan2(double3.Dot(double3.Cross(liftAcross, yAcross), bodyNose), double3.Dot(liftAcross, yAcross)) * Deg
                 : double.NaN;
-            // The held roll against the one flown: the body's +y now against b x d, about the body axis. Near zero means the body-axis table is read in the axes the craft really has.
+            // The held roll against the one flown: the body's +y now against the held wing direction's part square to the axis, about the body axis. Near zero means the body-axis table is read in the axes the craft really has.
             double rollHoldErr = double.NaN;
             if (_s.BoosterRollHold && _s.ReturnRollRefCcf.Length() > 0.5)
             {
                 double3 d = frame.VecToLocal(ReturnRollRefCci(vehicle, parent)).NormalizeOrZero();
-                double3 wantY = double3.Cross(bodyNose, d).NormalizeOrZero();
+                double3 wantY = (d - double3.Dot(d, bodyNose) * bodyNose).NormalizeOrZero();
                 if (wantY.Length() > 0.5 && yAcross.Length() > 0.5)
                     rollHoldErr = Math.Atan2(double3.Dot(double3.Cross(wantY, yAcross), bodyNose), double3.Dot(wantY, yAcross));
             }

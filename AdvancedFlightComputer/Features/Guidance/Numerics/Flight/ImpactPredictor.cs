@@ -92,7 +92,7 @@ public struct DragCoastSystem : IOdeSystem
     public BodyAeroTable? BodyAero;
 
     /// <summary>
-    /// The held roll's reference direction w (body +y along b x w; GuidanceWindow.ReturnRollRefCci), in this frame at t = -<see cref="RollRefTime"/>. It is fixed to the ground, so it turns with the body: at time t it is turned by OmegaZ (t + RollRefTime) about +z. Zero for no held roll.
+    /// The held roll's wing direction w (body +y along w's part square to b; GuidanceWindow.ReturnRollRefCci), in this frame at t = -<see cref="RollRefTime"/>. It is fixed to the ground, so it turns with the body: at time t it is turned by OmegaZ (t + RollRefTime) about +z. Zero for no held roll.
     /// </summary>
     public double RollRefX, RollRefY, RollRefZ;
 

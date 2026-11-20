@@ -151,10 +151,10 @@ internal static class ThreeDofMpcCheck
         };
         if (double.IsFinite(BodySide))
         {
-            // Held wings level towards the site and down, as GuidanceWindow.ReturnRollRefCci: the start's horizontal direction to the aim point, less up.
+            // Held wings level, as GuidanceWindow.ReturnRollRefCci: the wing along up x d, d the start's horizontal direction to the aim point.
             double[] start = c.Start ?? X0;
             double[] d = ThreeDofScenario.Normalise([-start[0], -start[1], 0]);
-            double[] wRef = ThreeDofScenario.Normalise([d[0], d[1], -1]);
+            double[] wRef = [-d[1], d[0], 0.0];
             KsaPointMassModel held = nominal with { BodyAero = ThreeDofScenario.BodyTable(BodySide, BodyUp), RollRefX = wRef[0], RollRefY = wRef[1], RollRefZ = wRef[2] };
             KsaPointMassModel heldPlan = nominal with { BodyAero = ThreeDofScenario.BodyTable(), RollRefX = wRef[0], RollRefY = wRef[1], RollRefZ = wRef[2] };
             if (!BodyTruthOnly)

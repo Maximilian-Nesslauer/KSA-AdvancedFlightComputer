@@ -1374,7 +1374,7 @@ public static partial class GuidanceWindow
             bool boosterReturn = boostbackGuides || threeDofGuides;
             bool holdRoll = boosterReturn && _s.BoosterRollHold;
             double3? rollRef = _s.Running ? AscentRollRef(vehicle, _s.CommandDir)
-                : holdRoll && _s.CommandDir.Length() > 0.5 ? double3.Cross(double3.Normalize(_s.CommandDir), ReturnRollRefCci(vehicle, parent))
+                : holdRoll && _s.CommandDir.Length() > 0.5 ? ReturnRollRefCci(vehicle, parent)
                 : null;
             CommandAttitude(vehicle, parent, _s.CommandDir,
                             fullEngage: !_s.WasEngaged, rollRef: rollRef,
@@ -1946,8 +1946,9 @@ public static partial class GuidanceWindow
     /// the pad to cutoff, with no discontinuity anywhere in between.
     /// </summary>
     /// <summary>
-    /// A returning booster's roll reference in CCI now (VehicleAutopilotState.ReturnRollRefCcf): set on first use, then frozen in the body's frame. The body's +y is held along (axis x it).
-    ///  It points 45 deg below the horizon towards the site: w = (d - up) / sqrt 2, d the horizontal direction to the site. The horizontal d alone would be parallel to the axis in a boostback burn, which points the engine-first booster at the site, and "up" alone is parallel to it in a vertical glide and turns the other way between the two, a half roll after the burn. Against w, axis x w is up x d (wings level along the ground track, navball roll 0) in the glide and in the burn alike, and only an axis pointing down at the site at 45 deg, which a returning booster never flies, leaves it undefined.
+    /// A returning booster's roll reference in CCI now (VehicleAutopilotState.ReturnRollRefCcf): the direction its wing, body +y, is held along - up x d, with up the local vertical and d the horizontal direction to the site, set on first use and then frozen in the body's frame. The body's +y is that direction less its part along the axis (SteerBody2Cci, BodyAeroTable.WorldCoefficients).
+    ///  WINGS LEVEL TO THE LOCAL VERTICAL. up x d is the normal of the great circle through the booster and the site, so it is horizontal everywhere along the ground track: the booster pitches in the vertical plane of its track and skids across it, and its roll on the navball stays 0 through the boostback burn, the flip, the glide and entry guidance. It is undefined only for an axis along it, flat and square to the track, which a returning booster never flies.
+    ///  Until 2026-11-20 the reference was w = (d - up) / sqrt 2, 45 deg below the horizon towards the site, with the wing along axis x w. An engine-first glide's axis is the reverse of its velocity, so a glide path through 45 deg put the axis along -w: there axis x w had no direction and swung with the slightest skid, and either side of it pointed opposite ways - the booster rolled through the boostback glide as if it kept redefining "up".
     /// </summary>
     internal static double3 ReturnRollRefCci(Vehicle vehicle, IParentBody parent)
     {
@@ -1967,7 +1968,7 @@ public static partial class GuidanceWindow
             }
             if (d.Length() < 1e-6)
                 d = double3.Cross(up, Math.Abs(up.Z) < 0.9 ? new double3(0, 0, 1) : new double3(1, 0, 0));
-            _s.ReturnRollRefCcf = double3.Normalize(double3.Normalize(d) - up).Transform(cci2Ccf);
+            _s.ReturnRollRefCcf = double3.Normalize(double3.Cross(up, double3.Normalize(d))).Transform(cci2Ccf);
         }
         return _s.ReturnRollRefCcf.Transform(doubleQuat.Inverse(cci2Ccf));
     }

@@ -349,7 +349,7 @@ internal static class ThreeDofModelCheck
     }
 
     /// <summary>
-    /// The body-axis table (BodyAeroTable) read by the model at a held roll. Built from the scenario's own axisymmetric drag and lift - drag against the airflow, lift along the engine end's tilt, both functions of the total angle only - it must give the old model's force at tilts in pitch, in yaw and between, to within the tables' interpolation. With a fixed side force on body +y added at every node, as an asymmetric fin set at zero angle would make, the model must give exactly that force more, along b x d. And its Jacobian in the attitude and the velocity must match central differences.
+    /// The body-axis table (BodyAeroTable) read by the model at a held roll. Built from the scenario's own axisymmetric drag and lift - drag against the airflow, lift along the engine end's tilt, both functions of the total angle only - it must give the old model's force at tilts in pitch, in yaw and between, to within the tables' interpolation. With a fixed side force on body +y added at every node, as an asymmetric fin set at zero angle would make, the model must give exactly that force more, along the wing (+y less its part along b). And its Jacobian in the attitude and the velocity must match central differences.
     /// </summary>
     private static bool CheckBodyAero()
     {
@@ -383,9 +383,9 @@ internal static class ThreeDofModelCheck
                     }
             return new BodyAeroTable(mach, angles, angles, c);
         }
-        // Held wings level along +x of the site frame: d = (1, 0, 0).
-        KsaPointMassModel body = model with { BodyAero = Build(0.0), RollRefX = 1.0 };
-        KsaPointMassModel asym = model with { BodyAero = Build(side), RollRefX = 1.0 };
+        // Held wings level along +x of the site frame: d = (1, 0, 0), so the wing direction up x d is +y.
+        KsaPointMassModel body = model with { BodyAero = Build(0.0), RollRefY = 1.0 };
+        KsaPointMassModel asym = model with { BodyAero = Build(side), RollRefY = 1.0 };
 
         double alt = 6000, speed = 160;
         double worstRel = 0, worstSide = 0;
@@ -408,9 +408,9 @@ internal static class ThreeDofModelCheck
             double on = Math.Sqrt(ox * ox + oy * oy + oz * oz);
             double rel = Math.Sqrt((nx - ox) * (nx - ox) + (ny - oy) * (ny - oy) + (nz - oz) * (nz - oz)) / on;
             worstRel = Math.Max(worstRel, rel);
-            // The extra force must be q S side along b x d.
+            // The extra force must be q S side along the wing: w = +y less its part along b.
             double q = 0.5 * model.Atmosphere!.Density(alt) * speed * speed;
-            double yx = b[1] * 0 - b[2] * 0, yy = b[2] * 1 - b[0] * 0, yz = b[0] * 0 - b[1] * 1;
+            double yx = -b[1] * b[0], yy = 1.0 - b[1] * b[1], yz = -b[1] * b[2];
             double yn = Math.Sqrt(yx * yx + yy * yy + yz * yz);
             double ex = q * ThreeDofScenario.Area * side * yx / yn, ey = q * ThreeDofScenario.Area * side * yy / yn, ez = q * ThreeDofScenario.Area * side * yz / yn;
             double dside = Math.Sqrt(Sq(sx - nx - ex) + Sq(sy - ny - ey) + Sq(sz - nz - ez)) / Math.Sqrt(ex * ex + ey * ey + ez * ez);
@@ -418,7 +418,7 @@ internal static class ThreeDofModelCheck
         }
         bool agree = worstRel < 0.02, sideOk = worstSide < 1e-6;
         Console.WriteLine($"  axisymmetric table vs the old model, 8 tilts in pitch and yaw: worst {worstRel:E1} of the force  {(agree ? "ok" : "FAIL")}");
-        Console.WriteLine($"  a fixed side force on body +y: reproduced along b x d to {worstSide:E1}  {(sideOk ? "ok" : "FAIL")}");
+        Console.WriteLine($"  a fixed side force on body +y: reproduced along the wing to {worstSide:E1}  {(sideOk ? "ok" : "FAIL")}");
         ok &= agree && sideOk;
 
         // Slopes: AD against central differences in the attitude and the velocity.
@@ -463,7 +463,7 @@ internal static class ThreeDofModelCheck
     }
 
     /// <summary>
-    /// The landing-point prediction on the body-axis table (DragCoastSystem.BodyAero). From a table built out of the roll-averaged drag and lift it must give the old coast's acceleration - engine first, and tilted up the trajectory at a planned angle - to within the tables' interpolation. A fixed side force on body +y must come out along b x w with the roll reference turned with the ground to the time asked, so a prediction minutes long keeps the roll the craft holds. And its slope in the velocity must match central differences.
+    /// The landing-point prediction on the body-axis table (DragCoastSystem.BodyAero). From a table built out of the roll-averaged drag and lift it must give the old coast's acceleration - engine first, and tilted up the trajectory at a planned angle - to within the tables' interpolation. A fixed side force on body +y must come out along the wing direction w, less its part along b, with w turned with the ground to the time asked, so a prediction minutes long keeps the roll the craft holds. And its slope in the velocity must match central differences.
     /// </summary>
     private static bool CheckBodyAeroCoast()
     {
@@ -504,8 +504,8 @@ internal static class ThreeDofModelCheck
         double[] origin = [ez[0] * R, ez[1] * R, ez[2] * R];
         double[] rc = Add(origin, Local(rl, ex, ey, ez));
         double[] vc = Add(Local(vl, ex, ey, ez), ThreeDofScenario.Cross([0, 0, w], rc));
-        // The held roll: towards the site and down, as GuidanceWindow.ReturnRollRefCci.
-        double[] wRef = ThreeDofScenario.Normalise([ex[0] - ez[0], ex[1] - ez[1], ex[2] - ez[2]]);
+        // The held roll: the wing along up x d, d towards the site, as GuidanceWindow.ReturnRollRefCci.
+        double[] wRef = ThreeDofScenario.Normalise(ThreeDofScenario.Cross(ez, ex));
 
         DragCoastSystem Coast(double alpha, BodyAeroTable? body) => new()
         {
@@ -550,15 +550,21 @@ internal static class ThreeDofModelCheck
             double[] s0 = Accel(Coast(0, sym), t), s1 = Accel(Coast(0, asym), t);
             double c = Math.Cos(w * t), sn = Math.Sin(w * t);
             double[] wt = [c * wRef[0] - sn * wRef[1], sn * wRef[0] + c * wRef[1], wRef[2]];
-            double[] y = ThreeDofScenario.Normalise(ThreeDofScenario.Cross([-h[0], -h[1], -h[2]], wt));
-            double[] y0 = ThreeDofScenario.Normalise(ThreeDofScenario.Cross([-h[0], -h[1], -h[2]], wRef));
+            double[] y = Square(wt, [-h[0], -h[1], -h[2]]);
+            double[] y0 = Square(wRef, [-h[0], -h[1], -h[2]]);
             double[] got = [s1[0] - s0[0], s1[1] - s0[1], s1[2] - s0[2]];
             worstSide = Math.Max(worstSide, Math.Sqrt(Sq(got[0] - k * y[0]) + Sq(got[1] - k * y[1]) + Sq(got[2] - k * y[2])) / k);
             if (t > 0)
                 unturned = Math.Sqrt(Sq(got[0] - k * y0[0]) + Sq(got[1] - k * y0[1]) + Sq(got[2] - k * y0[2])) / k;
         }
         bool sideOk = worstSide < 1e-6 && unturned > 1e-3;
-        Console.WriteLine($"  a side force on body +y, at t 0 and 300 s: along b x w(t) to {worstSide:E1} (unturned w off by {unturned:E1})  {(sideOk ? "ok" : "FAIL")}");
+        // The wing: v less its part along the unit b, normalised (BodyAeroTable.WorldCoefficients).
+        static double[] Square(double[] v, double[] b)
+        {
+            double a = ThreeDofScenario.Dot(v, b);
+            return ThreeDofScenario.Normalise([v[0] - a * b[0], v[1] - a * b[1], v[2] - a * b[2]]);
+        }
+        Console.WriteLine($"  a side force on body +y, at t 0 and 300 s: along the wing w(t) to {worstSide:E1} (unturned w off by {unturned:E1})  {(sideOk ? "ok" : "FAIL")}");
         ok &= sideOk;
 
         // Slopes in the velocity, at a planned angle, through the table: AD against central differences.

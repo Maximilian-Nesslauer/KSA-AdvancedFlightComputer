@@ -84,8 +84,8 @@ public sealed class BodyAeroTable
     }
 
     /// <summary>
-    /// The coefficients as a vector in the caller's own frame, for a craft held at a fixed roll: body x along the axis b (normalised here), y along b x w, z = x x y; alpha and beta from the air direction h (unit: the craft's velocity through the air) in those axes; Mach held inside the table. The one place the held roll turns a pointing into body axes, so the entry model, the landing-point prediction and the glide steering cannot disagree about it.
-    ///  False where the craft is not within <paramref name="maxTiltRad"/> of engine first, or the axes are degenerate (b along w, which a returning booster never flies): the caller then uses its whole-sphere tables.
+    /// The coefficients as a vector in the caller's own frame, for a craft held at a fixed roll: body x along the axis b (normalised here), y along w's part square to b (w is the wing direction the roll is held to, GuidanceWindow.ReturnRollRefCci), z = x x y; alpha and beta from the air direction h (unit: the craft's velocity through the air) in those axes; Mach held inside the table. The one place the held roll turns a pointing into body axes, so the entry model, the landing-point prediction and the glide steering cannot disagree about it.
+    ///  False where the craft is not within <paramref name="maxTiltRad"/> of engine first, or the axes are degenerate (b along w, flat and square to its own ground track, which a returning booster never flies): the caller then uses its whole-sphere tables.
     /// </summary>
     public bool WorldCoefficients(Dual mach, Dual bx, Dual by, Dual bz, Dual hx, Dual hy, Dual hz,
                                   double wx, double wy, double wz, double maxTiltRad,
@@ -99,7 +99,9 @@ public sealed class BodyAeroTable
         Dual ux = hx * xx + hy * xy + hz * xz;
         if (!(-ux.V > Math.Cos(maxTiltRad)))
             return false;
-        Dual yx = xy * wz - xz * wy, yy = xz * wx - xx * wz, yz = xx * wy - xy * wx;
+        // y: w less its part along x. Not x x w, whose direction flips as x passes w or -w: with w 45 deg below the horizon towards the site, an engine-first glide at 45 deg had no roll reference, and opposite ones either side (2026-11-20).
+        Dual along = xx * wx + xy * wy + xz * wz;
+        Dual yx = wx - along * xx, yy = wy - along * xy, yz = wz - along * xz;
         Dual yn = Dual.Sqrt(yx * yx + yy * yy + yz * yz);
         if (!(yn.V > 1e-6))
             return false;

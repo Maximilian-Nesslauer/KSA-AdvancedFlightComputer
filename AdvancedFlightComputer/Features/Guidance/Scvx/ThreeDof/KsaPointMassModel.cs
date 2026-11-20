@@ -73,7 +73,7 @@ public sealed record KsaPointMassModel : IPointMassModel
     public BodyAeroTable? BodyAero { get; init; }
 
     /// <summary>
-    /// THE ROLL THE CRAFT IS HELD AT, site frame: a fixed direction w - 45 deg below the horizon towards the site, frozen at separation - with the body's +y along b x w. The guidance commands that same roll (GuidanceWindow.ReturnRollRefCci), so the model knows the body axes for any pointing b and can read the body-axis table for the actual tilt: pitch in the body x-z plane, yaw towards +-y. In the glide it is wings level along the ground track, navball roll 0, and it stays defined as the axis passes vertical and through a boostback burn. Zero for none.
+    /// THE ROLL THE CRAFT IS HELD AT, site frame: the fixed wing direction w - up x d, horizontal and square to the ground track, frozen at separation - with the body's +y along w's part square to b. The guidance commands that same roll (GuidanceWindow.ReturnRollRefCci), so the model knows the body axes for any pointing b and can read the body-axis table for the actual tilt: pitch in the body x-z plane, yaw towards +-y. In the glide it is wings level along the ground track, navball roll 0, and it stays defined as the axis passes vertical and through a boostback burn. Zero for none.
     /// </summary>
     public double RollRefX { get; init; }
     public double RollRefY { get; init; }
@@ -223,7 +223,7 @@ public sealed record KsaPointMassModel : IPointMassModel
     }
 
     /// <summary>
-    /// The body-axis table's force, N, for a body axis b and air direction h, with the roll held at RollRef: body x along b, y along b x w, z = x x y; alpha and beta from h in those axes (BodyAeroTable); the force q S (C_x x + C_y y + C_z z), its part along the airflow times DragScale and the rest times LiftScale. False where the craft is not within BodyAeroMaxTiltRad of engine first, or the axes are degenerate (b along d, which a returning booster never flies).
+    /// The body-axis table's force, N, for a body axis b and air direction h, with the roll held at RollRef: body x along b, y along w's part square to b, z = x x y; alpha and beta from h in those axes (BodyAeroTable); the force q S (C_x x + C_y y + C_z z), its part along the airflow times DragScale and the rest times LiftScale. False where the craft is not within BodyAeroMaxTiltRad of engine first, or the axes are degenerate (b along w, which a returning booster never flies).
     /// </summary>
     private bool TryBodyAero(Dual bx, Dual by, Dual bz, Dual hx, Dual hy, Dual hz, Dual qs, Dual speed,
                              out Dual fx, out Dual fy, out Dual fz)
