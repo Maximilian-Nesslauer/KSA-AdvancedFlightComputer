@@ -6,13 +6,23 @@ namespace AdvancedFlightComputer.Features.Guidance;
 // The landing group's part of the booster reserve. The reserve formula stays as it is, and a selected group only changes the thrust and exhaust velocity it is given.
 public static partial class GuidanceWindow
 {
-    /// <summary>The sea-level exhaust velocity of the selected landing group, with its full thrust in <paramref name="thrustN"/>. NaN when the group does not resolve on the booster, or cannot draw from the booster's reserve.</summary>
+    /// <summary>The sea-level exhaust velocity of the selected landing group, with its full thrust in <paramref name="thrustN"/>. NaN when the group does not resolve on the booster, cannot draw from the booster's reserve, or cannot throttle as low as the booster.</summary>
     private static double LandingGroupSeaLevelVe(Vehicle vehicle, ReturnableStage booster, Part root, HashSet<Part> leaving,
                                                  LandingEngineGroup group, double seaLevelPressure, out double thrustN)
+        => LandingGroupSeaLevelVe(vehicle, booster, root, leaving, group, seaLevelPressure, out thrustN, out _);
+
+    private static double LandingGroupSeaLevelVe(Vehicle vehicle, ReturnableStage booster, Part root, HashSet<Part> leaving,
+                                                 LandingEngineGroup group, double seaLevelPressure, out double thrustN, out string problem)
     {
         thrustN = double.NaN;
+        problem = "";
         if (!ResolveBoosterLandingEngines(vehicle, booster, root, leaving, group, out EngineController[] engines))
+        {
+            problem = engines.Length > 0 && !ThrottlesAsLowAsBooster(engines, leaving)
+                ? "CANNOT THROTTLE AS LOW AS THE OTHER ENGINES OF THE BOOSTER"
+                : "HAS A MISSING, UNSUPPLIED OR UNSUPPORTED ENGINE";
             return double.NaN;
+        }
         float3 force = float3.Zero;
         double flow = 0.0;
         foreach (EngineController engine in engines)
@@ -34,7 +44,21 @@ public static partial class GuidanceWindow
             && LandingEngineGroups.Resolve(group, LandingEngineGroups.Controllers(vehicle, root, leaving), out engines)
             && engines.All(engine => engine.Rockets.Length > 0 && engine.Rockets.All(KsaEnginePerf.FollowsThrottle))
             && !SplitsLandingGimbal(vehicle, engines)
+            && ThrottlesAsLowAsBooster(engines, leaving)
             && LandingEngineGroups.HasRetainedFeeds(vehicle, engines, leaving);
+    }
+
+    /// <summary>
+    /// True when no engine of the group has a higher minimum throttle than the lowest of the booster's engines.
+    /// After separation the landing models take that lowest value as the booster's floor (PartTree.EngineThrottleMin counts every installed controller), so the same refusal the glide makes is made here, before launch.
+    /// </summary>
+    private static bool ThrottlesAsLowAsBooster(EngineController[] engines, HashSet<Part> leaving)
+    {
+        float floor = 1f;
+        foreach (Part part in leaving)
+            foreach (EngineController engine in part.SubtreeModules.Get<EngineController>())
+                floor = Math.Min(floor, engine.MinimumThrottle);
+        return engines.All(engine => engine.MinimumThrottle <= floor + 1e-4f);
     }
 
     /// <summary>

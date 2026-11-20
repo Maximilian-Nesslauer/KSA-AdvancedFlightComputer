@@ -650,12 +650,13 @@ public static partial class GuidanceWindow
             // THE LANDING BURN AS IT WILL BE FLOWN: at sea level, from its own engines, and braking no harder than the landing's acceleration limit (AscentRecovery.LandingAccel). Its thrust goes against its own share of the row's dry mass: side boosters leaving together split it.
             double landingThrust = double.NaN;
             double pressure = aero.Atmosphere?.SeaLevelPressure ?? 0.0;
+            string groupProblem = "";
             double landingVe = group != null
-                ? LandingGroupSeaLevelVe(vehicle, booster, boosterRoot, leaving, group, pressure, out landingThrust)
+                ? LandingGroupSeaLevelVe(vehicle, booster, boosterRoot, leaving, group, pressure, out landingThrust, out groupProblem)
                 : leaving != null ? BoosterSeaLevelVe(vehicle, leaving, pressure, out landingThrust) : double.NaN;
             if (group != null && double.IsNaN(landingVe))
             {
-                error = $"'{booster.Name}': LANDING GROUP '{group.Name}' HAS A MISSING, UNSUPPLIED OR UNSUPPORTED ENGINE.";
+                error = $"'{booster.Name}': LANDING GROUP '{group.Name}' {(groupProblem.Length > 0 ? groupProblem : "HAS NO USABLE THRUST")}.";
                 return false;
             }
             int onRow = 0;
