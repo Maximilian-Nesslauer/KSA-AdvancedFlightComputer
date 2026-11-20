@@ -815,13 +815,18 @@ public sealed class Scvx6DofSolver
                 double d = (u[(k + 1) * NU + j] - u[k * NU + j]) / _us[j];
                 du += d * d;
             }
-        double ww = 0;
+        double ww = 0, coastWw = 0;
         for (int k = 0; k < _n; k++)
+        {
+            // The coast's own rate price (Scvx6DofConfig.CoastRateWeight), as the subproblem prices it.
+            double coast = Scvx6DofSubproblemScs.CoastRateWeightAt(_cfg, _nCoast, k);
             for (int i = 0; i < 3; i++)
             {
                 double w = x[k * NX + Dynamics6Dof.IW + i];
                 ww += w * w;
+                coastWw += coast * w * w;
             }
+        }
         double rcs = 0;
         if (_cfg.RcsWeight > 0.0)
             for (int k = 0; k < _n; k++)
@@ -830,7 +835,7 @@ public sealed class Scvx6DofSolver
                     double r = u[k * NU + Dynamics6Dof.IRCS + j] / _us[Dynamics6Dof.IRCS + j];
                     rcs += r * r;
                 }
-        return _cfg.WDu * du + _cfg.WW * ww + _cfg.RcsWeight * rcs;
+        return _cfg.WDu * du + _cfg.WW * ww + coastWw + _cfg.RcsWeight * rcs;
     }
 
     private static double SumSquaresScaled(double[] v, double[] scale)

@@ -59,6 +59,12 @@ public sealed class Scvx6DofConfig
     /// </summary>
     public double RcsWeight { get; init; } = 0.0;
     public double WW { get; init; } = 1.0;                      // angular-rate damping
+
+    /// <summary>
+    /// A rate price on the COAST's nodes, on top of WW: CoastRateWeight * sum over coast nodes 1 .. CoastIntervals-1 of ||w||^2. 0 for none.
+    ///  WHY. The coast burns nothing, so fuel - the only term that cares about the path's shape - is flat across every glide that reaches an equally good ignition, and the air's lift steers it sideways for free. Re-solves then wandered: on the 2026-11-20 14:51 Earth flight entry's plan, the seed, ran 7.6 m off the straight line to the pad; the plans went to +27 m, then -14, -23, -47 m, and the booster flew a 20 m sideways bend in the coast and back in the burn. Of glides that cost the same, the one that turns least is the straight one, so a small price on turning picks it; set against fuel (Ksa6DofSetup), small enough that a turn that saves fuel still wins.
+    /// </summary>
+    public double CoastRateWeight { get; init; }
     /// <summary>
     /// PROXIMAL weight: penalise deviation from the REFERENCE trajectory,
     /// rho * ||(X - Xbar)/Xscale||^2, rather than deviation from zero.

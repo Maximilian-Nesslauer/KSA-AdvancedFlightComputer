@@ -40,6 +40,7 @@ internal static class SixDofCoastCheck
         SixDofRcsCheck.RollPinned = args.Contains("--roll-pinned");
         SeedDefects = args.Contains("--seed-defects");
         PathSeed = args.Contains("--path-seed");
+        SixDofRcsCheck.CoastTurnMs = Num("--coast-turn", 0.0);
         SpreadFree = args.Contains("--spread-free");
         SpreadResample = args.Contains("--spread-resample");
         bool coldOnly = args.Contains("--cold-only");
@@ -86,6 +87,7 @@ internal static class SixDofCoastCheck
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"  {lead:F0} s before ignition: {x0[2]:F0} m, {Speed(x0):F0} m/s, {Math.Sqrt(x0[0] * x0[0] + x0[1] * x0[1]):F0} m from the target; {n} nodes, {c} in the coast"));
             (string cold, double _, bool solved) = Cold(dyn, x0, lead, BurnSeed, n, c, verbose);
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"    sideways: plan bends up to {LastSideways:F1} m off the straight line to the pad"));
             ok &= solved;
             Console.WriteLine($"    two-phase   cold: {cold}");
             if (coldOnly) continue;
@@ -168,6 +170,15 @@ internal static class SixDofCoastCheck
             if (toGate < 0 && ratio <= 1.0) toGate = i;
             if (ratio <= 0.05) { toFine = i; break; }
         }
+        {
+            double ex = x0[0], ey = x0[1], len = Math.Max(Math.Sqrt(ex * ex + ey * ey), 1e-9);
+            LastSideways = 0.0;
+            for (int k = 0; k < n; k++)
+            {
+                double side = (-ey * s.ReferenceX[k * NX] + ex * s.ReferenceX[k * NX + 1]) / len;
+                if (Math.Abs(side) > Math.Abs(LastSideways)) LastSideways = side;
+            }
+        }
         double peak = SixDofRcsCheck.PeakRcs(s.ReferenceU, n, out double share);
         int ign = c * NX;
         return (string.Create(CultureInfo.InvariantCulture,
@@ -176,6 +187,7 @@ internal static class SixDofCoastCheck
     }
 
     private static bool SeedDefects;
+    private static double LastSideways;
 
     // --path-seed: the cold seed laid along a path as entry guidance's plan gives one (ColdSeed6Dof.BuildAlongPath) - here the glide to ignition and a converged burn-only plan from there.
     private static bool PathSeed;

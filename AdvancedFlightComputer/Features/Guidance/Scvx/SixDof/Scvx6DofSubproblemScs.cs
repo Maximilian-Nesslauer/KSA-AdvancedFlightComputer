@@ -375,7 +375,7 @@ public sealed class Scvx6DofSubproblemScs
         // WW * sum_k ||w[k]||^2 - pure diagonal, no coupling between nodes
         for (int k = 0; k < _n; k++)
             for (int i = 0; i < 3; i++)
-                AddP(IX(k, Dynamics6Dof.IW + i), IX(k, Dynamics6Dof.IW + i), 2.0 * _cfg.WW);
+                AddP(IX(k, Dynamics6Dof.IW + i), IX(k, Dynamics6Dof.IW + i), 2.0 * (_cfg.WW + CoastRateWeightAt(_cfg, _nCoast, k)));
 
         // Proximal term: ProximalWeight * sum_k ||(X[k]-Xbar[k])/Xscale||^2.
         // Expanding gives a diagonal P contribution 2*w/xs^2 and a LINEAR term -2*w*xbar/xs^2; the constant xbar'xbar is dropped as it cannot change the argmin.
@@ -422,6 +422,10 @@ public sealed class Scvx6DofSubproblemScs
 
     /// <summary>Whether control j's change over interval k is the ignition's step: the engine's controls (not the RCS) over the last coast interval.</summary>
     internal bool IsIgnitionStep(int k, int j) => IsIgnitionStep(_nCoast, k, j);
+
+    /// <summary>The coast's rate price at node k (Scvx6DofConfig.CoastRateWeight): on the coast's nodes after the measured one and before ignition, 0 elsewhere.</summary>
+    internal static double CoastRateWeightAt(Scvx6DofConfig cfg, int coastIntervals, int k)
+        => cfg.CoastRateWeight > 0.0 && k >= 1 && k < coastIntervals ? cfg.CoastRateWeight : 0.0;
 
     internal static bool IsIgnitionStep(int coastIntervals, int k, int j)
         => coastIntervals > 0 && k == coastIntervals - 1 && j < Dynamics6Dof.IRCS;

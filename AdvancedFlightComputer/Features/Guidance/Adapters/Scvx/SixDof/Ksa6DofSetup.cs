@@ -351,6 +351,12 @@ public static class Ksa6DofSetup
     /// <summary>
     /// The body-axis force and moment for the plan's full attitude (BodyAero6Dof), from the sweep's tables, or null where it measured none: the model's axes in the game's body axes (KsaFrameBridge.BodyAxes), and the moment moved from the centre of mass the sweep saw to the one the craft has now.
     /// </summary>
+    /// <summary>
+    /// The coast's rate price (Scvx6DofConfig.CoastRateWeight), as the fuel of this much burn, m/s, for turning at CoastTurnRefRadS about one axis through the whole coast. Small: it is there to pick one glide among those that cost the same fuel, not to stop a turn that saves some. The 2026-11-20 coasts turned 25 deg in about 7 s for the burn, about 1 m/s's worth at this price.
+    /// </summary>
+    private const double CoastTurnPriceMs = 1.0;
+    private const double CoastTurnRefRadS = 0.05;
+
     private static BodyAero6Dof BodyAeroFor(Vehicle vehicle, KsaAeroSweep.Result aero, double momentLimiterPerPa)
     {
         if (aero?.BodyAero == null || aero.Atmosphere == null || !(aero.ReferenceArea > 0.0))
@@ -621,6 +627,10 @@ public static class Ksa6DofSetup
 
             // Generous bounds. These only need to BRACKET the answer - sigma is a free variable and the solver picks it - but a bound that binds silently dictates the trajectory instead of the physics: sigma pinned at the max forces the vehicle to spend that long in the air, and if it cannot hover it loops to burn the time. Widening costs nothing, because conditioning comes from SigmaScale (the seed), not from the bounds.
             WW = wW,
+            // The coast's rate price (Scvx6DofConfig.CoastRateWeight): turning at CoastTurnRefRadS about one axis through the whole coast costs what CoastTurnPriceMs of burn does in fuel, whose term is -m_final/m_init, so a metre per second is alpha (1 / Isp g0) of it.
+            CoastRateWeight = coastIntervals > 1 && coastIntervals <= nodes - 3
+                ? CoastTurnPriceMs * alpha / ((coastIntervals - 1) * CoastTurnRefRadS * CoastTurnRefRadS)
+                : 0.0,
             WDu = Math.Max(controlSmoothWeight, 0.0),
             // Restores the conditioning the regularisers previously provide, without the bias. Measured on the reference problem at low weights: 91650 ADMM iterations / 4907 ms at 0, versus 23675 / 1295 ms at 0.05 - 3.8x faster for a burn time within 1.2% and a merit within 0.03%. Do NOT raise this chasing more speed: at 0.2 it is 7x faster but shifts burn time 6% and worsens merit 1%, because SCvx stops at a tolerance rather than exactly at X = Xbar, so a large proximal term leaves a residual pull and starts acting as a second trust region.
             ProximalWeight = Math.Max(proximalWeight, 0.0),

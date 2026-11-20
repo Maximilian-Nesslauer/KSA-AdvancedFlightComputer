@@ -21,6 +21,7 @@ internal static class SixDofRcsCheck
     private const double WarmTrustRegion = 0.05;   // Ksa6DofGuidance.WarmTrustRegion
 
     // The logged booster (SixDofLiftCheck's): 2171 kN, 10 % floor, 2 deg gimbals at 2 deflections a second.
+    internal static double CoastTurnMs;
     private const double Tmax = 2171e3, Floor = 0.10, Isp = 290.0, Gravity = 9.81;
     private const double Arm = 10.0, Ipitch = 1.14e6, Iroll = 2.7e4, Length = 40.0;
     internal const double TargetZ = 13.0, AccelMax = 31.0, GimbalDeg = 2.0, SlewPerS = 2.0;
@@ -395,6 +396,8 @@ internal static class SixDofRcsCheck
             GroundFloor = -1.0,
             AccelMax = AccelMax,
             WW = 0.002 / (n * 3.0 * omegaScale * omegaScale),
+            // --coast-turn m/s: the coast's rate price as Ksa6DofSetup sizes it, turning at 0.05 rad/s through the coast priced as that much burn.
+            CoastRateWeight = coastIntervals > 1 && CoastTurnMs > 0.0 ? CoastTurnMs / (Isp * 9.80665) / ((coastIntervals - 1) * 0.05 * 0.05) : 0.0,
             WDu = ProbeWdu,
             ProximalWeight = ProbeProx,
             UScale = ProbeUScale(dyn),
