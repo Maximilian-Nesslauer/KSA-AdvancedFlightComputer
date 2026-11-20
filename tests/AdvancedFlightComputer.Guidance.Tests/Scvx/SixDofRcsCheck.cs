@@ -17,7 +17,7 @@ using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 internal static class SixDofRcsCheck
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    private const int NU = Dynamics6Dof.NUBase;
     private const double WarmTrustRegion = 0.05;   // Ksa6DofGuidance.WarmTrustRegion
 
     // The logged booster (SixDofLiftCheck's): 2171 kN, 10 % floor, 2 deg gimbals at 2 deflections a second.

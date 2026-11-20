@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using BepuUtilities;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Features.AeroControl;
 using AdvancedFlightComputer.Features.RcsTorque;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
@@ -369,7 +370,37 @@ public static class Ksa6DofSetup
     private const double CoastTurnPriceMs = 1.0;
     private const double CoastTurnRefRadS = 0.05;
 
-    private static BodyAero6Dof BodyAeroFor(Vehicle vehicle, KsaAeroSweep.Result aero, double momentLimiterPerPa)
+    /// <summary>
+    /// The craft's control surfaces as the plan's fins (BodyAero6Dof.Fins): every surface the registry lists (ControlSurfaces.Collect) that the sweep has a table for, in the registry's order - the order the flight commands them in (TouchdownFinSurfaces) - with its range and rate. None where the sweep measured none.
+    /// </summary>
+    internal static BodyAero6Dof.FinTable[] FinsFor(Vehicle vehicle, KsaAeroSweep.Result aero, List<ControlSurface> surfaces = null)
+    {
+        surfaces?.Clear();
+        if (vehicle == null || aero?.Surfaces == null || aero.Surfaces.Length == 0 || !ControlSurfaces.Any)
+            return [];
+        var live = new List<ControlSurface>();
+        ControlSurfaces.Collect(vehicle, live);
+        var fins = new List<BodyAero6Dof.FinTable>();
+        foreach (ControlSurface surface in live)
+            foreach (KsaAeroSweep.SurfaceTable table in aero.Surfaces)
+                if (ReferenceEquals(table.Part, surface.Part) && table.DeflectionDeg.Length > 1)
+                {
+                    fins.Add(new BodyAero6Dof.FinTable
+                    {
+                        DeflectionDeg = table.DeflectionDeg,
+                        Force = table.Force,
+                        Moment = table.Moment,
+                        MinDeg = surface.MinDeg,
+                        MaxDeg = surface.MaxDeg,
+                        RateDegS = surface.RateDegS,
+                    });
+                    surfaces?.Add(surface);
+                    break;
+                }
+        return fins.ToArray();
+    }
+
+    private static BodyAero6Dof BodyAeroFor(Vehicle vehicle, KsaAeroSweep.Result aero, double momentLimiterPerPa, bool fins = true)
     {
         if (aero?.BodyAero == null || aero.Atmosphere == null || !(aero.ReferenceArea > 0.0))
             return null;
@@ -387,6 +418,8 @@ public static class Ksa6DofSetup
             ComShiftX = shift.X, ComShiftY = shift.Y, ComShiftZ = shift.Z,
             // The game's moment limiter, as measured in flight (BodyAero6Dof.MomentLimiterPerPa).
             MomentLimiterPerPa = double.IsFinite(momentLimiterPerPa) && momentLimiterPerPa > 0.0 ? momentLimiterPerPa : 0.0,
+            // The control surfaces, one fin control each (Dynamics6Dof.IFIN on).
+            Fins = fins ? FinsFor(vehicle, aero) : [],
         };
     }
 
@@ -411,7 +444,7 @@ public static class Ksa6DofSetup
                                 KsaAeroSweep.Result aero = null, bool? keptRollFree = null, bool bodyAero = true,
                                 bool gimbalRateLimit = true, Dynamics6Dof.RcsModel rcs = null, double rcsWeight = 0.0,
                                 double rateMaxDegS = 0.0, int coastIntervals = 0, double[] scaleFrom = null,
-                                double momentLimiterPerPa = 0.0, double torqueMargin = 0.0)
+                                double momentLimiterPerPa = 0.0, double torqueMargin = 0.0, bool fins = true)
     {
         cfg = null!;
         dyn = null!;
@@ -561,7 +594,7 @@ public static class Ksa6DofSetup
                 }
                 : null,
             // THE BODY-AXIS FORCE AND MOMENT for the plan's own attitude, where the sweep measured them: the gimbal then holds against the air's moment from the plan's start rather than finding it in flight (BodyAero6Dof). The tables above carry the share of the force these fade out of.
-            BodyAero = bodyAero && aero?.Table != null ? BodyAeroFor(vehicle, aero, momentLimiterPerPa) : null,
+            BodyAero = bodyAero && aero?.Table != null ? BodyAeroFor(vehicle, aero, momentLimiterPerPa, fins) : null,
             AeroAltitudeOffset = siteAltAsl,
             LArm = arm,
             Ixx = ixx, Iyy = iyy, Izz = izz,
@@ -599,6 +632,7 @@ public static class Ksa6DofSetup
         double omegaScale = Math.Max(tiltMaxDeg * Math.PI / 180.0 / Math.Max(sigma * 0.5, 1.0), 1e-3);
         double wW = Math.Max(rateDampShare, 0.0) / (nodes * 3.0 * omegaScale * omegaScale);
 
+        BodyAero6Dof.FinTable[] finTables = dyn.BodyAero?.Fins ?? [];
         cfg = new Scvx6DofConfig
         {
             Nodes = nodes,
@@ -617,6 +651,10 @@ public static class Ksa6DofSetup
             RcsMaxPosNm = rcsPos,
             RcsMaxNegNm = rcsNeg,
             RcsWeight = rcsWeight,
+            // THE FINS (Dynamics6Dof.IFIN on): each one's range and rate, the plan's share of them (PlanTorqueShare), the rest kept for the feedback as for the gimbals and the RCS.
+            FinMinDeg = finTables.Length > 0 ? Array.ConvertAll(finTables, f => f.MinDeg * torqueShare) : null,
+            FinMaxDeg = finTables.Length > 0 ? Array.ConvertAll(finTables, f => f.MaxDeg * torqueShare) : null,
+            FinRateDegS = finTables.Length > 0 ? Array.ConvertAll(finTables, f => f.RateDegS * torqueShare) : null,
             // The turn-rate limit (Scvx6DofConfig.RateMaxRadS).
             RateMaxRadS = Math.Max(rateMaxDegS, 0.0) * Math.PI / 180.0,
             RateLimitIncludesRoll = !coastPlan,

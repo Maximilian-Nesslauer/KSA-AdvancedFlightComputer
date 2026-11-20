@@ -39,6 +39,65 @@ public sealed class BodyAero6Dof
     public double ComShiftY { get; init; }
     public double ComShiftZ { get; init; }
 
+    /// <summary>
+    /// The craft's control surfaces (KsaAeroSweep.SurfaceTable), in the order of the plan's fin controls (Dynamics6Dof.IFIN on), as many as it has: each one's change to the force and moment coefficients at each swept deflection, read at the flight condition and added to the body's, faded and limited with them. Empty for none.
+    /// </summary>
+    public FinTable[] Fins { get; init; } = [];
+
+    /// <summary>One control surface: its swept deflections, degrees, ascending with 0 among them, and at each the change it makes to the body-axis force (per q S) and moment (per q S L) coefficients, zero at rest; its range and rate as the plan may use them.</summary>
+    public sealed class FinTable
+    {
+        public required double[] DeflectionDeg { get; init; }
+        public required BodyAeroTable[] Force { get; init; }
+        public required BodyAeroTable[] Moment { get; init; }
+        public double MinDeg { get; init; }
+        public double MaxDeg { get; init; }
+        public double RateDegS { get; init; }
+    }
+
+    /// <summary>
+    /// A control surface's coefficients at a deflection: straight between its swept deflections, held at its ends. On a swept deflection itself the slope is the mean of the two either side, so a plan linearised there - at rest, most of all, where the drag a fin adds bends the curve whichever way it turns - is told the curve's middle, not one side of it. A fin at rest that is not being differentiated adds nothing and reads no table.
+    /// </summary>
+    public static void FinCoefficients(FinTable fin, bool moment, Dual deg, Dual mach, Dual alpha, Dual beta,
+                                       out Dual c0, out Dual c1, out Dual c2)
+    {
+        c0 = c1 = c2 = default;
+        double[] d = fin.DeflectionDeg;
+        BodyAeroTable[] t = moment ? fin.Moment : fin.Force;
+        int n = d.Length;
+        if (n < 2 || t.Length != n || (deg.V == 0.0 && deg.D == 0.0))
+            return;
+        double v = Math.Clamp(deg.V, d[0], d[n - 1]);
+        int k = 0;
+        while (k + 2 < n && v > d[k + 1])
+            k++;
+        // On a swept deflection inside the range: the value there, the mean slope either side.
+        int at = -1;
+        for (int i = 1; i + 1 < n; i++)
+            if (Math.Abs(v - d[i]) <= 1e-9)
+                at = i;
+        Dual m0 = Clamp(mach, t[0].MachMin, t[0].MachMax);
+        if (at >= 0)
+        {
+            t[at - 1].Coefficients(m0, alpha, beta, out Dual a0, out Dual a1, out Dual a2);
+            t[at].Coefficients(m0, alpha, beta, out Dual b0, out Dual b1, out Dual b2);
+            t[at + 1].Coefficients(m0, alpha, beta, out Dual e0, out Dual e1, out Dual e2);
+            double wl = d[at] - d[at - 1], wr = d[at + 1] - d[at];
+            Dual step = deg - d[at];
+            c0 = b0 + step * 0.5 * ((b0 - a0) / wl + (e0 - b0) / wr);
+            c1 = b1 + step * 0.5 * ((b1 - a1) / wl + (e1 - b1) / wr);
+            c2 = b2 + step * 0.5 * ((b2 - a2) / wl + (e2 - b2) / wr);
+            return;
+        }
+        t[k].Coefficients(m0, alpha, beta, out Dual l0, out Dual l1, out Dual l2);
+        t[k + 1].Coefficients(m0, alpha, beta, out Dual h0, out Dual h1, out Dual h2);
+        // Held at the ends: past them the deflection moves nothing.
+        Dual w = deg.V <= d[0] ? new Dual(0.0) : deg.V >= d[n - 1] ? new Dual(1.0) : (deg - d[k]) / (d[k + 1] - d[k]);
+        c0 = l0 + w * (h0 - l0);
+        c1 = l1 + w * (h1 - l1);
+        c2 = l2 + w * (h2 - l2);
+    }
+
     /// <summary>The airspeed the tables fade in over, m/s: none below the low end, all above the high.</summary>
     /// <summary>
     /// THE GAME'S MOMENT LIMITER, per pascal of dynamic pressure: the moment is divided by 1 + MomentLimiterPerPa q. 0 for none.
@@ -58,7 +117,8 @@ public sealed class BodyAero6Dof
     /// </summary>
     public void Wrench(Dual altitude, Dual vx, Dual vy, Dual vz,
                        Dual r00, Dual r01, Dual r02, Dual r10, Dual r11, Dual r12, Dual r20, Dual r21, Dual r22,
-                       out Dual fx, out Dual fy, out Dual fz, out Dual tx, out Dual ty, out Dual tz, out Dual weight)
+                       out Dual fx, out Dual fy, out Dual fz, out Dual tx, out Dual ty, out Dual tz, out Dual weight,
+                       ReadOnlySpan<Dual> finDeg = default)
     {
         fx = fy = fz = tx = ty = tz = weight = default;
         Dual speed2 = vx * vx + vy * vy + vz * vz;
@@ -91,6 +151,16 @@ public sealed class BodyAero6Dof
 
         Dual fm = Clamp(mach, Force.MachMin, Force.MachMax);
         Force.Coefficients(fm, alpha, beta, out Dual cx, out Dual cy, out Dual cz);
+        // The control surfaces at their deflections: their force joins the body's, and their moment below.
+        Dual fcl = default, fcm = default, fcn = default;
+        int fins = Math.Min(Fins.Length, finDeg.Length);
+        for (int i = 0; i < fins; i++)
+        {
+            FinCoefficients(Fins[i], false, finDeg[i], mach, alpha, beta, out Dual dx, out Dual dy, out Dual dz);
+            cx += dx; cy += dy; cz += dz;
+            FinCoefficients(Fins[i], true, finDeg[i], mach, alpha, beta, out Dual dl, out Dual dm, out Dual dn);
+            fcl += dl; fcm += dm; fcn += dn;
+        }
         Dual Fx = qs * cx, Fy = qs * cy, Fz = qs * cz;
 
         // Back to model axes (M transposed), and to the site frame (R).
@@ -105,10 +175,15 @@ public sealed class BodyAero6Dof
         Dual Mx = ComShiftY * Fz - ComShiftZ * Fy;
         Dual My = ComShiftZ * Fx - ComShiftX * Fz;
         Dual Mz = ComShiftX * Fy - ComShiftY * Fx;
-        if (Moment != null && ReferenceLength > 0.0)
+        if (ReferenceLength > 0.0)
         {
-            Dual mm = Clamp(mach, Moment.MachMin, Moment.MachMax);
-            Moment.Coefficients(mm, alpha, beta, out Dual cl, out Dual cm, out Dual cn);
+            Dual cl = fcl, cm = fcm, cn = fcn;
+            if (Moment != null)
+            {
+                Dual mm = Clamp(mach, Moment.MachMin, Moment.MachMax);
+                Moment.Coefficients(mm, alpha, beta, out Dual bl, out Dual bm, out Dual bn);
+                cl += bl; cm += bm; cn += bn;
+            }
             Dual qsl = qs * ReferenceLength;
             Mx += qsl * cl;
             My += qsl * cm;

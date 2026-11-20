@@ -11,7 +11,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 internal static class SixDofCoastCheck
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    private const int NU = Dynamics6Dof.NUBase;
     private const double Cycle = 0.1, Dt = 0.01, LockS = 1.0, WarmTrustRegion = 0.05;
 
     // The cross-wind push the plan does not model, m/s^2, site frame: entry guidance's logged cross-flow bias was 0.4-0.8 m/s^2.

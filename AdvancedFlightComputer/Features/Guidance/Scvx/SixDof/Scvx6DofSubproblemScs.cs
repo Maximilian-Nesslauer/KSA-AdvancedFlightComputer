@@ -31,7 +31,8 @@ namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 public sealed class Scvx6DofSubproblemScs
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    /// <summary>The control count, the base controls and the craft's fins (Scvx6DofConfig.NU).</summary>
+    private readonly int NU;
 
     private readonly Scvx6DofConfig _cfg;
     private readonly int _n;
@@ -81,6 +82,7 @@ public sealed class Scvx6DofSubproblemScs
     public Scvx6DofSubproblemScs(Scvx6DofConfig cfg)
     {
         _cfg = cfg;
+        NU = cfg.NU;
         _n = cfg.Nodes;
         _dtau = 1.0 / (_n - 1);
         _xs = cfg.XScale;
@@ -128,8 +130,10 @@ public sealed class Scvx6DofSubproblemScs
         _nSlew = cfg.GimbalSlewPerS > 0.0 ? 4 * (_n - 1) : 0;
         // + two rows per node for each RCS control's bounds, 0 <= u <= its authority, the last orthant rows of all.
         _nPin = cfg.TorqueDemand ? 6 * _n : 0;
+        // + two rows per node for each fin's range, and two per interval for its rate, after the RCS's.
         _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm + 2 * _nAc + _nSlew
-                + 2 * _n * Dynamics6Dof.NRCS + _nPin + _nRr + (_nCoast > 0 ? 4 : 0);
+                + 2 * _n * Dynamics6Dof.NRCS + 2 * _n * _cfg.FinCount + 2 * (_n - 1) * _cfg.FinCount
+                + _nPin + _nRr + (_nCoast > 0 ? 4 : 0);
         _socDims = new int[_n + _nGs + _n + _nRr];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
@@ -370,6 +374,16 @@ public sealed class Scvx6DofSubproblemScs
                     int col = IU(k, Dynamics6Dof.IRCS + j);
                     double s = _us[Dynamics6Dof.IRCS + j];
                     AddP(col, col, 2.0 * _cfg.RcsWeight / (s * s));
+                }
+
+        // FinWeight * sum_k,i (d[k,i] / range_i)^2 - pure diagonal (Scvx6DofConfig.FinWeight).
+        if (_cfg.FinWeight > 0.0)
+            for (int k = 0; k < _n; k++)
+                for (int i = 0; i < _cfg.FinCount; i++)
+                {
+                    int col = IU(k, Dynamics6Dof.IFIN + i);
+                    double s = _us[Dynamics6Dof.IFIN + i];
+                    AddP(col, col, 2.0 * _cfg.FinWeight / (s * s));
                 }
 
         // WW * sum_k ||w[k]||^2 - pure diagonal, no coupling between nodes
@@ -678,6 +692,35 @@ public sealed class Scvx6DofSubproblemScs
                 if (perN > 0.0) AddA(row, IU(k, Dynamics6Dof.IT), -perN);
                 _b[row++] = pos;
             }
+
+        // THE CONTROL SURFACES (Scvx6DofConfig.FinBounds, FinRate): each fin between its stops at every node, min <= d <= max, and its change from one node to the next within its rate times the interval, in the coast as in the burn - a fin works in the air whether the engine burns or not. A slot without a fin gets the same rows with zero bounds and stays at zero.
+        for (int k = 0; k < _n; k++)
+            for (int i = 0; i < _cfg.FinCount; i++)
+            {
+                int col = IU(k, Dynamics6Dof.IFIN + i);
+                (double lo, double hi) = _cfg.FinBounds(i);
+                AddA(row, col, -1.0);
+                _b[row++] = -lo;
+                AddA(row, col, 1.0);
+                _b[row++] = hi;
+            }
+        for (int k = 0; k < _n - 1; k++)
+        {
+            double interval = CoastInterval(k) ? _dtauC * _sigCBar : _dtauB * sigBar;
+            for (int i = 0; i < _cfg.FinCount; i++)
+            {
+                (double lo, double hi) = _cfg.FinBounds(i);
+                double rate = _cfg.FinRate(i);
+                // Without a rate, the whole range in one step.
+                double reach = rate > 0.0 && interval > 0.0 ? rate * interval : hi - lo;
+                for (int sign = 1; sign >= -1; sign -= 2)
+                {
+                    AddA(row, IU(k + 1, Dynamics6Dof.IFIN + i), sign);
+                    AddA(row, IU(k, Dynamics6Dof.IFIN + i), -sign);
+                    _b[row++] = reach;
+                }
+            }
+        }
 
         // The turn-rate slacks are non-negative.
         for (int k = 0; k < _nRr; k++)

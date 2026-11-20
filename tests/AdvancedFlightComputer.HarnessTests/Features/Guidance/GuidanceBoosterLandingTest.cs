@@ -27,7 +27,8 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
     public override bool OptIn => true;
 
     private const BindingFlags PrivateStatic = BindingFlags.NonPublic | BindingFlags.Static;
-    private const string Save = "2stage_controlled";
+    // AFC_LANDING_SAVE flies another save's booster (2stage_KSAero for KSAero's fins, with AFC_LANDING_KSAERO=1).
+    private static string Save => Environment.GetEnvironmentVariable("AFC_LANDING_SAVE") is { Length: > 0 } s ? s : "2stage_controlled";
     private const double StepS = 0.02;
     private const double SampleS = 0.5;
     private const double TimeoutS = 150.0;
@@ -158,6 +159,10 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                 if (!SweepAero(t, booster, state, home, ambient))
                     return;
                 state.UseThreeDofLanding = true;
+                // AFC_LANDING_OWN_ATTITUDE=0 flies the glide on the stock flight computer, as before AttitudeController.
+                state.ThreeDofOwnAttitude = Env("AFC_LANDING_OWN_ATTITUDE", 1.0) > 0.0;
+                // AFC_LANDING_STANDBY=1 engages entry guidance on standby, as a boostback glide does at ThreeDofStandbyQkPa: planning, holding the planned glide until ThreeDofEngageQkPa.
+                state.ThreeDofStandby = Env("AFC_LANDING_STANDBY", 0.0) > 0.0;
                 state.ThreeDofEngagePending = true;
             }
             state.LandingAccelLimitG = Env("AFC_LANDING_ACCEL_G", state.LandingAccelLimitG);
@@ -407,7 +412,8 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                 t.Info($"  t {sim,6:F2}  | {line}");
             if (mode != lastMode)
             {
-                t.Info($"  t {sim,6:F2}  -> {mode}  ({(state.Active ? state.Error : threeDof ? state.ThreeDofStatus : state.LandingStatus)})");
+                t.Info($"  t {sim,6:F2}  -> {mode}  ({(state.Active ? state.Error : threeDof ? state.ThreeDofStatus : state.LandingStatus)})"
+                       + (threeDof || state.Active ? "" : $"  [entry: '{state.ThreeDofStatus}', pending {state.ThreeDofEngagePending}, acquired {state.ControlAcquired}, takeover '{state.TakeoverReason}']"));
                 lastMode = mode;
             }
             if (sim >= nextSample)

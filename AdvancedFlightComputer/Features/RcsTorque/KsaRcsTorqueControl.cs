@@ -170,6 +170,40 @@ internal static class KsaRcsTorqueControl
     }
 
     /// <summary>
+    /// The RCS's propellant flow this step, kg/s, and how many thrusters fire: each one's full flow times the share of <paramref name="stepS"/> its commanded pulse covers, whoever commanded it (stock's flight computer or this). Counts the same under either, so the two can be compared. Main thread.
+    /// </summary>
+    internal static bool FiredFlow(Vehicle vehicle, double stepS, out double flowKgS, out int firing)
+    {
+        flowKgS = 0.0;
+        firing = 0;
+        if (vehicle?.Parts == null)
+            return false;
+        ThrusterController[] modules = Thrusters(vehicle);
+        if (modules.Length == 0
+            || !ModuleStateful<ThrusterController, ThrusterControllerState, ThrusterControllerGlobalState, EmptyStruct>
+                .TryGetFrom(vehicle.Parts.States, out var states))
+            return false;
+        ReadOnlySpan<RocketState> rocketStates = RocketStates.Of(vehicle.Parts);
+        float3 com = vehicle.TotalMassPropsAsmb.Offset;
+        float ambient = vehicle.PhysicsEnvironment.AtmosphericPressure;
+        var assembly = new RcsCtrlFrame(floatQuat.Identity);
+        double step = Math.Max(stepS, 1e-3);
+        foreach (ThrusterController module in modules)
+        {
+            ThrusterControllerState st = states.States[module.StatesIdx];
+            double share = Math.Clamp(st.CommandPulseTime / step, 0.0, 1.0);
+            if (!st.IsPropellantAvailable || !(share > 0.0))
+                continue;
+            RcsWrenchTable.ComputeLive(module, rocketStates, com, ambient, in assembly, out _, out _, out float flow);
+            if (!float.IsFinite(flow))
+                continue;
+            flowKgS += share * flow;
+            firing++;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// What the craft's RCS can do about each axis of the frame each way, into <paramref name="six"/> in the order +x, -x, +y, -y, +z, -z (RcsTorqueAllocator.Characterise). False when it has no usable thruster.
     /// </summary>
     internal static bool TryCharacterise(Vehicle vehicle, double3 ax, double3 ay, double3 az,

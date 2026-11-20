@@ -10,7 +10,7 @@ internal static class ColdReferenceShiftCheck
         double step = sigma / (nodes - 1);
         var dynamics = new Dynamics6Dof.Params { Gz = -1.62 };
         var states = new double[nodes * Dynamics6Dof.NX];
-        var controls = new double[nodes * Dynamics6Dof.NU];
+        var controls = new double[nodes * Dynamics6Dof.NUBase];
         states[0] = 28000;
         states[1] = 150;
         states[2] = 5400;
@@ -21,7 +21,7 @@ internal static class ColdReferenceShiftCheck
         double flow = thrust / (dynamics.Isp * dynamics.G0);
         for (int k = 0; k < nodes; k++)
         {
-            controls[k * Dynamics6Dof.NU + Dynamics6Dof.IT] = thrust;
+            controls[k * Dynamics6Dof.NUBase + Dynamics6Dof.IT] = thrust;
             if (k == nodes - 1) break;
             int offset = k * Dynamics6Dof.NX;
             int next = (k + 1) * Dynamics6Dof.NX;
@@ -68,7 +68,7 @@ internal static class ColdReferenceShiftCheck
         int nodes, double step)
     {
         const int nx = Dynamics6Dof.NX;
-        const int nu = Dynamics6Dof.NU;
+        const int nu = Dynamics6Dof.NUBase;
         Span<double> first = stackalloc double[nx];
         Span<double> second = stackalloc double[nx];
         double worst = 0;

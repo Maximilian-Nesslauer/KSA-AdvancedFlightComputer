@@ -32,7 +32,8 @@ namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 public static class Dynamics6Dof
 {
     public const int NX = 14;   // state dimension
-    public const int NU = 7;    // control dimension
+    /// <summary>The controls every craft has (engine, roll torque, RCS). The fins follow them, one per control surface the craft carries, so a problem's control count is NUBase + its fins (Params.NU, Scvx6DofConfig.NU).</summary>
+    public const int NUBase = 7;
 
     // State layout
     public const int IR = 0;    // position      r(3)
@@ -48,6 +49,7 @@ public static class Dynamics6Dof
     public const int ITAU = 3;  // direct body-z (roll) torque
     public const int IRCS = 4;  // RCS torque, one signed control per body axis: x, y, z
     public const int NRCS = 3;
+    public const int IFIN = NUBase;  // control-surface deflections, degrees, one per fin (BodyAero6Dof.Fins), as many as the craft has
 
     /// <summary>Vehicle and environment constants. Defaults mirror 6dof.py.</summary>
     public sealed class Params
@@ -86,6 +88,12 @@ public static class Dynamics6Dof
         /// The engine is off: its lateral and axial thrust have no effect and no propellant flows (<see cref="MassFlowOffset"/> included), while the roll torque, the RCS and the air still act. The coast before ignition (Scvx6DofConfig.CoastIntervals) is evaluated with these.
         /// </summary>
         public bool EngineOff;
+
+        /// <summary>The craft's control surfaces (BodyAero6Dof.Fins), one fin control each.</summary>
+        public int FinCount => BodyAero?.Fins.Length ?? 0;
+
+        /// <summary>The control count: the base controls and one per fin.</summary>
+        public int NU => NUBase + FinCount;
 
         /// <summary>These parameters with the engine off (<see cref="EngineOff"/>), sharing every table.</summary>
         public Params WithEngineOff()
@@ -178,9 +186,10 @@ public static class Dynamics6Dof
         Dual fy = r10 * bx + r11 * by + r12 * bz;
         Dual fz = r20 * bx + r21 * by + r22 * bz;
 
-        // vdot = g + (R(q) T_body + F_aero) / m
+        // vdot = g + (R(q) T_body + F_aero) / m; the air's force and moment include the control surfaces' at their deflections.
         AeroWrench(x, p, vx, vy, vz, r00, r01, r02, r10, r11, r12, r20, r21, r22,
-                   out Dual ax, out Dual ay, out Dual az, out Dual aeroTx, out Dual aeroTy, out Dual aeroTz);
+                   out Dual ax, out Dual ay, out Dual az, out Dual aeroTx, out Dual aeroTy, out Dual aeroTz,
+                   u.Length > IFIN ? u.Slice(IFIN, Math.Min(u.Length - IFIN, p.FinCount)) : default);
         fx += ax;
         fy += ay;
         fz += az;
@@ -216,14 +225,15 @@ public static class Dynamics6Dof
     /// </summary>
     private static void AeroWrench(ReadOnlySpan<Dual> x, Params p, Dual vx, Dual vy, Dual vz,
                                    Dual r00, Dual r01, Dual r02, Dual r10, Dual r11, Dual r12, Dual r20, Dual r21, Dual r22,
-                                   out Dual fx, out Dual fy, out Dual fz, out Dual tx, out Dual ty, out Dual tz)
+                                   out Dual fx, out Dual fy, out Dual fz, out Dual tx, out Dual ty, out Dual tz,
+                                   ReadOnlySpan<Dual> finDeg = default)
     {
         fx = fy = fz = tx = ty = tz = default;
         Dual altitude = p.AeroAltitudeOffset + x[IR + 2];
         Dual weight = default;
         if (p.BodyAero != null)
             p.BodyAero.Wrench(altitude, vx, vy, vz, r00, r01, r02, r10, r11, r12, r20, r21, r22,
-                              out fx, out fy, out fz, out tx, out ty, out tz, out weight);
+                              out fx, out fy, out fz, out tx, out ty, out tz, out weight, finDeg);
         if (p.Aero == null || weight.V >= 1.0)
             return;
         p.Aero.AeroForce(altitude, vx, vy, vz, r02, r12, r22, out Dual ax, out Dual ay, out Dual az);
@@ -266,16 +276,23 @@ public static class Dynamics6Dof
     /// sweeps are shared - but to skip storing it.
     ///
     /// The RCS columns of B are written from their closed form instead of more sweeps: the RCS terms are linear in those controls, so each column is the force rotated into the site frame over the mass, and the torque over the inertia. Each sweep costs a full evaluation of the aero tables, so this keeps a craft with RCS at the cost of one without.
+    ///  The control surfaces' columns are swept, one for each of the craft's fins (BodyAero6Dof.Fins): their torque is the air's, read from their tables at the node's flight condition.
     /// </summary>
     public static void Jacobian(ReadOnlySpan<double> x, ReadOnlySpan<double> u, Params p,
                                 Span<double> f, Span<double> A, Span<double> B)
     {
+        int NU = p.NU;
+        if (u.Length < NU)
+            throw new ArgumentException($"The controls are {u.Length} long; this craft has {NU} ({p.FinCount} fins).");
         Span<Dual> dx = stackalloc Dual[NX];
         Span<Dual> du = stackalloc Dual[NU];
         Span<Dual> dout = stackalloc Dual[NX];
 
-        for (int col = 0; col < NX + IRCS; col++)
+        for (int col = 0; col < NX + NU; col++)
         {
+            // The RCS columns come from their closed form (RcsColumns).
+            if (col >= NX + IRCS && col < NX + IFIN)
+                continue;
             for (int i = 0; i < NX; i++)
                 dx[i] = new Dual(x[i], col == i ? 1.0 : 0.0);
             for (int j = 0; j < NU; j++)
@@ -312,6 +329,7 @@ public static class Dynamics6Dof
     /// <summary>The RCS columns of B, row-major NX x NU: d(xdot)/d(u_rcs), exactly what F's RCS terms differentiate to.</summary>
     private static void RcsColumns(ReadOnlySpan<double> x, Params p, Span<double> B)
     {
+        int NU = p.NU;
         for (int j = 0; j < NRCS; j++)
             for (int r = 0; r < NX; r++)
                 B[r * NU + IRCS + j] = 0.0;
@@ -338,6 +356,7 @@ public static class Dynamics6Dof
     /// <summary>Value only, no derivatives - for the nonlinear defect / merit function.</summary>
     public static void Eval(ReadOnlySpan<double> x, ReadOnlySpan<double> u, Params p, Span<double> f)
     {
+        int NU = Math.Min(p.NU, u.Length);
         Span<Dual> dx = stackalloc Dual[NX];
         Span<Dual> du = stackalloc Dual[NU];
         Span<Dual> dout = stackalloc Dual[NX];

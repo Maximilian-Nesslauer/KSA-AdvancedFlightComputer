@@ -29,7 +29,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 internal static class QuaternionBranchCheck
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    private const int NU = Dynamics6Dof.NUBase;
 
     /// <summary>Engage state from flight 20260808-104651: 1552 m, 126 m/s down, 92.1 deg tilt.</summary>
     private static readonly double[] EngageState =

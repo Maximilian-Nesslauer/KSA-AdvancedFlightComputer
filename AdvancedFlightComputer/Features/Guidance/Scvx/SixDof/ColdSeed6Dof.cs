@@ -12,7 +12,6 @@ public delegate bool SeedPath(int phase, double f, Span<double> rv, Span<double>
 public static class ColdSeed6Dof
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
 
     // The share of the burn over which the attitude turns from the thrust direction to the target attitude.
     private const double UprightShare = 0.15;
@@ -20,6 +19,7 @@ public static class ColdSeed6Dof
     public static void Build(ReadOnlySpan<double> x0, ReadOnlySpan<double> xf, double sigma, int nodes,
                              Scvx6DofConfig cfg, Dynamics6Dof.Params dyn, out double[] xSeed, out double[] uSeed)
     {
+        int NU = cfg.NU;
         if (nodes < 2 || x0.Length < NX || xf.Length < NX || !(sigma > 0.0))
             throw new ArgumentException("The cold seed needs two nodes, complete states and a positive duration.");
 
@@ -104,6 +104,7 @@ public static class ColdSeed6Dof
                                       int nodes, int coastIntervals, Scvx6DofConfig cfg, Dynamics6Dof.Params dyn,
                                       out double[] xSeed, out double[] uSeed)
     {
+        int NU = cfg.NU;
         if (coastIntervals <= 0)
         {
             Build(x0, xf, sigma, nodes, cfg, dyn, out xSeed, out uSeed);
@@ -165,6 +166,7 @@ public static class ColdSeed6Dof
                                       int nodes, int coastIntervals, Scvx6DofConfig cfg, Dynamics6Dof.Params dyn, SeedPath path,
                                       out double[] xSeed, out double[] uSeed)
     {
+        int NU = cfg.NU;
         if (coastIntervals <= 0 || coastIntervals > nodes - 2 || !(sigma > 0.0))
             throw new ArgumentException("A seed along a path needs a coast and a burn of at least two nodes.");
         int burnNodes = nodes - coastIntervals;

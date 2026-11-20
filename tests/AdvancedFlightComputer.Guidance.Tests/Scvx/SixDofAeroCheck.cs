@@ -14,7 +14,7 @@ using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 internal static class SixDofAeroCheck
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    private const int NU = Dynamics6Dof.NUBase;
 
     // A returning booster near the end of its propellant, as ThreeDofScenario's, on one engine it can throttle below its weight.
     private const double Tmax = 600e3, Floor = 0.3, Isp = 282.0, Gravity = 9.81, Mass = 26_000.0, Arm = 15.0, Length = 40.0;
@@ -150,7 +150,7 @@ internal static class SixDofAeroCheck
         Console.WriteLine();
         Console.WriteLine("2. agreement: the old force from a symmetric table, and a moment about the right axes");
         bool ok = true;
-        double[] u0 = new double[Dynamics6Dof.NU];
+        double[] u0 = new double[Dynamics6Dof.NUBase];
 
         // The symmetric table against the old thrust-axis force, at tilts inside the full-air region.
         Dynamics6Dof.Params oldOnly = Params(null);

@@ -1556,7 +1556,7 @@ public sealed class VehicleAutopilotState
     public double ThreeDofLastStep;
     public double ThreeDofLogTime = double.NaN;
 
-    /// <summary>Take a boostback glide over automatically once its predicted time to impact falls under <see cref="ThreeDofEngageTgoS"/>.</summary>
+    /// <summary>Take a boostback glide over automatically once the air's dynamic pressure reaches <see cref="ThreeDofEngageQkPa"/>, or its predicted time to impact falls under <see cref="ThreeDofEngageTgoS"/>.</summary>
     public bool ThreeDofFromGlide = true;
 
     /// <summary>
@@ -1564,6 +1564,20 @@ public sealed class VehicleAutopilotState
     /// 45 s rather than the 90 it started at, which engaged 90-115 km up: the PID glide holds the entry well enough, and the cold solve from up there is the fragile one - offline (--3dof-far) it gives up from 4 of 15 starts at 69-107 km and from none below 50 km.
     /// </summary>
     public double ThreeDofEngageTgoS = 45.0;
+
+    /// <summary>
+    /// The dynamic pressure, kPa, at which entry guidance takes over a falling boostback glide (past its apex): where the air begins to matter, so entry guidance flies all of the descent where it does and the boostback's glide only holds its planned angle above. 1 kPa is about 37 km on the 2026-11-20 return. Offline (--3dof-far) entry's cold solve converges from every start at 50 km and below. 0 for the time to impact alone (ThreeDofEngageTgoS, also the backstop).
+    /// </summary>
+    public double ThreeDofEngageQkPa = 1.0;
+
+    /// <summary>The dynamic pressure, kPa, at which entry guidance engages on standby ahead of taking the glide at ThreeDofEngageQkPa: it plans from here, so the take-over finds a plan ready, while the craft holds the planned glide. 0, or above ThreeDofEngageQkPa, for none.</summary>
+    public double ThreeDofStandbyQkPa = 0.5;
+
+    /// <summary>Entry guidance is on standby (ThreeDofStandbyQkPa): planning, the craft holding the planned glide, until the air reaches ThreeDofEngageQkPa.</summary>
+    internal bool ThreeDofStandby;
+
+    /// <summary>Steer the boostback glide on its impact prediction's miss (the PID). Off by default: above where entry guidance takes over the air is too thin for it to matter, and the prediction, which knows nothing of what the fins push, made the glide swing (2026-11-20). Off holds the glide the boostback planned.</summary>
+    public bool GlideSteerMiss = false;
 
     /// <summary>Hand the landing burn to 6-DOF for its last seconds, for its rotational model of the final flare: the 3-DOF's horizon collapses there and its re-solves start being refused. On by default.</summary>
     public bool ThreeDofSixDofHandover = true;
@@ -1603,6 +1617,20 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double3 ReturnRollRefCcf;
 
+    /// <summary>
+    /// Roll entry guidance's glide to the nearest roll at which the air's rolling moment is zero and restoring (GuidanceWindow.UpdateGlideRoll), under AFC's own attitude controller. OFF by default since 2026-11-20: on 2stage_KSAero no roll trims (the rolling moment is a near-constant bias), and the search only wandered; the glide flies wings level to the local vertical, as before. The offset it has turned the held wing direction by, rad, about the engine-first axis (ReturnRollRefCci); when it last chose; and the air's rolling moment at the held roll and at the one it heads for then, N m.
+    /// </summary>
+    public bool ThreeDofLeastRollMoment = false;
+
+    /// <summary>Fly the boostback's glide with AFC's own attitude controller too, while the engine is off (ThreeDofOwnAttitude switches both). On by default.</summary>
+    public bool BoostbackGlideOwnAttitude = true;
+
+    /// <summary>The glide's held wing direction, site frame, at its last roll choice (UpdateGlideRoll): touchdown guidance lands with its wings there (TerminalAttitude). Zero for none; a later glide of the same craft replaces it.</summary>
+    internal double3 GlideWingSite;
+    internal double ReturnRollOffsetRad;
+    internal double GlideRollAt = double.NegativeInfinity;
+    internal double GlideRollMomentNm = double.NaN, GlideRollBestNm = double.NaN;
+
     /// <summary>Hold a returning booster at the fixed roll (ReturnRollRefCcf) through the boostback and entry guidance, so the body-axis aero table applies. On by default.</summary>
     public bool BoosterRollHold = true;
 
@@ -1631,6 +1659,20 @@ public sealed class VehicleAutopilotState
     /// Wind the difference between the attitude entry guidance asks for and the one flown into the command it sends, as the boostback glide does (GlideTrackGain). The plan assumes the angle of attack it asks for is the one flown; a craft that holds a steady offset - the stock attitude controller leaves one inside its deadband, and an unstable airframe pushes it to one side of it - flies lift the plan did not count. On by default.
     /// </summary>
     public bool ThreeDofTrim = true;
+
+    /// <summary>
+    /// Fly entry guidance's glide with AFC's own attitude controller (AttitudeController): a feedforward of the air's moment from the sweep's tables plus filtered PD feedback and a slow integral, shared between the control surfaces and the RCS in one programme that spends the RCS only on what the fins cannot give, with an optional deadband (0, off, by default) inside which only the feedforward and integral fly. Off points the craft through the stock flight computer, as before 2026-11-20, which fired the RCS every way against the air it knows nothing of. The controller's natural frequency, rad/s, and its deadband, degrees.
+    /// </summary>
+    public bool ThreeDofOwnAttitude = true;
+    public double AttitudeBandwidthRadS = 1.0;
+    public double AttitudeDeadbandDeg = 0.0;
+
+    /// <summary>Whether AFC's own attitude controller flew the last step (Autopilot.FlyOwnAttitude), so its actuators are let go when it stops.</summary>
+    internal bool OwnAttitudeFlying;
+
+    /// <summary>Whether touchdown guidance flew the craft's fins (SixDof.FlyPlanFins), so they are sent home when it stops.</summary>
+    internal bool TouchdownFinsFlown;
+    internal Vehicle OwnAttitudeVehicle;
 
     /// <summary>The trim added to the command, CCI, radians across the airflow: a small rotation off the planned attitude. Zero outside the glide on a plan, and faded out once the engine lights.</summary>
     public double3 ThreeDofTrimCci;

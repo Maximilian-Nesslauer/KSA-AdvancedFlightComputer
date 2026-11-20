@@ -58,6 +58,33 @@ public sealed class Scvx6DofConfig
     /// Price on the RCS torque, RcsWeight * sum over nodes and controls of (u_rcs / authority)^2. The propellant alone barely prices it, so without this the split between the gimbals and the RCS, and between a control's + and - halves, was all but free, and the subproblem had flat directions: on 2026-11-19 SCS took 2-8 times the iterations it had without RCS. The square makes the split unique and leans on the gimbals, which cost no propellant, before the thrusters.
     /// </summary>
     public double RcsWeight { get; init; } = 0.0;
+
+    /// <summary>
+    /// THE CONTROL SURFACES (Dynamics6Dof.IFIN): each fin's deflection range, degrees, and how fast it may move, deg/s, as the plan may use them; zeros pin a slot at zero (a craft with fewer fins, or none). The subproblem bounds each fin control between its min and max at every node and its change between nodes by the rate times the interval.
+    /// </summary>
+    public double[]? FinMinDeg { get; init; }
+    public double[]? FinMaxDeg { get; init; }
+    public double[]? FinRateDegS { get; init; }
+
+    /// <summary>Price on the fins' deflection, FinWeight * sum over nodes and fins of (deflection / range)^2: far below the RCS's, so the fins are spent first, and enough to make the split between the fins unique and keep idle ones home.</summary>
+    public double FinWeight { get; init; } = 1.0e-3;
+
+    /// <summary>The craft's control surfaces as the plan flies them, one fin control each (Dynamics6Dof.IFIN on): as many as the fin arrays are long. Must match the dynamics' (Dynamics6Dof.Params.FinCount).</summary>
+    public int FinCount => Math.Max(FinMinDeg?.Length ?? 0, Math.Max(FinMaxDeg?.Length ?? 0, FinRateDegS?.Length ?? 0));
+
+    /// <summary>The control count: the base controls and one per fin.</summary>
+    public int NU => Dynamics6Dof.NUBase + FinCount;
+
+    /// <summary>Fin <paramref name="i"/>'s range, degrees; (0, 0) for none.</summary>
+    public (double Min, double Max) FinBounds(int i)
+    {
+        double lo = FinMinDeg is { } a && i < a.Length && double.IsFinite(a[i]) ? Math.Min(a[i], 0.0) : 0.0;
+        double hi = FinMaxDeg is { } b && i < b.Length && double.IsFinite(b[i]) ? Math.Max(b[i], 0.0) : 0.0;
+        return (lo, hi);
+    }
+
+    /// <summary>Fin <paramref name="i"/>'s rate, deg/s; 0 for none (or no limit where the fin has a range: see the subproblem).</summary>
+    public double FinRate(int i) => FinRateDegS is { } r && i < r.Length && double.IsFinite(r[i]) && r[i] > 0.0 ? r[i] : 0.0;
     public double WW { get; init; } = 1.0;                      // angular-rate damping
 
     /// <summary>
@@ -362,9 +389,9 @@ public sealed class Scvx6DofConfig
             // A craft with no gimbal has a zero cone, which pins its gimbal controls; their scale still has to be positive, so they take a hundredth of the thrust.
             double gimbalScale = Tmax * TanGimbal > 0.0 ? Tmax * TanGimbal : 0.01 * Tmax;
             double[] head = UScale ?? [gimbalScale, gimbalScale, Tmax, TauRollMax];
-            if (head.Length >= Dynamics6Dof.NU)
+            if (head.Length >= NU)
                 return head;
-            var all = new double[Dynamics6Dof.NU];
+            var all = new double[NU];
             Array.Copy(head, all, Math.Min(head.Length, Dynamics6Dof.IRCS));
             double fallback = TauRollMax > 0.0 && double.IsFinite(TauRollMax) ? TauRollMax : 1.0;
             for (int a = 0; a < Dynamics6Dof.NRCS; a++)
@@ -375,6 +402,13 @@ public sealed class Scvx6DofConfig
                 double gimbal = TorqueDemand || !(GimbalArm > 0.0) ? 0.0
                     : a < 2 ? Tmax * TanGimbal * GimbalArm : Math.Max(TauRollMax, 0.0);
                 all[Dynamics6Dof.IRCS + a] = max > 0.0 ? max + gimbal : fallback;
+            }
+            // A fin's scale is its range, degrees; a fin with none, pinned at zero, any positive figure.
+            for (int i = 0; i < FinCount; i++)
+            {
+                (double lo, double hi) = FinBounds(i);
+                double range = Math.Max(-lo, hi);
+                all[Dynamics6Dof.IFIN + i] = range > 0.0 ? range : 1.0;
             }
             return all;
         }

@@ -62,7 +62,8 @@ public enum ScvxStatus
 public sealed class Scvx6DofSolver
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    /// <summary>The control count, the base controls and the craft's fins (Scvx6DofConfig.NU).</summary>
+    private readonly int NU;
 
     private readonly Scvx6DofConfig _cfg;
     private readonly Dynamics6Dof.Params _dyn;
@@ -74,7 +75,7 @@ public sealed class Scvx6DofSolver
     private readonly int _nCoast;
     private readonly Dynamics6Dof.Params _dynCoast;
     private readonly double _dtauC, _dtauB;
-    private readonly double[] _aJ = new double[NX * NX], _bJ = new double[NX * NU], _f0J = new double[NX];
+    private readonly double[] _aJ = new double[NX * NX], _bJ, _f0J = new double[NX];
     private double _sigCBar;
     private readonly double[] _xs, _us;
 
@@ -263,7 +264,11 @@ public sealed class Scvx6DofSolver
     public Scvx6DofSolver(Scvx6DofConfig cfg, Dynamics6Dof.Params? dyn = null)
     {
         _cfg = cfg;
+        NU = cfg.NU;
+        _bJ = new double[NX * NU];
         _dyn = dyn ?? new Dynamics6Dof.Params();
+        if (_dyn.FinCount != cfg.FinCount)
+            throw new ArgumentException($"The plan's fin limits are for {cfg.FinCount} control surfaces; the dynamics have {_dyn.FinCount}.");
         _n = cfg.Nodes;
         _dtau = 1.0 / (_n - 1);
         _nCoast = Math.Max(cfg.CoastIntervals, 0);
@@ -617,6 +622,13 @@ public sealed class Scvx6DofSolver
                 (double pos, double neg) = _cfg.ControlTorqueBounds(a, u[k * NU + Dynamics6Dof.IT]);
                 u[i] = Math.Clamp(double.IsFinite(u[i]) ? u[i] : 0.0, -neg, pos);
             }
+            // Each fin inside its range; a slot without a fin at zero.
+            for (int i = 0; i < _cfg.FinCount; i++)
+            {
+                int j = k * NU + Dynamics6Dof.IFIN + i;
+                (double lo, double hi) = _cfg.FinBounds(i);
+                u[j] = Math.Clamp(double.IsFinite(u[j]) ? u[j] : 0.0, lo, hi);
+            }
             // The coast's nodes have the engine off.
             if (k < _nCoast)
             {
@@ -835,7 +847,15 @@ public sealed class Scvx6DofSolver
                     double r = u[k * NU + Dynamics6Dof.IRCS + j] / _us[Dynamics6Dof.IRCS + j];
                     rcs += r * r;
                 }
-        return _cfg.WDu * du + _cfg.WW * ww + coastWw + _cfg.RcsWeight * rcs;
+        double fin = 0;
+        if (_cfg.FinWeight > 0.0)
+            for (int k = 0; k < _n; k++)
+                for (int i = 0; i < _cfg.FinCount; i++)
+                {
+                    double r = u[k * NU + Dynamics6Dof.IFIN + i] / _us[Dynamics6Dof.IFIN + i];
+                    fin += r * r;
+                }
+        return _cfg.WDu * du + _cfg.WW * ww + coastWw + _cfg.RcsWeight * rcs + _cfg.FinWeight * fin;
     }
 
     private static double SumSquaresScaled(double[] v, double[] scale)

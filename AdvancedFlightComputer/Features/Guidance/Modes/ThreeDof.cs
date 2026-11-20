@@ -137,7 +137,11 @@ public static partial class GuidanceWindow
     /// <summary>Stop the 3-DOF. In the air the engine is left as it is; a cut there drops the craft.</summary>
     private static void Disengage3Dof(string why)
     {
+        _s.ThreeDofStandby = false;
         bool burning = _s.ThreeDofPhase == ThreeDofPhase.Burn;
+        // AFC's own attitude controller flew the glide: its RCS and surfaces stop with entry guidance.
+        if (_s.OwnAttitudeFlying && _s.OwnAttitudeVehicle is { } flown)
+            StopOwnAttitude(flown);
         StopSixDofStandby();
         // A coast nothing will fly any more: the next touchdown guidance plans without one unless entry guidance asks again.
         if (!_s.Active && !_s.EngagePending)
@@ -265,7 +269,23 @@ public static partial class GuidanceWindow
             StepEntryTouchdownPrepare(vehicle, parent, siteCci, x, x14, now);
 
         // Fly the plan if there is one; otherwise the PID glide until there is.
-        if (!Plan3DofStep(vehicle, parent, frame, x, att, now, dt, out double3 wantLocal, out double3 rateLocal, out bool smooth))
+        bool planned = Plan3DofStep(vehicle, parent, frame, x, att, now, dt, out double3 wantLocal, out double3 rateLocal, out bool smooth);
+        // ON STANDBY (ThreeDofStandbyQkPa): the plan is solved and re-solved, but the craft holds the planned glide until the air reaches ThreeDofEngageQkPa, or its time to impact the backstop.
+        if (_s.ThreeDofStandby && _s.ThreeDofPhase == ThreeDofPhase.Glide)
+        {
+            double qNow = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * (x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
+            if (qNow >= _s.ThreeDofEngageQkPa * 1000.0 || (double.IsFinite(_s.GlideTgo) && _s.GlideTgo <= _s.ThreeDofEngageTgoS))
+            {
+                _s.ThreeDofStandby = false;
+                GuidanceLog.Info(vehicle, FormattableString.Invariant($"Entry guidance takes the glide at {qNow / 1000.0:F2} kPa, {(planned ? "on its plan" : "its plan not ready yet")}."));
+            }
+            else
+            {
+                planned = false;
+                _s.DiagEntry(FormattableString.Invariant($"ENTRY STANDBY: PLANNING, HOLDING THE PLANNED GLIDE UNTIL {_s.ThreeDofEngageQkPa:0.##} kPa (NOW {qNow / 1000.0:F2})."));
+            }
+        }
+        if (!planned)
         {
             if (!ThreeDofLive)
                 return;   // a handover claimed the craft on this step
@@ -320,7 +340,8 @@ public static partial class GuidanceWindow
         double3 r = orbit.StateVectors.PositionCci;
         double3 vAir = orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r);
         double speed = vAir.Length();
-        if (!_s.ThreeDofTrim)
+        // Off under AFC's own attitude controller (ThreeDofOwnAttitude): it holds the command against the air itself, where the trim wound out the stock flight computer's standing error.
+        if (!_s.ThreeDofTrim || OwnsGlideAttitude(vehicle, false, true))
             trim = default;
         else if (integrate && speed > ThreeDofTrimMinSpeedMs)
         {
@@ -526,6 +547,28 @@ public static partial class GuidanceWindow
             }
             float3 rcs = fc.RcsTorqueAuthority;
             float3 tvc = fc.TvcTorqueAuthorityMax;
+            // The RCS as fired, under either controller, and AFC's own attitude controller's last step when it flew.
+            double rcsFlow = double.NaN;
+            int rcsFiring = 0;
+            if (AdvancedFlightComputer.Features.RcsTorque.KsaRcsTorqueControl.FiredFlow(vehicle, physDt > 0.0 && physDt < 1.0 ? physDt : 0.02, out double firedFlow, out int firedCount))
+            {
+                rcsFlow = firedFlow;
+                rcsFiring = firedCount;
+            }
+            bool ownAtt = _s.OwnAttitudeFlying;
+            // The air as the body meets it, retrograde-first, as the aero tables read it.
+            double alphaRf = double.NaN, betaRf = double.NaN;
+            {
+                float3 airF = PhysicsStates.ComputeAirVelocityBody(vehicle.BubbleOrigin, vehicle.KinematicStates, vehicle.PhysicsEnvironment);
+                double3 airBodyNow = double3.Unpack(in airF);
+                if (airBodyNow.Length() > 1.0)
+                {
+                    double3 uAir = double3.Normalize(airBodyNow);
+                    alphaRf = Math.Atan2(uAir.Z, -uAir.X);
+                    betaRf = Math.Atan2(uAir.Y, -uAir.X);
+                }
+            }
+            AttitudeController.Report ac = ownAtt ? AttitudeController.Last(vehicle) : default;
             double rcsTransverse = Math.Min(rcs.Y, rcs.Z);
             Guidance3Dof g = _s.ThreeDofGuidance;
 
@@ -581,6 +624,27 @@ public static partial class GuidanceWindow
                 PredMx = predMoment.X, PredMy = predMoment.Y, PredMz = predMoment.Z,
                 SolveWaitMs = _s.ThreeDofWorker?.LastWaitMs ?? double.NaN,
                 SolveRunMs = _s.ThreeDofWorker?.LastRunMs ?? double.NaN,
+                RcsFlowKgS = rcsFlow,
+                RcsFiring = rcsFiring,
+                OwnAtt = ownAtt,
+                AcErrDeg = ownAtt ? ac.ErrorDeg : double.NaN,
+                AcRateErrDegS = ownAtt ? ac.RateErrorDegS : double.NaN,
+                AcDeadband = ac.InDeadband,
+                AcAirKnown = ac.AirKnown,
+                AcDemand = ownAtt ? ac.DemandNm : new double3(double.NaN, double.NaN, double.NaN),
+                AcAir = ownAtt && ac.AirKnown ? ac.AirNm : new double3(double.NaN, double.NaN, double.NaN),
+                AcSurf = ownAtt ? ac.SurfacesNm : new double3(double.NaN, double.NaN, double.NaN),
+                AcRcsAsk = ownAtt ? ac.RcsAskedNm : new double3(double.NaN, double.NaN, double.NaN),
+                AcRcs = ownAtt ? ac.RcsNm : new double3(double.NaN, double.NaN, double.NaN),
+                AcRcsFlowKgS = ownAtt ? ac.RcsFlowKgS : double.NaN,
+                AcInt = ownAtt ? ac.IntegralNm : new double3(double.NaN, double.NaN, double.NaN),
+                FinCommandDeg = ownAtt ? ac.FinCommandDeg : null,
+                FinNowDeg = ownAtt ? ac.FinNowDeg : null,
+                AlphaRfDeg = alphaRf * Deg,
+                BetaRfDeg = betaRf * Deg,
+                RollOffsetDeg = _s.ReturnRollOffsetRad * Deg,
+                RollMomentNm = _s.GlideRollMomentNm,
+                RollMomentBestNm = _s.GlideRollBestNm,
                 // Guidance results are the worker's while it solves; -1 then.
                 Refusals = g == null ? 0 : ThreeDofBusy ? -1 : g.ConsecutiveRefusals,
                 AxisOffsetDeg = axisOffset * Deg,
@@ -843,7 +907,9 @@ public static partial class GuidanceWindow
         _s.ThreeDofRateInUse = Ksa3DofSetup.PlanRateMax(vehicle);
         double coastTurn = _s.ThreeDofTurnAccelDegS2 == 0.0 ? Ksa3DofSetup.CoastTurnAccelLimit(vehicle) : turn;
         bool fixedCoast = _s.ThreeDofTurnAccelDegS2 == 0.0 && coastTurn == 0.0;
-        Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: 12, _s.GlideMaxAoaDeg,
+        // THE PROVEN NODE COUNT, 12 glide intervals and 17 in the burn, from wherever entry guidance takes over. From higher up (it engages on dynamic pressure, ThreeDofEngageQkPa) each interval is longer; as the horizon closes they shrink back to the sizes flown for months. More intervals instead took 0.7-0.9 s a re-solve up high (2026-11-20).
+        const int glideIntervals = 12;
+        Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: glideIntervals, _s.GlideMaxAoaDeg,
             _s.VehicleHeightM, settings.GlideAccelMax(LandingAccelLimitMs2), _s.LandingPlanFloorMargin, turn,
             fixedGlideAttitude: fixedCoast, burnTiltPerSDeg: _s.ThreeDofBurnTiltPerSDeg);
         Scvx3DofConfig burn = Ksa3DofSetup.Config(vehicle, nodes: 20, glideIntervals: 0, _s.GlideMaxAoaDeg,

@@ -35,6 +35,8 @@ public static partial class GuidanceWindow
         ReadOnlySpan<double> px = g.PlanState;
         ReadOnlySpan<double> pu = g.PlanControl;
         int n = g.Nodes;
+        // The plan's control count per node: the base controls and one per fin.
+        int nu = n > 0 ? pu.Length / n : 0;
         if (px.Length < n * 14)
             return;
 
@@ -96,9 +98,9 @@ public static partial class GuidanceWindow
         for (int k = 0; k < n; k++)
         {
             double t = Math.Sqrt(
-                pu[k * Dynamics6Dof.NU + 0] * pu[k * Dynamics6Dof.NU + 0] +
-                pu[k * Dynamics6Dof.NU + 1] * pu[k * Dynamics6Dof.NU + 1] +
-                pu[k * Dynamics6Dof.NU + 2] * pu[k * Dynamics6Dof.NU + 2]);
+                pu[k * nu + 0] * pu[k * nu + 0] +
+                pu[k * nu + 1] * pu[k * nu + 1] +
+                pu[k * nu + 2] * pu[k * nu + 2]);
             thrustScale = Math.Max(thrustScale, t);
         }
         // Longest thrust arrow spans ~8% of the trajectory, so the picture stays readable whatever the vehicle's thrust happens to be.
@@ -116,7 +118,7 @@ public static partial class GuidanceWindow
             OvLine(dl, p, p + f.VecToCci(b2) * (0.03 * span), axisCol, 1.5f);
 
             // Thrust vector in the site frame: R(q) * (tdx, tdy, T).
-            double3 thrustSite = b0 * pu[k * Dynamics6Dof.NU + 0] + b1 * pu[k * Dynamics6Dof.NU + 1] + b2 * pu[k * Dynamics6Dof.NU + 2];
+            double3 thrustSite = b0 * pu[k * nu + 0] + b1 * pu[k * nu + 1] + b2 * pu[k * nu + 2];
             if (arrow > 0)
                 OvLine(dl, p, p + f.VecToCci(thrustSite) * arrow, thrCol, 1.5f);
         }

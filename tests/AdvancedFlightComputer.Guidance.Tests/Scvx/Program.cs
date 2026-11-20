@@ -12,7 +12,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 //   usage: Scvx.Console [path/to/dyn_ref.csv] [--verbose]
 
 const int NX = Dynamics6Dof.NX;
-const int NU = Dynamics6Dof.NU;
+const int NU = Dynamics6Dof.NUBase;
 // The Python references' control count: u = (tdx, tdy, T, tau_roll), from before the RCS controls (Dynamics6Dof.IRCS). Their RCS controls are zero, so the references are read into the wider layout with zeros there, and compared on their own four.
 const int RefNU = 4;
 const int RowLen = NX + RefNU + NX + NX * NX + NX * RefNU;
@@ -69,6 +69,11 @@ if (args.Contains("--6dof-coast"))
 if (args.Contains("--6dof-rcs"))
     return SixDofRcsCheck.Run(verbose);
 
+if (args.Contains("--aero-alloc"))
+    return AeroAllocatorCheck.Run(verbose);
+
+if (args.Contains("--6dof-fins"))
+    return SixDofFinCheck.Run(verbose);
 if (args.Contains("--6dof-aero"))
     return SixDofAeroCheck.Run(verbose);
 
@@ -117,6 +122,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --6dof-lift     touchdown guidance from logged hand-overs in pre-5901 and 5901 air: convergence and a closed-loop landing
           --6dof-coast    touchdown guidance taking the craft in the glide, a coast before a burn with the ignition time free, against taking the burn at ignition
           --6dof-rcs      the RCS torque allocator on a booster's layout, and the logged fast hand-over planned with gimbals alone and with RCS
+          --aero-alloc    the aero torque allocator on four fins in a cross that stall past 15 deg: reach, demands in and out of reach, axis priorities
           --boostback-replay <file> [--delay s] [--min-pitch deg]  the booster's own burn planner from where the plan separates it
           --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f] [--hold i,j]
                           solve an ascent problem the game dumped, with the full trace

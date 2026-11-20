@@ -31,6 +31,32 @@ internal static class KsaEnginePerf
 
     internal static double VacuumThrust(Vehicle vehicle) => Vacuum(vehicle).thrust;
 
+    /// <summary>
+    /// The thrust the craft's engines (EngineController) give now, N, summed over their nozzles: the main engines only. Not Vehicle.ComputeLiveThrust, which sums every rocket nozzle on the craft, the RCS thrusters' among them, so any RCS pulse reads as an engine burning (2026-11-20: the first pulse in the boostback glide handed the attitude back to the stock flight computer for the rest of the glide).
+    /// </summary>
+    internal static double LiveEngineThrust(Vehicle vehicle)
+    {
+        if (vehicle?.Parts?.States == null
+            || !ModuleStateful<RocketNozzle, RocketNozzleState, EmptyStruct, RocketNozzleFxState>
+                .TryGetFrom(vehicle.Parts.States, out var nozzles))
+            return 0.0;
+        double thrust = 0.0;
+        foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
+        {
+            if (engine.Rockets == null)
+                continue;
+            foreach (Rocket rocket in engine.Rockets)
+                foreach (RocketCore core in rocket.Cores)
+                    foreach (RocketNozzle nozzle in core.Nozzles)
+                    {
+                        double t = nozzles.States[nozzle.StatesIdx].Performance.TotalThrust;
+                        if (double.IsFinite(t))
+                            thrust += Math.Abs(t);
+                    }
+        }
+        return thrust;
+    }
+
     internal static double VacuumExhaustVelocity(Vehicle vehicle)
     {
         (double thrust, double massFlow) = Vacuum(vehicle);

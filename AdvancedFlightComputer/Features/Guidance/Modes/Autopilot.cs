@@ -1367,6 +1367,11 @@ public static partial class GuidanceWindow
             }
         }
 
+        // AFC's own attitude controller flies entry guidance's glide (ThreeDofOwnAttitude); anywhere else the stock flight computer steers, and the controller's actuators are let go the first step it does not fly.
+        bool ownAttitude = shouldCommand && OwnsGlideAttitude(vehicle, boostbackGuides, threeDofGuides);
+        if (_s.OwnAttitudeFlying && !ownAttitude)
+            StopOwnAttitude(vehicle);
+
         if (shouldCommand)
         {
             // An ascent references its roll to its target plane (see SteerBody2Cci and AscentRollRef); a landing keeps the stock position-derived reference, which is well conditioned there because the thrust axis is fighting the velocity, not lying along the position vector.
@@ -1376,11 +1381,16 @@ public static partial class GuidanceWindow
             double3? rollRef = _s.Running ? AscentRollRef(vehicle, _s.CommandDir)
                 : holdRoll && _s.CommandDir.Length() > 0.5 ? ReturnRollRefCci(vehicle, parent)
                 : null;
-            CommandAttitude(vehicle, parent, _s.CommandDir,
-                            fullEngage: !_s.WasEngaged, rollRef: rollRef,
-                            rollMode: holdRoll ? FlightComputerRollMode.Up : null);
-            if (boosterReturn && _s.BoosterStrictProfile)
-                _s.AttitudeOwnership.WriteProfile(vehicle.FlightComputer, FlightComputerAttitudeProfile.Strict);
+            if (ownAttitude)
+                FlyOwnAttitude(vehicle, parent, rollRef, heldRoll: holdRoll && !_s.Running);
+            else
+            {
+                CommandAttitude(vehicle, parent, _s.CommandDir,
+                                fullEngage: !_s.WasEngaged, rollRef: rollRef,
+                                rollMode: holdRoll ? FlightComputerRollMode.Up : null);
+                if (boosterReturn && _s.BoosterStrictProfile)
+                    _s.AttitudeOwnership.WriteProfile(vehicle.FlightComputer, FlightComputerAttitudeProfile.Strict);
+            }
 
             // Publish the attitude and its turning rate together so they describe the same instant.
             KsaAttitudeRate.Set(vehicle,
@@ -1970,7 +1980,111 @@ public static partial class GuidanceWindow
                 d = double3.Cross(up, Math.Abs(up.Z) < 0.9 ? new double3(0, 0, 1) : new double3(1, 0, 0));
             _s.ReturnRollRefCcf = double3.Normalize(double3.Cross(up, double3.Normalize(d))).Transform(cci2Ccf);
         }
-        return _s.ReturnRollRefCcf.Transform(doubleQuat.Inverse(cci2Ccf));
+        double3 w = _s.ReturnRollRefCcf.Transform(doubleQuat.Inverse(cci2Ccf));
+        // The glide's roll offset (UpdateGlideRoll), about the engine-first axis the airflow sets: zero until entry guidance's glide picks one.
+        double phi = _s.ReturnRollOffsetRad;
+        if (phi == 0.0 || !double.IsFinite(phi))
+            return w;
+        double3 axis = GlideRollAxisCci(vehicle, parent);
+        return axis.Length() > 0.5 ? RotateAbout(w, axis, phi) : w;
+    }
+
+    /// <summary>The engine-first axis of a glide, CCI: the reverse of the craft's velocity through the air. Zero when it is not moving through it.</summary>
+    private static double3 GlideRollAxisCci(Vehicle vehicle, IParentBody parent)
+    {
+        double3 r = vehicle.Orbit.StateVectors.PositionCci;
+        double3 vAir = vehicle.Orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r);
+        return vAir.Length() > 1.0 ? -double3.Normalize(vAir) : default;
+    }
+
+    /// <summary>How often the glide's roll is chosen again, s, and how fast it may move, deg/s: the attitude controller's own capture rate, so the plan's held roll and the body's stay together.</summary>
+    private const double GlideRollEveryS = 0.5, GlideRollRateDegS = 5.0;
+
+    /// <summary>The least gain in rolling moment worth rolling for: an absolute floor, N m, and a share of the moment at the held roll.</summary>
+    private const double GlideRollMinGainNm = 1000.0, GlideRollMinGainShare = 0.3;
+
+    /// <summary>
+    /// THE GLIDE'S ROLL (ThreeDofLeastRollMoment): rolls the held wing direction toward the nearest roll at which the air's rolling moment is zero and restoring, read from the body moment table at the airflow the commanded attitude meets (AttitudeController.TryLeastRollMoment), at GlideRollRateDegS. A craft that trims there holds its roll by itself, and the fins its pitch and yaw need are not also cancelling a roll - on the 2026-11-20 flight a steady -6.7 kN m of roll, with fin 4 on its stop and fin 2 in the lee. Every consumer of the held roll (entry guidance's model, the steering, the landing-point prediction) reads it through ReturnRollRefCci, so they move with it. Main thread.
+    /// </summary>
+    private static void UpdateGlideRoll(Vehicle vehicle, IParentBody parent, double3 dir)
+    {
+        if (!_s.ThreeDofLeastRollMoment || !_s.BoosterRollHold)
+            return;
+        double now = SimNow();
+        if (now - _s.GlideRollAt < GlideRollEveryS)
+            return;
+        double dt = double.IsFinite(_s.GlideRollAt) ? Math.Min(now - _s.GlideRollAt, 2.0) : GlideRollEveryS;
+        _s.GlideRollAt = now;
+        double3 r = vehicle.Orbit.StateVectors.PositionCci;
+        double3 vAir = vehicle.Orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r);
+        doubleQuat target = SteerBody2Cci(dir, ReturnRollRefCci(vehicle, parent));
+        double3 airBody = vAir.Transform(doubleQuat.Inverse(target));
+        if (!AttitudeController.TryLeastRollMoment(_s.Aero, airBody, vehicle.PhysicsEnvironment.AtmosphericDensity, _s.MomentLimiterPerPa,
+                                                   out double delta, out double nowNm, out double bestNm))
+            return;
+        _s.GlideRollMomentNm = nowNm;
+        _s.GlideRollBestNm = bestNm;
+        // Only for a real gain: the least moment is shallow and moves with the flight, and chasing every move of it swung the roll 40 deg each way in the harness (2026-11-20).
+        if (Math.Abs(nowNm) - Math.Abs(bestNm) < Math.Max(GlideRollMinGainNm, GlideRollMinGainShare * Math.Abs(nowNm)))
+            delta = 0.0;
+        double step = GlideRollRateDegS * Math.PI / 180.0 * dt;
+        double phi = _s.ReturnRollOffsetRad + Math.Clamp(delta, -step, step);
+        _s.ReturnRollOffsetRad = Math.IEEERemainder(phi, 2.0 * Math.PI);
+        // Touchdown guidance lands at this roll (TerminalAttitude): the held wing direction in the site frame, where it stays put as the planet turns.
+        double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+        _s.GlideWingSite = KsaFrameBridge.BuildSiteFrame(siteCci).VecToLocal(ReturnRollRefCci(vehicle, parent)).NormalizeOrZero();
+    }
+
+    /// <summary>Whether AFC's own attitude controller flies this step: a returning booster gliding with its engine off - entry guidance's glide, or the boostback's (BoostbackGlideOwnAttitude) - with the setting on and a command to fly.</summary>
+    private static bool OwnsGlideAttitude(Vehicle vehicle, bool boostbackGuides, bool threeDofGuides)
+    {
+        if (!_s.ThreeDofOwnAttitude || _s.CommandDir.Length() <= 0.5)
+            return false;
+        if (threeDofGuides)
+            return _s.ThreeDofPhase == ThreeDofPhase.Glide;
+        return boostbackGuides && _s.BoostbackGlideOwnAttitude && _s.BoostbackPhase == BoostbackPhase.Glide
+               && !(KsaEnginePerf.LiveEngineThrust(vehicle) > 0.0);
+    }
+
+    /// <summary>
+    /// One step of AFC's own attitude controller (AttitudeController) on the commanded direction and roll: the stock flight computer held at Manual so it steers nothing, the target built as CommandAttitude builds it, and the craft's surfaces and RCS driven for it.
+    /// </summary>
+    /// <param name="heldRoll">The roll is the returning booster's held one (ReturnRollRefCci), which the glide may turn to its least rolling moment (UpdateGlideRoll).</param>
+    private static void FlyOwnAttitude(Vehicle vehicle, IParentBody parent, double3? rollRef, bool heldRoll)
+    {
+        if (!TryTakeCraft(vehicle, acquire: true))
+            return;
+        FlightComputer fc = vehicle.FlightComputer;
+        if (fc.AttitudeMode != FlightComputerAttitudeMode.Manual)
+        {
+            KsaAttitudeRate.Clear(vehicle);
+            _s.AttitudeOwnership.BeginWrite(fc);
+            fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+            _s.AttitudeOwnership.EndWrite(fc, writesRoll: false);
+        }
+        double3 dir = double3.Normalize(_s.CommandDir);
+        if (heldRoll && rollRef.HasValue)
+        {
+            UpdateGlideRoll(vehicle, parent, dir);
+            rollRef = ReturnRollRefCci(vehicle, parent);
+        }
+        doubleQuat target = rollRef.HasValue
+            ? SteerBody2Cci(dir, rollRef.Value)
+            : BurnTarget.ComputeBurnBody2Cci(float3.Pack(double3.Normalize(vehicle.Orbit.StateVectors.PositionCci)), float3.Pack(dir));
+        var settings = new AttitudeController.Settings(_s.AttitudeBandwidthRadS, AttitudeController.Settings.Default.Damping,
+                                                       _s.AttitudeDeadbandDeg, AttitudeController.Settings.Default.RateDeadbandDegS);
+        AttitudeController.Step(vehicle, target, _s.CommandRate, _s.Aero, _s.MomentLimiterPerPa, settings);
+        _s.OwnAttitudeFlying = true;
+        _s.OwnAttitudeVehicle = vehicle;
+    }
+
+    /// <summary>Lets AFC's own attitude controller go: its surfaces home and its RCS released, and the stock flight computer engaged in full on its next command (CommandAttitude's fullEngage).</summary>
+    internal static void StopOwnAttitude(Vehicle vehicle)
+    {
+        AttitudeController.Release(vehicle);
+        _s.OwnAttitudeFlying = false;
+        _s.OwnAttitudeVehicle = null;
+        _s.WasEngaged = false;
     }
 
     private static doubleQuat SteerBody2Cci(double3 steerDir, double3 rollRef)

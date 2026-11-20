@@ -20,7 +20,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 internal static class SpiralCheck
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    private const int NU = Dynamics6Dof.NUBase;
 
     internal static int Run()
     {

@@ -18,7 +18,7 @@ using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 internal static class SixDofLiftCheck
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    private const int NU = Dynamics6Dof.NUBase;
     private const double WarmTrustRegion = 0.05;   // Ksa6DofGuidance.WarmTrustRegion
     private const double Tmax = 2171e3, Floor = 0.10, Isp = 290.0, Gravity = 9.81;
     private const double Arm = 10.0, Ixx = 1.14e6, Izz = 2.7e4;    // LArm/Ixx = 8.8e-6, from the 23:05 plan's rates against its gimbal
