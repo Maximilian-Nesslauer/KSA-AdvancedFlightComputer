@@ -133,9 +133,7 @@ public sealed class GuidanceReserveStrapOnTest : AfcTest
             string dump = Path.Combine(Path.GetTempPath(), "afc-convex-ascent", "HarnessReserveStrapOn.json");
             if (File.Exists(dump))
                 File.Delete(dump);
-            state.AscentPlanRequested = true;
-            driver.Step(0.02);
-            AscentPlanJob? job = state.AscentPlanJob;
+            AscentPlanJob? job = AscentPlanRequests.Start(driver, state);
             if (!t.Check("Calculate wrote the problem", File.Exists(dump), $"status '{state.AscentPlanStatus}'"))
                 return;
             using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(dump));

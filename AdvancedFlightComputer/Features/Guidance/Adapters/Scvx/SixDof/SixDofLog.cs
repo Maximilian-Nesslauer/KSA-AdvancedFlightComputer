@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Flight telemetry for the 6-DOF guidance, written to CSV so a run can be read back afterwards instead of described from memory.
@@ -52,7 +53,13 @@ internal static class SixDofLog
     internal static bool Start(object owner, string vehicleName, string bodyName)
     {
         if (Enabled && Owner != null && !ReferenceEquals(Owner, owner))
-            return false;
+        {
+            // Unless the craft holding it has written nothing for a while: one destroyed or unloaded mid-run never steps again to stop its own log, and held it from every later landing (as EntryLog did on 2026-11-18).
+            if (Environment.TickCount64 - _lastWriteTick < StaleOwnerMs)
+                return false;
+            Stop(Owner);
+        }
+        _lastWriteTick = Environment.TickCount64;
 
         try
         {
@@ -100,9 +107,13 @@ internal static class SixDofLog
                 "thrustDemandN", "capabilityN", "throttle", "saturated",
                 "tauX", "tauY", "tauZ", "allocX", "allocY", "allocZ", "allocSat",
                 "twr", "twrMin", "ambientPa", "altToGo", "descentRate", "stopDistM",
-                "glideViolM", "biasX", "biasY", "biasZ", "trackPosM", "trackVelMs", "trackThrustN", "vcVelMs", "error"));
+                "glideViolM", "biasX", "biasY", "biasZ", "trackPosM", "trackVelMs", "trackThrustN", "vcVelMs",
+                "allocRoll", "gimCmdY", "gimCmdZ", "gimAngY", "gimAngZ", "gimRateY", "gimRateZ", "gimMaxDeg", "gimSlewPerS", "gimThrustN", "gimCount",
+                "rcsX", "rcsY", "rcsZ", "rcsGivenX", "rcsGivenY", "rcsGivenZ", "rcsShortNm", "rcsForceN", "rcsFlowKgS", "rcsFiring", "rcsReached",
+                "attErrDeg", "rateErrDegS", "fbWantX", "fbWantY", "fbWantZ", "fbGimX", "fbGimY", "fbGimZ", "fbRcsX", "fbRcsY", "fbRcsZ", "fbShortNm",
+                "error"));
 
-            _plan.AppendLine("cycle,t,node,x,y,z,vx,vy,vz,thrustN,tiltDeg,qw,qx,qy,qz,wx,wy,wz,mass,tdx,tdy,tauRoll,solveTime,sigma");
+            _plan.AppendLine("cycle,t,node,x,y,z,vx,vy,vz,thrustN,tiltDeg,qw,qx,qy,qz,wx,wy,wz,mass,tdx,tdy,tauRoll,solveTime,sigma,rcsX,rcsY,rcsZ,coast,coastIntervals,kind");
 
             _events.AppendLine($"# navbox 6-DOF run {RunName}");
             _events.AppendLine($"# vehicle: {vehicleName}   body: {bodyName}");
@@ -153,7 +164,18 @@ internal static class SixDofLog
     /// <summary>
     /// May this caller write? The sink is single-owner by design, but only Start and Stop ever checked - so a second craft refused ownership went on appending to the same three buffers anyway, interleaving two vehicles' rows in one CSV and racing a StringBuilder between their guidance threads. Every write checks now.
     /// </summary>
-    private static bool Writable(object owner) => Enabled && ReferenceEquals(Owner, owner);
+    private static bool Writable(object owner)
+    {
+        if (!Enabled || !ReferenceEquals(Owner, owner))
+            return false;
+        _lastWriteTick = Environment.TickCount64;
+        return true;
+    }
+
+    private static long _lastWriteTick;
+
+    /// <summary>Wall-clock time without a write after which another craft may take the log, ms.</summary>
+    private const long StaleOwnerMs = 5000;
 
     internal static void Event(object owner, double t, string message)
     {
@@ -216,6 +238,16 @@ internal static class SixDofLog
             F(sb, r.BiasX); F(sb, r.BiasY); F(sb, r.BiasZ);
             F(sb, r.TrackPosM); F(sb, r.TrackVelMs); F(sb, r.TrackThrustN);
             F(sb, r.VcVelMs);
+            F(sb, r.AllocRoll);
+            F(sb, r.GimCmdY); F(sb, r.GimCmdZ); F(sb, r.GimAngY); F(sb, r.GimAngZ); F(sb, r.GimRateY); F(sb, r.GimRateZ);
+            F(sb, r.GimMaxDeg); F(sb, r.GimSlewPerS); F(sb, r.GimThrustN); sb.Append(r.GimCount).Append(',');
+            F(sb, r.RcsX); F(sb, r.RcsY); F(sb, r.RcsZ);
+            F(sb, r.RcsGivenX); F(sb, r.RcsGivenY); F(sb, r.RcsGivenZ);
+            F(sb, r.RcsShortNm); F(sb, r.RcsForceN); F(sb, r.RcsFlowKgS); sb.Append(r.RcsFiring).Append(',').Append(r.RcsReached).Append(',');
+            F(sb, r.AttErrDeg); F(sb, r.RateErrDegS);
+            F(sb, r.FbWantX); F(sb, r.FbWantY); F(sb, r.FbWantZ);
+            F(sb, r.FbGimX); F(sb, r.FbGimY); F(sb, r.FbGimZ);
+            F(sb, r.FbRcsX); F(sb, r.FbRcsY); F(sb, r.FbRcsZ); F(sb, r.FbShortNm);
             sb.Append(Csv(r.Error));
             sb.AppendLine();
 
@@ -232,20 +264,23 @@ internal static class SixDofLog
     /// Snapshot the whole planned trajectory, rate-limited. THE point of this file:
     /// a cycle row can only say where the vehicle went, so on its own it can never distinguish "the plan is a loop and the vehicle followed it" from "the plan was straight and the vehicle diverged". Those have opposite causes.
     /// </summary>
-    internal static void PlanSnapshot(object owner, double t, Ksa6DofPlan plan)
+    /// <param name="kind">What the rows are: "published" (a plan flown or ready to be), "seed" (a cold solve's starting reference), or "iterate" (a cold solve's reference after an iteration). Anything but a published plan is written whatever the rate limit.</param>
+    internal static void PlanSnapshot(object owner, double t, Ksa6DofPlan plan, string kind = "published")
     {
         if (!Writable(owner) || plan == null || plan.X.Length < plan.Nodes * 14
             || plan.U.Length < plan.Nodes * 4)
             return;
-        if (t - _lastPlanSnapshot < PlanSnapshotInterval)
+        bool published = kind == "published";
+        if (published && t - _lastPlanSnapshot < PlanSnapshotInterval)
             return;
         try
         {
-            _lastPlanSnapshot = t;
+            if (published)
+                _lastPlanSnapshot = t;
             for (int k = 0; k < plan.Nodes; k++)
             {
                 int i = k * 14;
-                int u = k * 4;
+                int u = k * Dynamics6Dof.NU;
                 double qx = plan.X[i + 7], qy = plan.X[i + 8];
                 double r22 = 1.0 - 2.0 * (qx * qx + qy * qy);
                 double tilt = Math.Acos(Math.Clamp(r22, -1.0, 1.0)) * 180.0 / Math.PI;
@@ -263,7 +298,12 @@ internal static class SixDofLog
                 F(sb, plan.X[i + 10]); F(sb, plan.X[i + 11]); F(sb, plan.X[i + 12]);
                 F(sb, plan.X[i + 13]);
                 F(sb, plan.U[u + 0]); F(sb, plan.U[u + 1]); F(sb, plan.U[u + 3]);
-                F(sb, plan.SolveTime); F(sb, plan.Sigma, last: true);
+                F(sb, plan.SolveTime); F(sb, plan.Sigma);
+                // The plan's RCS torque, model body axes, N m.
+                int r = u + Dynamics6Dof.IRCS;
+                F(sb, plan.U[r]); F(sb, plan.U[r + 1]); F(sb, plan.U[r + 2]);
+                F(sb, plan.Coast);
+                sb.Append(plan.CoastIntervals).Append(',').Append(kind);
                 sb.AppendLine();
             }
         }
@@ -362,6 +402,17 @@ internal static class SixDofLog
         public double TrackPosM, TrackVelMs, TrackThrustN;
         // The scale velocity's virtual control was priced on for the last solve, m/s (Ksa6DofGuidance.PricingVelocityMs).
         public double VcVelMs;
+
+        /// <summary>The share of the roll demand the allocation fitted (TvcAllocationResult.WeakAxisScale), and the highest-thrust gimbal's command, angle and rate in fractions of its range (KsaGimbalControl.GimbalTrace): gimCmd is what it was told, gimAng where it was, gimRate how fast it moved, per second.</summary>
+        public double AllocRoll, GimCmdY, GimCmdZ, GimAngY, GimAngZ, GimRateY, GimRateZ, GimMaxDeg, GimSlewPerS, GimThrustN;
+        public int GimCount;
+
+        /// <summary>The plan's RCS torque, N m, model body axes; what the allocator's duties give of it; the part out of reach; the side force those duties bring, N; their propellant, kg/s; how many thrusters fire (KsaRcsTorqueControl.Report), and how many the worker's last pass reached (0 with a command standing: the pulses land nowhere).</summary>
+        public double RcsX, RcsY, RcsZ, RcsGivenX, RcsGivenY, RcsGivenZ, RcsShortNm, RcsForceN, RcsFlowKgS;
+        public int RcsFiring, RcsReached;
+
+        /// <summary>The attitude feedback (AttitudeFeedback6Dof): attitude and rate error against the plan, deg and deg/s; the torque the law wanted, what the gimbals and the RCS took of it, and what did not fit, N m, model body axes. The tau and rcs columns include what was taken.</summary>
+        public double AttErrDeg, RateErrDegS, FbWantX, FbWantY, FbWantZ, FbGimX, FbGimY, FbGimZ, FbRcsX, FbRcsY, FbRcsZ, FbShortNm;
         public string Error;
     }
 }

@@ -65,6 +65,9 @@ public static partial class GuidanceWindow
     /// </summary>
     private static bool Engage3Dof(Vehicle vehicle, double now)
     {
+        _s.SixDofCoastPending = false;
+        _s.ThreeDofGlideHandoff = null;
+        _s.SixDofCoastScaleState = null;
         if (!vehicle.IsControllable)
             return RefuseEntry(vehicle, vehicle.NoControlTooltip.ToString());
         IParentBody parent = vehicle.Orbit?.Parent;
@@ -84,7 +87,8 @@ public static partial class GuidanceWindow
             || _s.AeroStale(LiveBoxExtents(vehicle), KsaAeroSweep.LiveMeshHash(vehicle), parent))
             return RefuseEntry(vehicle, "AERO MODEL UNAVAILABLE.");
         double3 site = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
-        KsaPointMassModel model = Ksa3DofSetup.BuildModel(vehicle, parent, KsaFrameBridge.BuildSiteFrame(site), aero, out string refusal);
+        KsaFrameBridge.SiteFrame engageFrame = KsaFrameBridge.BuildSiteFrame(site);
+        KsaPointMassModel model = Ksa3DofSetup.BuildModel(vehicle, parent, engageFrame, aero, out string refusal, ReturnRollRefLocal(vehicle, parent, engageFrame));
         if (model == null)
             return RefuseEntry(vehicle, refusal);
 
@@ -94,6 +98,9 @@ public static partial class GuidanceWindow
         _s.Engage = true;
         Reset3Dof();
         _s.ThreeDofNominal = model;
+        // The per-step glide log, under the same switch as touchdown guidance's (SixDofLogging).
+        if (_s.EntryLogging && EntryLog.Start(_s, vehicle.Id, (vehicle.Orbit?.Parent as Astronomical)?.Id ?? ""))
+            GuidanceLog.Info(vehicle, "Entry guidance log: " + EntryLog.Path);
         _s.ThreeDofPhase = ThreeDofPhase.Glide;
         _s.ThreeDofLastStep = now;
         // A fresh flown path for the entry page's plot, which touchdown guidance's plot carries on after the hand-over.
@@ -132,6 +139,12 @@ public static partial class GuidanceWindow
     {
         bool burning = _s.ThreeDofPhase == ThreeDofPhase.Burn;
         StopSixDofStandby();
+        // A coast nothing will fly any more: the next touchdown guidance plans without one unless entry guidance asks again.
+        if (!_s.Active && !_s.EngagePending)
+        {
+            _s.SixDofCoastPending = false;
+            _s.ThreeDofGlideHandoff = null;
+        }
         Reset3Dof();
         _s.ThreeDofPhase = ThreeDofPhase.Done;
         if (burning)
@@ -152,17 +165,19 @@ public static partial class GuidanceWindow
         _s.ThreeDofLastUpdate = _s.ThreeDofColdTime = double.NegativeInfinity;
         _s.ThreeDofPlan = null;
         _s.ThreeDofCommandLocal = default;
+        _s.ThreeDofPlanCommandCci = default;
+        _s.ThreeDofTrimCci = default;
+        EntryLog.Stop(_s);
         _s.ThreeDofSolveText = "";
         _s.ThreeDofRefusing = false;
         _s.ThreeDofEngineOn = false;
         _s.ThreeDofThrottle = _s.ThreeDofPlanThrottle = 0.0;
         _s.ThreeDofSixDofWaiting = false;
-        _s.ThreeDofRejectedTouchdownPlan = null;
         _s.ThreeDofBurnSolveFault = false;
         _s.ThreeDofTouchdownHandoff = default;
         _s.ThreeDofHandoffRefusal = "";
-        _s.ThreeDofCoastAttitudeFixed = false;
-        _s.ThreeDofCoastTurnAccel = 0.0;
+        _s.SixDofStandbyPredicted = false;
+        _s.ThreeDofHandoverDueAt = double.NaN;
     }
 
     /// <summary>One step of the 3-DOF landing, run for this vehicle from ApplyAutopilot whether or not it is the one on screen.</summary>
@@ -171,7 +186,11 @@ public static partial class GuidanceWindow
         double now = SimNow();
         // A pending engage is taken in ApplyAutopilot, ahead of the control claim.
         if (!ThreeDofLive)
+        {
+            // Whatever ended entry guidance, its log ends with it.
+            EntryLog.Stop(_s);
             return;
+        }
 
         double dt = Math.Clamp(now - _s.ThreeDofLastStep, 0.0, 1.0);
         _s.ThreeDofLastStep = now;
@@ -199,6 +218,8 @@ public static partial class GuidanceWindow
 
         EnsureBoostbackAero(vehicle, parent);
         KsaAeroSweep.Result aero = _s.Aero;
+        // The game's moment limiter, measured through the glide so touchdown guidance's first plan has it (BodyAero6Dof.MomentLimiterPerPa).
+        UpdateMomentLimiter(vehicle, now);
         double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         KsaFrameBridge.SiteFrame frame = KsaFrameBridge.BuildSiteFrame(siteCci);
         double[] x14 = KsaFrameBridge.ToModelState(vehicle, frame);
@@ -209,16 +230,39 @@ public static partial class GuidanceWindow
 
         if (aero?.Table != null && aero.Atmosphere != null && _s.ThreeDofNominal == null)
         {
-            _s.ThreeDofNominal = Ksa3DofSetup.BuildModel(vehicle, parent, frame, aero, out string error);
+            _s.ThreeDofNominal = Ksa3DofSetup.BuildModel(vehicle, parent, frame, aero, out string error, ReturnRollRefLocal(vehicle, parent, frame));
             if (_s.ThreeDofNominal == null)
                 _s.DiagEntry(error);
         }
         _s.ThreeDofEstimator ??= new AeroScaleEstimator();
         if (_s.ThreeDofNominal != null)
+        {
             Measure3Dof(x, att, burning ? _s.ThreeDofThrottle : 0.0, now);
+            _s.ThreeDofBiasAccel = _s.ThreeDofEstimator.BiasAcceleration(_s.ThreeDofNominal, x);
+        }
 
         if (burning)
+        {
+            // Entry guidance lit the engine itself: a standby planning a coast carries on with the coast pinned at zero, and the burn is handed over as before.
+            if (_s.SixDofCoastPending)
+            {
+                _s.SixDofCoastPending = false;
+                _s.ThreeDofGlideHandoff = null;
+                if (_s.SixDofStandby && _s.Guidance != null)
+                    _s.Guidance.EngineLit = true;
+            }
+            if (_s.SixDofStandbyPredicted)
+            {
+                // The engine has lit: the standby carries on from the craft as it is. The bias estimator starts afresh, and a standby that could not be set up on the forecast may be tried again at once.
+                _s.SixDofStandbyPredicted = false;
+                _s.PrevV = null;
+                if (!_s.SixDofStandby)
+                    _s.SixDofStandbyRetryAt = now;
+            }
             StepEntryTouchdownHandoff(vehicle, parent, siteCci, x14, now);
+        }
+        else
+            StepEntryTouchdownPrepare(vehicle, parent, siteCci, x, x14, now);
 
         // Fly the plan if there is one; otherwise the PID glide until there is.
         if (!Plan3DofStep(vehicle, parent, frame, x, att, now, dt, out double3 wantLocal, out double3 rateLocal, out bool smooth))
@@ -228,18 +272,75 @@ public static partial class GuidanceWindow
             if (_s.ThreeDofPhase == ThreeDofPhase.Burn)
             {
                 // Lit with no plan for this step: hold the command and the throttle rather than steer on a law the burn does not use.
-                CommandThreeDof(frame, frame.VecToLocal(_s.CommandDir), default, dt, smooth: false);
+                CommandThreeDof(frame, frame.VecToLocal(_s.ThreeDofPlanCommandCci.Length() > 0.5 ? _s.ThreeDofPlanCommandCci : _s.CommandDir), default, dt, smooth: false);
+                TrimThreeDof(vehicle, orbit, parent, dt, integrate: false);
+                EntryLogRow(vehicle, parent, frame, x, att, now, onPlan: false);
                 return;
             }
+            // The PID glide has its own trim (GlideDirection), so entry guidance's fades out under it.
             double3 glide = GlideDirection(vehicle, orbit, parent, now, dt);
             double3 glideRate = BoostbackTargetRate(glide, dt);
             CommandThreeDof(frame, frame.VecToLocal(glide), frame.VecToLocal(glideRate), dt, smooth: false);
+            TrimThreeDof(vehicle, orbit, parent, dt, integrate: false);
             _s.ThreeDofEngineOn = false;
             _s.ThreeDofThrottle = 0.0;
+            EntryLogRow(vehicle, parent, frame, x, att, now, onPlan: false);
             return;
         }
         CommandThreeDof(frame, wantLocal, rateLocal, dt, smooth);
+        // Trimmed only in the glide on a plan, and not while the command turns to the burn's opening attitude after the lock, where the error is the turn's own and winding it in would carry it into the burn.
+        TrimThreeDof(vehicle, orbit, parent, dt, integrate: _s.ThreeDofPhase == ThreeDofPhase.Glide);
         Log3Dof(vehicle, x, att, now);
+        EntryLogRow(vehicle, parent, frame, x, att, now, onPlan: true);
+    }
+
+    /// <summary>The held roll's reference in the site frame, for the model (KsaPointMassModel.RollRef), or zero when the roll is not held.</summary>
+    private static double3 ReturnRollRefLocal(Vehicle vehicle, IParentBody parent, KsaFrameBridge.SiteFrame frame)
+        => _s.BoosterRollHold ? frame.VecToLocal(ReturnRollRefCci(vehicle, parent)).NormalizeOrZero() : default;
+
+    /// <summary>Largest trim, degrees: a correction for a steady offset, not a second steering law.</summary>
+    private const double ThreeDofTrimMaxDeg = 5.0;
+
+    /// <summary>Time constant the trim fades out with where it is not wound in, s: through the turn to the burn's opening attitude after the lock, in the burn, where the tracker and the gimbals hold the attitude, and under the PID glide.</summary>
+    private const double ThreeDofTrimFadeS = 1.0;
+
+    /// <summary>Below this airspeed the airflow direction the trim is measured across means little, m/s.</summary>
+    private const double ThreeDofTrimMinSpeedMs = 30.0;
+
+    /// <summary>
+    /// THE ATTITUDE TRIM, every step: the tilt of the thrust axis off the airflow as asked (the command before the trim) against the tilt flown, the difference wound into a small rotation that is added to the command the flight computer points. The boostback glide's trim, in vector form (GlideTrackGain, GlideTrimMaxErrorDeg).
+    ///  It stays out of what the plan sees. ThreeDofCommandLocal, which each re-solve anchors its opening attitude on, and ThreeDofPlanCommandCci, which the low-pass steps from, are the command before the trim, so a plan never starts from the trim and the trim never compounds through the filter. Only CommandDir carries it.
+    /// </summary>
+    private static void TrimThreeDof(Vehicle vehicle, Orbit orbit, IParentBody parent, double dt, bool integrate)
+    {
+        double3 asked = _s.ThreeDofPlanCommandCci;
+        if (asked.Length() < 0.5)
+            return;
+        double3 trim = _s.ThreeDofTrimCci;
+        double3 r = orbit.StateVectors.PositionCci;
+        double3 vAir = orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r);
+        double speed = vAir.Length();
+        if (!_s.ThreeDofTrim)
+            trim = default;
+        else if (integrate && speed > ThreeDofTrimMinSpeedMs)
+        {
+            double3 retro = -vAir / speed;
+            double3 flown = KsaFrameBridge.ThrustAxisCci(vehicle).NormalizeOrZero();
+            double3 err = (asked - double3.Dot(asked, retro) * retro) - (flown - double3.Dot(flown, retro) * retro);
+            // Only a steady offset: an error larger than this is a manoeuvre still in progress.
+            if (err.Length() <= GlideTrimMaxErrorDeg * Math.PI / 180.0)
+                trim += GlideTrackGain * dt * err;
+            trim -= double3.Dot(trim, retro) * retro;
+            double max = ThreeDofTrimMaxDeg * Math.PI / 180.0;
+            if (trim.Length() > max)
+                trim *= max / trim.Length();
+        }
+        else
+            trim *= Math.Exp(-Math.Max(dt, 0.0) / ThreeDofTrimFadeS);
+        _s.ThreeDofTrimCci = trim;
+        double3 sent = (asked + trim).NormalizeOrZero();
+        if (sent.Length() > 0.5)
+            _s.CommandDir = sent;
     }
 
     /// <summary>Sim seconds between 3-DOF lines in the game log.</summary>
@@ -260,8 +361,8 @@ public static partial class GuidanceWindow
         double off = Math.Acos(Math.Clamp(cmd.X * att[0] + cmd.Y * att[1] + cmd.Z * att[2], -1.0, 1.0)) * 180.0 / Math.PI;
         AeroScaleEstimator est = _s.ThreeDofEstimator;
         GuidanceLog.Info(vehicle, string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "Entry guidance {0}: alt {1:F2} km, {2:F0} m/s, {3:F0} m from the site; {4}; flown {5:F1} deg off the command; "
-            + "{6}; drag x{7:F2} lift x{8:F2} thrust x{9:F2}{10}",
+            "Entry guidance {0}: alt {1:F2} km, {2:F0} m/s, {3:F0} m from the site; {4}; flown {5:F1} deg off the command (trim {11:F1} deg); "
+            + "{6}; drag x{7:F2} cross-flow bias {8:F2} m/s^2 thrust x{9:F2}{10}",
             ThreeDofPhaseName(_s.ThreeDofPhase), x[2] / 1000.0, speed, Math.Sqrt(x[0] * x[0] + x[1] * x[1]),
             plan == null ? "no plan"
                 : _s.ThreeDofPhase == ThreeDofPhase.Burn
@@ -269,8 +370,238 @@ public static partial class GuidanceWindow
                 : FormattableString.Invariant($"ignition in {plan.IgnitionTime - now:F1} s, burn {plan.SigmaBurn:F1} s"),
             off,
             g == null ? "NO SOLVER" : ThreeDofBusy ? "SOLVING" : FormattableString.Invariant($"LAST SOLVE {g.LastSolveMs:F0} ms, {g.ConsecutiveRefusals} REFUSED{RefusalReason(g)}"),
-            est?.DragScale ?? 1.0, est?.LiftScale ?? 1.0, est?.ThrustScale ?? 1.0,
-            _s.ThreeDofPhase == ThreeDofPhase.Burn ? "; TOUCHDOWN STANDBY " + SixDofStandbyText(now) : ""));
+            est?.DragScale ?? 1.0, est != null && _s.ThreeDofNominal != null ? est.BiasAcceleration(_s.ThreeDofNominal, x) : 0.0, est?.ThrustScale ?? 1.0,
+            _s.ThreeDofPhase == ThreeDofPhase.Burn ? "; TOUCHDOWN STANDBY " + SixDofStandbyText(now) : "",
+            _s.ThreeDofTrimCci.Length() * 180.0 / Math.PI));
+    }
+
+    /// <summary>
+    /// One row of the per-step glide log (EntryLog), at its own cadence. Angles are taken against the airflow in the site frame: the thrust axis flies at alpha off retrograde, engine first. The error between the attitude flown and the one asked for (before the trim) is split three ways - along the asked angle of attack, across it, and along the command's own motion - because a craft that is unstable engine first errs past the command, and an attitude loop that lags errs behind its motion.
+    /// </summary>
+    private static void EntryLogRow(Vehicle vehicle, IParentBody parent, KsaFrameBridge.SiteFrame frame, double[] x, double[] att, double now, bool onPlan)
+    {
+        if (!EntryLog.Due(_s, now))
+            return;
+        try
+        {
+            const double Deg = 180.0 / Math.PI;
+            var v = new double3(x[3], x[4], x[5]);
+            double speed = v.Length();
+            double3 retro = speed > 1e-6 ? -v / speed : default;
+            double3 asked = _s.ThreeDofCommandLocal.NormalizeOrZero();
+            double3 sent = frame.VecToLocal(_s.CommandDir).NormalizeOrZero();
+            var flown = new double3(att[0], att[1], att[2]);
+
+            double3 askedAcross = asked - double3.Dot(asked, retro) * retro;
+            double3 flownAcross = flown - double3.Dot(flown, retro) * retro;
+            // The direction of the asked angle of attack; at alpha near zero, the flown one's.
+            double3 alphaDir = askedAcross.Length() > 1e-3 ? askedAcross.NormalizeOrZero() : flownAcross.NormalizeOrZero();
+            double3 sideDir = double3.Cross(retro, alphaDir).NormalizeOrZero();
+            double3 errAcross = flownAcross - askedAcross;
+
+            // The command's motion, from its rate: d(asked)/dt = w x asked, in the site frame.
+            double3 rateLocal = frame.VecToLocal(_s.CommandRate);
+            double3 motion = double3.Cross(rateLocal, asked);
+            double3 motionDir = motion.Length() > 1e-9 ? motion.NormalizeOrZero() : default;
+
+            double3 trimLocal = frame.VecToLocal(_s.ThreeDofTrimCci);
+            double rho = vehicle.PhysicsEnvironment.AtmosphericDensity;
+            double q = 0.5 * rho * speed * speed;
+
+            KsaAeroSweep.Result aero = _s.Aero;
+            double mach = aero?.Atmosphere?.Mach(speed) ?? double.NaN;
+            double alphaFlown = AngleBetween(flown, retro);
+            double cm = aero?.Moment != null && double.IsFinite(mach) ? aero.MomentAt(Math.Clamp(mach, aero.Moment.MachMin, aero.Moment.MachMax), alphaFlown) : double.NaN;
+            double moment = aero != null ? q * aero.ReferenceArea * aero.ReferenceLength * cm : double.NaN;
+            // Transverse inertia: the mean of the two largest principal-axis values of the body tensor's diagonal; the smallest is the long axis.
+            var inertia = vehicle.TotalMassPropsBody.Inertia;
+            double ixx = inertia.XX, iyy = inertia.YY, izz = inertia.ZZ;
+            double inertiaT = 0.5 * (ixx + iyy + izz - Math.Min(ixx, Math.Min(iyy, izz)));
+            double aeroAccel = inertiaT > 0.0 ? moment / inertiaT : double.NaN;
+
+            FlightComputer fc = vehicle.FlightComputer;
+            float3 err = fc.ErrorAngles;
+
+            // THE FORCES, measured against modelled. The measured non-gravitational acceleration (Measure3Dof) split along the airflow (+ drag), along the lift the model predicts for the thrust axis flown, and across both; beside it the model's drag and lift for the thrust axis the plan points, and for the body axis the aero tables are measured about. A lift residual that the body axis's prediction closes says the plan flies one axis while the air sees the other.
+            double3 bodyNose = frame.VecToLocal(KsaFrameBridge.BodyNoseCci(vehicle)).NormalizeOrZero();
+            double axisOffset = AngleBetween(flown, bodyNose);
+            double3 measured = _s.ThreeDofMeasuredAccel;
+            double3 predThrust = default, predBody = default;
+            if (_s.ThreeDofNominal != null && speed > 1.0)
+            {
+                double[] pt = AdvancedFlightComputer.Guidance.Scvx.ThreeDof.AeroScaleEstimator.PredictedAero(_s.ThreeDofNominal, x, att);
+                double[] pb = AdvancedFlightComputer.Guidance.Scvx.ThreeDof.AeroScaleEstimator.PredictedAero(_s.ThreeDofNominal, x, [bodyNose.X, bodyNose.Y, bodyNose.Z]);
+                predThrust = new double3(pt[0], pt[1], pt[2]);
+                predBody = new double3(pb[0], pb[1], pb[2]);
+            }
+            // retro is -v_hat, so drag acts along it. The lift direction is the thrust axis's predicted lift, or the engine end's tilt where that is nothing.
+            double3 liftPred = predThrust - double3.Dot(predThrust, retro) * retro;
+            double3 liftDir = liftPred.Length() > 1e-6 ? liftPred.NormalizeOrZero() : (-flownAcross).NormalizeOrZero();
+            double3 liftSide = double3.Cross(retro, liftDir).NormalizeOrZero();
+            // The game's own aerodynamic force on the craft as it is, over its mass, site frame.
+            bool liveOk = KsaAeroSweep.TryLiveAero(vehicle, out double3 liveForceBody, out double3 liveTorque);
+            double3 liveAccel = liveOk && vehicle.TotalMass > 0.0
+                ? frame.VecToLocal(liveForceBody.Transform(KsaFrameBridge.BodyToCci(vehicle))) / vehicle.TotalMass
+                : default;
+            // Roll: the body's +y across the body axis, against the lift direction across it. Its zero is arbitrary; it says whether the craft turns about its axis through the glide.
+            double3 bodyY = frame.VecToLocal(double3.UnitY.Transform(KsaFrameBridge.BodyToCci(vehicle)));
+            double3 yAcross = (bodyY - double3.Dot(bodyY, bodyNose) * bodyNose).NormalizeOrZero();
+            double3 liftAcross = (liftDir - double3.Dot(liftDir, bodyNose) * bodyNose).NormalizeOrZero();
+            double rollDeg = yAcross.Length() > 0.5 && liftAcross.Length() > 0.5
+                ? Math.Atan2(double3.Dot(double3.Cross(liftAcross, yAcross), bodyNose), double3.Dot(liftAcross, yAcross)) * Deg
+                : double.NaN;
+            // The held roll against the one flown: the body's +y now against the held wing direction's part square to the axis, about the body axis. Near zero means the body-axis table is read in the axes the craft really has.
+            double rollHoldErr = double.NaN;
+            if (_s.BoosterRollHold && _s.ReturnRollRefCcf.Length() > 0.5)
+            {
+                double3 d = frame.VecToLocal(ReturnRollRefCci(vehicle, parent)).NormalizeOrZero();
+                double3 wantY = (d - double3.Dot(d, bodyNose) * bodyNose).NormalizeOrZero();
+                if (wantY.Length() > 0.5 && yAcross.Length() > 0.5)
+                    rollHoldErr = Math.Atan2(double3.Dot(double3.Cross(wantY, yAcross), bodyNose), double3.Dot(wantY, yAcross));
+            }
+            // THE ROLL BALANCE about the thrust axis (EntryLog.EntryRow.RollNetNm): measured, air, RCS fired, and what is left.
+            double rollRate = double.NaN, rollAccel = double.NaN, rollIzz = double.NaN, rollAir = double.NaN, rollRcs = double.NaN, rcsPos = double.NaN, rcsNeg = double.NaN;
+            // All three axes: [0] pitch (model x), [1] yaw (model y), [2] roll (model z).
+            var axNet = new double[] { double.NaN, double.NaN, double.NaN };
+            var axInt = new double[] { double.NaN, double.NaN, double.NaN };
+            var axAir = new double[] { double.NaN, double.NaN, double.NaN };
+            var axAirDt = new double[] { double.NaN, double.NaN, double.NaN };
+            var axRcs = new double[] { double.NaN, double.NaN, double.NaN };
+            double physDt = double.NaN;
+            {
+                KsaFrameBridge.BodyAxes(vehicle, out double3 pitchAxis, out double3 yawAxis, out double3 rollAxis);
+                double3[] axes = [pitchAxis, yawAxis, rollAxis];
+                Ksa6DofSetup.Inertia(vehicle, out double monIxx, out double monIyy, out rollIzz);
+                double[] monInertia = [monIxx, monIyy, rollIzz];
+                double3 wBody = vehicle.KinematicStates.AngularVelocityPhys.Transform(vehicle.KinematicStates.Body2Phys.Inverse());
+                rollRate = double3.Dot(wBody, rollAxis);
+                double stepS = now - _s.RollMonitorPrevT;
+                bool stepOk = stepS > 1e-4 && stepS < 1.0;
+                if (stepOk && double.IsFinite(_s.RollMonitorPrevRate))
+                    rollAccel = (rollRate - _s.RollMonitorPrevRate) / stepS;
+                if (stepOk && _s.RollMonitorPrevW is { } prevW)
+                {
+                    double3 dw = (wBody - prevW) / stepS;
+                    for (int a = 0; a < 3; a++)
+                        axNet[a] = monInertia[a] * double3.Dot(dw, axes[a]);
+                }
+                _s.RollMonitorPrevRate = rollRate;
+                _s.RollMonitorPrevW = wBody;
+                _s.RollMonitorPrevT = now;
+                // The integrator's own: the angular acceleration it applied on its last substep, and that substep.
+                KinematicMeasurements meas = vehicle.KinematicMeasurements;
+                physDt = meas.DeltaTime;
+                for (int a = 0; a < 3; a++)
+                    axInt[a] = monInertia[a] * double3.Dot(meas.AngularAccelerationBody, axes[a]);
+                double3 liveTorqueDt = default;
+                bool liveDtOk = physDt > 0.0 && KsaAeroSweep.TryLiveAero(vehicle, out _, out liveTorqueDt, physDt);
+                for (int a = 0; a < 3; a++)
+                {
+                    if (liveOk)
+                        axAir[a] = double3.Dot(liveTorque, axes[a]);
+                    if (liveDtOk)
+                        axAirDt[a] = double3.Dot(liveTorqueDt, axes[a]);
+                    if (AdvancedFlightComputer.Features.RcsTorque.KsaRcsTorqueControl.FiredTorqueAlong(vehicle, axes[a], stepOk ? stepS : 0.02, out double fired, out double pos, out double neg))
+                    {
+                        axRcs[a] = fired;
+                        if (a == 2)
+                        {
+                            rcsPos = pos;
+                            rcsNeg = neg;
+                        }
+                    }
+                }
+                rollAir = axAir[2];
+                rollRcs = axRcs[2];
+            }
+            // The moment, per body axis: the game's against the body-axis tables' for the air the craft meets now, about its centre of mass now.
+            double3 predMoment = new double3(double.NaN, double.NaN, double.NaN);
+            if (aero != null)
+            {
+                double3 vCci = frame.VecToCci(v);
+                double3 airBody = vCci.Transform(doubleQuat.Inverse(KsaFrameBridge.BodyToCci(vehicle)));
+                float3 comNow = vehicle.CenterOfMassAsmbF;
+                if (!KsaAeroSweep.PredictBodyMoment(aero, airBody, rho, new double3(comNow.X, comNow.Y, comNow.Z), out predMoment))
+                    predMoment = new double3(double.NaN, double.NaN, double.NaN);
+            }
+            float3 rcs = fc.RcsTorqueAuthority;
+            float3 tvc = fc.TvcTorqueAuthorityMax;
+            double rcsTransverse = Math.Min(rcs.Y, rcs.Z);
+            Guidance3Dof g = _s.ThreeDofGuidance;
+
+            EntryLog.Row(_s, new EntryLog.EntryRow
+            {
+                T = now,
+                Phase = ThreeDofPhaseName(_s.ThreeDofPhase),
+                OnPlan = onPlan,
+                Alt = x[2], Speed = speed, Mach = mach, Q = q,
+                AlphaAsked = AngleBetween(asked, retro) * Deg,
+                AlphaSent = AngleBetween(sent, retro) * Deg,
+                AlphaFlown = alphaFlown * Deg,
+                OffAsked = AngleBetween(flown, asked) * Deg,
+                PastDeg = double3.Dot(errAcross, alphaDir) * Deg,
+                SideDeg = double3.Dot(errAcross, sideDir) * Deg,
+                LagDeg = motionDir.Length() > 0.5 ? double3.Dot(flown - asked, motionDir) * Deg : 0.0,
+                CmdTurnDegS = rateLocal.Length() * Deg,
+                BodyRateDegS = vehicle.KinematicStates.AngularVelocityPhys.Length() * Deg,
+                TrimDeg = trimLocal.Length() * Deg,
+                TrimPastDeg = double3.Dot(trimLocal, alphaDir) * Deg,
+                FcErrX = err.X * Deg, FcErrY = err.Y * Deg, FcErrZ = err.Z * Deg,
+                FcDeadband = fc.AngleDeadband * Deg,
+                RcsAuthX = rcs.X, RcsAuthY = rcs.Y, RcsAuthZ = rcs.Z,
+                TvcAuthY = tvc.Y, TvcAuthZ = tvc.Z,
+                CmFlown = cm, AeroMomentNm = moment, InertiaT = inertiaT, AeroAccel = aeroAccel,
+                AeroOverRcs = rcsTransverse > 0.0 ? Math.Abs(aeroAccel) / rcsTransverse : double.NaN,
+                Throttle = _s.ThreeDofThrottle,
+                DragScale = _s.ThreeDofEstimator?.DragScale ?? 1.0,
+                BiasAccel = _s.ThreeDofEstimator != null && _s.ThreeDofNominal != null ? _s.ThreeDofEstimator.BiasAcceleration(_s.ThreeDofNominal, x) : double.NaN,
+                LiveOk = liveOk,
+                LiveDrag = double3.Dot(liveAccel, retro),
+                LiveLift = double3.Dot(liveAccel, liftDir),
+                LiveSide = double3.Dot(liveAccel, liftSide),
+                LiveMomentNm = liveTorque.Length(),
+                BodyAero = _s.ThreeDofNominal?.BodyAero != null,
+                RollHoldErrDeg = rollHoldErr * Deg,
+                RollRateDegS = rollRate * Deg,
+                RollAccelDegS2 = rollAccel * Deg,
+                RollIzz = rollIzz,
+                RollNetNm = rollIzz * rollAccel,
+                RollAirNm = rollAir,
+                RollRcsNm = rollRcs,
+                RollResidNm = rollIzz * rollAccel - rollAir - rollRcs,
+                RcsRollPosNm = rcsPos,
+                RcsRollNegNm = rcsNeg,
+                PhysDtS = physDt,
+                PitchNetNm = axNet[0], PitchIntNm = axInt[0], PitchAirNm = axAir[0], PitchAirDtNm = axAirDt[0], PitchRcsNm = axRcs[0],
+                YawNetNm = axNet[1], YawIntNm = axInt[1], YawAirNm = axAir[1], YawAirDtNm = axAirDt[1], YawRcsNm = axRcs[1],
+                RollIntNm = axInt[2], RollAirDtNm = axAirDt[2],
+                LiveMx = liveOk ? liveTorque.X : double.NaN,
+                LiveMy = liveOk ? liveTorque.Y : double.NaN,
+                LiveMz = liveOk ? liveTorque.Z : double.NaN,
+                PredMx = predMoment.X, PredMy = predMoment.Y, PredMz = predMoment.Z,
+                SolveWaitMs = _s.ThreeDofWorker?.LastWaitMs ?? double.NaN,
+                SolveRunMs = _s.ThreeDofWorker?.LastRunMs ?? double.NaN,
+                // Guidance results are the worker's while it solves; -1 then.
+                Refusals = g == null ? 0 : ThreeDofBusy ? -1 : g.ConsecutiveRefusals,
+                AxisOffsetDeg = axisOffset * Deg,
+                AlphaBody = AngleBetween(bodyNose, retro) * Deg,
+                Tnm = fc.ActiveControlFrame.IsTnm(),
+                RollDeg = rollDeg,
+                MeasDrag = double3.Dot(measured, retro),
+                MeasLift = double3.Dot(measured, liftDir),
+                MeasSide = double3.Dot(measured, liftSide),
+                PredDrag = double3.Dot(predThrust, retro),
+                PredLift = double3.Dot(predThrust, liftDir),
+                PredLiftBody = double3.Dot(predBody, liftDir),
+                PredSideBody = double3.Dot(predBody, liftSide),
+                Solver = g == null ? "NO SOLVER" : ThreeDofBusy ? "SOLVING" : _s.ThreeDofSolveText.Trim(),
+            });
+        }
+        catch (Exception e)
+        {
+            // A broken log must never break a flight.
+            GuidanceLog.Debug(vehicle, "entry log row failed: " + e.Message);
+        }
     }
 
     /// <summary>
@@ -345,21 +676,27 @@ public static partial class GuidanceWindow
             if (_s.ThreeDofPlan == null)
                 GuidanceLog.Info(vehicle, $"Entry guidance first plan at {x[2] / 1000:F1} km: ignition in {plan.IgnitionTime - now:F1} s, burn {plan.SigmaBurn:F1} s.");
             _s.ThreeDofPlan = plan;
-            NoteEntryPlanRecovery(_s);
+            _s.ThreeDofBurnSolveFault = false;
+            if (_s.ThreeDofTouchdownHandoff.Warning)
+                _s.ThreeDofTouchdownHandoff = default;
         }
 
         double height = x[2];
         double speed = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
         if (burning)
         {
-            // STOPPED SHORT. The plan ends at zero/zero, but a craft whose minimum thrust is above its weight climbs from wherever it actually stops, and nothing with the engine lit brings it back: the engine is cut and it drops the rest of the way. 6-DOF is no better placed, since it keeps the engine lit too.
-            if (x[5] >= 0.0)
+            // STOPPED SHORT, OR CLIMBING. The plan ends at zero/zero, but a craft whose minimum thrust is above its weight climbs from wherever it actually stops, and nothing with the engine lit brings it back: the engine is cut and it drops the rest of the way. 6-DOF is no better placed, since it keeps the engine lit too.
+            //  THE SAME RULE AS TOUCHDOWN GUIDANCE'S (NoPlanNearGround): cut on any climb at all, whatever the model says - a landing burn never plans one - and once it stops descending if the minimum throttle comes within a margin of the weight, judged on the thrust the engine has been MEASURED to give (the estimator's thrust scale). Entry kept the older rule, a model TWR above 1.0 and no climb test: on 2026-11-18 the model put that TWR at 1.00 while the engine gave 10 % more, and the booster climbed from 10 m to 65 m, rising 13.5 m/s, before it was cut.
+            double minTwr = TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) * (_s.ThreeDofEstimator?.ThrustScale ?? 1.0);
+            bool cannotStop = x[5] >= 0.0 && minTwr > SixDofHoverMaxMinTwr;
+            bool climbing = x[5] > SixDofClimbCutMs;
+            if (cannotStop || climbing)
             {
-                double minTwr = TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu);
-                if (minTwr > 1.0)
                 {
-                    string why = FormattableString.Invariant($"ENTRY STOPPED SHORT {height - _s.VehicleHeightM:F1} m ABOVE PAD, RISING {x[5]:F1} m/s, ")
-                               + FormattableString.Invariant($"CANNOT THROTTLE BELOW WEIGHT (TWR {minTwr:F2} AT MIN). ENGINE CUT, DROP TO PAD.");
+                    string why = FormattableString.Invariant($"ENTRY {(cannotStop ? "STOPPED SHORT" : "CLIMBING")} {height - _s.VehicleHeightM:F1} m ABOVE PAD, RISING {x[5]:F1} m/s, ")
+                               + (cannotStop
+                                   ? FormattableString.Invariant($"CANNOT THROTTLE BELOW WEIGHT (TWR {minTwr:F2} AT MIN). ENGINE CUT, DROP TO PAD.")
+                                   : "ENGINE CUT, DROP TO PAD.");
                     GuidanceLog.Info(vehicle, why);
                     StopSixDofStandby();
                     Reset3Dof();
@@ -371,37 +708,13 @@ public static partial class GuidanceWindow
             }
         }
 
-        // The newest plan's attitude and throttle now, and its own rate of turn.
-        if (!SamplePlan(plan, now, out double3 b0, out double throttle) || !SamplePlan(plan, now + ThreeDofRateProbeS, out double3 b1, out _))
+        // The newest plan's attitude and throttle now, and its own rate of turn. Ignition locked and the engine still off, the plan the ignition was locked on, flown open loop to ignition (Guidance3Dof.LockPlan): its glide runs on into its burn's opening attitude, as the ignition prediction assumes, and nothing turns the craft that a plan did not ask for. The scripted turn towards the burn plan's opening attitude this replaced swung the 2026-11-18 booster across retrograde at 10 deg/s, three seconds before ignition, towards an attitude two seconds stale.
+        Plan3Dof attitudePlan = plan.Phase == Phase3Dof.Locked && now < plan.IgnitionTime && g?.LockPlan is { } locked ? locked : plan;
+        if (!SamplePlan(attitudePlan, now, out double3 b0, out double throttle) || !SamplePlan(attitudePlan, now + ThreeDofRateProbeS, out double3 b1, out _))
             return false;
-        if (plan.Phase == Phase3Dof.Locked && now < plan.IgnitionTime)
-        {
-            // Ignition locked: the burn's opening attitude is ahead of us. Turn towards it as the ignition prediction assumed, so the burn opens where the vehicle actually is: speeding up and slowing down at the turn-acceleration limit, as fast as it can still stop on the opening attitude, capped at the rate limit (Guidance3Dof.PredictIgnition). Turned at the rate limit from a standing start, the 2026-10-09 booster was 14 deg off its command by ignition.
-            double3 from = _s.ThreeDofCommandLocal.Length() > 0.5 ? _s.ThreeDofCommandLocal : anchor;
-            if (_s.ThreeDofCoastAttitudeFixed)
-                from = new double3(att[0], att[1], att[2]);
-            double accel = _s.ThreeDofCoastTurnAccel;
-            double turnSpeed = _s.ThreeDofCoastAttitudeFixed ? 0.0 : Ksa3DofSetup.RateMax;
-            if (accel > 0.0)
-            {
-                double angle = Math.Acos(Math.Clamp(double3.Dot(from.NormalizeOrZero(), b0.NormalizeOrZero()), -1.0, 1.0));
-                double want = Math.Min(Ksa3DofSetup.RateMax, Math.Sqrt(2.0 * accel * angle));
-                double was = _s.ThreeDofLockTurn;
-                turnSpeed = was < want ? Math.Min(want, was + accel * dt) : Math.Max(want, was - accel * dt);
-            }
-            _s.ThreeDofLockTurn = turnSpeed;
-            double3 next = SlewToward(from, b0, turnSpeed * dt, out bool turning);
-            wantLocal = next;
-            rateLocal = turning && dt > 1e-9 ? double3.Cross(from, next).NormalizeOrZero() * turnSpeed : default;
-            smooth = false;
-        }
-        else
-        {
-            _s.ThreeDofLockTurn = 0.0;
-            wantLocal = b0;
-            rateLocal = double3.Cross(b0, b1) / ThreeDofRateProbeS;
-            smooth = true;
-        }
+        wantLocal = b0;
+        rateLocal = double3.Cross(b0, b1) / ThreeDofRateProbeS;
+        smooth = true;
 
         if (!burning && now >= plan.IgnitionTime)
         {
@@ -491,17 +804,20 @@ public static partial class GuidanceWindow
             _s.CommandRate = default;
             return;
         }
-        if (smooth && _s.CommandDir.Length() > 0.5)
-            want = (_s.CommandDir + SmoothGain(dt) * (want - _s.CommandDir)).NormalizeOrZero();
+        // Stepped from the command before the trim (TrimThreeDof), or, on the first step, from whatever was flying the craft.
+        double3 prev = _s.ThreeDofPlanCommandCci.Length() > 0.5 ? _s.ThreeDofPlanCommandCci : _s.CommandDir;
+        if (smooth && prev.Length() > 0.5)
+            want = (prev + SmoothGain(dt) * (want - prev)).NormalizeOrZero();
         double3 rate = frame.VecToCci(rateLocal);
         double maxRad = ThreeDofSlewMax * dt;
         bool clamped = false;
-        double3 slewed = _s.CommandDir.Length() > 0.5 ? SlewToward(_s.CommandDir, want, maxRad, out clamped) : want;
+        double3 slewed = prev.Length() > 0.5 ? SlewToward(prev, want, maxRad, out clamped) : want;
         if (clamped && dt > 1e-9)
         {
-            double3 axis = double3.Cross(_s.CommandDir, slewed);
+            double3 axis = double3.Cross(prev, slewed);
             rate = axis.Length() > 1e-12 ? double3.Normalize(axis) * (maxRad / dt) : default;
         }
+        _s.ThreeDofPlanCommandCci = slewed;
         _s.CommandDir = slewed;
         _s.CommandRate = rate;
         _s.HasCommand = _s.CommandDir.Length() > 0.5;
@@ -524,13 +840,15 @@ public static partial class GuidanceWindow
             : _s.ThreeDofTurnAccelDegS2 < 0.0 ? 0.0
             : Ksa3DofSetup.TurnAccelLimit(vehicle);
         _s.ThreeDofTurnAccelInUse = turn * 180.0 / Math.PI;
+        _s.ThreeDofRateInUse = Ksa3DofSetup.PlanRateMax(vehicle);
         double coastTurn = _s.ThreeDofTurnAccelDegS2 == 0.0 ? Ksa3DofSetup.CoastTurnAccelLimit(vehicle) : turn;
         bool fixedCoast = _s.ThreeDofTurnAccelDegS2 == 0.0 && coastTurn == 0.0;
         Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: 12, _s.GlideMaxAoaDeg,
             _s.VehicleHeightM, settings.GlideAccelMax(LandingAccelLimitMs2), _s.LandingPlanFloorMargin, turn,
-            fixedGlideAttitude: fixedCoast);
+            fixedGlideAttitude: fixedCoast, burnTiltPerSDeg: _s.ThreeDofBurnTiltPerSDeg);
         Scvx3DofConfig burn = Ksa3DofSetup.Config(vehicle, nodes: 20, glideIntervals: 0, _s.GlideMaxAoaDeg,
-                                                   _s.VehicleHeightM, LandingAccelLimitMs2, _s.LandingPlanFloorMargin, turn);
+                                                   _s.VehicleHeightM, LandingAccelLimitMs2, _s.LandingPlanFloorMargin, turn,
+                                                   burnTiltPerSDeg: _s.ThreeDofBurnTiltPerSDeg);
         var g = new Guidance3Dof(glide, burn, _s.ThreeDofEstimator.Apply(_s.ThreeDofNominal), settings);
         _s.ThreeDofWorker ??= new Ksa3DofWorker();
         // Zero/zero: the legs on the pad, at rest. The plan flies the CoM, VehicleHeightM above the legs.
@@ -553,8 +871,6 @@ public static partial class GuidanceWindow
         }))
             return;
         _s.ThreeDofColdTime = now;
-        _s.ThreeDofCoastAttitudeFixed = fixedCoast;
-        _s.ThreeDofCoastTurnAccel = coastTurn;
         _s.ThreeDofGuidance = g;
     }
 
@@ -576,9 +892,10 @@ public static partial class GuidanceWindow
 
         double3 a = (v - _s.ThreeDofAccelVelocity) / dt;
         Span<double> f = stackalloc double[PointMass3Dof.NX];
-        KsaPointMassModel bare = _s.ThreeDofNominal with { Drag = null, LiftSlope = null };
+        KsaPointMassModel bare = _s.ThreeDofNominal with { Drag = null, LiftSlope = null, CrossBiasX = 0, CrossBiasY = 0, CrossBiasZ = 0 };
         PointMass3Dof.Eval(bare, x, [att[0], att[1], att[2], 0.0], f);
         double[] measured = [a.X - f[3], a.Y - f[4], a.Z - f[5]];
+        _s.ThreeDofMeasuredAccel = new double3(measured[0], measured[1], measured[2]);
         _s.ThreeDofEstimator.Update(_s.ThreeDofNominal, x, att, throttle, measured, dt);
         _s.ThreeDofAccelTime = now;
         _s.ThreeDofAccelVelocity = v;
@@ -598,6 +915,131 @@ public static partial class GuidanceWindow
         }
     }
 
+    /// <summary>
+    /// TOUCHDOWN GUIDANCE'S HEAD START. From the ignition lock to ignition, its standby solves the burn it will be handed: from the state entry guidance predicts at the committed ignition - the craft carried along the locked plan, at that plan's attitude there - and at the ignition time, re-solved as the prediction closes in. When the engine lights, the plan is converged for the state the craft is in, and touchdown guidance can take the burn from its start.
+    ///  WHY. The hand-over is ThreeDofSixDofTimeS (5 s) before the pad and the standby used to start at ignition. A landing burn ran 6.6-7.1 s, so the standby had two seconds and took the burn at 250 m and 104 m/s with a converged plan. KSA 5901's aerodynamics gave the boosters about 60 % more drag: they arrive at 103 m/s where they came at 125, the burn is 4.8-5.0 s, ignition and the hand-over time coincide, and the standby solved from cold through the hardest braking and took over 1-1.6 s in, at half the height (2026-11-18).
+    ///  The standby is given the forecast as its state and the ignition time as its clock, so nothing in it knows the difference; only the bias estimator and the drift restart, which read the craft's motion, wait for the real thing (SixDofStandbyPredicted).
+    /// </summary>
+    /// <summary>How often the standby's forecast is renewed while the craft glides, s.</summary>
+    private const double SixDofStandbyGlideForecastS = 0.1;
+
+    private static void StepEntryTouchdownPrepare(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                                  double[] x, double[] x14, double now)
+    {
+        Guidance3Dof g = _s.ThreeDofGuidance;
+        Plan3Dof plan = g?.Published;
+        Plan3Dof lockPlan = g?.LockPlan;
+        if (!_s.ThreeDofSixDofHandover || !_s.ThreeDofTouchdownPrepare || plan == null
+            || now >= plan.IgnitionTime || _s.ThreeDofNominal == null)
+            return;
+        // In the lock window the craft flies the lock plan open loop, so the forecast follows it. EARLIER, in the glide, once ignition is ThreeDofTouchdownPrepareS away, the forecast follows the glide plan: the standby's cold solve then has seconds of glide to converge in rather than the 2.4 s of the lock, and re-solves warm on a forecast that sharpens as ignition nears. On 2026-11-20 a cold solve with RCS took 4-7 s offline, longer than the lock window.
+        bool locked = plan.Phase == Phase3Dof.Locked && lockPlan != null;
+        bool gliding = plan.Phase == Phase3Dof.Glide && plan.IgnitionTime - now <= _s.ThreeDofTouchdownPrepareS;
+        if (!locked && !gliding)
+            return;
+        double ignition = plan.IgnitionTime;
+        // TOUCHDOWN GUIDANCE OWNS IGNITION (SixDofOwnsIgnition): its standby plans the coast and the burn from the craft as it is, every step, and is handed the craft in the glide. The forecast below then only scales its problem.
+        bool owns = _s.SixDofOwnsIgnition;
+        bool forecast = !gliding || now - _s.ThreeDofPrepareForecastAt >= SixDofStandbyGlideForecastS || _s.SixDofCoastScaleState == null;
+        if (!forecast)
+        {
+            if (owns && _s.SixDofCoastPending)
+                StepEntryTouchdownOwn(vehicle, parent, siteCci, plan, x14, now);
+            return;
+        }
+        // Forecast at the standby's own cadence while gliding; every step in the lock, as before.
+        _s.ThreeDofPrepareForecastAt = now;
+        Plan3Dof flown = locked ? lockPlan : plan;
+        KsaPointMassModel model = plan.Model ?? flown.Model ?? _s.ThreeDofNominal;
+        double[] predicted = g.PredictAlong(model, x, flown, now, ignition - now, out double[] opening, out _);
+
+        // The 14-state at ignition: the predicted position and velocity, the attitude turned the shortest way from the thrust axis now onto the plan's there, the body rates and the mass as they are.
+        double[] xi = (double[])x14.Clone();
+        for (int i = 0; i < 6; i++)
+            xi[i] = predicted[i];
+        double qw = x14[6], qx = x14[7], qy = x14[8], qz = x14[9];
+        var axis = new double3(2.0 * (qx * qz + qw * qy), 2.0 * (qy * qz - qw * qx), 1.0 - 2.0 * (qx * qx + qy * qy));
+        var target = new double3(opening[0], opening[1], opening[2]);
+        double3 turn = double3.Cross(axis, target);
+        double sin = turn.Length(), cos = double3.Dot(axis, target);
+        if (sin > 1e-9)
+        {
+            double half = 0.5 * Math.Atan2(sin, cos);
+            double3 n = turn / sin * Math.Sin(half);
+            double dw = Math.Cos(half);
+            // q_at_ignition = q_turn (x) q_now, both taking body axes to the site frame.
+            xi[6] = dw * qw - n.X * qx - n.Y * qy - n.Z * qz;
+            xi[7] = dw * qx + n.X * qw + n.Y * qz - n.Z * qy;
+            xi[8] = dw * qy - n.X * qz + n.Y * qw + n.Z * qx;
+            xi[9] = dw * qz + n.X * qy - n.Y * qx + n.Z * qw;
+        }
+
+        if (owns)
+        {
+            _s.SixDofCoastScaleState = xi;
+            if (!_s.SixDofCoastPending)
+            {
+                GuidanceLog.Info(vehicle, FormattableString.Invariant($"Touchdown guidance preparing {ignition - now:F1} s before ignition: planning the coast and the burn from {x14[2]:F0} m, scaled on the state predicted at ignition, {xi[2]:F0} m at {Math.Sqrt(xi[3] * xi[3] + xi[4] * xi[4] + xi[5] * xi[5]):F0} m/s."));
+                StopSixDofStandby();
+                _s.SixDofStandbyRetryAt = now;
+                _s.SixDofStandbyPredicted = false;
+                _s.SixDofCoastPending = true;
+            }
+            StepEntryTouchdownOwn(vehicle, parent, siteCci, plan, x14, now);
+            return;
+        }
+
+        if (!_s.SixDofStandbyPredicted)
+            GuidanceLog.Info(vehicle, FormattableString.Invariant($"Touchdown guidance preparing {ignition - now:F1} s before ignition: planning from {xi[2]:F0} m at {Math.Sqrt(xi[3] * xi[3] + xi[4] * xi[4] + xi[5] * xi[5]):F0} m/s, the state predicted there."));
+        _s.SixDofStandbyPredicted = true;
+        StepSixDofStandby(vehicle, parent, siteCci, xi, ignition, Math.Max(plan.SigmaBurn, SixDofStandbyMinSeedS));
+    }
+
+    /// <summary>
+    /// Entry guidance's plan as a path for touchdown guidance's cold seed (ColdSeed6Dof.BuildAlongPath), fixed at <paramref name="now"/>: the coast from now to entry's ignition along its glide, the burn along its burn, with its commanded body axis and its thrust by its own model's law. Null while entry has no glide or lock plan with an ignition still ahead. The plan is immutable, so the worker can sample it.
+    /// </summary>
+    internal static AdvancedFlightComputer.Guidance.Scvx.SixDof.SeedPath EntrySeedPath(double now)
+    {
+        Guidance3Dof g = _s.ThreeDofGuidance;
+        Plan3Dof plan = g?.Published;
+        if (plan?.Phase == Phase3Dof.Locked)
+            plan = g.LockPlan;
+        else if (plan?.Phase != Phase3Dof.Glide)
+            plan = null;
+        KsaPointMassModel model = plan?.Model ?? _s.ThreeDofNominal;
+        if (plan == null || model == null || !(plan.IgnitionTime > now) || !(plan.SigmaBurn > 0.0))
+            return null;
+        double ignition = plan.IgnitionTime, coast = ignition - now, burn = plan.SigmaBurn;
+        return (int phase, double f, Span<double> rv, Span<double> axis, out double thrustN) =>
+        {
+            Span<double> xs = stackalloc double[PointMass3Dof.NX];
+            Span<double> us = stackalloc double[PointMass3Dof.NU];
+            plan.Sample(phase == 0 ? now + f * coast : ignition + f * burn, xs, us);
+            xs[..6].CopyTo(rv);
+            double norm = Math.Sqrt(us[0] * us[0] + us[1] * us[1] + us[2] * us[2]);
+            thrustN = phase == 0 ? 0.0 : model.Thrust(us[3], model.Altitude(xs));
+            if (!(norm > 0.5))
+                return false;
+            for (int i = 0; i < 3; i++)
+                axis[i] = us[i] / norm;
+            return true;
+        };
+    }
+
+    /// <summary>
+    /// One step of the standby that takes the craft before ignition (SixDofOwnsIgnition): re-solved from the measured state with a coast to entry guidance's ignition, and the hand-over asked for once it is due - ThreeDofTakeoverBeforeIgnitionS before entry's ignition or ThreeDofTakeoverBeforeImpactS before its touchdown, whichever is earlier - and the standby is ready. The claim is the next step's (CheckPendingEntryTouchdownHandoff).
+    /// </summary>
+    private static void StepEntryTouchdownOwn(Vehicle vehicle, IParentBody parent, double3 siteCci, Plan3Dof plan, double[] x14, double now)
+    {
+        double ignition = plan.IgnitionTime;
+        _s.SixDofCoastSeedS = Math.Max(ignition - now, 0.0);
+        StepSixDofStandby(vehicle, parent, siteCci, x14, now, Math.Max(plan.SigmaBurn, SixDofStandbyMinSeedS));
+        double due = Math.Min(plan.EndTime - _s.ThreeDofTakeoverBeforeImpactS, ignition - _s.ThreeDofTakeoverBeforeIgnitionS);
+        if (now < due || _s.ThreeDofGlideHandoff != null || !SixDofStandbyReady(now))
+            return;
+        _s.ThreeDofGlideHandoff = FormattableString.Invariant($"HANDOVER IN THE GLIDE: TOUCHDOWN, {ignition - now:F1} s BEFORE ENTRY'S IGNITION, {plan.EndTime - now:F1} s FROM PAD, {x14[2]:F0} m.");
+    }
+
     private static void StepEntryTouchdownHandoff(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                                   double[] x, double now)
     {
@@ -614,7 +1056,11 @@ public static partial class GuidanceWindow
         if (reason == null && burnLeft < -0.5)
             reason = "ENTRY PLAN RAN OUT IN BURN";
 
-        bool handoff = reason != null || (_s.ThreeDofSixDofHandover && burnLeft < _s.ThreeDofSixDofTimeS);
+        // THE HAND-OVER TIME IS SET WHEN THE ENGINE LIGHTS: ThreeDofSixDofTimeS before the end of the burn as planned then, and not pushed back by a burn that grows afterwards. Entry guidance's re-solves stretch the burn once it runs (5.1 s at the lock, 5.5 s left 1.7 s after ignition on 2026-11-18), and judged on the time left each step, the hand-over waited 2.3 s into a 5 s burn with touchdown guidance's plan ready all along.
+        if (!double.IsFinite(_s.ThreeDofHandoverDueAt) && double.IsFinite(burnLeft))
+            _s.ThreeDofHandoverDueAt = now + Math.Max(burnLeft - _s.ThreeDofSixDofTimeS, 0.0);
+        bool due = burnLeft < _s.ThreeDofSixDofTimeS || now >= _s.ThreeDofHandoverDueAt;
+        bool handoff = reason != null || (_s.ThreeDofSixDofHandover && due);
         if (handoff && !Can6DofTake(vehicle, out string refusal))
         {
             StopSixDofStandby();
@@ -623,14 +1069,11 @@ public static partial class GuidanceWindow
         }
         _s.ThreeDofHandoffRefusal = "";
         double seed = double.IsFinite(burnLeft) ? Math.Max(burnLeft, SixDofStandbyMinSeedS) : _s.SixDofSigmaSeed;
-        if (!handoff)
-            _s.ThreeDofSixDofWaiting = false;
-        bool rejected = RejectedEntryStandby();
-        StepSixDofStandby(vehicle, parent, siteCci, x, now, seed, holdForEntryHandoff: handoff && !rejected);
+        StepSixDofStandby(vehicle, parent, siteCci, x, now, seed, holdForEntryHandoff: handoff);
         if (!handoff)
             return;
 
-        if (RejectedEntryStandby() || !SixDofStandbyReady(now, SixDofStandbyMaxPlanAgeS, x))
+        if (!SixDofStandbyReady(now, SixDofStandbyMaxPlanAgeS, x))
         {
             if (!_s.ThreeDofSixDofWaiting)
             {
@@ -648,6 +1091,26 @@ public static partial class GuidanceWindow
 
     private static void CheckPendingEntryTouchdownHandoff(Vehicle vehicle, IParentBody parent)
     {
+        // IN THE GLIDE (SixDofOwnsIgnition): the engine is off and stays off until touchdown guidance's plan lights it.
+        string glide = _s.ThreeDofGlideHandoff;
+        _s.ThreeDofGlideHandoff = null;
+        if (glide != null && _s.ThreeDofPhase == ThreeDofPhase.Glide && _s.SixDofCoastPending && !HasTouchedDown(vehicle))
+        {
+            if (!Can6DofTake(vehicle, out string why) || !StandbyEnginesStillMatch(vehicle))
+            {
+                GuidanceLog.Info(vehicle, "Touchdown guidance cannot take the glide: " + (why ?? "ENGINE CONFIGURATION CHANGED.") + " Entry guidance keeps it.");
+                StopSixDofStandby();
+                _s.SixDofCoastPending = false;
+                return;
+            }
+            if (!SixDofStandbyReady(SimNow()))
+                return;
+            GuidanceLog.Info(vehicle, glide);
+            Engage6Dof(vehicle, fromBrakingBurn: true, tookBurn: false);
+            _s.ThreeDofStatus = glide;
+            return;
+        }
+
         var (status, warning) = _s.ThreeDofTouchdownHandoff;
         _s.ThreeDofTouchdownHandoff = default;
         if (status == null || _s.ThreeDofPhase != ThreeDofPhase.Burn || HasTouchedDown(vehicle))
@@ -680,35 +1143,13 @@ public static partial class GuidanceWindow
         if (!carried.EngineOn || !(carried.EngineThrottle > 0.0f))
             return;
         double throttle = carried.EngineThrottle;
-        double now = SimNow();
-        if (!EntryThrustMatches(vehicle, parent, siteCci, x, now, throttle))
-        {
-            _s.ThreeDofRejectedTouchdownPlan = _s.Guidance?.Published;
-            KeepEntryBurn(vehicle, "TOUCHDOWN THRUST DOES NOT MATCH THE ENTRY BURN.");
-            return;
-        }
         GuidanceLog.Info(vehicle, status);
         Engage6Dof(vehicle, fromBrakingBurn: true, tookBurn: true);
-        _s.SixDofEntryBlendStart = now;
+        _s.SixDofEntryBlendStart = SimNow();
         _s.SixDofEntryBlendThrottle = throttle;
-        _s.LastThrottle = throttle;
         _s.ThreeDofStatus = status;
         if (warning)
             _s.WarnEntry(status);
-    }
-
-    private static bool RejectedEntryStandby()
-        => _s.ThreeDofRejectedTouchdownPlan != null
-            && ReferenceEquals(_s.ThreeDofRejectedTouchdownPlan, _s.Guidance?.Published);
-
-    internal static void NoteEntryPlanRecovery(VehicleAutopilotState state)
-    {
-        state.ThreeDofBurnSolveFault = false;
-        state.ThreeDofRefusing = false;
-        state.ThreeDofSixDofWaiting = false;
-        state.ThreeDofHandoffRefusal = "";
-        if (state.ThreeDofTouchdownHandoff.Warning)
-            state.ThreeDofTouchdownHandoff = default;
     }
 
     private static void KeepEntryBurn(Vehicle vehicle, string reason)

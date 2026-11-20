@@ -89,7 +89,7 @@ internal static class GuidanceSettingSpecs
         "Lowest pitch of the burn against the horizon. A very negative value switches the shaping off.");
     public static readonly SettingSpec GlideMaxAoaDeg = new("GlideMaxAoaDeg", "GLIDE MAX AoA", "deg", E, 7.5, 0.0, 60.0, "%.1f",
         "Largest angle of attack (AoA) the glide may fly to steer the impact point.");
-    public static readonly SettingSpec GlideNominalAoaDeg = new("GlideNominalAoaDeg", "GLIDE PLAN AoA", "deg", E, 0.0, 0.0, 60.0, "%.1f",
+    public static readonly SettingSpec GlideNominalAoaDeg = new("GlideNominalAoaDeg", "GLIDE PLAN AoA", "deg", E, 2.5, 0.0, 60.0, "%.1f",
         "Angle of attack that every impact prediction assumes for the glide, with the lift pointed up the trajectory. 0 plans an engine-first ballistic coast.");
     public static readonly SettingSpec BoostbackGlideMissKm = new("BoostbackGlideMissKm", "GLIDE ONLY WITHIN", "km", E, 3.0, 0.0, 1e4, "%.1f",
         "A booster whose predicted impact misses its site by no more than this flies no boostback: the glide's lift corrects it. A booster that is still climbing is judged again once it starts to fall, and burns then if its miss has grown past this.");
@@ -241,7 +241,7 @@ internal static class GuidanceSettingSpecs
 
     public static readonly SettingSpec ThreeDofEngageTgoS = new("ThreeDofEngageTgoS", "AT IMPACT T-", "s", P, 45.0, 0.0, 1e4, "%.1f",
         "Predicted time to impact at which ENTRY takes over a boostback glide.");
-    public static readonly SettingSpec ThreeDofSixDofTimeS = new("ThreeDofSixDofTimeS", "AT BURN LEFT", "s", P, 5.0, 0.0, 1e3, "%.1f",
+    public static readonly SettingSpec ThreeDofSixDofTimeS = new("ThreeDofSixDofTimeS", "AT BURN LEFT", "s", P, 30.0, 0.0, 1e3, "%.1f",
         "Burn left in the plan at which TOUCHDOWN takes over the burn, once its standby plan is ready.");
     public static readonly SettingSpec ThreeDofSmoothTau = new("ThreeDofSmoothTau", "COMMAND SMOOTHING", "s", T, 0.05, 0.0, 60.0, "%.2f",
         "Time constant of the low-pass filter on the plan attitude and throttle. 0 switches it off.");

@@ -17,8 +17,11 @@ using Brutal.Numerics;
 /// <param name="Ixx">Body-x inertia, kg m^2. Live: it tracks propellant drain.</param>
 /// <param name="Iyy">Body-y inertia, kg m^2.</param>
 /// <param name="Izz">Body-z (roll) inertia, kg m^2.</param>
-public sealed record Ksa6DofInputs(double3 AccelBias, double Ixx, double Iyy, double Izz)
+/// <param name="MomentLimiterPerPa">The game's air moment limiter as measured now (BodyAero6Dof.MomentLimiterPerPa), per Pa; NaN leaves the model's.</param>
+public sealed record Ksa6DofInputs(double3 AccelBias, double Ixx, double Iyy, double Izz, double MomentLimiterPerPa = double.NaN)
 {
+    public Ksa6DofInputs WithMomentLimiter(double perPa) => this with { MomentLimiterPerPa = perPa };
+
     /// <summary>Nothing measured yet: no bias, and whatever inertia the config was built with.</summary>
     public static readonly Ksa6DofInputs None = new(default, 0.0, 0.0, 0.0);
 

@@ -43,6 +43,12 @@ public static class KsaGimbalControl
     /// Everything the override holds for ONE vehicle: its demand, its scratch buffers and its diagnostics.
     ///  THE SCRATCH HAS TO BE PER-VEHICLE, not merely the demand. ApplyLsq runs on a job thread, and with two guided vehicles two of those run at once - sharing one commands array between them would interleave two allocations into the same buffer and then fly the result.
     /// </summary>
+    /// <summary>
+    /// One gimbal's command and state on a control pass, in FRACTIONS OF ITS RANGE (Gimbal.GetCommand's units): the command just written, the angle and rate the game's state had before this pass (per second for the rate), its range in degrees and its slew cap in ranges per second, the thrust through it, and how many gimbals the allocation drove. An angle that trails its command by the slew cap is the gimbal's rate limit; one on its command with the torque still short is the allocation.
+    /// </summary>
+    public sealed record GimbalTrace(double CmdY, double CmdZ, double AngleY, double AngleZ, double RateY, double RateZ,
+                                     double MaxAngleDeg, double SlewPerS, double ThrustN, int Count);
+
     public sealed class Slot
     {
         public volatile Command Cmd = Command.Off;
@@ -58,6 +64,9 @@ public static class KsaGimbalControl
 
         /// <summary>Diagnostics from the last Lsq allocation, for the UI readout.</summary>
         public TvcAllocationResult LastAllocation;
+
+        /// <summary>The highest-thrust gimbal on the last Lsq pass: what it was told against where it is. Replaced whole by the worker, read by the sim thread for the log.</summary>
+        public volatile GimbalTrace Trace;
 
         /// <summary>The vehicle the demand is for. The worker reads Vehicle.IsControllable through it, which Vehicle.UpdateControl writes on the main thread while no worker runs.</summary>
         internal volatile Vehicle Owner;
@@ -266,6 +275,25 @@ public static class KsaGimbalControl
         st.LastAllocation = KsaTvcAllocator.Solve(
             st.Gimbals.AsSpan(0, n), st.Thrusts.AsSpan(0, n), com,
             new double3(cmd.TorqueXNm, cmd.TorqueYNm, cmd.TorqueZNm), st.Commands);
+
+        // The log's gimbal: the one with the most thrust through it.
+        int lead = 0;
+        for (int i = 1; i < n; i++)
+            if (st.Thrusts[i] > st.Thrusts[lead])
+                lead = i;
+        {
+            GimbalController gc = st.Gimbals[lead];
+            Gimbal g = gc.Gimbal;
+            GimbalControllerState was = outputs.Gimbals.GetModuleAndReadOnlyState(gc).State;
+            double maxY = g != null ? g.AxisY.MaxAngle : 0.0, maxZ = g != null ? g.AxisZ.MaxAngle : 0.0;
+            st.Trace = new GimbalTrace(
+                st.Commands[2 * lead], st.Commands[2 * lead + 1],
+                maxY > 0.0 ? was.Angles.X / maxY : 0.0, maxZ > 0.0 ? was.Angles.Y / maxZ : 0.0,
+                maxY > 0.0 ? was.AngleRates.X / maxY : 0.0, maxZ > 0.0 ? was.AngleRates.Y / maxZ : 0.0,
+                Math.Max(maxY, maxZ) * 180.0 / Math.PI,
+                g != null ? g.NaturalFrequency * Gimbal.RATE_CAP_PER_NATURAL_FREQUENCY : 0.0,
+                st.Thrusts[lead], n);
+        }
 
         int applied = 0;
         for (int i = 0; i < n; i++)

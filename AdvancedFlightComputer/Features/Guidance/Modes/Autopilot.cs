@@ -10,6 +10,7 @@ using AdvancedFlightComputer.Core;
 using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
+using AdvancedFlightComputer.Features.RcsTorque;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
 using AscentRecoveryResult = AdvancedFlightComputer.Guidance.Scvx.Ascent.AscentRecoveryResult;
@@ -1369,9 +1370,17 @@ public static partial class GuidanceWindow
         if (shouldCommand)
         {
             // An ascent references its roll to its target plane (see SteerBody2Cci and AscentRollRef); a landing keeps the stock position-derived reference, which is well conditioned there because the thrust axis is fighting the velocity, not lying along the position vector.
-            double3? rollRef = _s.Running ? AscentRollRef(vehicle, _s.CommandDir) : null;
+            // A returning booster is held at a fixed roll, wings level along its ground track (ReturnRollRefCci), so the body-axis aero table it plans with applies (KsaPointMassModel.RollRef), and flies the Strict profile so it turns as fast as the plan asks.
+            bool boosterReturn = boostbackGuides || threeDofGuides;
+            bool holdRoll = boosterReturn && _s.BoosterRollHold;
+            double3? rollRef = _s.Running ? AscentRollRef(vehicle, _s.CommandDir)
+                : holdRoll && _s.CommandDir.Length() > 0.5 ? ReturnRollRefCci(vehicle, parent)
+                : null;
             CommandAttitude(vehicle, parent, _s.CommandDir,
-                            fullEngage: !_s.WasEngaged, rollRef: rollRef);
+                            fullEngage: !_s.WasEngaged, rollRef: rollRef,
+                            rollMode: holdRoll ? FlightComputerRollMode.Up : null);
+            if (boosterReturn && _s.BoosterStrictProfile)
+                _s.AttitudeOwnership.WriteProfile(vehicle.FlightComputer, FlightComputerAttitudeProfile.Strict);
 
             // Publish the attitude and its turning rate together so they describe the same instant.
             KsaAttitudeRate.Set(vehicle,
@@ -1407,7 +1416,7 @@ public static partial class GuidanceWindow
         else if (ViewDemand.Wants(vehicle, ViewDemand.Kind.Aero))
             EnsureBoostbackAero(vehicle, parent);
         if (ViewDemand.ConsumeResample(vehicle))
-            ResampleBoostbackAero(vehicle, parent);
+            ResampleBoostbackAero(vehicle, parent, force: true);
         if (!BoostbackLive && ViewDemand.Wants(vehicle, ViewDemand.Kind.Impact))
             UpdateImpactPrediction(vehicle, orbit, parent, force: false);
         if (ViewDemand.Wants(vehicle, ViewDemand.Kind.Passes))
@@ -1738,6 +1747,7 @@ public static partial class GuidanceWindow
         Attempt(() => ReleaseStockDeorbit(vehicle, keepClaim: true, preserve: _s.ReleaseWithoutEngineCut));
         Attempt(() => KsaAttitudeRate.Clear(vehicle));
         Attempt(() => KsaGimbalControl.Disengage(vehicle));
+        Attempt(() => KsaRcsTorqueControl.Release(vehicle));
         Attempt(() => GiveRcsBack(vehicle));
         Attempt(_s.CancelGfoldSolve);
 
@@ -1935,6 +1945,34 @@ public static partial class GuidanceWindow
     /// plane does - i.e. the vehicle flies wings-level to its own orbital plane from
     /// the pad to cutoff, with no discontinuity anywhere in between.
     /// </summary>
+    /// <summary>
+    /// A returning booster's roll reference in CCI now (VehicleAutopilotState.ReturnRollRefCcf): the direction its wing, body +y, is held along - up x d, with up the local vertical and d the horizontal direction to the site, set on first use and then frozen in the body's frame. The body's +y is that direction less its part along the axis (SteerBody2Cci, BodyAeroTable.WorldCoefficients).
+    ///  WINGS LEVEL TO THE LOCAL VERTICAL. up x d is the normal of the great circle through the booster and the site, so it is horizontal everywhere along the ground track: the booster pitches in the vertical plane of its track and skids across it, and its roll on the navball stays 0 through the boostback burn, the flip, the glide and entry guidance. It is undefined only for an axis along it, flat and square to the track, which a returning booster never flies.
+    ///  Until 2026-11-20 the reference was w = (d - up) / sqrt 2, 45 deg below the horizon towards the site, with the wing along axis x w. An engine-first glide's axis is the reverse of its velocity, so a glide path through 45 deg put the axis along -w: there axis x w had no direction and swung with the slightest skid, and either side of it pointed opposite ways - the booster rolled through the boostback glide as if it kept redefining "up".
+    /// </summary>
+    internal static double3 ReturnRollRefCci(Vehicle vehicle, IParentBody parent)
+    {
+        doubleQuat cci2Ccf = parent.GetCci2Ccf();
+        if (_s.ReturnRollRefCcf.Length() < 0.5)
+        {
+            double3 r = vehicle.Orbit.StateVectors.PositionCci;
+            double3 up = r.NormalizeOrZero();
+            double3 site = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+            double3 toSite = site - r;
+            double3 d = toSite - double3.Dot(toSite, up) * up;
+            // Over the site itself there is no direction to it: the horizontal part of the velocity, reversed, is where it came from.
+            if (d.Length() < 1.0)
+            {
+                double3 vAir = vehicle.Orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r);
+                d = -(vAir - double3.Dot(vAir, up) * up);
+            }
+            if (d.Length() < 1e-6)
+                d = double3.Cross(up, Math.Abs(up.Z) < 0.9 ? new double3(0, 0, 1) : new double3(1, 0, 0));
+            _s.ReturnRollRefCcf = double3.Normalize(double3.Cross(up, double3.Normalize(d))).Transform(cci2Ccf);
+        }
+        return _s.ReturnRollRefCcf.Transform(doubleQuat.Inverse(cci2Ccf));
+    }
+
     private static doubleQuat SteerBody2Cci(double3 steerDir, double3 rollRef)
     {
         double3 x = double3.Normalize(steerDir);

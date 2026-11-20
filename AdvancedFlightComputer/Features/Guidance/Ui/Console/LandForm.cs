@@ -297,8 +297,8 @@ public static partial class GuidanceWindow
             NoteLandFact(FormattableString.Invariant($"NO SOLUTION: TWR {f.TwrNeeded:F2} NEEDED, {f.TwrMax:F2} AVAILABLE."), danger: true);
         else if (f.MarginalNow)
             NoteLandFact(FormattableString.Invariant($"MARGINAL: STOP USES {f.StopM / f.AltToGoM * 100.0:F0} % OF ALTITUDE LEFT."), danger: false);
-        if (f.NoGimbal)
-            NoteLandFact(PageText.NoGimbalFact, danger: true, calm: true);
+        if (f.NoSteering)
+            NoteLandFact(PageText.NoSteeringFact, danger: true, calm: true);
         else if (f.OverPowered)
             NoteLandFact(PageText.OverPoweredFact(f.FeasibleFloor), danger: true, next: ConsolePage.Tune, calm: true);
     }

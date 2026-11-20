@@ -5,6 +5,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 using System;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 // 6-DOF ON STANDBY through the 3-DOF's landing burn, so the hand-over swaps to a plan that is already converged and warm. The braking burn of DEORBIT + LAND keeps its standby the same way from its hand-over time (StepBrakingHandover).
 //
@@ -52,7 +53,7 @@ public static partial class GuidanceWindow
                                           double[] brakingState = null)
         => _s.SixDofStandby && !_s.Converging && _s.Guidance?.Published is { } plan
            && now - plan.SolveTime <= maxPlanAgeS
-           && now - plan.SolveTime < plan.Sigma
+           && now - plan.SolveTime < plan.Duration
            && (brakingState == null || (GuidanceIdle && Ksa6DofGuidance.MatchesHandoffAttitude(
                plan, brakingState, now, BrakingHandoffAngleRad, BrakingHandoffRateRadS)
                && _s.Guidance.MeasureDrift(brakingState, now) <= SixDofRestartDriftLimit(brakingState[2])));
@@ -96,7 +97,9 @@ public static partial class GuidanceWindow
             FixedTime = false, ColdIterationIntervalS = 0.0,
             BrakingSeed = braking, LongBudgetMs = braking ? BrakingStandbyBudgetMs : 0.0,
         };
-        guidance.BeginCold(x, xf, sigmaSeed);
+        // A standby that takes the craft before ignition plans the coast too, from entry guidance's time to ignition, seeded along entry's plan.
+        guidance.ColdSeedPath = _s.SixDofCoastPending ? EntrySeedPath(now) : null;
+        guidance.BeginCold(x, xf, sigmaSeed, _s.SixDofCoastPending ? _s.SixDofCoastSeedS : double.NaN, now);
         _s.Guidance = guidance;
         _s.Worker = new Ksa6DofSolveWorker();
         _s.SixDofStandby = true;
@@ -118,14 +121,18 @@ public static partial class GuidanceWindow
         _s.LastMass = vehicle.TotalMass;
         _s.DiagError("standby: converging...");
 
-        string what = $"BURN-TIME SEED {sigmaSeed:F1} s, {engageNodes} NODES";
+        string what = $"BURN-TIME SEED {sigmaSeed:F1} s, {engageNodes} NODES"
+                      + (cfg.HasCoast ? FormattableString.Invariant($", COAST {_s.SixDofCoastSeedS:F1} s TO IGNITION OVER {cfg.CoastIntervals} INTERVALS") : "");
         if (_s.SixDofLogging)
         {
             SixDofLog.Start(_s, vehicle.ToString(), parent.ToString());
-            SixDofLog.Event(_s, now, $"STANDBY at alt {x[2]:F0} m: cold solve on the worker, {what}");
+            SixDofLog.Event(_s, now, $"STANDBY at alt {x[2]:F0} m: cold solve on the worker, {what}{(guidance.SeededAlongPath ? ", SEEDED ALONG ENTRY'S PLAN" : cfg.HasCoast ? ", FREE-COAST SEED" : "")}");
+            // The cold seed of a coast standby, before anything has iterated on it.
+            if (cfg.HasCoast)
+                SixDofLog.PlanSnapshot(_s, now, guidance.WorkingPlan(now), "seed");
         }
         GuidanceLog.Info(vehicle, $"Touchdown guidance standby at {x[2]:F0} m: cold solve on its own thread, {what}.");
-        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"Touchdown guidance model: Tmax {cfg.Tmax:F0} N, floor {cfg.ThrottleFloor:F3}, gimbal {cfg.GimbalMaxDeg:F2} deg, roll torque {cfg.TauRollMax:F0} N m{(cfg.TerminalRollFree ? " (roll left free)" : "")}, engine arm {dyn.LArm:F2} m, inertia {dyn.Ixx:F0} {dyn.Iyy:F0} {dyn.Izz:F0} kg m2, Isp {dyn.Isp:F0} s, tilt limit {cfg.TiltMaxDeg:F0} deg, scales {cfg.XScale[0]:F0} m {cfg.XScale[3]:F0} m/s, plan ends {_s.SixDofTargetComAltM:F2} m over the site of which {_s.SiteEarlyContactM:F2} m for the ground under the footprint, which rises {(_s.SiteGround?.Within(_s.SiteGround.ReachM) ?? 0.0):F2} m within {(_s.SiteGround?.ReachM ?? 0.0):F0} m of the site."));
+        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"Touchdown guidance model: air moment limiter {_s.MomentLimiterPerPa * 1e3:F3} per kPa (divides by {_s.MomentLimiterDivisor:F2} now), Tmax {cfg.Tmax:F0} N, floor {cfg.ThrottleFloor:F3}, gimbal {cfg.GimbalMaxDeg:F2} deg, roll torque {cfg.TauRollMax:F0} N m{(cfg.TerminalRollFree ? " (roll left free)" : "")}, engine arm {dyn.LArm:F2} m, inertia {dyn.Ixx:F0} {dyn.Iyy:F0} {dyn.Izz:F0} kg m2, Isp {dyn.Isp:F0} s, tilt limit {cfg.TiltMaxDeg:F0} deg, scales {cfg.XScale[0]:F0} m {cfg.XScale[3]:F0} m/s, plan ends {_s.SixDofTargetComAltM:F2} m over the site of which {_s.SiteEarlyContactM:F2} m for the ground under the footprint, which rises {(_s.SiteGround?.Within(_s.SiteGround.ReachM) ?? 0.0):F2} m within {(_s.SiteGround?.ReachM ?? 0.0):F0} m of the site."));
         return true;
     }
 
@@ -200,6 +207,13 @@ public static partial class GuidanceWindow
             if (result.Job == Ksa6DofJob.StepCold)
             {
                 _s.ColdFrames++;
+                // Every cold iteration in the events log: a standby that stalls says how (2026-11-20: ten restarts in a glide, and nothing to read them from).
+                ScvxIteration it = _s.Guidance.LastIteration;
+                // A coast standby's first iterates in the plan log, so a stall can be read node by node (2026-11-20: a roll-rate error at the first burn interval that the offline seed does not show).
+                if (_s.Guidance.HasCoast && _s.Guidance.LastIterations <= 3)
+                    SixDofLog.PlanSnapshot(_s, now, _s.Guidance.WorkingPlan(now), "iterate");
+                SixDofLog.Event(_s, now, FormattableString.Invariant(
+                    $"STANDBY COLD {_s.Guidance.LastIterations} at {x[2]:F0} m: {(it.Solved ? it.Accepted ? "accepted" : "rejected" : "FAILED " + _s.Guidance.LastSubproblemFailure)}, rho {it.Rho:G3}, trust {it.TrustRegion:G3}, burn {it.Sigma:F2} s, coast {_s.Guidance.WorkingCoast:F2} s, SCS {it.SolverIterations}, worst {Scvx6DofSolver.ChannelName(it.DefectChannel)} at {it.DefectNode}, gate {_s.Guidance.LastGatedRatio:G3}x on {_s.Guidance.LastGatedDefectChannelName} at {_s.Guidance.LastGatedDefectNode}{(result.Ok ? "" : ": " + result.Error)}"));
                 if (result.Ok)
                 {
                     _s.Converging = false;
@@ -286,14 +300,17 @@ public static partial class GuidanceWindow
         _s.CapabilityN = KsaEnginePerf.ActiveThrustCapability(vehicle, ambientPa);
         _s.LastThrottle = _s.LandingPhase == LandingPhase.Burn ? _s.Upfg.Throttle : _s.ThreeDofThrottle;
         // Off the engines' curve, as Step6DofCore reads it: throttle x full thrust overstates low throttle by tens of kN.
-        UpdateAccelBias(x, now, _s.LastThrottle > 0.0 ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle, ambientPa) : 0.0);
+        // Not on a predicted state (SixDofStandbyPredicted): its velocity is a forecast that stands still, and differencing it would read as an acceleration the model lacks.
+        if (!_s.SixDofStandbyPredicted)
+            UpdateAccelBias(x, now, _s.LastThrottle > 0.0 ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle, ambientPa) : 0.0);
 
         // The node ladder too, so the guidance handed over is already at the count 6-DOF would fly. Only off a fresh plan: a rebuild reseeds from the published plan, synchronously.
-        if (_s.SixDofNodeGates && age <= SixDofStandbyMaxPlanAgeS)
+        if (_s.SixDofNodeGates && age <= SixDofStandbyMaxPlanAgeS && !_s.SixDofCoastPending)
             StepNodeGates(vehicle, parent, siteCci, x, now);
 
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
-        _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz);
+        UpdateMomentLimiter(vehicle, now);
+        _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz).WithMomentLimiter(_s.MomentLimiterPerPa);
         // Back to back, not on the flying cadence: the craft is not following this plan, so the solve has to keep moving to keep up.
         _s.Worker.TryDispatchTrack(_s.Guidance, x, now, SixDofStandbyTrackIterations);
     }
@@ -362,7 +379,7 @@ public static partial class GuidanceWindow
 
         string what = converging || plan == null
             ? $"COLD SOLVE RUNNING ({_s.Guidance.LastIterations} ITERATIONS)"
-            : FormattableString.Invariant($"WARM PLAN {now - plan.SolveTime:F2} s OLD: {plan.Sigma:F1} s TO TARGET, {_s.Guidance.Nodes} NODES");
+            : FormattableString.Invariant($"WARM PLAN {now - plan.SolveTime:F2} s OLD: {plan.Duration:F1} s TO TARGET{(plan.HasCoast ? FormattableString.Invariant($", IGNITION IN {plan.IgnitionTime - now:F1} s") : "")}, {_s.Guidance.Nodes} NODES");
         GuidanceLog.Info(vehicle, $"Touchdown guidance takes the burn from standby at {x[2]:F0} m with {what}.");
         SixDofLog.Event(_s, now, "ENGAGED FROM STANDBY: " + what);
     }
@@ -378,7 +395,7 @@ public static partial class GuidanceWindow
         if (plan == null)
             return "NO PLAN";
         return SixDofStandbyReady(now)
-            ? FormattableString.Invariant($"READY. PLAN {now - plan.SolveTime:F1} s OLD, {plan.Sigma:F1} s TO GO")
+            ? FormattableString.Invariant($"READY. PLAN {now - plan.SolveTime:F1} s OLD, {plan.Duration:F1} s TO GO")
             : FormattableString.Invariant($"CATCHING UP. PLAN {now - plan.SolveTime:F1} s OLD, {_s.SixDofStandbyRefusals} REFUSED");
     }
 }

@@ -532,6 +532,10 @@ public sealed class Scvx3DofSolver
             cost += Math.Max(0.0, _anchorCos - (_anchor[0] * u[0] + _anchor[1] * u[1] + _anchor[2] * u[2]));
         if (_cfg.AttitudeAccelMax > 0.0)
             cost += TurnAccelViolation(u, sigG, sigB);
+        // The burn's tilt limit, at the candidate's own burn time: how far the body axis's vertical part falls short of the limit's cosine.
+        if (_cfg.BurnTiltPerS > 0.0)
+            for (int k = _k; k < _n - 1; k++)
+                cost += Math.Max(0.0, Math.Cos(_cfg.BurnTiltLimit(sigB * (1.0 - (k - _k) * _dtauB))) - u[k * NU + PointMass3Dof.IB + 2]);
         // The acceleration limit, in the subproblem's throttle units: thrust over the limit, over the thrust law's slope in throttle there.
         if (_cfg.AccelMax > 0.0 && _model is KsaPointMassModel ksa && ksa.HasThrust)
             for (int k = _k; k < _n; k++)

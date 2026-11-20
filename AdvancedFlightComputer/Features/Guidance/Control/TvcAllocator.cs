@@ -103,6 +103,9 @@ public static class KsaTvcAllocator
     /// command, or Data.MaximumThrust to preview what full thrust would allow.
     /// Commands come back in <paramref name="commands"/> as 2 per gimbal (Y then Z).
     /// </summary>
+    /// <summary>An axis whose capability is under this share of the strongest axis's is the weak one, allocated last (see Solve).</summary>
+    private const double WeakAxisShare = 0.25;
+
     public static TvcAllocationResult Solve(ReadOnlySpan<GimbalController> gimbals,
                                             ReadOnlySpan<double> thrusts,
                                             float3 comAsmb,
@@ -159,10 +162,24 @@ public static class KsaTvcAllocator
         if (!Invert3x3(g, out Span<double> inv))
             return result;
 
+        // THE WEAK AXIS GIVES WAY. The gimbals' deflection is one budget: torque about the weak axis (roll, for engines near the thrust line) is made by deflecting them against each other, and pitch and yaw by deflecting them together. Each axis's demand is inside what that axis can do alone, but both at their limits ask every gimbal for twice its travel, and scaling the whole solution then HALVED the pitch and yaw torque for the sake of a roll torque a hundredth of its size. On 2026-11-18 a booster that the air's roll moment had turning 3-6 deg/s at the hand-over asked 15-18 kN m of roll, the allocation was scaled to 0.5-0.7 on 85 % of the steps, the craft got half the pitch and yaw torque its plan flew on, and it left the plan within a second. Before KSA 5901 nothing rolled a booster, the roll demand was near nothing, and the allocation was whole.
+        //  So an axis with under WeakAxisShare of the strongest's capability is allocated SEPARATELY and LAST: the other two take what they need, scaled together only if they alone exceed the travel, and the weak axis gets as much of its demand as the travel left over allows.
+        int weak = -1;
+        if (result.DemandClamped)
+        {
+            double cx = Math.Abs(AxisCapability(bTorque, cols, inv, 0)), cy = Math.Abs(AxisCapability(bTorque, cols, inv, 1)), cz = Math.Abs(AxisCapability(bTorque, cols, inv, 2));
+            double strongest = Math.Max(cx, Math.Max(cy, cz));
+            if (cx < WeakAxisShare * strongest && cx <= cy && cx <= cz) weak = 0;
+            else if (cy < WeakAxisShare * strongest && cy <= cx && cy <= cz) weak = 1;
+            else if (cz < WeakAxisShare * strongest && cz <= cx && cz <= cy) weak = 2;
+        }
+        double weakDemand = weak == 0 ? desiredTorque.X : weak == 1 ? desiredTorque.Y : weak == 2 ? desiredTorque.Z : 0.0;
+        var strong = new double3(weak == 0 ? 0.0 : desiredTorque.X, weak == 1 ? 0.0 : desiredTorque.Y, weak == 2 ? 0.0 : desiredTorque.Z);
+
         // w = G^-1 tau, then u = B^T w.
-        double wx = inv[0] * desiredTorque.X + inv[1] * desiredTorque.Y + inv[2] * desiredTorque.Z;
-        double wy = inv[3] * desiredTorque.X + inv[4] * desiredTorque.Y + inv[5] * desiredTorque.Z;
-        double wz = inv[6] * desiredTorque.X + inv[7] * desiredTorque.Y + inv[8] * desiredTorque.Z;
+        double wx = inv[0] * strong.X + inv[1] * strong.Y + inv[2] * strong.Z;
+        double wy = inv[3] * strong.X + inv[4] * strong.Y + inv[5] * strong.Z;
+        double wz = inv[6] * strong.X + inv[7] * strong.Y + inv[8] * strong.Z;
 
         double peak = 0.0;
         for (int c = 0; c < cols; c++)
@@ -181,6 +198,27 @@ public static class KsaTvcAllocator
             for (int c = 0; c < cols; c++)
                 commands[c] *= scale;
             result.SaturationScale = scale;
+        }
+
+        // The weak axis, in the travel left: the largest share of its own solution that keeps every gimbal inside its range.
+        result.WeakAxisScale = 1.0;
+        if (weak >= 0 && weakDemand != 0.0)
+        {
+            double rx = inv[weak] * weakDemand, ry = inv[3 + weak] * weakDemand, rz = inv[6 + weak] * weakDemand;
+            double share = 1.0;
+            for (int c = 0; c < cols; c++)
+            {
+                double ur = bTorque[3 * c] * rx + bTorque[3 * c + 1] * ry + bTorque[3 * c + 2] * rz;
+                if (Math.Abs(ur) < 1e-12)
+                    continue;
+                // Room towards the side this gimbal's roll share pushes it.
+                double room = 1.0 - commands[c] * Math.Sign(ur);
+                share = Math.Min(share, Math.Max(room, 0.0) / Math.Abs(ur));
+            }
+            share = Math.Clamp(share, 0.0, 1.0);
+            for (int c = 0; c < cols; c++)
+                commands[c] += share * (bTorque[3 * c] * rx + bTorque[3 * c + 1] * ry + bTorque[3 * c + 2] * rz);
+            result.WeakAxisScale = share;
         }
 
         // Report what the linear model says we actually get, including the lateral force that comes along for free - gimballing for torque always tilts the thrust vector, and that coupling is real.
@@ -264,4 +302,7 @@ public struct TvcAllocationResult
 
     /// <summary>True once the demand has been clipped per axis to real capability.</summary>
     public bool DemandClamped;
+
+    /// <summary>The share of the weak axis's demand (roll, for engines near the thrust line) that fitted in the gimbal travel the other two left; 1 when all of it did, or when no axis is weak.</summary>
+    public double WeakAxisScale;
 }

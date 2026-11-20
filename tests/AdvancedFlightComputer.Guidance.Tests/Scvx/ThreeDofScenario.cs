@@ -74,10 +74,39 @@ internal static class ThreeDofScenario
         };
     }
 
+    /// <summary>
+    /// A body-axis table (BodyAeroTable) built from the scenario's own axisymmetric drag and lift - drag against the airflow, lift along the engine end's tilt, both of the total angle only - plus a fixed force on body +y (<paramref name="side"/>) and +z (<paramref name="up"/>) at every node, as an asymmetric fin set makes, in coefficients.
+    /// </summary>
+    public static BodyAeroTable BodyTable(double side = 0.0, double up = 0.0)
+    {
+        double[] mach = AeroTable.DefaultMachBreakpoints, alphaGrid = AeroTable.DefaultAlphaBreakpointsDeg;
+        var drag = new AeroTable();
+        var lift = new AeroTable(mach, alphaGrid, LiftTable(mach, alphaGrid));
+        double[] angles = { -20, -16, -12, -8, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 8, 12, 16, 20 };
+        var c = new double[mach.Length * angles.Length * angles.Length * 3];
+        for (int i = 0; i < mach.Length; i++)
+            for (int ja = 0; ja < angles.Length; ja++)
+                for (int jb = 0; jb < angles.Length; jb++)
+                {
+                    (double ux, double uy, double uz) = BodyAeroTable.AirDirection(angles[ja] * Math.PI / 180, angles[jb] * Math.PI / 180);
+                    double total = Math.Acos(Math.Clamp(-ux, -1, 1));
+                    double cd = drag.Cd(mach[i], total), cl = lift.Cd(mach[i], total);
+                    double px = 1 - ux * ux, py = -ux * uy, pz = -ux * uz;
+                    double pn = Math.Sqrt(px * px + py * py + pz * pz);
+                    double lx = pn > 1e-12 ? -px / pn : 0, ly = pn > 1e-12 ? -py / pn : 0, lz = pn > 1e-12 ? -pz / pn : 0;
+                    int n = ((i * angles.Length + ja) * angles.Length + jb) * 3;
+                    c[n] = -cd * ux + cl * lx;
+                    c[n + 1] = -cd * uy + cl * ly + side;
+                    c[n + 2] = -cd * uz + cl * lz + up;
+                }
+        return new BodyAeroTable(mach, angles, angles, c);
+    }
+
     /// <summary>The flight config: the script's problem plus the blocks a landing needs.</summary>
     /// <param name="accelMax">Thrust acceleration limit, m/s^2, or 0 for none; see Scvx3DofConfig.AccelMax.</param>
     public static Scvx3DofConfig Config(int nodes = 30, int glideIntervals = 12, double alphaMaxDeg = 15.0, bool anchor = false,
-                                        double accelMax = 0.0, double turnAccel = 0.0, double vcVelocity = 0.0)
+                                        double accelMax = 0.0, double turnAccel = 0.0, double vcVelocity = 0.0,
+                                        double burnTiltPerSDeg = 0.0)
     {
         var min = Enumerable.Repeat(double.NegativeInfinity, 7).ToArray();
         var max = Enumerable.Repeat(double.PositiveInfinity, 7).ToArray();
@@ -95,6 +124,7 @@ internal static class ThreeDofScenario
             TerminalAttitude = [0, 0, 1],
             AttitudeRateMax = 10.0 * Math.PI / 180,
             AttitudeAccelMax = turnAccel,
+            BurnTiltPerS = burnTiltPerSDeg * Math.PI / 180,
             VirtualControlScale = vcVelocity > 0.0 ? [0, 0, 0, vcVelocity, vcVelocity, vcVelocity, 0] : null,
             PathSlackWeight = 1e3,
             AttitudeAnchor = anchor,

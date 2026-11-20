@@ -1,4 +1,5 @@
 using AdvancedFlightComputer.Features.Guidance;
+using AdvancedFlightComputer.Features.RcsTorque;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using HarmonyLib;
 using KSA;
@@ -57,6 +58,17 @@ internal static class VehicleCommandSink
             }
         }
 
+        // RCS torque for whichever mode asked for it (KsaRcsTorqueControl); it writes nothing for a craft that has no command.
+        try
+        {
+            KsaRcsTorqueControl.OnComputeControl(in nav, ref outputs, ref receipt);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce($"command-sink-rcs-torque:{ex.GetType().Name}",
+                $"[AFC] RCS torque writer failed on the vehicle worker: {ex}");
+        }
+
         if (SharedVehicleHooks.GuidanceEnabled)
         {
             try
@@ -72,7 +84,7 @@ internal static class VehicleCommandSink
 
         if (receipt.Commanded)
             outputs.AnyActuatorCommanded = true;
-        // Only the RCS executor asks for an earlier step, so the step shows up as RCS steering in the timestep diagnostics.
+        // Only the RCS writers ask for an earlier step, so the step shows up as RCS steering in the timestep diagnostics.
         outputs.RequestWakeup(receipt.WakeupSec, PhysicsStepLimit.RcsSteering);
     }
 

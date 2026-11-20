@@ -19,7 +19,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 public sealed class Ksa6DofGuidance
 {
     private const int NX = 14;
-    private const int NU = 4;
+    private const int NU = Dynamics6Dof.NU;
 
     /// <summary>Quaternion offset in the state vector, for the seed resampling below.</summary>
     private const int IQ = Dynamics6Dof.IQ;
@@ -42,12 +42,14 @@ public sealed class Ksa6DofGuidance
     private double[] _planX = [];
     private double[] _planU = [];
     private double _planSigma;
+    private double _planCoast;          // the coast before ignition at the solve, s; 0 without a coast
     private double _solveTime;          // sim time at which node 0 was the vehicle
 
     // Track's working trajectory: the solver's latest reference and when its node 0 was the vehicle, kept whether or not it passed the gate.
     private double[] _workX = [];
     private double[] _workU = [];
     private double _workSigma;
+    private double _workCoast;
     private double _workTime = double.NegativeInfinity;
 
     public ScvxStatus Status { get; private set; } = ScvxStatus.Failed;
@@ -60,8 +62,69 @@ public sealed class Ksa6DofGuidance
     public double LastSolveMs { get; private set; }
     public bool HasPlan => _planX.Length > 0;
 
-    /// <summary>Plan duration (the solver's free final time), seconds.</summary>
+    /// <summary>The plan's burn time (the solver's free final time), seconds. With a coast (HasCoast) the plan runs Coast + Sigma.</summary>
     public double Sigma => _planSigma;
+
+    // ------------------------------------------------------------------ THE COAST BEFORE IGNITION
+    //  With Scvx6DofConfig.CoastIntervals the plan opens with a coast, engine off, whose duration - the time to ignition - the solver chooses. Each re-solve carries the coast down with the clock; a second out the ignition time is LOCKED (a fuel-optimal plan always lights as late as it can, so a free ignition slides later on every re-solve), and once the engine is lit the coast is pinned at zero. One node grid throughout, so the warm start carries through ignition.
+
+    /// <summary>Whether the plans open with a coast before ignition.</summary>
+    public bool HasCoast => _cfg.HasCoast;
+
+    /// <summary>The solve's working reference as a plan anchored at <paramref name="simNow"/>, for the log: a cold solve's seed or its latest iterate, flown by nothing. Read it only while the worker is idle.</summary>
+    public Ksa6DofPlan WorkingPlan(double simNow)
+        => new((double[])_solver.ReferenceX.Clone(), (double[])_solver.ReferenceU.Clone(), _solver.Sigma, simNow, _n,
+               _solver.CoastSigma, _cfg.CoastIntervals);
+
+    /// <summary>The coast of the solve in progress, s. Read it only while the worker is idle.</summary>
+    public double WorkingCoast => _solver.CoastSigma;
+
+    /// <summary>The published plan's coast at its solve, s: its time to ignition then.</summary>
+    public double Coast => _planCoast;
+
+    /// <summary>Set by the mode once the engine is lit: the coast is over and pinned at zero from then on.</summary>
+    public bool EngineLit { get; set; }
+
+    /// <summary>Time to ignition, s, under which the ignition time is locked.</summary>
+    public double IgnitionLockS { get; set; } = 1.0;
+
+    /// <summary>The locked ignition, sim time, or NaN while it is free.</summary>
+    public double LockedIgnition => _lockedIgnition;
+
+    private double _lockedIgnition = double.NaN;
+
+    // The ignition the latest reference plans, sim time: where a cold or spread solve's coast is carried down from.
+    private double _ignitionAt = double.NaN;
+
+    // Sim time at which the spread solve's reference node 0 was the craft, for moving it on in time (StepCold).
+    private double _spreadAnchorTime = double.NaN;
+
+    /// <summary>The time to ignition the next solve plans with, s, from a coast of <paramref name="coastLeft"/> s left on the plan it starts from - and the lock applied: pinned once locked or lit, locked when under IgnitionLockS. Sets the solver's pin (Scvx6DofConfig.CoastSigmaFixed).</summary>
+    private double CoastNow(double simNow, double coastLeft)
+    {
+        if (!_cfg.HasCoast)
+            return 0.0;
+        // An unknown time to ignition (no sim time, or no ignition planned yet) is left free, never locked: locking it at zero would light the engine at once.
+        bool known = double.IsFinite(coastLeft) && double.IsFinite(simNow);
+        double coast = known ? Math.Max(coastLeft, 0.0) : IgnitionLockS * 2.0;
+        if (EngineLit)
+            coast = 0.0;
+        else if (double.IsFinite(_lockedIgnition) && double.IsFinite(simNow))
+            coast = Math.Max(_lockedIgnition - simNow, 0.0);
+        else if (known && coast < IgnitionLockS)
+            _lockedIgnition = simNow + coast;
+        _cfg.CoastSigmaFixed = EngineLit || double.IsFinite(_lockedIgnition) ? coast : null;
+        return coast;
+    }
+
+    /// <summary>A plan's burn and coast <paramref name="elapsed"/> s on: the coast shortens first (and is locked as CoastNow says), the burn only once it has begun.</summary>
+    private (double Burn, double Coast) Shorten(double sigma, double coast, double elapsed, double simNow)
+    {
+        if (!_cfg.HasCoast)
+            return (sigma - elapsed, 0.0);
+        double newCoast = CoastNow(simNow, coast - elapsed);
+        return (sigma - Math.Max(elapsed - coast, 0.0), newCoast);
+    }
 
     /// <summary>The burn time of the solve in progress, which is not published yet. Read it only while the worker is idle.</summary>
     public double WorkingSigma => _solver.Sigma;
@@ -132,6 +195,8 @@ public sealed class Ksa6DofGuidance
             return;
 
         if (inputs.Ixx > 0.0) _dyn.Ixx = inputs.Ixx;
+        if (_dyn.BodyAero != null && inputs.MomentLimiterPerPa >= 0.0 && double.IsFinite(inputs.MomentLimiterPerPa))
+            _dyn.BodyAero.MomentLimiterPerPa = inputs.MomentLimiterPerPa;
         if (inputs.Iyy > 0.0) _dyn.Iyy = inputs.Iyy;
         if (inputs.Izz > 0.0) _dyn.Izz = inputs.Izz;
 
@@ -163,25 +228,18 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public double3 ModelAeroAccel(double[] x)
     {
-        if (_dyn.Aero == null || x == null || x.Length < NX || !(x[Dynamics6Dof.IM] > 0.0))
+        if ((_dyn.Aero == null && _dyn.BodyAero == null) || x == null || x.Length < NX || !(x[Dynamics6Dof.IM] > 0.0))
             return default;
-        double qw = x[6], qx = x[7], qy = x[8], qz = x[9];
-        double n = Math.Sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
-        if (!(n > 0.0))
-            return default;
-        qw /= n; qx /= n; qy /= n; qz /= n;
-        _dyn.Aero.AeroForce(_dyn.AeroAltitudeOffset + x[2], x[3], x[4], x[5],
-                            2.0 * (qx * qz + qw * qy), 2.0 * (qy * qz - qw * qx), 1.0 - 2.0 * (qx * qx + qy * qy),
-                            out var fx, out var fy, out var fz);
+        Dynamics6Dof.AeroForce(x, _dyn, out double fx, out double fy, out double fz);
         double m = x[Dynamics6Dof.IM];
-        return new double3(fx.V / m, fy.V / m, fz.V / m);
+        return new double3(fx / m, fy / m, fz / m);
     }
 
     /// <summary>Lateral (pitch/yaw) torque the model allows per newton of axial thrust, N m/N: the gimbal arm times the cone's tangent.</summary>
     public double LateralTorquePerNewton => _dyn.LArm * _cfg.TanGimbal;
 
     /// <summary>Whether the model carries aerodynamics.</summary>
-    public bool HasAero => _dyn.Aero != null;
+    public bool HasAero => _dyn.Aero != null || _dyn.BodyAero != null;
 
     /// <summary>The bias actually IN the model, i.e. as of the last CommitInputs.</summary>
     public double3 AccelBias { get; private set; }
@@ -453,7 +511,7 @@ public sealed class Ksa6DofGuidance
         _lateralTorqueLeadS = lateralTorqueLeadS;
         // The price the config asks for is where pricing ends up, not where it starts; see PricingStage.
         _vcTarget = cfg.VirtualControlScale is { } target ? (double[])target.Clone() : null;
-        _solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        _solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEpsFor(dyn, cfg.Nodes) };
         _solver.MaxSubproblemIterations = ColdAdmmCap;
         _solver.EscalatedSubproblemIterations = EscalatedAdmmCap;
         SetPricingStage(0);
@@ -539,11 +597,12 @@ public sealed class Ksa6DofGuidance
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
 
-        BuildColdSeed(x0, xf, sigmaSeed, out double[] xSeed, out double[] uSeed);
+        BuildColdSeed(x0, xf, sigmaSeed, out double[] xSeed, out double[] uSeed, CoastNow(simNow, _ignitionAt - simNow));
         _xf = (double[])xf.Clone();
         _pricingTimeToGo = sigmaSeed;
         SetPricingStage(0);
-        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
+        double coast = CoastNow(simNow, _ignitionAt - simNow);
+        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed, coastSigmaSeed: coast);
         return Finish(x0, simNow, maxIterations, cold: true);
     }
 
@@ -551,6 +610,14 @@ public sealed class Ksa6DofGuidance
     /// Seeds a cold solve from the path that brakes the craft onto the target over the burn time (ColdSeed6Dof) in place of the straight line. For a burn handed over at many times the local gravity with the thrust axis near the horizon, where the straight line with hover thrust is ten or more accepted steps from the answer.
     /// </summary>
     public bool BrakingSeed { get; init; }
+
+    /// <summary>
+    /// The path a cold solve with a coast is seeded along (ColdSeed6Dof.BuildAlongPath): entry guidance's glide and burn, which a touchdown guidance that owns ignition takes the craft from. Null, or a path with no sample, seeds the free coast (BuildWithCoast). Read where the seed is built, so it is set before BeginCold; it must be safe to call from the worker.
+    /// </summary>
+    public SeedPath ColdSeedPath { get; set; }
+
+    /// <summary>Whether the last cold seed was laid along ColdSeedPath, for the log.</summary>
+    public bool SeededAlongPath { get; private set; }
 
     /// <summary>
     /// Wall-clock budget of one subproblem, ms, when it is longer than the flight budgets. For a guidance whose solves run off the sim thread on a problem that needs more solver iterations than the flight budgets give: there a subproblem cut short is a refused step, and a run of them loses the plan, while a subproblem that takes a second only makes the plan that much older. 0 leaves the flight budgets.
@@ -561,8 +628,28 @@ public sealed class Ksa6DofGuidance
     /// The straight-line cold seed, shared by Plan and BeginCold.
     ///  Attitude and rates interpolate FROM THE MEASURED STATE rather than jumping to identity - see the note inside. That is a feasibility requirement, not a quality one.
     /// </summary>
-    private void BuildColdSeed(double[] x0, double[] xf, double sigma, out double[] xSeed, out double[] uSeed)
+    private void BuildColdSeed(double[] x0, double[] xf, double sigma, out double[] xSeed, out double[] uSeed, double coast = 0.0)
     {
+        // A plan with a coast: the coast flown out with the RCS damping the rates, then the braking path from where it leaves the craft.
+        if (_cfg.HasCoast)
+        {
+            // Along entry guidance's plan where there is one (ColdSeedPath); a path that cannot be sampled leaves the free coast.
+            if (ColdSeedPath is { } path)
+            {
+                try
+                {
+                    ColdSeed6Dof.BuildAlongPath(x0, xf, Math.Max(coast, 0.0), sigma, _n, _cfg.CoastIntervals, _cfg, _dyn, path, out xSeed, out uSeed);
+                    SeededAlongPath = true;
+                    return;
+                }
+                catch (ArgumentException)
+                {
+                }
+            }
+            SeededAlongPath = false;
+            ColdSeed6Dof.BuildWithCoast(x0, xf, Math.Max(coast, 0.0), sigma, _n, _cfg.CoastIntervals, _cfg, _dyn, out xSeed, out uSeed);
+            return;
+        }
         if (BrakingSeed)
         {
             ColdSeed6Dof.Build(x0, xf, sigma, _n, _cfg, _dyn, out xSeed, out uSeed);
@@ -617,7 +704,7 @@ public sealed class Ksa6DofGuidance
         if (FixedTime) PinSigma(sigmaSeed);
         _pricingTimeToGo = sigmaSeed;
         SetPricingStage(0);
-        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
+        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed, coastSigmaSeed: CoastNow(simNow, _ignitionAt - simNow));
         return Finish(x0, simNow, maxIterations, cold: true);
     }
 
@@ -635,23 +722,22 @@ public sealed class Ksa6DofGuidance
     /// Burn time the NEW solve will use. The seed is stretched onto it, so this must be the same value handed to Reseed or Initialize - a different one re-times the whole reference and reintroduces exactly the fault this removes.
     /// </param>
     private void BuildShiftedSeed(double[] x0, double simNow, double sigmaNew,
-                                  out double[] xs, out double[] us, out double elapsed)
+                                  out double[] xs, out double[] us, out double elapsed, double coastNew = 0.0)
     {
-        double dtOld = Math.Max(_planSigma / (_n - 1), 1e-9);
+        double dtOld = Math.Max(_planSigma / (_n - 1 - _cfg.CoastIntervals), 1e-9);
         elapsed = Math.Max(0.0, simNow - _solveTime);
 
         // Recorded, not used: the seed no longer shifts by whole nodes. Current because it is the quantity the refusal correlation was measured against, so logs from either side of this change stay comparable.
         LastSeedShift = (int)(elapsed / dtOld);
 
-        double dtNew = sigmaNew / (_n - 1);
-
         xs = new double[_n * NX];
         us = new double[_n * NU];
-        ResamplePlan(_planX, _planU, _n, _planSigma, elapsed, _n, dtNew, xs, us);
+        ResamplePlan(_planX, _planU, _n, _cfg.CoastIntervals, _planSigma, _planCoast, elapsed,
+                     _n, _cfg.CoastIntervals, sigmaNew, coastNew, xs, us);
 
         // Seed node 0 with the MEASURED state, and carry the rest of the reference with it: position by the offset plus the velocity offset times time, velocity and mass by their offsets - the same re-anchoring the spread cold solve does between its iterations (ColdReferenceShift). It is what the equality will force at node 0 anyway, and starting the reference there means even a cycle that accepts no step still hands back a plan anchored at the vehicle.
         // REPLACING NODE 0 ALONE put the whole difference between the vehicle and its plan into the first interval's defect. No vehicle flies a plan exactly, and once it was a few m/s off, the first interval asked for a velocity jump far outside the trust region: every warm re-solve was refused, the next started from the same seed, and 6-DOF flew its first plan open loop to the ground (headless, 2026-10-08: 0 of 123 re-solves accepted, refused on vx 6-9 m/s at interval 0).
-        ColdReferenceShift.Apply(xs, _n, sigmaNew, x0);
+        ColdReferenceShift.Apply(xs, _n, sigmaNew, x0, _cfg.CoastIntervals, coastNew);
 
         // Put the resampled plan on the MEASUREMENT quaternion branch. Without this a sign flip in the measured attitude - a no-op physically - lands as ~1.5 of quaternion defect at interval 0 and gets the plan refused every cycle until the circuit breaker throws it away. See AlignQuaternionBranch.
         LastBranchFlips = AlignQuaternionBranch(xs, _n);
@@ -669,8 +755,9 @@ public sealed class Ksa6DofGuidance
             return false;
 
         CommitInputs();
-        BuildShiftedSeed(x0, simNow, sigmaSeed, out double[] xSeed, out double[] uSeed, out _);
-        BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed);
+        double coast = CoastNow(simNow, _planCoast - Math.Max(0.0, simNow - _solveTime));
+        BuildShiftedSeed(x0, simNow, sigmaSeed, out double[] xSeed, out double[] uSeed, out _, coast);
+        BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed, coast, simNow);
         _spreadFromPlan = true;
         return true;
     }
@@ -679,14 +766,16 @@ public sealed class Ksa6DofGuidance
     /// Everything BeginCold and BeginWarmRestart do once their seed is chosen. Shared so the two cannot diverge in the state they leave behind for StepCold.
     /// </summary>
     private void BeginSpreadSolve(double[] x0, double[] xf, double[] xSeed, double[] uSeed,
-                                  double sigmaSeed)
+                                  double sigmaSeed, double coast = 0.0, double simNow = double.NaN)
     {
         _xf = (double[])xf.Clone();
         if (FixedTime) PinSigma(sigmaSeed);
         // Rough first: a cold start or a restart is finding a plan, not refining one.
-        _pricingTimeToGo = sigmaSeed;
+        _pricingTimeToGo = sigmaSeed + coast;
         SetPricingStage(0);
-        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed, trustRegion: _solver.TrustRegionMax);
+        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed, trustRegion: _solver.TrustRegionMax, coastSigmaSeed: coast);
+        _ignitionAt = _cfg.HasCoast ? simNow + _solver.CoastSigma : double.NaN;
+        _spreadAnchorTime = simNow;
         Status = ScvxStatus.IterationLimit;
         Error = "converging";
         _consecutiveFailures = 0;
@@ -702,13 +791,21 @@ public sealed class Ksa6DofGuidance
     /// Begin a cold solve WITHOUT running it, so the iterations can be spread over several frames by StepCold.
     ///  Blocking for a whole cold solve costs 130-280 ms in the caller's frame, which on the sim thread is a visible hitch. Spreading it is possible because SCvx is iterative by construction and the solver keeps all its state between calls - Iterate() is just one pass of the loop that Solve() runs in a batch.
     /// </summary>
-    public void BeginCold(double[] x0, double[] xf, double sigmaSeed)
+    /// <param name="coastSeed">With a coast (HasCoast): the time to ignition to seed it with, s, when nothing has planned one yet (entry guidance's forecast); NaN carries on with the ignition the guidance last planned.</param>
+    /// <param name="simNow">Sim time now, for the coast; NaN when there is no coast.</param>
+    public void BeginCold(double[] x0, double[] xf, double sigmaSeed, double coastSeed = double.NaN, double simNow = double.NaN)
     {
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
 
-        BuildColdSeed(x0, xf, sigmaSeed, out double[] xSeed, out double[] uSeed);
-        BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed);
+        double coast = 0.0;
+        if (_cfg.HasCoast)
+        {
+            double left = double.IsFinite(coastSeed) ? coastSeed : _ignitionAt - simNow;
+            coast = CoastNow(simNow, left);
+        }
+        BuildColdSeed(x0, xf, sigmaSeed, out double[] xSeed, out double[] uSeed, coast);
+        BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed, coast, simNow);
         _spreadFromPlan = false;
     }
 
@@ -740,7 +837,23 @@ public sealed class Ksa6DofGuidance
         ApplyTimeBudget(SubproblemBudgetMs, EscalatedBudgetMs);
 
         // Re-anchor at the vehicle before iterating, exactly as Update does.
-        if (_solver.IterationCount > 0)
+        if (_cfg.HasCoast)
+        {
+            // WITH A COAST THE REFERENCE MOVES ON IN TIME, as a warm seed does (BuildShiftedSeed), not only in space: sampled from the time gone since its node 0 was the craft, the coast and then the burn shortened by it, then re-anchored. Moved in space alone, every iteration slid the whole plan down by the craft's fall since the last - 15 m a step at 105 m/s, its end included - and once a rejected step had halved the trust region the end went under the ground floor faster than the trust region let it climb back: every subproblem after it was infeasible, and the standby restarted ten times in a glide (2026-11-20 12:20; --6dof-coast --spread, where moving it on in time reaches the gate in 3-8 iterations).
+            double elapsed = double.IsFinite(_spreadAnchorTime) ? Math.Max(simNow - _spreadAnchorTime, 0.0) : 0.0;
+            double sigma = _solver.Sigma, coastWas = _solver.CoastSigma;
+            double coast = CoastNow(simNow, coastWas - elapsed);
+            double burn = Math.Max(sigma - Math.Max(elapsed - coastWas, 0.0), _cfg.SigmaMin);
+            var xs = new double[_n * NX];
+            var us = new double[_n * NU];
+            ResamplePlan(_solver.ReferenceX, _solver.ReferenceU, _n, _cfg.CoastIntervals, sigma, coastWas, elapsed,
+                         _n, _cfg.CoastIntervals, burn, coast, xs, us);
+            ColdReferenceShift.Apply(xs, _n, burn, x0, _cfg.CoastIntervals, coast);
+            LastBranchFlips = AlignQuaternionBranch(xs, _n);
+            _solver.Reseed(x0, xs, us, burn, trustRegion: _solver.TrustRegion, coastSigma: coast);
+            _spreadAnchorTime = simNow;
+        }
+        else if (_solver.IterationCount > 0)
         {
             double[] xs = (double[])_solver.ReferenceX.Clone();
             double[] us = (double[])_solver.ReferenceU.Clone();
@@ -754,6 +867,9 @@ public sealed class Ksa6DofGuidance
             _solver.Iterate();
         double iterationMs = sw.Elapsed.TotalMilliseconds;
         LearnAdmmCost(iterationMs);
+        // The coast the iterations chose, carried down with the clock to the next.
+        if (_cfg.HasCoast)
+            _ignitionAt = simNow + _solver.CoastSigma;
 
         // Accept against the WARM gate first. Only fall back to the looser cold gate once the iteration count says it has stopped improving, so a genuinely hard case still engages instead of converging forever. Finish does no solving here - the 0 budget means it runs the gates over what Iterate just produced.
         // STALLED ABOVE THE WARM GATE MEANS TOO FEW NODES, NOT "GOOD ENOUGH".
@@ -770,7 +886,7 @@ public sealed class Ksa6DofGuidance
 
         // Back to flight accuracy for everything after this. The looser tolerance is only defensible while the answer is a seed for the next solve rather than a trajectory the vehicle is about to fly.
         if (ok)
-            _solver.SubproblemEps = Scvx6DofSolver.RealTimeEps;
+            _solver.SubproblemEps = Scvx6DofSolver.RealTimeEpsFor(_dyn, _n);
 
         // STUCK: a run of refused iterations - what the log shows as a defect of infinity, there being no accepted step to measure. Each refusal halves the trust region and the re-anchoring above carries it into the next iteration, so the run pins it at its floor, and the re-anchoring moves the reference's position but not its time: the vehicle flies on while nodes 1..n stay where the solve began, and the gap at interval 0 grows faster than a floor-sized step can close it. The 2026-10-13 moon_des retarget's third restart sat there from 338 m - 6x, then 12x the attitude tolerance at interval 0 - until its plan ran out 7 m over the pad.
         //  So it starts again: from the vehicle's state now, the trust region wide open, the price loose, and a seed made now - the plan resampled to this moment for a solve that started from the plan, a new straight line for one that did not.
@@ -807,11 +923,12 @@ public sealed class Ksa6DofGuidance
         double sigma = Math.Clamp(_solver.Sigma, _cfg.SigmaMin, _cfg.SigmaMax);
         bool fromPlan = _spreadFromPlan && HasPlan;
         double[] xs, us;
+        double coast = CoastNow(simNow, _ignitionAt - simNow);
         if (fromPlan)
-            BuildShiftedSeed(x0, simNow, sigma, out xs, out us, out _);
+            BuildShiftedSeed(x0, simNow, sigma, out xs, out us, out _, coast);
         else
-            BuildColdSeed(x0, _xf, sigma, out xs, out us);
-        BeginSpreadSolve(x0, _xf, xs, us, sigma);
+            BuildColdSeed(x0, _xf, sigma, out xs, out us, coast);
+        BeginSpreadSolve(x0, _xf, xs, us, sigma, coast, simNow);
         _spreadFromPlan = fromPlan;
         StuckRestarts++;
         _stuckNote = $"COLD SOLVE STUCK: {refused} iterations refused in a row, trust region {trust:G2} - starting it again from the vehicle's state with the trust region wide open, " +
@@ -864,12 +981,10 @@ public sealed class Ksa6DofGuidance
                                                 double maxAngleRad, double maxRateRadS)
     {
         double elapsed = now - plan.SolveTime;
-        if (!(elapsed >= 0.0 && elapsed < plan.Sigma) || plan.Nodes < 2)
+        if (!(elapsed >= 0.0 && elapsed < plan.Duration) || plan.Nodes < 2)
             return false;
 
-        double node = elapsed * (plan.Nodes - 1) / plan.Sigma;
-        int k = Math.Min((int)node, plan.Nodes - 2);
-        double f = node - k;
+        (int k, double f) = plan.Locate(elapsed);
         int a = k * NX;
         int b = a + NX;
         Span<double> target = stackalloc double[4];
@@ -901,11 +1016,9 @@ public sealed class Ksa6DofGuidance
         // The PUBLISHED plan, not the solve's working fields: this is called from the sim thread every frame, including while a solve is in flight. Reading _planSigma and _solveTime separately would pair a new burn time with an old anchor and report drift that is an artefact of the read, not of the vehicle.
         Ksa6DofPlan plan = _published;
         if (plan == null) return double.PositiveInfinity;
-        double dt = plan.Sigma / (plan.Nodes - 1);
         double t = Math.Max(0.0, simNow - plan.SolveTime);
-        double s = Math.Clamp(t / dt, 0.0, plan.Nodes - 1.0);
-        int k = (int)s;
-        double f = s - k;
+        (int k, double f) = plan.Locate(t);
+        double dt = plan.IntervalDt(k);
         int k1 = Math.Min(k + 1, plan.Nodes - 1);
         Span<double> position = stackalloc double[3];
         Span<double> velocity = stackalloc double[3];
@@ -922,25 +1035,42 @@ public sealed class Ksa6DofGuidance
 
     private double[] _xf = [];
 
+    /// <summary>An interval shorter than this, s, is resampled with its node velocities blended (ResamplePlan).</summary>
+    private const double ShortIntervalS = 0.02;
+
     /// <summary>
     /// Samples a plan onto a new grid of <paramref name="nodes"/> nodes that starts <paramref name="elapsed"/> seconds into it, <paramref name="dtNew"/> seconds apart.
     /// Position and velocity come from one cubic segment per interval, the other channels are blended linearly.
     /// </summary>
-    private static void ResamplePlan(double[] planX, double[] planU, int planNodes, double planSigma,
-                                     double elapsed, int nodes, double dtNew, double[] xs, double[] us)
+    /// <summary>
+    /// With a coast on either plan: the new grid's node times are its own phases' (Scvx6DofSolver.NodeTime), and each is read off the old plan on its own side of ignition - a burn node from the old burn, a coast node from the old coast - so neither is blended across the engine's step.
+    /// </summary>
+    private static void ResamplePlan(double[] planX, double[] planU, int planNodes, int planCoastIntervals, double planSigma, double planCoast,
+                                     double elapsed, int nodes, int coastIntervals, double sigmaNew, double coastNew, double[] xs, double[] us)
     {
-        double dtOld = Math.Max(planSigma / (planNodes - 1), 1e-9);
+        var old = new Ksa6DofPlan(planX, planU, planSigma, 0.0, planNodes, planCoast, planCoastIntervals);
         for (int k = 0; k < nodes; k++)
         {
+            bool burnSide = k >= coastIntervals;
             // Clamped at the old plan's END. Only reachable when the new horizon runs past what the old plan covered - SigmaMin or MinimumBurnTime holding sigma up late in a descent, or a warm restart seeding a longer burn. The old plan has nothing to say beyond its terminal node and holding the target is the honest answer; on the normal path t_k lands exactly on the old plan's sigma at k = n-1 and this never binds.
-            double t = Math.Clamp(elapsed + k * dtNew, 0.0, planSigma);
-            double sNode = Math.Clamp(t / dtOld, 0.0, planNodes - 1);
-            int i0 = Math.Clamp((int)Math.Floor(sNode), 0, planNodes - 1);
+            double t = Math.Clamp(elapsed + Scvx6DofSolver.NodeTime(k, nodes, coastIntervals, sigmaNew, coastNew), 0.0, Math.Max(old.Duration, 0.0));
+            if (planCoastIntervals > 0)
+                t = burnSide ? Math.Max(t, planCoast) : Math.Min(t, planCoast);
+            int i0;
+            double a;
+            if (t >= old.Duration)
+            {
+                i0 = planNodes - 2;
+                a = 1.0;
+            }
+            else
+                (i0, a) = old.Locate(t, burnSide);
             int i1 = Math.Min(i0 + 1, planNodes - 1);
-            double a = sNode - i0;
+            double dtOld = Math.Max(old.IntervalDt(i0), 1e-9);
 
+            // On an interval of almost no time - a coast that has shrunk to nothing - the cubic's velocity divides the nodes' spacing by it: the node velocities are blended instead, or the seed carries speeds of 10^6 m/s into the air model.
             PlanStateInterpolation.SamplePositionVelocity(planX, i0, i1, a, dtOld,
-                xs.AsSpan(k * NX, 3), xs.AsSpan(k * NX + Dynamics6Dof.IV, 3));
+                xs.AsSpan(k * NX, 3), xs.AsSpan(k * NX + Dynamics6Dof.IV, 3), useNodeVelocities: dtOld < ShortIntervalS);
             for (int i = IQ; i < NX; i++)
                 xs[k * NX + i] = planX[i0 * NX + i] * (1.0 - a) + planX[i1 * NX + i] * a;
             for (int j = 0; j < NU; j++)
@@ -988,14 +1118,21 @@ public sealed class Ksa6DofGuidance
         var xs = new double[_n * NX];
         var us = new double[_n * NU];
         double elapsed = Math.Max(0.0, simNow - prev._solveTime);
+        // The coast and its lock carry across; a plan rebuilt without a coast (once lit) takes the burn alone.
+        EngineLit = prev.EngineLit;
+        _lockedIgnition = prev._lockedIgnition;
+        double intoBurn = Math.Max(elapsed - prev._planCoast, 0.0);
+        double coast = _cfg.HasCoast ? CoastNow(simNow, prev._planCoast - elapsed) : 0.0;
         if (!FixedTime)
-            KeepSigmaMinUnder(prev._planSigma - elapsed);
-        double sigma = Math.Max(_cfg.SigmaMin, prev._planSigma - elapsed);
-        ResamplePlan(prev._planX, prev._planU, prev._n, prev._planSigma, elapsed, _n,
-                     sigma / (_n - 1), xs, us);
+            KeepSigmaMinUnder(prev._planSigma - intoBurn);
+        double sigma = Math.Max(_cfg.SigmaMin, prev._planSigma - intoBurn);
+        // A rebuild without a coast reads the old plan from its burn on.
+        double from = _cfg.HasCoast ? elapsed : Math.Max(elapsed, prev._planCoast);
+        ResamplePlan(prev._planX, prev._planU, prev._n, prev._cfg.CoastIntervals, prev._planSigma, prev._planCoast, from,
+                     _n, _cfg.CoastIntervals, sigma, coast, xs, us);
 
         // Node 0 is the measured state exactly, for the same reason as in Plan: the equality and the trust region leave no slack there at all. The rest moves with it, as in BuildShiftedSeed, so the resampled plan is not refused for the jump from the vehicle to where the old plan thought it would be.
-        ColdReferenceShift.Apply(xs, _n, sigma, x0);
+        ColdReferenceShift.Apply(xs, _n, sigma, x0, _cfg.CoastIntervals, coast);
         LastBranchFlips = AlignQuaternionBranch(xs, _n);
 
         _xf = (double[])prev._xf.Clone();
@@ -1009,9 +1146,9 @@ public sealed class Ksa6DofGuidance
         }
         if (FixedTime) PinSigma(sigma);
         // A rebuild continues a refinement: the stage the previous guidance had reached, not a rough start, at this horizon.
-        _pricingTimeToGo = sigma;
+        _pricingTimeToGo = sigma + coast;
         SetPricingStage(prev.PricingStage);
-        _solver.Initialize(x0, _xf, xs, us, sigma);
+        _solver.Initialize(x0, _xf, xs, us, sigma, coastSigmaSeed: coast);
         return Finish(x0, simNow, maxIterations);
     }
 
@@ -1100,12 +1237,12 @@ public sealed class Ksa6DofGuidance
                 }
             }
 
-            double merit = _solver.TrueCost(_planX, _planU, _planSigma).Cost;
+            double merit = _solver.Cost;
             SearchLog += $"{sigma:F1}s J={merit:F4}  ";
             if (merit < bestMerit)
             {
                 bestMerit = merit;
-                bestSigma = _planSigma;
+                bestSigma = sigma;
                 bestX = (double[])_planX.Clone();
                 bestU = (double[])_planU.Clone();
             }
@@ -1151,26 +1288,27 @@ public sealed class Ksa6DofGuidance
         // SIGMA FIRST, because the seed is stretched onto it rather than shifted by whole nodes - BuildShiftedSeed needs the horizon it is resampling to.
         //  FIXED TIME: count the COMMITTED burn time down rather than letting the solver re-choose it every cycle. Re-choosing is what made successive plans change shape instead of merely advancing, and it is what let the regularisers stretch sigma to make themselves cheaper.
         double elapsed = Math.Max(0.0, simNow - _solveTime);
+        (double burnLeft, double coast) = Shorten(_planSigma, _planCoast, elapsed, simNow);
         double sigma;
         if (FixedTime)
         {
-            sigma = Math.Max(_planSigma - elapsed, MinimumBurnTime);
+            sigma = Math.Max(burnLeft, MinimumBurnTime);
             PinSigma(sigma);
         }
         else
         {
-            KeepSigmaMinUnder(_planSigma - elapsed);
-            sigma = Math.Max(_cfg.SigmaMin, _planSigma - elapsed);
+            KeepSigmaMinUnder(burnLeft);
+            sigma = Math.Max(_cfg.SigmaMin, burnLeft);
         }
 
-        BuildShiftedSeed(x0, simNow, sigma, out double[] xs, out double[] us, out _);
+        BuildShiftedSeed(x0, simNow, sigma, out double[] xs, out double[] us, out _, coast);
         // A cycle whose predecessor refused gets the larger budget, so it can take the second and third iterations that let SCvx shrink its way to an accepted step. A healthy cycle never reaches the deadline at all.
         double budget = _consecutiveFailures > 0 ? RecoveryCycleBudgetMs : CycleBudgetMs;
 
         FellBack = false;
         LastTrustRegionStart = WarmTrustRegion;
-        PriceForHorizon(sigma);
-        _solver.Reseed(x0, xs, us, sigma, trustRegion: WarmTrustRegion);
+        PriceForHorizon(sigma + coast);
+        _solver.Reseed(x0, xs, us, sigma, trustRegion: WarmTrustRegion, coastSigma: coast);
         if (Finish(x0, simNow, maxIterations, budgetMs: budget))
         {
             _consecutiveFailures = 0;
@@ -1195,8 +1333,8 @@ public sealed class Ksa6DofGuidance
         FellBack = true;
         _consecutiveFailures++;
         LastTrustRegionStart = _solver.TrustRegionMax;
-        PriceForHorizon(sigma);
-        _solver.Reseed(x0, xs, us, sigma, trustRegion: _solver.TrustRegionMax);
+        PriceForHorizon(sigma + coast);
+        _solver.Reseed(x0, xs, us, sigma, trustRegion: _solver.TrustRegionMax, coastSigma: coast);
         if (Finish(x0, simNow, maxIterations * 3, budgetMs: RecoveryCycleBudgetMs))
         {
             _consecutiveFailures = 0;
@@ -1227,27 +1365,35 @@ public sealed class Ksa6DofGuidance
         double[] baseX = fromWork ? _workX : _planX;
         double[] baseU = fromWork ? _workU : _planU;
         double baseSigma = fromWork ? _workSigma : _planSigma;
+        double baseCoast = fromWork ? _workCoast : _planCoast;
         double elapsed = Math.Max(0.0, simNow - (fromWork ? _workTime : _solveTime));
 
         // Resampled onto the shrinking horizon and re-anchored, as BuildShiftedSeed does for the published plan.
-        double sigma = Math.Max(_cfg.SigmaMin, baseSigma - elapsed);
+        (double burnLeft, double coast) = Shorten(baseSigma, baseCoast, elapsed, simNow);
+        double sigma = Math.Max(_cfg.SigmaMin, burnLeft);
         var xs = new double[_n * NX];
         var us = new double[_n * NU];
-        ResamplePlan(baseX, baseU, _n, baseSigma, elapsed, _n, sigma / (_n - 1), xs, us);
-        Array.Copy(x0, 0, xs, 0, NX);
+        ResamplePlan(baseX, baseU, _n, _cfg.CoastIntervals, baseSigma, baseCoast, elapsed,
+                     _n, _cfg.CoastIntervals, sigma, coast, xs, us);
+        // A standby with a coast follows the craft through the glide: the reference moves with the measured state, as the flying loop's does. Without a coast, node 0 alone, as before.
+        if (_cfg.HasCoast)
+            ColdReferenceShift.Apply(xs, _n, sigma, x0, _cfg.CoastIntervals, coast);
+        else
+            Array.Copy(x0, 0, xs, 0, NX);
         LastBranchFlips = AlignQuaternionBranch(xs, _n);
 
         FellBack = false;
         double region = Math.Clamp(_solver.TrustRegion, WarmTrustRegion, _solver.TrustRegionMax);
         LastTrustRegionStart = region;
-        PriceForHorizon(sigma);
-        _solver.Reseed(x0, xs, us, sigma, trustRegion: region);
+        PriceForHorizon(sigma + coast);
+        _solver.Reseed(x0, xs, us, sigma, trustRegion: region, coastSigma: coast);
         bool ok = Finish(x0, simNow, maxIterations, budgetMs: RecoveryCycleBudgetMs);
         SetPricingStage(ok ? PricingStage + 1 : PricingStage - 1);
 
         _workX = (double[])_solver.ReferenceX.Clone();
         _workU = (double[])_solver.ReferenceU.Clone();
         _workSigma = _solver.Sigma;
+        _workCoast = _solver.CoastSigma;
         _workTime = simNow;
         return ok;
     }
@@ -1355,8 +1501,10 @@ public sealed class Ksa6DofGuidance
             Error = "plan has no physical mass history";
             return false;
         }
-        double dtPlan = _solver.Sigma / Math.Max(_n - 1, 1);
-        int commit = (int)Math.Floor(Math.Max(CommitHorizonS, 0.0) / Math.Max(dtPlan, 1e-6));
+        // Intervals within CommitHorizonS of node 0: with a coast the nodes are not evenly spaced.
+        int commit = 0;
+        while (commit < _n - 1 && _solver.NodeTime(commit + 1) <= Math.Max(CommitHorizonS, 0.0))
+            commit++;
         LastCommitIntervals = commit;
 
         double[] tol = DefectTolerances(cold);
@@ -1386,9 +1534,12 @@ public sealed class Ksa6DofGuidance
         _planX = flightState;
         _planU = (double[])_solver.ReferenceU.Clone();
         _planSigma = _solver.Sigma;
+        _planCoast = _solver.CoastSigma;
         _solveTime = simNow;
+        if (_cfg.HasCoast)
+            _ignitionAt = simNow + _planCoast;
         // LAST, after every array is fully built. The reference assignment is what makes the new plan visible to the sim thread, so nothing may still be half-written when it happens.
-        _published = new Ksa6DofPlan(_planX, _planU, _planSigma, simNow, _n);
+        _published = new Ksa6DofPlan(_planX, _planU, _planSigma, simNow, _n, _planCoast, _cfg.CoastIntervals);
         Error = "";
         return true;
     }
@@ -1400,36 +1551,59 @@ public sealed class Ksa6DofGuidance
     /// <summary>What the tracker corrected on the last command - zero when the plan was flown open loop.</summary>
     public Tracker6Dof.Error TrackingError { get; private set; }
 
+    /// <summary>Whether the plans carry RCS torque (Dynamics6Dof.Params.Rcs).</summary>
+    public bool HasRcs => _dyn.Rcs != null;
+
+    /// <summary>The plan's RCS torque at the last <see cref="Command"/>, N m, model body axes. Zero for a plan without RCS.</summary>
+    public double3 RcsTorqueModel { get; private set; }
+
+    /// <summary>Whether the last <see cref="Command"/> fell in the plan's coast, before ignition: the engine is to be off.</summary>
+    public bool InCoast { get; private set; }
+
+    /// <summary>What the attitude feedback added on the last command - default when there was none.</summary>
+    public AttitudeFeedback6Dof.Result AttitudeCorrection { get; private set; }
+
     /// <param name="x">The measured state, model frame, for the tracker; null flies the plan open loop.</param>
     /// <param name="tracker">The feedback to fly the plan through, or null.</param>
+    /// <param name="attitude">The feedback that holds the plan's attitude from the torque margin, or null.</param>
     public bool Command(double simNow, out double3 torqueModel, out double thrustN,
-                        double[] x = null, Tracker6Dof tracker = null)
+                        double[] x = null, Tracker6Dof tracker = null, AttitudeFeedback6Dof attitude = null)
     {
         torqueModel = default;
         thrustN = 0.0;
+        RcsTorqueModel = default;
+        AttitudeCorrection = default;
 
         // ONE READ of the published plan, into a local. Re-reading the field would reintroduce exactly the tear this exists to prevent: a solve landing between two reads would pair the new controls with the old anchor time, and the vehicle would be commanded from the wrong point of the right trajectory.
         Ksa6DofPlan plan = _published;
         if (plan == null)
             return false;
 
-        double dt = plan.Sigma / (plan.Nodes - 1);
         double t = Math.Max(0.0, simNow - plan.SolveTime);
         PlanElapsed = t;
 
-        (int k, double f) = ControlSegment(plan, t / dt);
+        (int k, double f) = plan.Locate(t);
 
-        double tdx = Lerp(plan.U, 0, k, f);
-        double tdy = Lerp(plan.U, 1, k, f);
-        double thrust = Lerp(plan.U, 2, k, f);
-        double tauRoll = Lerp(plan.U, 3, k, f);
+        // IN THE COAST the engine is off: no thrust, no gimbal, no engine roll - only the RCS, below. The coast's last interval ends on the ignition node, whose controls are the burn's, so they must not be blended in.
+        InCoast = plan.InCoast(t);
+        double tdx = InCoast ? 0.0 : Lerp(plan.U, 0, k, f);
+        double tdy = InCoast ? 0.0 : Lerp(plan.U, 1, k, f);
+        double thrust = InCoast ? 0.0 : Lerp(plan.U, 2, k, f);
+        double tauRoll = InCoast && _cfg.RollTorqueFollowsThrust ? 0.0 : Lerp(plan.U, 3, k, f);
 
         // tau = r_T x T_body with r_T = (0,0,-LArm), i.e. the engine below the centre of mass - the model's own gimbal-torque relation, verbatim.
         // Lead the lateral gimbals' response while the axial thrust and roll follow the current plan step.
-        (int leadNode, double leadFraction) = ControlSegment(plan, (t + _lateralTorqueLeadS) / dt);
-        double leadTdx = Lerp(plan.U, 0, leadNode, leadFraction);
-        double leadTdy = Lerp(plan.U, 1, leadNode, leadFraction);
+        (int leadNode, double leadFraction) = plan.Locate(t + _lateralTorqueLeadS);
+        double leadTdx = InCoast ? 0.0 : Lerp(plan.U, 0, leadNode, leadFraction);
+        double leadTdy = InCoast ? 0.0 : Lerp(plan.U, 1, leadNode, leadFraction);
         torqueModel = new double3(_dyn.LArm * leadTdy, -_dyn.LArm * leadTdx, tauRoll);
+
+        // The RCS torque at the current step: thrusters answer within a pulse, so there is no lag to lead.
+        if (_dyn.Rcs != null)
+        {
+            int r = Dynamics6Dof.IRCS;
+            RcsTorqueModel = new double3(Lerp(plan.U, r, k, f), Lerp(plan.U, r + 1, k, f), Lerp(plan.U, r + 2, k, f));
+        }
 
         // AXIAL THRUST IN NEWTONS, not a throttle fraction.
         //  This previously return thrust / _cfg.Tmax, and that was the systematic error behind the descend-until-it-loops behaviour. Tmax is fixed when the plan is built, so the moment the vehicle's real capability differs from it - a different ambient pressure, an engine out, propellant starvation - every commanded thrust is wrong by exactly that ratio. It is invisible to the MPC too: re-solving corrects the STATE, but the error is in the actuator mapping, so each new plan is executed just as wrongly as the last.
@@ -1443,8 +1617,36 @@ public sealed class Ksa6DofGuidance
         thrustN = Math.Max(thrustN, 0.0);
         TrackingError = default;
 
-        // THE TRACKER, when there is one: the axial thrust corrected for where the vehicle is against the plan. The torques, and the lateral thrust they come from, are the plan's.
-        if (tracker != null && x != null && x.Length >= NX && plan.X.Length >= plan.Nodes * NX)
+        // THE ATTITUDE FEEDBACK, when there is one: a torque on top of the plan's from what the plan left of each actuator (AttitudeFeedback6Dof). The hardware's limits are the plan's over the share it was given (Scvx6DofConfig.PlanTorqueShare); the gimbals' scale with the thrust now, and give nothing in the coast.
+        if (attitude != null && x != null && x.Length >= NX && plan.X.Length >= plan.Nodes * NX)
+        {
+            double share = _cfg.PlanTorqueShare > 0.0 ? _cfg.PlanTorqueShare : 1.0;
+            double axial = Math.Max(thrust, 0.0);
+            double lateralNm = InCoast ? 0.0 : _dyn.LArm * axial * _cfg.TanGimbal / share;
+            double rollNm = InCoast && _cfg.RollTorqueFollowsThrust ? 0.0
+                : _cfg.TauRollMax / share * (_cfg.RollTorqueFollowsThrust && _cfg.Tmax > 0.0 ? axial / _cfg.Tmax : 1.0);
+            double[] rcsPos = null, rcsNeg = null;
+            if (_dyn.Rcs != null)
+            {
+                rcsPos = new double[3];
+                rcsNeg = new double[3];
+                for (int a = 0; a < 3; a++)
+                {
+                    (double pos, double neg) = _cfg.RcsBounds(a);
+                    rcsPos[a] = pos / share;
+                    rcsNeg[a] = neg / share;
+                }
+            }
+            AttitudeFeedback6Dof.Result fb = attitude.Correct(plan, k, f, x, _dyn.Ixx, _dyn.Iyy, _dyn.Izz,
+                                                              torqueModel, RcsTorqueModel, lateralNm, rollNm, rcsPos, rcsNeg);
+            torqueModel += fb.Gimbal;
+            if (_dyn.Rcs != null)
+                RcsTorqueModel += fb.Rcs;
+            AttitudeCorrection = fb;
+        }
+
+        // THE TRACKER, when there is one: the axial thrust corrected for where the vehicle is against the plan. The torques, and the lateral thrust they come from, are the plan's. Not in the coast, where there is no thrust to correct.
+        if (!InCoast && tracker != null && x != null && x.Length >= NX && plan.X.Length >= plan.Nodes * NX)
         {
             double axial = tracker.Correct(plan, k, f, x, thrust, out Tracker6Dof.Error error);
             if (double.IsFinite(axial))
@@ -1454,13 +1656,6 @@ public sealed class Ksa6DofGuidance
             }
         }
         return true;
-    }
-
-    private static (int node, double fraction) ControlSegment(Ksa6DofPlan plan, double sample)
-    {
-        double position = Math.Clamp(sample, 0.0, plan.Nodes - 1.001);
-        int node = (int)position;
-        return (node, position - node);
     }
 
     /// <summary>
@@ -1521,10 +1716,10 @@ public sealed class Ksa6DofGuidance
         if (!HasPlan)
             return;
 
-        double dt = _planSigma / (_n - 1);
-        double sNode = Math.Clamp(PlanElapsed / dt, 0.0, _n - 1.001);
-        int k = (int)sNode;
-        double f = sNode - k;
+        Ksa6DofPlan plan = _published;
+        if (plan == null)
+            return;
+        (int k, double f) = plan.Locate(PlanElapsed);
         int k1 = Math.Min(k + 1, _n - 1);
 
         double Sx(int off) => _planX[k * NX + off] * (1 - f) + _planX[k1 * NX + off] * f;

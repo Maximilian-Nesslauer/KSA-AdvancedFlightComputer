@@ -876,7 +876,8 @@ internal static class PageText
 
     public const string HoverNoEngine = "NO HOVER: NO LIT LIQUID ENGINE.";
 
-    public const string NoGimbalFact = "NO GIMBAL: NO LANDING GUIDANCE CAN FLY THIS CRAFT.";
+    /// <summary>A craft with neither a gimbal nor RCS that turns it about pitch and yaw: touchdown guidance cannot point its thrust, and G-FOLD needs a gimbal.</summary>
+    public const string NoSteeringFact = "NO GIMBAL OR RCS: NO LANDING GUIDANCE CAN FLY THIS CRAFT.";
 
     /// <summary>The refusal of a landing that neither touchdown guidance nor G-FOLD can fly, with the reason of each.</summary>
     public static string LandingRefused(string touchdown, string gfold)
@@ -890,6 +891,10 @@ internal static class PageText
     public static string PickRowTip(LandSolver solver) => "Selects " + LandSolvers.Label(solver) + " in the table.";
 
     public const string NoLiftAirframe = "NO USABLE LIFT. GLIDE HOLDS RETROGRADE.";
+
+    public const string BalanceCard = "Where the air's force acts on this craft, measured from the game's aerodynamics. Towards the nose, the trailing end flying engine first, the air turns the engine end back into the wind, and the craft holds a glide attitude on less control.";
+
+    public const string UnstableBalanceCard = "The air's force acts ahead of the centre of mass, flying engine first, so it turns the craft further from any attitude off the wind, and the further it is turned the harder it pushes. The controls hold it against that, and a glide or entry flown at an angle of attack may not stay where it is pointed. Move mass towards the engine end, or area towards the nose, to balance it.";
 
     public const string LegsStowed = "LEGS STOWED. DEPLOY IN EACH LEG WINDOW.";
 

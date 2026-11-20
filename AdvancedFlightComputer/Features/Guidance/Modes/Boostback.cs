@@ -244,18 +244,23 @@ public static partial class GuidanceWindow
     /// The BOOSTBACK verb on LAND > BOOSTBACK: start the machine at separation, from whatever
     /// attitude and state the vehicle is in right now.
     ///
-    /// The aero sweep is FORCED here rather than left to the staleness check, because
-    /// this is pressed within seconds of the separation, sometimes on the frame the part
-    /// tree is still settling, and a table fitted to the stack that included the upper
-    /// stage would give the prediction several times the drag area the booster actually
-    /// has. While the game rebuilds the aero mesh the sweep refuses, and so does this, so
-    /// the old stack's table never flies the booster; the hand-over tries again.
-    /// Runs in the PrepareWorker prefix only, because the sweep writes the aero flow
-    /// buffers that the vehicle's worker also writes.
+    /// The aero table must be the booster's, not the stack's: this is pressed within seconds
+    /// of the separation, sometimes on the frame the part tree is still settling, and a table
+    /// fitted to the stack that included the upper stage would give the prediction several
+    /// times the drag area the booster actually has. A table swept before the split is stale
+    /// (its mesh and box are the stack's), so the boostback waits while its sweep runs on its
+    /// own thread, and engages on the step the new table lands. While the game rebuilds the
+    /// aero mesh the sweep refuses, and so does this; the hand-over tries again.
     /// </summary>
     private static void ExecuteBoostback(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
         ResampleBoostbackAero(vehicle, parent);
+        if (_s.AeroJob != null)
+        {
+            _s.WarnBoostback("MEASURING AERO. BOOSTBACK WAITS FOR IT.");
+            _s.BoostbackEngagePending = true;
+            return;
+        }
         if (_s.AeroError == KsaAeroSweep.RebuildingError)
         {
             _s.WarnBoostback("AERO MESH REBUILDING. BOOSTBACK WAITS FOR IT.");
@@ -836,6 +841,13 @@ public static partial class GuidanceWindow
             GlideAlpha = GlideNominalAlpha(aero),
             LiftTable = aero.Lift,
         };
+        if (HeldRollAero(vehicle, parent, aero, out BodyAeroTable heldTable, out double3 heldRef))
+        {
+            sys.BodyAero = heldTable;
+            sys.RollRefX = heldRef.X;
+            sys.RollRefY = heldRef.Y;
+            sys.RollRefZ = heldRef.Z;
+        }
 
         double3 r0 = orbit.StateVectors.PositionCci;
         double3 v0 = orbit.StateVectors.VelocityCci;
@@ -1195,10 +1207,7 @@ public static partial class GuidanceWindow
     /// old table, and the next frame asks again.
     /// </summary>
     private static void EnsureBoostbackAero(Vehicle vehicle, IParentBody parent)
-    {
-        if (_s.AeroStale(LiveBoxExtents(vehicle), KsaAeroSweep.LiveMeshHash(vehicle), parent))
-            ResampleBoostbackAero(vehicle, parent);
-    }
+        => ResampleBoostbackAero(vehicle, parent);
 
     internal static string BoostbackPhaseName(BoostbackPhase p) => p switch
     {

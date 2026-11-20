@@ -86,6 +86,22 @@ public struct DragCoastSystem : IOdeSystem
     /// <summary>True if drag is modelled at all.</summary>
     public readonly bool HasDrag => Table != null && Atmosphere != null;
 
+    /// <summary>
+    /// THE BODY-AXIS TABLE, for a craft held at a fixed roll (KsaAeroSweep.Result.BodyAero), or null. Where set, with <see cref="RollRefX"/>, it replaces <see cref="Table"/> and <see cref="LiftTable"/> once the coast is not climbing nose first: the craft flies engine first - tilted by <see cref="Alpha"/> up the trajectory, on the side the lift table says lifts up - and the force is the one the game applies at that pointing and that roll, fins and strakes and all, whatever it pushes sideways. A roll-averaged lift curve keeps none of that; on the 2026-11-18 booster it overstated the lift by about 1 m/s^2.
+    /// </summary>
+    public BodyAeroTable? BodyAero;
+
+    /// <summary>
+    /// The held roll's wing direction w (body +y along w's part square to b; GuidanceWindow.ReturnRollRefCci), in this frame at t = -<see cref="RollRefTime"/>. It is fixed to the ground, so it turns with the body: at time t it is turned by OmegaZ (t + RollRefTime) about +z. Zero for no held roll.
+    /// </summary>
+    public double RollRefX, RollRefY, RollRefZ;
+
+    /// <summary>Seconds from when <see cref="RollRefX"/> was taken to this coast's t = 0: the burn's duration, for a coast that starts at a burn's cutoff.</summary>
+    public double RollRefTime;
+
+    /// <summary>Largest tilt off engine first the body table is read at, radians, as KsaPointMassModel.BodyAeroMaxTiltRad.</summary>
+    private const double BodyAeroMaxTiltRad = 30.0 * Math.PI / 180.0;
+
     public readonly void Derivative(Dual t, ReadOnlySpan<Dual> x, Span<Dual> dx)
     {
         Dual rx = x[0], ry = x[1], rz = x[2];
@@ -126,6 +142,15 @@ public struct DragCoastSystem : IOdeSystem
         // Climbing nose first (ClimbNoseFirst): alpha 180 and no lift until the coast turns down.
         bool noseFirst = ClimbNoseFirst && (rx.V * vx.V + ry.V * vy.V + rz.V * vz.V) > 0.0;
         double alpha = noseFirst ? Math.PI : Alpha;
+
+        if (!noseFirst && BodyAero != null && (RollRefX != 0.0 || RollRefY != 0.0 || RollRefZ != 0.0)
+            && BodyAeroAccel(t, rx, ry, rz, rlen, ax, ay, az, speed, speed2, rho, mach, out Dual bax, out Dual bay, out Dual baz))
+        {
+            dx[3] += bax;
+            dx[4] += bay;
+            dx[5] += baz;
+            return;
+        }
         Dual cd = Table.Cd(mach, new Dual(alpha));
 
         // a = -(1/2) rho |v| Cd (A/m) * v_air   -- one power of speed is in the vector
@@ -153,6 +178,43 @@ public struct DragCoastSystem : IOdeSystem
         dx[3] += kl * px;
         dx[4] += kl * py;
         dx[5] += kl * pz;
+    }
+
+    /// <summary>
+    /// The body-axis table's acceleration: engine first, the engine end tilted by Alpha towards p - the vertical's part across the airflow, the way that stretches the range - or away from it for an airframe whose lift table says it lifts the other way, the side GuidanceWindow.HoldPlannedGlide tilts to; the roll held at w, turned with the ground to this time. False where the table cannot be read, and the whole-sphere tables fly instead.
+    /// </summary>
+    private readonly bool BodyAeroAccel(Dual t, Dual rx, Dual ry, Dual rz, Dual rlen, Dual ax, Dual ay, Dual az,
+                                        Dual speed, Dual speed2, Dual rho, Dual mach,
+                                        out Dual fx, out Dual fy, out Dual fz)
+    {
+        fx = fy = fz = default;
+        Dual hx = ax / speed, hy = ay / speed, hz = az / speed;
+        Dual bx = -hx, by = -hy, bz = -hz;
+        if (Alpha != 0.0 && LiftTable != null)
+        {
+            Dual ux = rx / rlen, uy = ry / rlen, uz = rz / rlen;
+            Dual uv = ux * hx + uy * hy + uz * hz;
+            Dual px = ux - uv * hx, py = uy - uv * hy, pz = uz - uv * hz;
+            // The same floor as the lift below: the tilt fades out in a vertical fall rather than dividing by nothing.
+            Dual pn = Dual.Sqrt(px * px + py * py + pz * pz + LiftDirectionFloor * LiftDirectionFloor);
+            double liftMach = Math.Clamp(mach.V, LiftTable.MachMin, LiftTable.MachMax);
+            double side = LiftTable.Cd(liftMach, Alpha) < 0.0 ? -1.0 : 1.0;
+            double c = Math.Cos(Alpha), s = side * Math.Sin(Alpha);
+            bx = -(c * hx + s * px / pn);
+            by = -(c * hy + s * py / pn);
+            bz = -(c * hz + s * pz / pn);
+        }
+        double turn = OmegaZ * (t.V + RollRefTime);
+        double ct = Math.Cos(turn), st = Math.Sin(turn);
+        double wx = ct * RollRefX - st * RollRefY, wy = st * RollRefX + ct * RollRefY;
+        if (!BodyAero!.WorldCoefficients(mach, bx, by, bz, hx, hy, hz, wx, wy, RollRefZ, BodyAeroMaxTiltRad,
+                                         out Dual cx, out Dual cy, out Dual cz))
+            return false;
+        Dual k = 0.5 * rho * speed2 * AreaOverMass;
+        fx = k * cx;
+        fy = k * cy;
+        fz = k * cz;
+        return true;
     }
 
     /// <summary>Lift coefficient table C_L(Mach, alpha), signed as KsaAeroSweep measures it. With a non-zero <see cref="Alpha"/> the coast carries |C_L| of lift up the trajectory - a lifting glide. Null, or Alpha 0, for the engine-first ballistic coast.</summary>

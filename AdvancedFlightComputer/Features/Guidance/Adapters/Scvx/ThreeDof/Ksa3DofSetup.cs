@@ -16,6 +16,18 @@ public static class Ksa3DofSetup
     /// <summary>Attitude rate the plans may ask of the vehicle, rad/s.</summary>
     public const double RateMax = 10.0 * Math.PI / 180.0;
 
+    /// <summary>Share of the flight computer's own turn-rate limit the plan may use; the rest is the attitude loop's.</summary>
+    public const double RateLimitShare = 0.8;
+
+    /// <summary>
+    /// The fastest turn the plan may ask for, rad/s: RateMax, or less if the flight computer is limited to less. The stock profiles limit it to 30 (Strict), 5 (Balanced) or 1 deg/s (Relaxed); planned at 10 deg/s on Balanced, a booster fell 10 deg behind a burn's opening attitude (2026-11-18).
+    /// </summary>
+    public static double PlanRateMax(Vehicle vehicle)
+    {
+        double limit = vehicle?.FlightComputer?.RateLimit ?? 0.0;
+        return limit > 0.0 && double.IsFinite(limit) ? Math.Min(RateMax, RateLimitShare * limit) : RateMax;
+    }
+
     /// <summary>Share of the vehicle's turn acceleration the plan may use, the rest left to the attitude loop that follows it - the same idea as the throttle ceilings.</summary>
     public const double TurnAccelShare = 0.75;
 
@@ -52,8 +64,9 @@ public static class Ksa3DofSetup
     /// <summary>
     /// The planner's model of this vehicle over this body, in the site frame: central gravity and the frame's rotation from the body, the aerodynamics from the boostback's sweep, and the lit engines' thrust and flow sampled from the game over throttle and pressure (<see cref="EngineTable"/>).
     /// </summary>
+    /// <param name="rollRefLocal">The held roll's reference direction in the site frame (KsaPointMassModel.RollRef), or zero for a craft whose roll is not held: then the body-axis table is not read.</param>
     public static KsaPointMassModel BuildModel(Vehicle vehicle, IParentBody parent, KsaFrameBridge.SiteFrame frame,
-                                               KsaAeroSweep.Result aero, out string error)
+                                               KsaAeroSweep.Result aero, out string error, double3 rollRefLocal = default)
     {
         error = "";
         (double vacuum, double flow) = KsaEnginePerf.UncappedAtPressure(vehicle, 0.0);
@@ -68,9 +81,6 @@ public static class Ksa3DofSetup
 
         double3 centre = frame.PosToLocal(double3.Zero);
         double3 omega = frame.VecToLocal(parent.GetAngularVelocityCci());
-        AeroTable lift = aero.LiftTable != null
-            ? KsaPointMassModel.LiftSlopeTable(aero.MachGrid, aero.AlphaGridDeg, aero.LiftTable)
-            : null;
         return new KsaPointMassModel
         {
             Mu = parent.Mu,
@@ -79,7 +89,11 @@ public static class Ksa3DofSetup
             OmegaX = omega.X, OmegaY = omega.Y, OmegaZ = omega.Z,
             Atmosphere = aero.Atmosphere,
             Drag = aero.Table,
-            LiftSlope = lift,
+            BodyAero = rollRefLocal.Length() > 0.5 ? aero.BodyAero : null,
+            RollRefX = rollRefLocal.X, RollRefY = rollRefLocal.Y, RollRefZ = rollRefLocal.Z,
+            LiftSlope = aero.LiftTable != null
+                ? KsaPointMassModel.LiftSlopeTable(aero.MachGrid, aero.AlphaGridDeg, aero.LiftTable)
+                : null,
             ReferenceArea = aero.ReferenceArea,
             VacuumThrust = vacuum,
             ExitArea = exitArea,
@@ -132,7 +146,8 @@ public static class Ksa3DofSetup
     /// <param name="floorMargin">Throttle the plan keeps in hand above the engines' minimum, for the burn tracker; see VehicleAutopilotState.LandingPlanFloorMargin.</param>
     public static Scvx3DofConfig Config(Vehicle vehicle, int nodes, int glideIntervals, double alphaMaxDeg,
                                         double comFloorM = 0.0, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
-                                        double turnAccelRadS2 = 0.0, bool fixedGlideAttitude = false)
+                                        double turnAccelRadS2 = 0.0, bool fixedGlideAttitude = false,
+                                        double burnTiltPerSDeg = 0.0)
     {
         var min = new double[PointMass3Dof.NX];
         var max = new double[PointMass3Dof.NX];
@@ -155,8 +170,9 @@ public static class Ksa3DofSetup
             StateMin = min,
             StateMax = max,
             TerminalAttitude = [0, 0, 1],
-            AttitudeRateMax = RateMax,
+            AttitudeRateMax = PlanRateMax(vehicle),
             AttitudeAccelMax = Math.Max(turnAccelRadS2, 0.0),
+            BurnTiltPerS = Math.Max(burnTiltPerSDeg, 0.0) * Math.PI / 180.0,
             // Virtual control stays on XScale here, unlike 6-DOF's (Ksa6DofSetup.VirtualControlVelocityScaleMs). Priced at 5 m/s, the 2026-10-13 headless 7 t booster's locked burn solves ran out of ADMM iterations twelve times before ignition and handed 6-DOF a burn it had no plan for, and offline the 2 km cross-range cold solve gave up at both engine scales.
             AttitudeAnchor = true,
             PathSlackWeight = 1e3,

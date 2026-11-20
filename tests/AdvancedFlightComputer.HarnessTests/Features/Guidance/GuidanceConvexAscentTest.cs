@@ -248,11 +248,9 @@ public abstract class ConvexAscentFlightTest : AfcTest
         state.ConvexThrottleMinPct = ThrottleFloorPct;
         AmbientState() = state;
 
-        // Calculate, the way the button asks: the sim step builds the problem and starts the worker. The sim is not
-        // stepped while it solves, so the vehicle is still on its pad when the plan comes back.
-        state.AscentPlanRequested = true;
-        driver.Step(0.02);
-        AscentPlanJob? job = state.AscentPlanJob;
+        // Calculate, the way the button asks: the sim step sweeps the aero on its own threads, then builds the problem and
+        // starts the worker. The sim is not stepped while it solves, so the vehicle is still on its pad when the plan comes back.
+        AscentPlanJob? job = AscentPlanRequests.Start(driver, state);
         if (!t.Check("Calculate starts a solve", job != null, $"status '{state.AscentPlanStatus}'"))
             return;
         var clock = System.Diagnostics.Stopwatch.StartNew();
@@ -729,4 +727,26 @@ public sealed class GuidanceConvexAscentSolidsTest : ConvexAscentFlightTest
 
     // The hand-over falls inside the solid stage, so the log shows whether UPFG's stage model of the boosters matches their real burn.
     protected override bool LogsUpfgSolvesAroundHandover => true;
+}
+
+/// <summary>Calculate, as the button asks it, for the ascent tests.</summary>
+internal static class AscentPlanRequests
+{
+    /// <summary>
+    /// Asks for a plan and steps the sim until its solve starts, or the request ends without one, or <paramref name="timeoutS"/> of wall time passes. The aero sweeps run on their own threads first (KsaAeroSweep.Job), so the solve starts a second or two after the request, on a later step.
+    /// </summary>
+    internal static AscentPlanJob? Start(SimDriver driver, VehicleAutopilotState state, double timeoutS = 60.0)
+    {
+        state.AscentPlanRequested = true;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        do
+        {
+            driver.Step(0.02);
+            if (state.AscentPlanJob != null || !state.AscentPlanRequested)
+                break;
+            Thread.Sleep(20);
+        }
+        while (clock.Elapsed.TotalSeconds < timeoutS);
+        return state.AscentPlanJob;
+    }
 }

@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using BepuUtilities;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Features.RcsTorque;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 
@@ -38,13 +39,25 @@ public static class Ksa6DofSetup
     internal const double ModelRollTorqueFloorNm = 1.0e-3;
 
     /// <summary>
-    /// The roll part of the model for gimbals that give <paramref name="tauRoll"/> N m at full thrust about a roll inertia of <paramref name="izz"/>: whether the plan leaves the roll free, and the roll torque bound. A choice made for an earlier plan of the same landing comes in as <paramref name="keptRollFree"/> and stands, because the roll inertia falls with the propellant and a craft near the floor would otherwise change the end condition between two plans.
+    /// The roll part of the model for gimbals that give <paramref name="tauRoll"/> N m at full thrust, and RCS that gives <paramref name="rcsRollNm"/> N m either way, about a roll inertia of <paramref name="izz"/>: whether the plan leaves the roll free, and the gimbals' roll torque bound. The roll is held when the two together can stop it; the RCS's roll is its own control (Scvx6DofConfig.RcsMaxPosNm), not part of the bound. A choice made for an earlier plan of the same landing comes in as <paramref name="keptRollFree"/> and stands, because the roll inertia falls with the propellant and a craft near the floor would otherwise change the end condition between two plans.
     /// </summary>
-    internal static void RollModel(double tauRoll, double izz, bool? keptRollFree, out bool rollFree, out double modelTauRoll)
+    internal static void RollModel(double tauRoll, double izz, bool? keptRollFree, out bool rollFree, out double modelTauRoll, double rcsRollNm = 0.0)
     {
-        rollFree = keptRollFree ?? tauRoll < RollAuthorityFloorRadS2 * izz;
+        rollFree = keptRollFree ?? tauRoll + Math.Max(rcsRollNm, 0.0) < RollAuthorityFloorRadS2 * izz;
         modelTauRoll = Math.Max(tauRoll, ModelRollTorqueFloorNm);
     }
+
+    /// <summary>Whether the RCS turns the craft both ways about pitch and yaw (model x and y), so a plan can point its thrust with it alone.</summary>
+    internal static bool RcsSteers(Dynamics6Dof.RcsModel rcs)
+    {
+        if (rcs?.MaxPosNm is not { Length: >= 2 } pos || rcs.MaxNegNm is not { Length: >= 2 } neg)
+            return false;
+        return pos[0] > 0.0 && neg[0] > 0.0 && pos[1] > 0.0 && neg[1] > 0.0;
+    }
+
+    /// <summary>The RCS's roll torque the weaker way, N m; 0 without RCS roll.</summary>
+    internal static double RcsRollNm(Dynamics6Dof.RcsModel rcs)
+        => rcs?.MaxPosNm is { Length: >= 3 } pos && rcs.MaxNegNm is { Length: >= 3 } neg ? Math.Max(Math.Min(pos[2], neg[2]), 0.0) : 0.0;
     public static double LastVacuumThrustN { get; private set; }
     public static double LastPressureThrustN { get; private set; }
 
@@ -136,6 +149,24 @@ public static class Ksa6DofSetup
         return total;
     }
 
+    /// <summary>
+    /// How fast the dominant planning gimbal slews, as full deflections a second (Scvx6DofConfig.GimbalSlewPerS): Gimbal's own rate cap, RATE_CAP_PER_NATURAL_FREQUENCY of its range per unit of natural frequency. 0 where there is no gimbal to read.
+    /// </summary>
+    internal static double GimbalSlewPerS(Vehicle vehicle)
+    {
+        double thrust = 0.0, frequency = 0.0;
+        foreach (GimbalController controller in KsaGimbalControl.PlanningGimbals(vehicle))
+        {
+            Gimbal gimbal = controller.Gimbal;
+            if (!(controller.Data.MaximumThrust > thrust)
+                || Math.Max(gimbal.AxisY.MaxAngle, gimbal.AxisZ.MaxAngle) <= 0.0)
+                continue;
+            thrust = controller.Data.MaximumThrust;
+            frequency = gimbal.NaturalFrequency;
+        }
+        return double.IsFinite(frequency) && frequency > 0.0 ? frequency * Gimbal.RATE_CAP_PER_NATURAL_FREQUENCY : 0.0;
+    }
+
     internal static double LateralTorqueLead(Vehicle vehicle)
     {
         double thrust = 0.0;
@@ -186,6 +217,45 @@ public static class Ksa6DofSetup
                 total += thrust;
         }
         return total;
+    }
+
+    /// <summary>
+    /// What the craft's RCS can give touchdown guidance, in MODEL body axes (KsaFrameBridge.BodyAxes), measured by the allocator that will fly it (KsaRcsTorqueControl.TryCharacterise): per one-sided control the largest torque, the propellant per newton metre and the side force per newton metre. Null for a craft with no usable thruster.
+    /// The side force is the point on a booster: its thrusters sit at the top, far from the centre of mass, so every newton metre they give comes with a push of roughly 1/arm newtons sideways, which the plan must carry or it will drift off what it planned.
+    /// </summary>
+    public static Dynamics6Dof.RcsModel RcsModel(Vehicle vehicle)
+    {
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        // Six measurements, each axis each way (KsaRcsTorqueControl.TryCharacterise), two per RCS control.
+        Span<RcsTorqueAllocator.AxisAuthority> six = stackalloc RcsTorqueAllocator.AxisAuthority[2 * Dynamics6Dof.NRCS];
+        if (!KsaRcsTorqueControl.TryCharacterise(vehicle, mx, my, mz, six))
+            return null;
+        return RcsModelFrom(six);
+    }
+
+    /// <summary>The plan's RCS model from the allocator's six one-way measurements (+x, -x, +y, -y, +z, -z): each axis's two bounds, and the side force per newton metre as the average of what the two ways bring - force odd in the torque, exact for a symmetric layout. Null when no direction has any authority.</summary>
+    internal static Dynamics6Dof.RcsModel RcsModelFrom(ReadOnlySpan<RcsTorqueAllocator.AxisAuthority> six)
+    {
+        static bool Good(RcsTorqueAllocator.AxisAuthority a)
+            => a.MaxTorqueNm > 0.0 && double.IsFinite(a.MaxTorqueNm) && double.IsFinite(a.FlowPerNm)
+               && double.IsFinite(a.ForcePerNmX) && double.IsFinite(a.ForcePerNmY) && double.IsFinite(a.ForcePerNmZ);
+        var model = new Dynamics6Dof.RcsModel();
+        for (int axis = 0; axis < Dynamics6Dof.NRCS; axis++)
+        {
+            RcsTorqueAllocator.AxisAuthority plus = six[2 * axis], minus = six[2 * axis + 1];
+            bool p = Good(plus), m = Good(minus);
+            if (!p && !m)
+                continue;
+            model.MaxPosNm[axis] = p ? plus.MaxTorqueNm : 0.0;
+            model.MaxNegNm[axis] = m ? minus.MaxTorqueNm : 0.0;
+            // Force for a torque tau: f+ tau one way, f- |tau| the other; the odd line through both is (f+ - f-) / 2, or the one side measured.
+            double w = p && m ? 0.5 : 1.0;
+            model.ForcePerNm[3 * axis] = w * ((p ? plus.ForcePerNmX : 0.0) - (m ? minus.ForcePerNmX : 0.0));
+            model.ForcePerNm[3 * axis + 1] = w * ((p ? plus.ForcePerNmY : 0.0) - (m ? minus.ForcePerNmY : 0.0));
+            model.ForcePerNm[3 * axis + 2] = w * ((p ? plus.ForcePerNmZ : 0.0) - (m ? minus.ForcePerNmZ : 0.0));
+            model.FlowPerNm[axis] = w * ((p ? Math.Max(plus.FlowPerNm, 0.0) : 0.0) + (m ? Math.Max(minus.FlowPerNm, 0.0) : 0.0));
+        }
+        return model.Any ? model : null;
     }
 
     /// <summary>
@@ -288,6 +358,47 @@ public static class Ksa6DofSetup
     /// <param name="xf">Terminal model state, same reason.</param>
     /// <param name="accelMaxMs2">Largest thrust acceleration the plan may use, m/s^2, or 0 for none; see Scvx6DofConfig.AccelMax.</param>
     /// <param name="keptRollFree">The Scvx6DofConfig.TerminalRollFree of the plan this one replaces, or null for the first plan of a landing; see RollModel.</param>
+    /// <param name="bodyAero">Plan with the body-axis force and moment (BodyAeroFor), or only the roll-averaged force on the thrust axis.</param>
+    /// <param name="gimbalRateLimit">Hold the plan's lateral thrust to the gimbal's slew rate (GimbalSlewPerS).</param>
+    /// <summary>
+    /// The body-axis force and moment for the plan's full attitude (BodyAero6Dof), from the sweep's tables, or null where it measured none: the model's axes in the game's body axes (KsaFrameBridge.BodyAxes), and the moment moved from the centre of mass the sweep saw to the one the craft has now.
+    /// </summary>
+    /// <summary>
+    /// The coast's rate price (Scvx6DofConfig.CoastRateWeight), as the fuel of this much burn, m/s, for turning at CoastTurnRefRadS about one axis through the whole coast. Small: it is there to pick one glide among those that cost the same fuel, not to stop a turn that saves some. The 2026-11-20 coasts turned 25 deg in about 7 s for the burn, about 1 m/s's worth at this price.
+    /// </summary>
+    private const double CoastTurnPriceMs = 1.0;
+    private const double CoastTurnRefRadS = 0.05;
+
+    private static BodyAero6Dof BodyAeroFor(Vehicle vehicle, KsaAeroSweep.Result aero, double momentLimiterPerPa)
+    {
+        if (aero?.BodyAero == null || aero.Atmosphere == null || !(aero.ReferenceArea > 0.0))
+            return null;
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        float3 com = vehicle.CenterOfMassAsmbF;
+        double3 shift = aero.BodyMoment != null ? aero.BodyMomentComAsmb - new double3(com.X, com.Y, com.Z) : double3.Zero;
+        return new BodyAero6Dof
+        {
+            Atmosphere = aero.Atmosphere,
+            Force = aero.BodyAero,
+            Moment = aero.BodyMoment,
+            ReferenceArea = aero.ReferenceArea,
+            ReferenceLength = aero.ReferenceLength,
+            ModelToTable = [mx.X, my.X, mz.X, mx.Y, my.Y, mz.Y, mx.Z, my.Z, mz.Z],
+            ComShiftX = shift.X, ComShiftY = shift.Y, ComShiftZ = shift.Z,
+            // The game's moment limiter, as measured in flight (BodyAero6Dof.MomentLimiterPerPa).
+            MomentLimiterPerPa = double.IsFinite(momentLimiterPerPa) && momentLimiterPerPa > 0.0 ? momentLimiterPerPa : 0.0,
+        };
+    }
+
+    /// <summary>The fixed length and speed the terminal miss is priced on, m and m/s (Scvx6DofConfig.TerminalMissScaleM): the scales of the hand-over the terminal weights were tuned at.</summary>
+    internal const double TerminalMissPriceM = 250.0, TerminalSpeedPriceMs = 100.0;
+
+    /// <summary>
+    /// The body-rate scale, rad/s. The trust region is a share of each scale, so at 1 a warm re-solve may move a body rate 0.05 rad/s in one step against a 0.01 rad/s defect gate, and the refusals at ignition on 2026-11-20 were rate defects at the first interval, 4-8 times the gate.
+    ///  KEPT AT 1. Tried at 0.2, about the rates a landing flies (--6dof-coast --rate-scale 0.2, 2026-11-20): the two-phase landings came out the same (3.1 and 2.8 m off against 2.9 and 3.2 m), but the burn-only re-solves went from 650-1,825 SCS iterations to 5,750-9,000, at the cap. The virtual control and the rate limit's slack are priced on this scale, so a tighter one makes every subproblem harder.
+    /// </summary>
+    internal static double RateScaleRadS = 1.0;
+
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                 int nodes, double tiltMaxDeg, double throttleFloor,
                                 double sigmaSeed,
@@ -297,7 +408,10 @@ public static class Ksa6DofSetup
                                 double[] x0, double[] xf,
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
                                 out string error, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
-                                KsaAeroSweep.Result aero = null, bool? keptRollFree = null)
+                                KsaAeroSweep.Result aero = null, bool? keptRollFree = null, bool bodyAero = true,
+                                bool gimbalRateLimit = true, Dynamics6Dof.RcsModel rcs = null, double rcsWeight = 0.0,
+                                double rateMaxDegS = 0.0, int coastIntervals = 0, double[] scaleFrom = null,
+                                double momentLimiterPerPa = 0.0, double torqueMargin = 0.0)
     {
         cfg = null!;
         dyn = null!;
@@ -348,10 +462,12 @@ public static class Ksa6DofSetup
         // Tmax is the thrust of every engine the craft runs, because no engine is shut down for the landing. The throttle command is T / Tmax of the model, so a plan built against a smaller Tmax would command full throttle for part of the thrust and overshoot every plan.
         // An over-powered vehicle is a real situation, not something to model around. The feasibility readout reports it and names the throttle floor that would work.
 
+        // NO GIMBAL: the plan points the thrust with the RCS alone, where it turns the craft both ways about pitch and yaw (RcsSteers). The gimbal's controls are then pinned at zero by their own cone (a zero angle), and its arm and roll play no part.
         double gimbalDeg = GimbalLimitDeg(vehicle);
-        if (gimbalDeg <= 0.0)
+        bool noGimbal = gimbalDeg <= 0.0;
+        if (noGimbal && !RcsSteers(rcs))
         {
-            error = "no gimballed engine - touchdown guidance needs thrust vectoring";
+            error = "no gimballed engine and no RCS torque on pitch and yaw - nothing to point the thrust with";
             return false;
         }
 
@@ -363,8 +479,8 @@ public static class Ksa6DofSetup
         if (planningThrust > 0.0)
             tauRoll *= thrust / planningThrust;
 
-        double arm = EngineArm(vehicle);
-        if (arm <= 0.0)
+        double arm = noGimbal ? 0.0 : EngineArm(vehicle);
+        if (!noGimbal && arm <= 0.0)
         {
             error = "engine thrust point coincides with the centre of mass";
             return false;
@@ -386,7 +502,16 @@ public static class Ksa6DofSetup
             error = "vehicle inertia is degenerate";
             return false;
         }
-        RollModel(tauRoll, izz, keptRollFree, out bool rollFree, out tauRoll);
+        RollModel(tauRoll, izz, keptRollFree, out bool rollFree, out tauRoll, RcsRollNm(rcs));
+
+        // THE TORQUE MARGIN (Scvx6DofConfig.PlanTorqueShare): the plan gets this share of the gimbals' torque, their roll and the RCS's, and the attitude feedback the rest (AttitudeFeedback6Dof). The cone is shrunk in torque, through its tangent; the gimbals' slew, in full deflections a second, is widened by as much so it stays the hardware's rate in degrees. After the roll model, so a margin cannot by itself decide the roll is left free.
+        double torqueShare = Math.Clamp(1.0 - (double.IsFinite(torqueMargin) ? torqueMargin : 0.0), 0.5, 1.0);
+        gimbalDeg = Math.Atan(Math.Tan(gimbalDeg * Math.PI / 180.0) * torqueShare) * 180.0 / Math.PI;
+        tauRoll *= torqueShare;
+        double[] rcsPos = rcs?.MaxPosNm is { } pos ? Array.ConvertAll(pos, v => v * torqueShare) : null;
+        double[] rcsNeg = rcs?.MaxNegNm is { } neg ? Array.ConvertAll(neg, v => v * torqueShare) : null;
+        // A plan with a coast keeps the heading and the roll-rate limit like any other. Freeing them was tried on 2026-11-20 while the air's roll moment read 40 kN m against 22 of RCS; that was the sweep's moment without the game's limiter (BodyAero6Dof.MomentLimiterPerPa), and the booster felt about 11.
+        bool coastPlan = false;
 
         // Refuse an over-powered configuration up front, with the number needed to fix it. Reporting "infeasible" after a 500 ms solve tells the user nothing; this says exactly which knob is wrong and what value would work.
         {
@@ -435,9 +560,13 @@ public static class Ksa6DofSetup
                     ReferenceArea = aero.ReferenceArea,
                 }
                 : null,
+            // THE BODY-AXIS FORCE AND MOMENT for the plan's own attitude, where the sweep measured them: the gimbal then holds against the air's moment from the plan's start rather than finding it in flight (BodyAero6Dof). The tables above carry the share of the force these fade out of.
+            BodyAero = bodyAero && aero?.Table != null ? BodyAeroFor(vehicle, aero, momentLimiterPerPa) : null,
             AeroAltitudeOffset = siteAltAsl,
             LArm = arm,
             Ixx = ixx, Iyy = iyy, Izz = izz,
+            // RCS torque and the side force and propellant that come with it (RcsModel), or none.
+            Rcs = rcs,
         };
 
         // NON-DIMENSIONALISE AGAINST THIS PROBLEM, not against the Python test case.
@@ -447,11 +576,13 @@ public static class Ksa6DofSetup
         //  Quaternion and body-rate scales stay at 1: both are already dimensionless or O(1), and they are the values the reference converges with - no reason to perturb a validated part of the setup.
         double mass = vehicle.TotalMass;
         double gScale = parent.Mu / (siteCci.Length() * siteCci.Length());
+        // A plan with a coast before ignition is scaled on the burn, from the state at ignition (scaleFrom), not on the glide from the craft now: the terminal miss is priced per length scale, so scaled on a hand-over several hundred metres up it cost a third as much per metre, and offline the landings missed by 10 m against 3 m (--6dof-coast, 2026-11-20).
+        double[] sx = scaleFrom != null && scaleFrom.Length >= 6 ? scaleFrom : x0;
         double lengthScale = Math.Max(
-            Math.Sqrt((x0[0] - xf[0]) * (x0[0] - xf[0]) +
-                      (x0[1] - xf[1]) * (x0[1] - xf[1]) +
-                      (x0[2] - xf[2]) * (x0[2] - xf[2])), 1.0);
-        double speed0 = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
+            Math.Sqrt((sx[0] - xf[0]) * (sx[0] - xf[0]) +
+                      (sx[1] - xf[1]) * (sx[1] - xf[1]) +
+                      (sx[2] - xf[2]) * (sx[2] - xf[2])), 1.0);
+        double speed0 = Math.Sqrt(sx[3] * sx[3] + sx[4] * sx[4] + sx[5] * sx[5]);
         double velocityScale = Math.Max(Math.Max(speed0, Math.Sqrt(lengthScale * gScale)), 1.0);
         // Burn-time bounds must BRACKET the seed. Scvx6DofConfig's defaults (5..25 s, scale 12) describe the Python test case; leaving them while seeding sigma elsewhere gives the solver a starting point outside its own feasible range and a badly conditioned scale. Both are set from the seed instead.
         double sigma = Math.Max(sigmaSeed, 1.0);
@@ -471,11 +602,24 @@ public static class Ksa6DofSetup
         cfg = new Scvx6DofConfig
         {
             Nodes = nodes,
+            // The coast before ignition (Scvx6DofConfig.CoastIntervals), or none.
+            CoastIntervals = coastIntervals > 0 && coastIntervals <= nodes - 3 ? coastIntervals : 0,
+            CoastSigmaMax = 60.0,
             Tmax = thrust,
             ThrottleFloor = throttleFloor,
             GimbalMaxDeg = gimbalDeg,
+            // The RCS controls are scaled on each axis's whole control torque (Scvx6DofConfig.ResolvedUScale).
+            GimbalArm = arm,
+            GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) / torqueShare : 0.0,
+            PlanTorqueShare = torqueShare,
             TauRollMax = tauRoll,
             RollTorqueFollowsThrust = true,
+            RcsMaxPosNm = rcsPos,
+            RcsMaxNegNm = rcsNeg,
+            RcsWeight = rcsWeight,
+            // The turn-rate limit (Scvx6DofConfig.RateMaxRadS).
+            RateMaxRadS = Math.Max(rateMaxDegS, 0.0) * Math.PI / 180.0,
+            RateLimitIncludesRoll = !coastPlan,
             TerminalRollFree = rollFree,
             // WIDENED TO ADMIT THE CURRENT ATTITUDE. The tilt cone is applied at every node INCLUDING node 0, and node 0 is pinned by an equality to the measured state - so a cap below the vehicle's present tilt asks for a quaternion that is simultaneously exactly the measured one and inside a cone the measured one is outside. That is infeasible by construction, not merely expensive: measured offline from the the recorded run entry at 92.1 degrees with a 60-degree cap, NO node count solves at all - infinite defect at 15, 30 and 50 nodes, never reaching even the loose cold gate. Raise the cap above the entry attitude and the same problem solves at every one of them.
             //  This is the same failure the trust-region box had before it was moved off node 0, and the reason the glideslope and climb-rate constraints start at node 1. Widening rather than restructuring the rows, because the row layout is what the Python reference comparison checks.
@@ -497,6 +641,10 @@ public static class Ksa6DofSetup
 
             // Generous bounds. These only need to BRACKET the answer - sigma is a free variable and the solver picks it - but a bound that binds silently dictates the trajectory instead of the physics: sigma pinned at the max forces the vehicle to spend that long in the air, and if it cannot hover it loops to burn the time. Widening costs nothing, because conditioning comes from SigmaScale (the seed), not from the bounds.
             WW = wW,
+            // The coast's rate price (Scvx6DofConfig.CoastRateWeight): turning at CoastTurnRefRadS about one axis through the whole coast costs what CoastTurnPriceMs of burn does in fuel, whose term is -m_final/m_init, so a metre per second is alpha (1 / Isp g0) of it.
+            CoastRateWeight = coastIntervals > 1 && coastIntervals <= nodes - 3
+                ? CoastTurnPriceMs * alpha / ((coastIntervals - 1) * CoastTurnRefRadS * CoastTurnRefRadS)
+                : 0.0,
             WDu = Math.Max(controlSmoothWeight, 0.0),
             // Restores the conditioning the regularisers previously provide, without the bias. Measured on the reference problem at low weights: 91650 ADMM iterations / 4907 ms at 0, versus 23675 / 1295 ms at 0.05 - 3.8x faster for a burn time within 1.2% and a merit within 0.03%. Do NOT raise this chasing more speed: at 0.2 it is 7x faster but shifts burn time 6% and worsens merit 1%, because SCvx stops at a tolerance rather than exactly at X = Xbar, so a large proximal term leaves a residual pull and starts acting as a second trust region.
             ProximalWeight = Math.Max(proximalWeight, 0.0),
@@ -506,6 +654,9 @@ public static class Ksa6DofSetup
             //  POSITION ABOVE SPEED. Both are normalised by the problem's scales (here ~250 m and ~100 m/s at a hand-over), so the weights alone do not say what trades for what. With speed at 1e5 and the miss at 1e3, 1 m/s cost as much as ~270 m of miss, and a squeezed plan stopped at rest 20-30 m over the pad - where a booster that cannot throttle below its weight floats and then climbs (2026-10-08, 17:42 and 17:53). At 1e5 and 1e4, 1 m of miss costs about as much as 4 m/s: a squeezed plan arrives a little fast rather than high, as Falcon 9 lands at ~2 m/s rather than stopping short.
             TerminalMissWeight = 1.0e5,
             TerminalSpeedWeight = 1.0e4,
+            // Priced per fixed metre and m/s - the ~250 m and ~100 m/s scales of the hand-over these weights were tuned at - so a metre of miss costs the same however far away the plan starts (Scvx6DofConfig.TerminalMissScaleM).
+            TerminalMissScaleM = TerminalMissPriceM,
+            TerminalSpeedScaleMs = TerminalSpeedPriceMs,
             SigmaMin = sigma * 0.15,
             SigmaMax = sigma * 4.0,
             SigmaScale = sigma,
@@ -514,7 +665,8 @@ public static class Ksa6DofSetup
                 lengthScale, lengthScale, lengthScale,
                 velocityScale, velocityScale, velocityScale,
                 1, 1, 1, 1,
-                1, 1, 1,
+                // Body rates on the rates a landing flies (RateScaleRadS), not 1 rad/s.
+                RateScaleRadS, RateScaleRadS, RateScaleRadS,
                 Math.Max(mass, 1.0),
             ],
         };
@@ -522,11 +674,11 @@ public static class Ksa6DofSetup
         //  The realistic path is not exotic: `gScale = Mu / |siteCci|^2` is Infinity if the site has not resolved yet, and `Math.Max(NaN, x)` RETURNS NaN, so a single bad intermediate propagates silently through the scale chain.
         (string Name, double Value)[] mustBeFinitePositive =
         [
-            ("Tmax", cfg.Tmax), ("Tmin", cfg.Tmin), ("gimbal limit", cfg.GimbalMaxDeg),
+            ("Tmax", cfg.Tmax), ("Tmin", cfg.Tmin), ("gimbal limit", noGimbal ? 1.0 : cfg.GimbalMaxDeg),
             ("tau_roll max", cfg.TauRollMax), ("tilt limit", cfg.TiltMaxDeg),
             ("sigma scale", cfg.SigmaScale), ("sigma min", cfg.SigmaMin), ("sigma max", cfg.SigmaMax),
             ("length scale", lengthScale), ("velocity scale", velocityScale),
-            ("gravity", -dyn.Gz), ("Isp", dyn.Isp), ("L_arm", dyn.LArm),
+            ("gravity", -dyn.Gz), ("Isp", dyn.Isp), ("L_arm", noGimbal ? 1.0 : dyn.LArm),
             ("Ixx", dyn.Ixx), ("Iyy", dyn.Iyy), ("Izz", dyn.Izz),
             ("mass", mass),
         ];

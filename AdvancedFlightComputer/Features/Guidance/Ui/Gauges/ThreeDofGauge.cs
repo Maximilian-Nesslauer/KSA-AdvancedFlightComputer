@@ -55,7 +55,7 @@ public static partial class GuidanceWindow
         GaugeRowText(D, "STATUS", _s.ThreeDofStatus.Length > 0 ? Fmt.Sentence(_s.ThreeDofStatus) : "-", ConsoleStyle.TextMuted);
         var est = _s.ThreeDofEstimator;
         GaugeRowText(D, "MODEL CORRECTION", est != null
-            ? FormattableString.Invariant($"DRAG x{est.DragScale:F2}  LIFT x{est.LiftScale:F2}  THRUST x{est.ThrustScale:F2}") : "-", ConsoleStyle.TextMuted);
+            ? FormattableString.Invariant($"DRAG x{est.DragScale:F2}  CROSS-FLOW {_s.ThreeDofBiasAccel:F2} m/s^2  THRUST x{est.ThrustScale:F2}") : "-", ConsoleStyle.TextMuted);
         // As of the solver's last idle moment: the guidance is the worker's while it solves, so the step caches this rather than the draw reading it.
         GaugeRowText(D, "LAST SOLVE", _s.ThreeDofSolveText.Length > 0 ? _s.ThreeDofSolveText : "-",
             _s.ThreeDofRefusing ? ConsoleUi.WarnInk : ConsoleStyle.TextMuted);

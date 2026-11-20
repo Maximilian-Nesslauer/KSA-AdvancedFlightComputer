@@ -129,6 +129,7 @@ public static partial class GuidanceWindow
             LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,
         };
+        WithHeldRoll(ref sys, vehicle, parent, aero);
 
         double3 r0 = orbit.StateVectors.PositionCci;
         double3 v0 = orbit.StateVectors.VelocityCci;
@@ -232,6 +233,7 @@ public static partial class GuidanceWindow
             LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,
         };
+        WithHeldRoll(ref sys, vehicle, parent, aero);
 
         // THE SITE'S SURFACE, ON BOTH SIDES OF THE MISS.
         //  The prediction that DRAWS the impact marker terminates on the terrain under the impact point, which is right for drawing: that is where the vehicle would actually touch. It is wrong for TARGETING, twice over. It puts the hit and the target on two different spheres, so the miss carries a radial component that is a difference of terrain heights rather than a distance to fly; and that height MOVES as the impact point walks across the terrain, so the surface the solution is converging onto wanders under it - a low-passed wander, at that, which is worse than a noisy one because it lags.

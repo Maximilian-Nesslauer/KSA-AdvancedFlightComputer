@@ -44,7 +44,6 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
     private static bool _standbyReady;
     private static bool _gfoldCanFly;
     private static bool _contact;
-    private static bool _entryThrustMatches;
 
     protected override void Execute(TestContext t)
     {
@@ -53,11 +52,6 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             !GuidanceWindow.CanRestartEntryGlide(7.0, 4.0));
         t.Check("entry can restart when there is time for a cold retry before ignition lock",
             GuidanceWindow.CanRestartEntryGlide(13.0, 4.0));
-        t.Check("entry handoff bounds both excess and missing delivered impulse",
-            GuidanceWindow.EntryHandoffThrustCompatible(200_000.0, 204_000.0, 8_000.0)
-            && !GuidanceWindow.EntryHandoffThrustCompatible(200_000.0, 206_000.0, 8_000.0)
-            && !GuidanceWindow.EntryHandoffThrustCompatible(200_000.0, 194_000.0, 8_000.0)
-            && !GuidanceWindow.EntryHandoffThrustCompatible(200_000.0, 0.0, 8_000.0));
         if (!TestWorld.RequireHome(t, out IParentBody home))
             return;
         IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(RcsTestVehicles.Candidates);
@@ -104,7 +98,6 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             harmony.Patch(Method("StartSixDofStandby"), prefix: Prefix(nameof(StartStandbyForFixture)));
             harmony.Patch(Method("StepSixDofStandby"), prefix: Prefix(nameof(NotForFixture)));
             harmony.Patch(Method("SixDofStandbyReady"), prefix: Prefix(nameof(AnswerStandbyReady)));
-            harmony.Patch(Method("EntryThrustMatches"), prefix: Prefix(nameof(AnswerEntryThrustMatches)));
             harmony.Patch(Method("GfoldCanFly"), prefix: Prefix(nameof(AnswerGfoldCanFly)));
             harmony.Patch(Method("HasTouchedDown"), prefix: Prefix(nameof(AnswerContact)));
 
@@ -125,7 +118,6 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             _standbyReady = false;
             _gfoldCanFly = false;
             _contact = false;
-            _entryThrustMatches = false;
             if (craft != null)
             {
                 StagingDetector.Arm(craft, false);
@@ -143,14 +135,6 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         if (!ReferenceEquals(vehicle, _fixture))
             return true;
         __result = _contact;
-        return false;
-    }
-
-    private static bool AnswerEntryThrustMatches(Vehicle vehicle, ref bool __result)
-    {
-        if (!ReferenceEquals(vehicle, _fixture))
-            return true;
-        __result = _entryThrustMatches;
         return false;
     }
 
@@ -246,20 +230,6 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         t.Check("a ready standby leaves an unlit entry burn in control", !state.EngagePending
             && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn && !Inputs(craft).EngineOn);
         Inputs(craft).EngineOn = true;
-        var published = AccessTools.Field(typeof(Ksa6DofGuidance), "_published");
-        state.Guidance = new Ksa6DofGuidance(new Scvx6DofConfig(), new Dynamics6Dof.Params());
-        var unsuitable = new Ksa6DofPlan([], [], 2.0, now, 2);
-        published.SetValue(state.Guidance, unsuitable);
-        step.Invoke(null, args);
-        take.Invoke(null, [craft, home]);
-        t.Check("an incompatible touchdown command keeps the lit entry burn in control",
-            !state.EngagePending && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn
-            && ReferenceEquals(state.ThreeDofRejectedTouchdownPlan, unsuitable)
-            && state.ThreeDofSixDofWaiting && Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle);
-        step.Invoke(null, args);
-        t.Check("the same rejected publication cannot queue another handoff", state.ThreeDofTouchdownHandoff.Status == null);
-        published.SetValue(state.Guidance, new Ksa6DofPlan([], [], 2.0, now, 2));
-        _entryThrustMatches = true;
         step.Invoke(null, args);
         take.Invoke(null, [craft, home]);
         t.Check("a ready standby takes the entry burn without cutting its engine",
@@ -274,7 +244,6 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         t.CheckAbs("the touchdown command follows its own plan after promotion",
             GuidanceWindow.EntryHandoffThrottle(HandoffThrottle, 0.4, BurnThrottle), HandoffThrottle, 1e-10);
         _standbyReady = false;
-        _entryThrustMatches = false;
         state.SixDofStandby = false;
         VehicleAutopilotState.Remove(craft);
     }

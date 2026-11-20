@@ -77,6 +77,10 @@ public struct PoweredBurnSystem : IOdeSystem
     public double GlideAlpha;
     public AeroTable? LiftTable;
 
+    /// <summary>The glide's body-axis table and held roll, at the burn's start (DragCoastSystem.BodyAero, RollRefX): the coast after cutoff reads them, the roll turned on by the burn's duration. Null and zero for none.</summary>
+    public BodyAeroTable? BodyAero;
+    public double RollRefX, RollRefY, RollRefZ;
+
     /// <summary>Steering: the direction at ignition. Dual because the shoot
     /// differentiates with respect to the angles that built it.</summary>
     public Dual Lx, Ly, Lz;
@@ -507,6 +511,9 @@ public static class BoostbackShooter
             Table = sys.Table,
             LiftTable = sys.LiftTable,
             Atmosphere = sys.Atmosphere,
+            BodyAero = sys.BodyAero,
+            RollRefX = sys.RollRefX, RollRefY = sys.RollRefY, RollRefZ = sys.RollRefZ,
+            RollRefTime = duration.V,
         };
 
         Span<Dual> cs = stackalloc Dual[ImpactPredictor.N];

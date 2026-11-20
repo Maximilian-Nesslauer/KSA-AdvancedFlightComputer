@@ -16,6 +16,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 ///   D = -q S Cd(M, alpha) v_hat
 ///   L = q S k(M, alpha) (-p),      p = b - (b . v_hat) v_hat,   |p| = sin(alpha),   k = C_L / sin(alpha)
 /// The table's positive C_L is lift towards the side the engine end is tilted, and the engine end's tilt off the airflow is -p, so the lift is along -p; 3dof.py's retrograde sign s is the same thing. Written through k rather than C_L times a unit vector, the lift has no direction singularity at alpha = 0 and keeps its slope there: a seed flown at exactly alpha 0 still sees what tilting would buy.
+/// NOT THE TABLE READ DIRECTLY. C_L times a rounded unit vector, -p / sqrt(|p|^2 + e^2), read at a rounded alpha, was tried (2026-11-18): the two roundings make the lift fall off as |p|^3 below e, so its slope at alpha 0 is zero, and a glide seeded at alpha 0 (GLIDE PLAN AoA 0) could not find what lift would buy. Offline (--3dof-mpc) nine of ten cold solves gave up, at either rounding. k keeps that slope, and with the sweep's breakpoint at 1 deg the value it holds below it is the 1 deg one.
 ///
 /// THE CORNER AT alpha = 0. KSA's drag grows with |sin(alpha)|, which has a corner exactly where a booster flies, and a linearisation at the corner promises gains the true drag never pays. As the convex ascent does, the tables are read at an alpha whose |p| is rounded to |p|^2 / sqrt(|p|^2 + e^2): exact at zero, smooth, and about e^2 / 2|p| low elsewhere. Only the LOOKUP argument is rounded; the lift's direction comes from p itself.
 ///
@@ -58,6 +59,28 @@ public sealed record KsaPointMassModel : IPointMassModel
     /// </summary>
     public double DragScale { get; init; } = 1.0;
     public double LiftScale { get; init; } = 1.0;
+
+    /// <summary>
+    /// A force coefficient across the airflow that the tables do not have, site frame: the model adds q S (C - (C . v_hat) v_hat). The guidance learns it in the glide (AeroScaleEstimator), where the measured lift fell short of the table's by about the same 1 m/s^2 at 1 deg and at 7 deg - an offset, not a ratio, which a lift scale could only follow by swinging with the angle of attack (0.5 to 1.1 within seconds, 2026-11-18) and moving the plan with it. As a coefficient it scales with the dynamic pressure like any aerodynamic force, so it fades as the craft slows and the last metres of a burn do not carry it.
+    /// </summary>
+    public double CrossBiasX { get; init; }
+    public double CrossBiasY { get; init; }
+    public double CrossBiasZ { get; init; }
+
+    /// <summary>
+    /// The body-axis force over Mach, alpha and beta at a fixed roll (KsaAeroSweep's BodyAero), read in place of Drag and LiftSlope wherever the craft flies within <see cref="BodyAeroMaxTiltRad"/> of engine first and <see cref="RollRef"/> is set. Null for none.
+    /// </summary>
+    public BodyAeroTable? BodyAero { get; init; }
+
+    /// <summary>
+    /// THE ROLL THE CRAFT IS HELD AT, site frame: the fixed wing direction w - up x d, horizontal and square to the ground track, frozen at separation - with the body's +y along w's part square to b. The guidance commands that same roll (GuidanceWindow.ReturnRollRefCci), so the model knows the body axes for any pointing b and can read the body-axis table for the actual tilt: pitch in the body x-z plane, yaw towards +-y. In the glide it is wings level along the ground track, navball roll 0, and it stays defined as the axis passes vertical and through a boostback burn. Zero for none.
+    /// </summary>
+    public double RollRefX { get; init; }
+    public double RollRefY { get; init; }
+    public double RollRefZ { get; init; }
+
+    /// <summary>Total tilt off engine first within which the body-axis table is read, radians: past it, the whole-sphere tables. The body table spans 20 deg each way.</summary>
+    public double BodyAeroMaxTiltRad { get; init; } = 30.0 * Math.PI / 180.0;
 
     /// <summary>Rounding e of |p| in the table lookups, so the drag's |sin(alpha)| corner does not stall the linearisation. See the type summary.</summary>
     public double AlphaRounding { get; init; } = 0.02;
@@ -163,10 +186,22 @@ public sealed record KsaPointMassModel : IPointMassModel
         Dual alpha = Dual.Atan2(pRound, -bv);
         Dual mach = TableMach(Atmosphere.Mach(speed), Drag);
 
+        if (BodyAero != null && (RollRefX != 0.0 || RollRefY != 0.0 || RollRefZ != 0.0)
+            && TryBodyAero(bx, by, bz, hx, hy, hz, qs, speed, out Dual bfx, out Dual bfy, out Dual bfz))
+        {
+            fx += bfx;
+            fy += bfy;
+            fz += bfz;
+            AddCrossBias(qs, hx, hy, hz, ref fx, ref fy, ref fz);
+            return;
+        }
+
         Dual drag = DragScale * qs * Drag.Cd(mach, alpha);
         fx -= drag * hx;
         fy -= drag * hy;
         fz -= drag * hz;
+
+        AddCrossBias(qs, hx, hy, hz, ref fx, ref fy, ref fz);
 
         if (LiftSlope != null)
         {
@@ -175,6 +210,36 @@ public sealed record KsaPointMassModel : IPointMassModel
             fy -= lift * py;
             fz -= lift * pz;
         }
+    }
+
+    private void AddCrossBias(Dual qs, Dual hx, Dual hy, Dual hz, ref Dual fx, ref Dual fy, ref Dual fz)
+    {
+        if (CrossBiasX == 0.0 && CrossBiasY == 0.0 && CrossBiasZ == 0.0)
+            return;
+        Dual along = CrossBiasX * hx + CrossBiasY * hy + CrossBiasZ * hz;
+        fx += qs * (CrossBiasX - along * hx);
+        fy += qs * (CrossBiasY - along * hy);
+        fz += qs * (CrossBiasZ - along * hz);
+    }
+
+    /// <summary>
+    /// The body-axis table's force, N, for a body axis b and air direction h, with the roll held at RollRef: body x along b, y along w's part square to b, z = x x y; alpha and beta from h in those axes (BodyAeroTable); the force q S (C_x x + C_y y + C_z z), its part along the airflow times DragScale and the rest times LiftScale. False where the craft is not within BodyAeroMaxTiltRad of engine first, or the axes are degenerate (b along w, which a returning booster never flies).
+    /// </summary>
+    private bool TryBodyAero(Dual bx, Dual by, Dual bz, Dual hx, Dual hy, Dual hz, Dual qs, Dual speed,
+                             out Dual fx, out Dual fy, out Dual fz)
+    {
+        fx = fy = fz = default;
+        if (!BodyAero!.WorldCoefficients(Atmosphere!.Mach(speed), bx, by, bz, hx, hy, hz, RollRefX, RollRefY, RollRefZ,
+                                         BodyAeroMaxTiltRad, out Dual cx, out Dual cy, out Dual cz))
+            return false;
+        Dual Fx = qs * cx;
+        Dual Fy = qs * cy;
+        Dual Fz = qs * cz;
+        Dual along = Fx * hx + Fy * hy + Fz * hz;
+        fx = LiftScale * (Fx - along * hx) + DragScale * along * hx;
+        fy = LiftScale * (Fy - along * hy) + DragScale * along * hy;
+        fz = LiftScale * (Fz - along * hz) + DragScale * along * hz;
+        return true;
     }
 
     public double DynamicPressure(ReadOnlySpan<double> x)
@@ -248,7 +313,7 @@ public sealed record KsaPointMassModel : IPointMassModel
     /// <summary>
     /// k(Mach, alpha) = C_L / sin(alpha) from a measured C_L grid (row-major, Mach slowest - KsaAeroSweep's LiftTable), on the breakpoints up to 90 degrees, which is far past any angle a booster is flown at.
     ///
-    /// At alpha = 0 the ratio is 0/0, and its limit is the lift slope. The first non-zero breakpoint's ratio stands in for it: a slender body's crossflow lift grows faster than sin(alpha), so the ratio rises from zero, and extrapolating that rise back to alpha 0 could go negative and flip the sign of the lift at small angles. Holding it flat keeps the small-angle lift the right way round and slightly generous, where it matters least.
+    /// At alpha = 0 the ratio is 0/0, and its limit is the lift slope. The first non-zero breakpoint's ratio stands in for it - 1 deg on KsaAeroSweep's grid, which adds 1, 3 and 4 deg to the default 0, 2, 5: a slender body's crossflow lift grows faster than sin(alpha), so the ratio rises from zero, and extrapolating that rise back to alpha 0 could go negative and flip the sign of the lift at small angles. Holding it flat keeps the small-angle lift the right way round and slightly generous, where it matters least.
     /// </summary>
     public static AeroTable LiftSlopeTable(double[] machGrid, double[] alphaGridDeg, double[] clTable)
     {

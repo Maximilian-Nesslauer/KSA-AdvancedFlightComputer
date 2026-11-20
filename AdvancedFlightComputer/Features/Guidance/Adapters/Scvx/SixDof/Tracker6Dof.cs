@@ -43,7 +43,7 @@ public sealed record Tracker6Dof
         // Position follows the curved plan segment. Read velocity from the plan's velocity states because differentiating a small position defect across a short interval can command a large thrust correction.
         Span<double> planR = stackalloc double[3];
         Span<double> planV = stackalloc double[3];
-        double dt = plan.Nodes > 1 ? plan.Sigma / (plan.Nodes - 1) : 0.0;
+        double dt = plan.Nodes > 1 ? plan.IntervalDt(k) : 0.0;
         PlanStateInterpolation.SamplePositionVelocity(plan.X, k, k1, f, dt, planR, planV, useNodeVelocities: true);
 
         double[] fb = new double[3];

@@ -78,6 +78,15 @@ internal static class ThreeDofMpcCheck
             Arg("--turn-anchor")?.ToLowerInvariant() != "off",
             Num("--vc-velocity", 0.0));
         Xf = [0, 0, Num("--aim-height", 0.0), 0, 0, -Num("--aim-sink", 0.0)];
+        // --body <side> [--body-up <up>]: plan and fly on a body-axis table at a held roll (BodyAeroTable), with a fixed force across the body in coefficients, as the game's boosters with strakes and fins have; --body-truth-only gives it to the truth alone, so the estimator has to learn it.
+        BodySide = Arg("--body") is null ? double.NaN : Num("--body", 0.0);
+        BodyUp = Num("--body-up", 0.0);
+        BodyTruthOnly = args.Contains("--body-truth-only");
+        // --budget / --recovery-budget: the game's wall-clock caps per warm cycle and after a refusal, ms (60 and 200 in flight); 0, the default, for none, so the flight does not depend on the machine.
+        // --burn-tilt: the burn's tilt limit, degrees per second of burn left (Scvx3DofConfig.BurnTiltPerS), 0 for none.
+        BurnTilt = Num("--burn-tilt", 0.0);
+        CycleBudget = Num("--budget", 0.0);
+        RecoveryBudget = Num("--recovery-budget", 0.0);
         Console.WriteLine($"burn tracking {(flight.Tracker is { } k ? $"Kp {k.Kp:F2} Kd {k.Kd:F2} tilt {k.MaxTiltRad * 180.0 / Math.PI:F0} deg" : "off")}, " +
                           $"plan throttle ceiling {flight.GlideCeiling:F2} glide, {flight.BurnCeiling:F2} burn, accel limit {(flight.AccelMax > 0.0 ? $"{flight.AccelMax / 9.80665:F1} g" : "off")}, engines x{flight.EngineScale:F1}, end state {Xf[2]:F0} m at {-Xf[5]:F1} m/s, " +
                           $"turn accel plan {(flight.TurnAccel > 0.0 ? $"{flight.TurnAccel * 180.0 / Math.PI:F1}" : "off")} vehicle {(flight.PlantAccel > 0.0 ? $"{flight.PlantAccel * 180.0 / Math.PI:F1} deg/s2" : "instant")}");
@@ -113,6 +122,10 @@ internal static class ThreeDofMpcCheck
         return all ? 0 : 1;
     }
 
+    private static double BodySide = double.NaN, BodyUp;
+    private static bool BodyTruthOnly;
+    private static double CycleBudget, RecoveryBudget, BurnTilt;
+
     private sealed record Result(bool Pass, bool Flown, double Miss, double Vz, int Refused, double AdmmPerCycle, double P50, double Max);
 
     /// <summary>How the burn is flown: the tracker, or the plan's own command when null, the plan's throttle ceilings, and its thrust acceleration limit (m/s^2, 0 for none).</summary>
@@ -129,25 +142,40 @@ internal static class ThreeDofMpcCheck
     private static Result Fly(Case c, ScalingMode mode, Flight flight, bool verbose)
     {
         KsaPointMassModel scenario = ThreeDofScenario.Model();
+        KsaPointMassModel? truthBase = null;
         KsaPointMassModel nominal = scenario with
         {
             VacuumThrust = scenario.VacuumThrust * flight.EngineScale,
             MassFlow = scenario.MassFlow * flight.EngineScale,
             ExitArea = scenario.ExitArea * flight.EngineScale,
         };
-        KsaPointMassModel truth = nominal with
+        if (double.IsFinite(BodySide))
+        {
+            // Held wings level, as GuidanceWindow.ReturnRollRefCci: the wing along up x d, d the start's horizontal direction to the aim point.
+            double[] start = c.Start ?? X0;
+            double[] d = ThreeDofScenario.Normalise([-start[0], -start[1], 0]);
+            double[] wRef = [-d[1], d[0], 0.0];
+            KsaPointMassModel held = nominal with { BodyAero = ThreeDofScenario.BodyTable(BodySide, BodyUp), RollRefX = wRef[0], RollRefY = wRef[1], RollRefZ = wRef[2] };
+            KsaPointMassModel heldPlan = nominal with { BodyAero = ThreeDofScenario.BodyTable(), RollRefX = wRef[0], RollRefY = wRef[1], RollRefZ = wRef[2] };
+            if (!BodyTruthOnly)
+                nominal = held;
+            else
+                nominal = heldPlan;
+            truthBase = held;
+        }
+        KsaPointMassModel truth = (truthBase ?? nominal) with
         {
             DragScale = c.Drag,
             LiftScale = c.Lift,
             VacuumThrust = nominal.VacuumThrust * c.Thrust,
         };
-        Scvx3DofConfig glide = ThreeDofScenario.Config(anchor: true, accelMax: new Guidance3Dof.Settings().GlideAccelMax(flight.AccelMax), turnAccel: flight.TurnAccel, vcVelocity: flight.VcVelocity);
-        Scvx3DofConfig burn = ThreeDofScenario.Config(nodes: 20, glideIntervals: 0, anchor: true, accelMax: flight.AccelMax, turnAccel: flight.TurnAccelBurn, vcVelocity: flight.VcVelocity);
+        Scvx3DofConfig glide = ThreeDofScenario.Config(anchor: true, accelMax: new Guidance3Dof.Settings().GlideAccelMax(flight.AccelMax), turnAccel: flight.TurnAccel, vcVelocity: flight.VcVelocity, burnTiltPerSDeg: BurnTilt);
+        Scvx3DofConfig burn = ThreeDofScenario.Config(nodes: 20, glideIntervals: 0, anchor: true, accelMax: flight.AccelMax, turnAccel: flight.TurnAccelBurn, vcVelocity: flight.VcVelocity, burnTiltPerSDeg: BurnTilt);
         // No wall-clock deadlines offline: they make the iteration count, and so the flight, depend on the machine's speed. The iteration caps still bound every cycle.
         // Anchored on the last command, tight, as the game flies it.
         var guidance = new Guidance3Dof(glide, burn, nominal, new Guidance3Dof.Settings
         {
-            CycleBudgetMs = 0, RecoveryBudgetMs = 0, Scaling = mode,
+            CycleBudgetMs = CycleBudget, RecoveryBudgetMs = RecoveryBudget, Scaling = mode,
             AnchorSeconds = 0.3, AnchorFloor = 1.0 * Math.PI / 180.0,
             GlideThrottleCeiling = flight.GlideCeiling, BurnThrottleCeiling = flight.BurnCeiling,
         });
@@ -182,6 +210,7 @@ internal static class ThreeDofMpcCheck
         double throttle = 0.0;
         bool engine = false, lit = false, cut = false;
         double commanded = double.NaN, cutHeight = double.NaN, peakAccel = 0.0;
+        double ignitionSlant = double.NaN, ignitionSideways = double.NaN, tiltAt2 = double.NaN;
         Plan3Dof? lastGlidePlan = guidance.Published;
         while (t < 400)
         {
@@ -214,7 +243,7 @@ internal static class ThreeDofMpcCheck
                 if (guidance.Phase == Phase3Dof.Glide) lastGlidePlan = guidance.Published;
                 if (verbose && (solveMs.Count % 10 == 0 || before != guidance.Phase))
                     Console.WriteLine($"    t {t,6:F1}  {guidance.Phase,-9} alt {x[2],7:F0} v {Speed(x),5:F0}  ign {guidance.Published?.IgnitionTime ?? double.NaN,6:F2}  " +
-                                      $"tb {guidance.Published?.SigmaBurn ?? double.NaN,5:F1}  kd {estimator.DragScale:F2} kl {estimator.LiftScale:F2} kt {estimator.ThrustScale:F2}  " +
+                                      $"tb {guidance.Published?.SigmaBurn ?? double.NaN,5:F1}  kd {estimator.DragScale:F2} kb {estimator.BiasAcceleration(nominal, x):F2} kt {estimator.ThrustScale:F2}  " +
                                       $"{guidance.LastIterations} it {guidance.LastSolveMs,4:F0} ms  {guidance.Error}");
             }
 
@@ -222,13 +251,32 @@ internal static class ThreeDofMpcCheck
             double[] xp = new double[NX], up = new double[4];
             plan.Sample(t, xp, up);
             engine = t >= plan.IgnitionTime;
-            if (engine && double.IsNaN(commanded)) commanded = t;
+            if (engine && double.IsNaN(commanded))
+            {
+                commanded = t;
+                ignitionSlant = Math.Atan2(Math.Sqrt(x[3] * x[3] + x[4] * x[4]), -x[5]) * 180.0 / Math.PI;
+                ignitionSideways = Math.Sqrt(x[3] * x[3] + x[4] * x[4]);
+            }
+            if (engine && !cut)
+            {
+                double tiltNow = Math.Acos(Math.Clamp(att[2], -1.0, 1.0)) * 180.0 / Math.PI;
+                double left = plan.EndTime - t;
+                if (left <= 2.0 && left > 1.9) tiltAt2 = tiltNow;
+            }
             if (engine && flight.Tracker != null)
             {
                 // The game's command: the tracker's thrust, as the throttle that gives it by the engine as now learned, inside what the engine can do.
                 KsaPointMassModel model = guidance.Model;
                 double thrust = flight.Tracker.Command(plan, t, x, out cmd);
                 throttle = Math.Clamp(model.ThrottleFor(thrust, model.Altitude(x)), burn.ThrottleFloor, 1.0);
+            }
+            else if (plan.Phase == Phase3Dof.Locked && t < plan.IgnitionTime && guidance.LockPlan is { } locked)
+            {
+                // Ignition locked, engine off: the plan it was locked on, flown open loop to ignition, as the game flies it.
+                double[] xl = new double[NX], ul = new double[4];
+                locked.Sample(t, xl, ul);
+                cmd = [ul[0], ul[1], ul[2]];
+                throttle = 0.0;
             }
             else
             {
@@ -270,7 +318,7 @@ internal static class ThreeDofMpcCheck
         bool landed = x[2] <= Xf[2] + 1.0;
         bool pass = landed && miss < 15.0 && vh < 2.0 && Math.Abs(vz - Xf[5]) < 2.0 && x[6] > ThreeDofScenario.DryMass;
         double admmPerCycle = solveMs.Count > 0 ? (double)admm / solveMs.Count : double.NaN;
-        Console.WriteLine($"{c.Name,-18} {miss,7:F1} {vh,7:F2} {vz,7:F2} {prop,8:F0} {drift,11:F2} {refused,7} {admmPerCycle,8:F0} {p50,8:F0}/{max,-8:F0} {swapJump,11:F1} {(cut ? cutHeight.ToString("F1") : "-"),6} {peakAccel / 9.80665,6:F2} {t - commanded,6:F1}  " +
+        Console.WriteLine($"{c.Name,-18} {miss,7:F1} {vh,7:F2} {vz,7:F2} {prop,8:F0} {drift,11:F2} {refused,7} {admmPerCycle,8:F0} {p50,8:F0}/{max,-8:F0} {swapJump,11:F1} {(cut ? cutHeight.ToString("F1") : "-"),6} {peakAccel / 9.80665,6:F2} {t - commanded,6:F1}  slant {ignitionSlant,4:F1} deg {ignitionSideways,4:F0} m/s, tilt@2s {tiltAt2,4:F1}  " +
                           $"{(pass ? "ok" : landed ? "OFF TARGET" : $"FAILED at {x[2]:F0} m: {guidance.Error}")}");
         return new Result(pass, true, miss, vz, refused, admmPerCycle, p50, max);
     }

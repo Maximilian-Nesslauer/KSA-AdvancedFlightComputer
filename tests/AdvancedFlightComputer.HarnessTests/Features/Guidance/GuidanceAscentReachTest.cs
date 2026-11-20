@@ -503,9 +503,7 @@ public sealed class GuidanceAscentReachTest : AfcTest
         massToOrbit = double.NaN;
         SetPlane(state, vehicle, home, incDeg);
         state.AscentPlan = null;
-        state.AscentPlanRequested = true;
-        driver.Step(0.02);
-        AscentPlanJob? job = state.AscentPlanJob;
+        AscentPlanJob? job = AscentPlanRequests.Start(driver, state);
         if (!t.Check($"inc {incDeg:F1}: Calculate starts a solve", job != null, $"status '{state.AscentPlanStatus}'"))
             return;
         var clock = System.Diagnostics.Stopwatch.StartNew();

@@ -18,6 +18,11 @@ public sealed class Scvx6DofConfig
     public double Tmax { get; init; } = 6.0e6;
     public double ThrottleFloor { get; init; } = 0.40;          // Tmin = floor * Tmax
     public double GimbalMaxDeg { get; init; } = 10.0;
+
+    /// <summary>
+    /// How fast the gimbal can move, as full deflections (GimbalMaxDeg) per second; 0 for no limit. KSA 5901's gimbals slew at Gimbal's rate cap, NaturalFrequency / (5 e) of their range a second - 2 a second for the stock engines, zero to full deflection in half a second - where the plan took the lateral thrust as free to jump between nodes: at 50 nodes it could swing ten times faster than the gimbal follows. The lateral thrust may change between neighbouring nodes by no more than this rate times the interval times the cone's width at the thrust there.
+    /// </summary>
+    public double GimbalSlewPerS { get; init; }
     public double TauRollMax { get; init; } = 1.0e5;
 
     /// <summary>
@@ -48,7 +53,18 @@ public sealed class Scvx6DofConfig
         => VirtualControlScale is { } s && i < s.Length && s[i] > 0.0 ? s[i] : XScale[i];
 
     public double WDu { get; init; } = 0.2;                     // control-rate smoothing
+
+    /// <summary>
+    /// Price on the RCS torque, RcsWeight * sum over nodes and controls of (u_rcs / authority)^2. The propellant alone barely prices it, so without this the split between the gimbals and the RCS, and between a control's + and - halves, was all but free, and the subproblem had flat directions: on 2026-11-19 SCS took 2-8 times the iterations it had without RCS. The square makes the split unique and leans on the gimbals, which cost no propellant, before the thrusters.
+    /// </summary>
+    public double RcsWeight { get; init; } = 0.0;
     public double WW { get; init; } = 1.0;                      // angular-rate damping
+
+    /// <summary>
+    /// A rate price on the COAST's nodes, on top of WW: CoastRateWeight * sum over coast nodes 1 .. CoastIntervals-1 of ||w||^2. 0 for none.
+    ///  WHY. The coast burns nothing, so fuel - the only term that cares about the path's shape - is flat across every glide that reaches an equally good ignition, and the air's lift steers it sideways for free. Re-solves then wandered: on the 2026-11-20 14:51 Earth flight entry's plan, the seed, ran 7.6 m off the straight line to the pad; the plans went to +27 m, then -14, -23, -47 m, and the booster flew a 20 m sideways bend in the coast and back in the burn. Of glides that cost the same, the one that turns least is the straight one, so a small price on turning picks it; set against fuel (Ksa6DofSetup), small enough that a turn that saves fuel still wins.
+    /// </summary>
+    public double CoastRateWeight { get; init; }
     /// <summary>
     /// PROXIMAL weight: penalise deviation from the REFERENCE trajectory,
     /// rho * ||(X - Xbar)/Xscale||^2, rather than deviation from zero.
@@ -79,6 +95,24 @@ public sealed class Scvx6DofConfig
     public double SigmaMin { get; set; } = 5.0;
     public double SigmaMax { get; set; } = 25.0;
     public double SigmaScale { get; init; } = 12.0;
+
+    /// <summary>
+    /// THE COAST BEFORE IGNITION, as a number of intervals, or 0 for none (the burn starts at node 0, as before).
+    ///  The first CoastIntervals intervals are flown with the engine off (Dynamics6Dof.Params.EngineOff): nodes 0 .. CoastIntervals-1 have no thrust, and node CoastIntervals is the IGNITION, where the thrust steps to the burn's. The coast has its own free duration, the second time variable beside the burn's sigma, so the plan chooses when to light as well as how to burn: entry guidance's glide and burn split, on the full attitude. Attitude in the coast is the RCS's and the air's; there is no gimbal torque without thrust.
+    ///  One node grid for both phases, so the problem keeps its shape as ignition nears and passes: a warm start carries from a re-solve to the next, through ignition (<see cref="CoastSigmaFixed"/>).
+    /// </summary>
+    public int CoastIntervals { get; init; }
+
+    public bool HasCoast => CoastIntervals > 0;
+
+    /// <summary>The coast's duration bounds, s. SETTABLE like sigma's.</summary>
+    public double CoastSigmaMin { get; set; }
+    public double CoastSigmaMax { get; set; } = 30.0;
+
+    /// <summary>
+    /// THE IGNITION LOCK: the coast's duration pinned to this, s, or null to leave it free. A fuel-optimal plan always lights as late as it can, so a free ignition time slides later on every re-solve; locked a second or so out, the craft commits to it. After ignition the coast is pinned at zero: its nodes sit at the start, the problem keeps its shape, and the warm start carries on.
+    /// </summary>
+    public double? CoastSigmaFixed { get; set; }
 
     public double[] XScale { get; init; } =
         [100, 100, 300, 50, 50, 50, 1, 1, 1, 1, 1, 1, 1, 250000.0];
@@ -170,6 +204,21 @@ public sealed class Scvx6DofConfig
     public double TerminalMissWeight { get; init; }
 
     /// <summary>
+    /// The length the terminal miss is priced on, m: TerminalMissWeight per this many metres of miss. 0 prices it on the position scale (XScale), as it was.
+    ///  PRICED ON A FIXED LENGTH, the miss costs the same per metre wherever the plan starts. On the position scale - the craft's distance from the target when the solver was built - it cost a third as much per metre on a plan handed over 760 m up as on one from 240 m, and offline the landings missed by 10 m against 3 m (--6dof-coast, 2026-11-20).
+    /// </summary>
+    public double TerminalMissScaleM { get; init; }
+
+    /// <summary>The speed the terminal velocity miss is priced on, m/s; 0 prices it on the velocity scale (XScale). See TerminalMissScaleM.</summary>
+    public double TerminalSpeedScaleMs { get; init; }
+
+    /// <summary>The length a metre of terminal miss is priced on.</summary>
+    public double TerminalMissPriceScale => TerminalMissScaleM > 0.0 ? TerminalMissScaleM : XScale[Dynamics6Dof.IR];
+
+    /// <summary>The speed an m/s of terminal velocity miss is priced on.</summary>
+    public double TerminalSpeedPriceScale => TerminalSpeedScaleMs > 0.0 ? TerminalSpeedScaleMs : XScale[Dynamics6Dof.IV];
+
+    /// <summary>
     /// Penalty per m/s on missing the terminal VELOCITY, or 0 to keep it hard.
     ///
     /// Softening position alone does not help the case it was meant for. When a
@@ -202,6 +251,25 @@ public sealed class Scvx6DofConfig
     /// </summary>
     public double AccelWeight { get; init; } = 300;
     public bool AccelLimitEnabled => AccelMax > 0.0;
+
+    /// <summary>
+    /// THE TURN-RATE LIMIT, rad/s, or 0 for none: |w_k| &lt;= RateMaxRadS at every node from node 1 on, the body rate's whole magnitude, roll included. An exact second-order cone, soft like the glideslope with an L1 slack at <see cref="RateWeight"/>, so a craft handed over turning faster than this is brought back under it rather than given no plan.
+    ///  WHY. Before the RCS, the gimbals' small authority kept the plan's turns gentle. With the RCS the craft can turn hard, nothing in the objective objects (the rate penalty WW is tuned small in flight), and the cheapest plan used it: on 2026-11-20 the booster swung out to 23 deg of tilt and 25 deg/s of roll with the RCS slammed between its limits.
+    /// </summary>
+    public double RateMaxRadS { get; init; }
+
+    /// <summary>The turn-rate slack's price per rad/s over the limit, per node.</summary>
+    public double RateWeight { get; init; } = 1e3;
+
+    public bool RateLimitEnabled => RateMaxRadS > 0.0;
+
+    /// <summary>
+    /// Whether the turn-rate limit counts the roll rate. Off for a plan with a coast before ignition: there the air can roll the craft harder than its RCS can stop - 40 kN m against 22 on the 2026-11-20 booster, which spun at 30 deg/s under entry guidance in the headless harness - and a limit on a rate nothing can hold only makes the plan infeasible. The pitch and yaw rates, which steer the craft, stay limited.
+    /// </summary>
+    public bool RateLimitIncludesRoll { get; init; } = true;
+
+    /// <summary>Components of the body rate the turn-rate limit takes: 3 with the roll, 2 without.</summary>
+    public int RateLimitComponents => RateLimitIncludesRoll ? 3 : 2;
 
     /// <summary>cot of the glideslope half-angle: the cone's horizontal run per unit of height.</summary>
     public double CotGlideSlope => 1.0 / Math.Tan(Math.Clamp(GlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
@@ -238,6 +306,77 @@ public sealed class Scvx6DofConfig
     /// </summary>
     public double SinHalfTilt => Math.Sin(0.5 * TiltMaxDeg * Math.PI / 180.0);
 
-    public double[] ResolvedUScale => UScale ??
-        [Tmax * TanGimbal, Tmax * TanGimbal, Tmax, TauRollMax];
+    /// <summary>
+    /// The largest RCS torque about each body axis, N m, positive way and negative way (as magnitudes): Dynamics6Dof.RcsModel.MaxPosNm and MaxNegNm. The subproblem bounds each axis's control between -neg and +pos, so null, or zeros, pin it at zero.
+    /// </summary>
+    public double[]? RcsMaxPosNm { get; init; }
+    public double[]? RcsMaxNegNm { get; init; }
+
+    /// <summary>
+    /// The share of the craft's torque the plan's limits are: GimbalMaxDeg (in torque, the tangent), TauRollMax and the RCS bounds are this much of the hardware's, the rest kept for the feedback that holds the plan's attitude between re-solves (the flight's AttitudeFeedback6Dof). 1 for none kept. The solver does not read it; the flight divides by it to recover the hardware's limits.
+    /// </summary>
+    public double PlanTorqueShare { get; init; } = 1.0;
+
+    private static double Bound(double[]? r, int a)
+        => r is { } v && a < v.Length && double.IsFinite(v[a]) && v[a] > 0.0 ? v[a] : 0.0;
+
+    /// <summary>RCS axis <paramref name="a"/>'s bounds, N m: the most it may give the positive way, and the negative way as a magnitude; zeros for none.</summary>
+    public (double Pos, double Neg) RcsBounds(int a) => (Bound(RcsMaxPosNm, a), Bound(RcsMaxNegNm, a));
+
+    /// <summary>
+    /// TORQUE DEMAND (a prototype, issue #222): the plan asks for one torque per body axis and a mixer outside the plan splits it between the gimbals and the RCS (and later the fins). The three torque controls (Dynamics6Dof.IRCS) then carry the WHOLE control torque; the gimbals' lateral thrust and roll torque controls are pinned at zero; the side force the torque brings is Dynamics6Dof.RcsModel.ForcePerNm, an effective factor the caller sets from the mixer's split.
+    ///  What the plan sees of the mixer is its envelope: per axis, the gimbals' torque per newton of axial thrust (<see cref="DemandTorquePerN"/> on pitch and yaw, <see cref="DemandRollPerN"/> on roll) times the thrust, plus the RCS's own bounds (<see cref="RcsBounds"/>); and how fast that torque can change, the gimbals' slew (GimbalSlewPerS) on their share plus what the RCS can jump.
+    ///  WHY. With the gimbals and the RCS both free in the plan, two torque sources that cost about the same stand in for each other, and SCS takes 5-20 times the iterations on the warm re-solves (2026-11-19/20). One torque per axis leaves nothing to trade.
+    /// </summary>
+    public bool TorqueDemand { get; init; }
+
+    /// <summary>The gimbals' pitch and yaw torque per newton of axial thrust, N m per N (engine arm times tan of the gimbal limit), for <see cref="TorqueDemand"/>.</summary>
+    public double DemandTorquePerN { get; init; }
+
+    /// <summary>The gimbals' roll torque per newton of axial thrust, N m per N, for <see cref="TorqueDemand"/>.</summary>
+    public double DemandRollPerN { get; init; }
+
+    /// <summary>The control torque's bounds on axis <paramref name="a"/> at axial thrust <paramref name="thrust"/>: the RCS's alone, or in <see cref="TorqueDemand"/> the gimbals' share at that thrust plus the RCS's.</summary>
+    public (double Pos, double Neg) ControlTorqueBounds(int a, double thrust)
+    {
+        (double pos, double neg) = RcsBounds(a);
+        if (!TorqueDemand)
+            return (pos, neg);
+        double g = (a < 2 ? DemandTorquePerN : DemandRollPerN) * Math.Max(thrust, 0.0);
+        return (pos + g, neg + g);
+    }
+
+    /// <summary>
+    /// The engine's arm from the centre of mass to the gimbal pivot, m (Dynamics6Dof.Params.LArm), for the RCS controls' scale; 0 leaves it out.
+    /// </summary>
+    public double GimbalArm { get; init; }
+
+    /// <summary>
+    /// The control scales: the gimbal, thrust and roll ones from UScale or Tmax, then one per RCS control: ALL the control torque on that axis, the RCS's authority plus the gimbals' at full thrust (Tmax tan(gimbal) GimbalArm on pitch and yaw, TauRollMax on roll), or the roll scale for a control pinned at zero (any positive figure would do there).
+    ///  WHY THE AXIS'S WHOLE TORQUE AND NOT THE RCS'S ALONE. Scaled by its own authority, an RCS control's trust region (TrustRegion x scale) was a tenth of what the RCS can give per iteration, and the warm re-solves kept running into it: SCS took 5-20 times the iterations it needs with the gimbals alone, often its cap (2026-11-19/20). On the axis's whole torque (about 3x the RCS's on the 2026-11-18 booster) it took 325 at 3e-4 and 100-775 at RealTimeEpsWithRcs, against 350-575 for the gimbals alone, and landed as well (offline --6dof-rcs). The torques the plan trades against each other share one scale.
+    /// </summary>
+    public double[] ResolvedUScale
+    {
+        get
+        {
+            // A craft with no gimbal has a zero cone, which pins its gimbal controls; their scale still has to be positive, so they take a hundredth of the thrust.
+            double gimbalScale = Tmax * TanGimbal > 0.0 ? Tmax * TanGimbal : 0.01 * Tmax;
+            double[] head = UScale ?? [gimbalScale, gimbalScale, Tmax, TauRollMax];
+            if (head.Length >= Dynamics6Dof.NU)
+                return head;
+            var all = new double[Dynamics6Dof.NU];
+            Array.Copy(head, all, Math.Min(head.Length, Dynamics6Dof.IRCS));
+            double fallback = TauRollMax > 0.0 && double.IsFinite(TauRollMax) ? TauRollMax : 1.0;
+            for (int a = 0; a < Dynamics6Dof.NRCS; a++)
+            {
+                (double pos, double neg) = ControlTorqueBounds(a, Tmax);
+                double max = Math.Max(pos, neg);
+                // TorqueDemand's bounds already hold the gimbals' share.
+                double gimbal = TorqueDemand || !(GimbalArm > 0.0) ? 0.0
+                    : a < 2 ? Tmax * TanGimbal * GimbalArm : Math.Max(TauRollMax, 0.0);
+                all[Dynamics6Dof.IRCS + a] = max > 0.0 ? max + gimbal : fallback;
+            }
+            return all;
+        }
+    }
 }

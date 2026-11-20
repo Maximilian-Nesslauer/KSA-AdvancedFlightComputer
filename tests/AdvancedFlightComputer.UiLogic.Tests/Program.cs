@@ -380,7 +380,7 @@ internal static class Program
                      SituationVerbs.NoStageHome, SituationVerbs.NoImpact, SituationVerbs.BelowBrakingStart, SituationVerbs.DeorbitFirst, SituationVerbs.BoostbackNoAir, SituationVerbs.AscentFlies,
                      SituationVerbs.GuidanceFlies, SituationVerbs.DeorbitFlies(GuidanceModeId.GfoldHere), SituationVerbs.AscentFliesLand, SituationVerbs.EntryNeedsAir, SituationVerbs.GfoldNeedsNoAir, SituationVerbs.GfoldEndsDeorbit,
                      PageText.PassesFar, PageText.PressPlansNext, PageText.GfoldNoHoverOutcome, PageText.CorrectionOutcome, PageText.TriesAgain,
-                     PageText.NoGimbalFact, PageText.OverPoweredFact(0.45), PageText.PlanOld, PageText.BurnAfterImpact, PageText.HoverNoEngine,
+                     PageText.NoSteeringFact, PageText.OverPoweredFact(0.45), PageText.PlanOld, PageText.BurnAfterImpact, PageText.HoverNoEngine,
                      PageText.FuelShort(9757.0, 1978.0), PageText.FuelShort(9757.0, 1978.0, chained: true), PageText.BurnAnswer(9757.5, "IN 12h 44m", 11978.0),
                      PageText.TakeOverOutcome(GuidanceModeId.SixDofHere, "TOUCHDOWN"), PageText.TakeOverOutcome(GuidanceModeId.AscentUpfg, "BOOSTBACK"),
                      PageText.PassesOutcome(12), PageText.LandingStopped(true, true), PageText.SiteFar,
@@ -2626,7 +2626,7 @@ internal static class Program
         var curving = noAirHere with { Descent = curves };
         Check("a path that curves stands on its row and stops nothing", LandSolvers.NoteOf(LandSolver.Touchdown, in curving) == new RowNote("TWR >1 AT FLOOR"));
         Check("no hover is no obstacle of the row, its end says it", LandSolvers.NoteOf(LandSolver.Gfold, in curving).Text.Length == 0);
-        Check("no gimbal stops the row of touchdown, because G-FOLD needs a gimbal too", LandSolvers.NoteOf(LandSolver.Touchdown, curving with { Descent = curves with { NoGimbal = true } }) == new RowNote("NO GIMBAL", true));
+        Check("no gimbal and no RCS stops the row of touchdown, because G-FOLD needs a gimbal too", LandSolvers.NoteOf(LandSolver.Touchdown, curving with { Descent = curves with { NoSteering = true } }) == new RowNote("NO GIMBAL OR RCS", true));
         var over = curves with { NeedTiltDeg = 80.0, TiltLimitDeg = 15.0 };
         Check("an over-powered floor is named in place of the curve", LandSolvers.NoteOf(LandSolver.Touchdown, curving with { Descent = over }) == new RowNote("FLOOR TOO HIGH"));
         var heldRows = new LandNowFacts(LandWay.FromHere, LandSolver.Touchdown, false, true, false);

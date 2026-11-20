@@ -7,6 +7,11 @@ namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 public static class ColdReferenceShift
 {
     public static void Apply(double[] reference, int nodes, double sigma, ReadOnlySpan<double> observed)
+        => Apply(reference, nodes, sigma, observed, 0, 0.0);
+
+    /// <summary>As above for a plan that opens with a coast (Scvx6DofConfig.CoastIntervals), whose nodes are not evenly spaced in time.</summary>
+    public static void Apply(double[] reference, int nodes, double sigma, ReadOnlySpan<double> observed,
+                             int coastIntervals, double coastSigma)
     {
         const int stride = Dynamics6Dof.NX;
         if (nodes < 2 || reference.Length != nodes * stride || observed.Length < stride || !(sigma > 0))
@@ -20,13 +25,12 @@ public static class ColdReferenceShift
         double dvy = observed[v + 1] - reference[v + 1];
         double dvz = observed[v + 2] - reference[v + 2];
         double dm = observed[Dynamics6Dof.IM] - reference[Dynamics6Dof.IM];
-        double dt = sigma / (nodes - 1);
 
         // The terminal node moves too, by up to dx + dv * sigma. That is a linearisation point, not a target: the terminal constraints still pull the solution back onto xf.
         for (int k = 0; k < nodes; k++)
         {
             int offset = k * stride;
-            double time = k * dt;
+            double time = Scvx6DofSolver.NodeTime(k, nodes, coastIntervals, sigma, coastSigma);
             reference[offset + r] += dx + dvx * time;
             reference[offset + r + 1] += dy + dvy * time;
             reference[offset + r + 2] += dz + dvz * time;

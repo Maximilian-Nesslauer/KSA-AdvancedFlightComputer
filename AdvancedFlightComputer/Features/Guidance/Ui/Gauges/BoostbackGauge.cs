@@ -329,19 +329,38 @@ public static partial class GuidanceWindow
         return new double3(half.X * 2.0, half.Y * 2.0, half.Z * 2.0);
     }
 
-    private static void ResampleBoostbackAero(Vehicle vehicle, IParentBody parent)
+    /// <summary>How long a failed sweep waits before the next, s: a craft whose sweep fails would otherwise start one every frame.</summary>
+    private const double AeroRetryS = 1.0;
+
+    /// <summary>
+    /// Keeps <see cref="VehicleAutopilotState.Aero"/> current, its sweeps on their own thread (KsaAeroSweep.Job, #223): takes a finished one, and starts one when none runs and the table is stale - or <paramref name="force"/> asks, as DIAG's resample does. The old table flies until the new one lands; a table taken from a craft that changed while it was swept is stale again, and the next call sweeps again.
+    /// </summary>
+    private static void ResampleBoostbackAero(Vehicle vehicle, IParentBody parent, bool force = false)
     {
-        if (KsaAeroSweep.TryBuild(vehicle, parent, SimNow(),
-                                  out KsaAeroSweep.Result result, out string error))
+        if (_s.AeroJob != null)
         {
-            _s.Aero = result;
-            _s.AeroError = "";
+            if (!_s.AeroJob.TryTake(out KsaAeroSweep.Result result, out string error))
+                return;
+            _s.AeroJob = null;
+            if (result != null)
+            {
+                _s.Aero = result;
+                _s.AeroError = "";
+            }
+            else
+            {
+                // Keep whatever we had. A failed resample on a vehicle mid-staging is not a reason to throw away a table that was correct a second ago.
+                _s.AeroError = error;
+                _s.AeroRetryAt = SimNow() + AeroRetryS;
+            }
+            return;
         }
+        if (!force && (SimNow() < _s.AeroRetryAt || !_s.AeroStale(LiveBoxExtents(vehicle), KsaAeroSweep.LiveMeshHash(vehicle), parent)))
+            return;
+        if (KsaAeroSweep.TryStart(vehicle, parent, SimNow(), out KsaAeroSweep.Job job, out string startError))
+            _s.AeroJob = job;
         else
-        {
-            // Keep whatever we had. A failed resample on a vehicle mid-staging is not a reason to throw away a table that was correct a second ago, and the stale check will try again on the next frame anyway.
-            _s.AeroError = error;
-        }
+            _s.AeroError = startError;
     }
 
     private static bool MachAxisFlat(KsaAeroSweep.Result a) => a.MachSpread < 0.01;
@@ -404,6 +423,12 @@ public static partial class GuidanceWindow
             GaugeRowText(D, "LIFT", a.LiftToDragMax < 0.01
                 ? "NONE"
                 : FormattableString.Invariant($"L/D UP TO {a.LiftToDragMax:F2}, NOT IN TABLE"), a.LiftToDragMax < 0.01 ? plain : warn);
+
+            // Static balance from the measured moment: the centre of pressure against the centre of mass at the balance alpha, least stable Mach row. Positive is towards the nose, stable flying engine first.
+            if (a.HasMoment)
+                GaugeRowText(D, "BALANCE", FormattableString.Invariant(
+                        $"CP {a.BalanceWorstM:+0.00;-0.00} m (NOSE +), M{a.BalanceWorstMach:0.##}, {(Math.Abs(a.BalanceWorstM) < KsaAeroSweep.NeutralBalanceM ? "NEUTRAL" : a.BalanceWorstM > 0.0 ? "STABLE" : "UNSTABLE")}"),
+                    a.BalanceWorstM <= -KsaAeroSweep.NeutralBalanceM ? warn : plain);
 
             if (_s.AeroError.Length > 0)
                 GaugeRowText(D, "LAST RESAMPLE", _s.AeroError, ConsoleStyle.Danger);
