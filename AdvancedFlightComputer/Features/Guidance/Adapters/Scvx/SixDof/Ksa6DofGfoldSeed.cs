@@ -16,7 +16,6 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 public static class Ksa6DofGfoldSeed
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
 
     /// <summary>Nodes for the G-FOLD solve itself. Independent of the 6-DOF count; the result is resampled.</summary>
     private const int GfoldNodes = 60;
@@ -109,7 +108,7 @@ public static class Ksa6DofGfoldSeed
             LastGfoldMs = sw.Elapsed.TotalMilliseconds;
 
             // G-FOLD knows no roll, so its attitudes carry none. A craft that cannot stop its roll gets the reference that starts at its measured roll and rolls on with it, as the cold seeds do.
-            Resample(traj, nodes, x0, xf, tof, cfg.TerminalRollFree, out xSeed, out uSeed);
+            Resample(traj, nodes, x0, xf, tof, cfg.TerminalRollFree, cfg.NU, out xSeed, out uSeed);
             sigma = Math.Clamp(tof, cfg.SigmaMin, cfg.SigmaMax);
             if (cfg.TerminalRollFree)
                 ColdSeed6Dof.KeepRoll(xSeed, nodes, sigma);
@@ -154,7 +153,7 @@ public static class Ksa6DofGfoldSeed
 
     /// <param name="fromMeasuredRoll">Each node's attitude is the shortest turn from the node before it, from the measured attitude on, so every node has the measured roll about its thrust axis. Otherwise each node is the shortest turn from upright and has none.</param>
     private static void Resample(GfoldTrajectory t, int nodes, double[] x0, double[] xf,
-                                 double tof, bool fromMeasuredRoll, out double[] xSeed, out double[] uSeed)
+                                 double tof, bool fromMeasuredRoll, int NU, out double[] xSeed, out double[] uSeed)
     {
         xSeed = new double[nodes * NX];
         uSeed = new double[nodes * NU];

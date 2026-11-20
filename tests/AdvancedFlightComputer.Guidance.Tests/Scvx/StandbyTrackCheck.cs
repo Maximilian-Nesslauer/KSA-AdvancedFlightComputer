@@ -16,7 +16,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 internal static class StandbyTrackCheck
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    private const int NU = Dynamics6Dof.NUBase;
     private const double Cadence = 0.1;
     private const double GateM = 1.0;
     private const double WarmRegion = 0.05;

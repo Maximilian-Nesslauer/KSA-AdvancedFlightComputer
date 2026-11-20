@@ -1655,6 +1655,9 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Whether AFC's own attitude controller flew the last step (Autopilot.FlyOwnAttitude), so its actuators are let go when it stops.</summary>
     internal bool OwnAttitudeFlying;
+
+    /// <summary>Whether touchdown guidance flew the craft's fins (SixDof.FlyPlanFins), so they are sent home when it stops.</summary>
+    internal bool TouchdownFinsFlown;
     internal Vehicle OwnAttitudeVehicle;
 
     /// <summary>The trim added to the command, CCI, radians across the airflow: a small rotation off the planned attitude. Zero outside the glide on a plan, and faded out once the engine lights.</summary>

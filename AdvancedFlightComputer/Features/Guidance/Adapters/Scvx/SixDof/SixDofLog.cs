@@ -280,7 +280,7 @@ internal static class SixDofLog
             for (int k = 0; k < plan.Nodes; k++)
             {
                 int i = k * 14;
-                int u = k * Dynamics6Dof.NU;
+                int u = k * plan.NU;
                 double qx = plan.X[i + 7], qy = plan.X[i + 8];
                 double r22 = 1.0 - 2.0 * (qx * qx + qy * qy);
                 double tilt = Math.Acos(Math.Clamp(r22, -1.0, 1.0)) * 180.0 / Math.PI;

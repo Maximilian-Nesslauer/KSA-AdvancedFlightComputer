@@ -19,7 +19,8 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 public sealed class Ksa6DofGuidance
 {
     private const int NX = 14;
-    private const int NU = Dynamics6Dof.NU;
+    /// <summary>The control count, the base controls and the craft's fins (Scvx6DofConfig.NU).</summary>
+    private int NU => _cfg.NU;
 
     /// <summary>Quaternion offset in the state vector, for the seed resampling below.</summary>
     private const int IQ = Dynamics6Dof.IQ;
@@ -1049,6 +1050,7 @@ public sealed class Ksa6DofGuidance
                                      double elapsed, int nodes, int coastIntervals, double sigmaNew, double coastNew, double[] xs, double[] us)
     {
         var old = new Ksa6DofPlan(planX, planU, planSigma, 0.0, planNodes, planCoast, planCoastIntervals);
+        int nuOld = planU.Length / Math.Max(planNodes, 1), nuNew = us.Length / Math.Max(nodes, 1);
         for (int k = 0; k < nodes; k++)
         {
             bool burnSide = k >= coastIntervals;
@@ -1073,8 +1075,9 @@ public sealed class Ksa6DofGuidance
                 xs.AsSpan(k * NX, 3), xs.AsSpan(k * NX + Dynamics6Dof.IV, 3), useNodeVelocities: dtOld < ShortIntervalS);
             for (int i = IQ; i < NX; i++)
                 xs[k * NX + i] = planX[i0 * NX + i] * (1.0 - a) + planX[i1 * NX + i] * a;
-            for (int j = 0; j < NU; j++)
-                us[k * NU + j] = planU[i0 * NU + j] * (1.0 - a) + planU[i1 * NU + j] * a;
+            // Each plan at its own control count: a craft that lost a fin since keeps the controls both have.
+            for (int j = 0; j < Math.Min(nuOld, nuNew); j++)
+                us[k * nuNew + j] = planU[i0 * nuOld + j] * (1.0 - a) + planU[i1 * nuOld + j] * a;
 
             // THE DOUBLE COVER, between the two nodes being blended. q and -q are the same rotation, so a sign disagreement across the bracket interpolates through zero and comes back as a garbage attitude once normalised.
             // Adjacent nodes of a solved plan are normally on one branch, but nothing enforces it and the failure would be silent.
@@ -1557,6 +1560,12 @@ public sealed class Ksa6DofGuidance
     /// <summary>The plan's RCS torque at the last <see cref="Command"/>, N m, model body axes. Zero for a plan without RCS.</summary>
     public double3 RcsTorqueModel { get; private set; }
 
+    /// <summary>The fins' deflections the plan flies now, degrees, one per fin in the plan's order (Ksa6DofSetup.FinsFor), led by the gimbals' lead: a fin travels at its rate, as a nozzle does. Empty for a plan without fins.</summary>
+    public double[] FinDeflectionDeg { get; private set; } = [];
+
+    /// <summary>The plan's fins (Dynamics6Dof.Params.FinCount).</summary>
+    public int FinCount => _dyn.FinCount;
+
     /// <summary>Whether the last <see cref="Command"/> fell in the plan's coast, before ignition: the engine is to be off.</summary>
     public bool InCoast { get; private set; }
 
@@ -1597,6 +1606,13 @@ public sealed class Ksa6DofGuidance
         double leadTdx = InCoast ? 0.0 : Lerp(plan.U, 0, leadNode, leadFraction);
         double leadTdy = InCoast ? 0.0 : Lerp(plan.U, 1, leadNode, leadFraction);
         torqueModel = new double3(_dyn.LArm * leadTdy, -_dyn.LArm * leadTdx, tauRoll);
+
+        // The fins, led as the gimbals are: in the coast as in the burn, a fin works in the air whether the engine burns or not.
+        int fins = _dyn.FinCount;
+        if (FinDeflectionDeg.Length != fins)
+            FinDeflectionDeg = new double[fins];
+        for (int i = 0; i < fins; i++)
+            FinDeflectionDeg[i] = Lerp(plan.U, Dynamics6Dof.IFIN + i, leadNode, leadFraction);
 
         // The RCS torque at the current step: thrusters answer within a pulse, so there is no lag to lead.
         if (_dyn.Rcs != null)

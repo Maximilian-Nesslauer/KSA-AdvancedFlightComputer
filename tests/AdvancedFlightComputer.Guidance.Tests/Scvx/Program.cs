@@ -12,7 +12,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 //   usage: Scvx.Console [path/to/dyn_ref.csv] [--verbose]
 
 const int NX = Dynamics6Dof.NX;
-const int NU = Dynamics6Dof.NU;
+const int NU = Dynamics6Dof.NUBase;
 // The Python references' control count: u = (tdx, tdy, T, tau_roll), from before the RCS controls (Dynamics6Dof.IRCS). Their RCS controls are zero, so the references are read into the wider layout with zeros there, and compared on their own four.
 const int RefNU = 4;
 const int RowLen = NX + RefNU + NX + NX * NX + NX * RefNU;
@@ -72,6 +72,8 @@ if (args.Contains("--6dof-rcs"))
 if (args.Contains("--aero-alloc"))
     return AeroAllocatorCheck.Run(verbose);
 
+if (args.Contains("--6dof-fins"))
+    return SixDofFinCheck.Run(verbose);
 if (args.Contains("--6dof-aero"))
     return SixDofAeroCheck.Run(verbose);
 

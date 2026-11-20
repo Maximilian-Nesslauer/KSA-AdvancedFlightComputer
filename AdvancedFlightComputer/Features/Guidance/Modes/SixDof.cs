@@ -6,6 +6,8 @@ using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
+using System.Collections.Generic;
+using AdvancedFlightComputer.Features.AeroControl;
 using AdvancedFlightComputer.Features.RcsTorque;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
@@ -960,6 +962,7 @@ public static partial class GuidanceWindow
         try { worker?.Dispose(); } catch { /* disengaging must always succeed */ }
         KsaGimbalControl.Disengage(vehicle);
         KsaRcsTorqueControl.Release(vehicle);
+        ReleaseTouchdownFins(vehicle);
         // This also runs from the UI, so queue the engine cut for the next vehicle step.
         if (vehicle != null && cutEngine && _s.ControlAcquired)
             _s.LandingCutPending = true;
@@ -1171,6 +1174,7 @@ public static partial class GuidanceWindow
             KsaGimbalControl.SetLsq(vehicle, default);
         // Nothing plans an RCS torque either.
         KsaRcsTorqueControl.Release(vehicle);
+        ReleaseTouchdownFins(vehicle);
 
         double3 position = vehicle.Orbit.StateVectors.PositionCci;
         double3 up = double3.Normalize(position);
@@ -1274,6 +1278,7 @@ public static partial class GuidanceWindow
         // The plan has ended. Let stock TVC and RCS damp the turn until first contact.
         KsaGimbalControl.Disengage(vehicle);
         KsaRcsTorqueControl.Release(vehicle);
+        ReleaseTouchdownFins(vehicle);
         KsaAttitudeRate.Clear(vehicle);
         GiveRcsBack(vehicle);
         double3 up = double3.Normalize(vehicle.Orbit.StateVectors.PositionCci);
@@ -1853,6 +1858,40 @@ public static partial class GuidanceWindow
         KsaRcsTorqueControl.Command(vehicle, torqueKsa, mx, my, mz, RcsAxisPriority);
     }
 
+    /// <summary>Sends the fins touchdown guidance flew home (FlyPlanFins).</summary>
+    private static void ReleaseTouchdownFins(Vehicle vehicle)
+    {
+        if (!_s.TouchdownFinsFlown)
+            return;
+        KsaAeroTorqueControl.Release(vehicle);
+        _s.TouchdownFinsFlown = false;
+    }
+
+    /// <summary>
+    /// Flies the plan's fin deflections (Ksa6DofGuidance.FinDeflectionDeg) on the craft's control surfaces, in the order the plan was built with (Ksa6DofSetup.FinsFor, the registry's). The surfaces travel to them at their own rate, which the plan already respects. A plan without fins sends them home.
+    /// </summary>
+    private static void FlyPlanFins(Vehicle vehicle)
+    {
+        int fins = _s.Guidance?.FinCount ?? 0;
+        if (fins == 0)
+        {
+            if (_s.TouchdownFinsFlown)
+            {
+                KsaAeroTorqueControl.Release(vehicle);
+                _s.TouchdownFinsFlown = false;
+            }
+            return;
+        }
+        var surfaces = new List<ControlSurface>();
+        ControlSurfaces.Collect(vehicle, surfaces);
+        double[] deg = _s.Guidance.FinDeflectionDeg;
+        // The registry's surfaces that the sweep had tables for, in its order: the plan's fins, one for one.
+        Ksa6DofSetup.FinsFor(vehicle, _s.Aero, surfaces);
+        for (int i = 0; i < Math.Min(surfaces.Count, deg.Length); i++)
+            surfaces[i].Command(deg[i]);
+        _s.TouchdownFinsFlown = true;
+    }
+
     /// <summary>The feedback the plan's thrust is flown through between re-solves, from the panel's gains, or null to fly it open loop.</summary>
     private static Tracker6Dof SixDofTracker() => _s.SixDofTrack
         ? new Tracker6Dof
@@ -1925,6 +1964,7 @@ public static partial class GuidanceWindow
         // The override used to be a single global target, so a second guided craft silently stole the first one's gimbals.
         KsaGimbalControl.SetLsq(vehicle, torqueKsa);
         FlyPlanRcs(vehicle, mx, my, mz);
+        FlyPlanFins(vehicle);
 
         ref ManualControlInputs manual = ref ManualInputs(vehicle);
         // ENGINE STAYS LIT WHILE GUIDING.

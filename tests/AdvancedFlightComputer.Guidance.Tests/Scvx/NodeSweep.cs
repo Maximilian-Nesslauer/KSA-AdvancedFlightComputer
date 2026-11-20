@@ -22,7 +22,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 internal static class NodeSweep
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    private const int NU = Dynamics6Dof.NUBase;
 
     /// <summary>Mirrors Ksa6DofGuidance.MaxDefectM - a plan past this is refused.</summary>
     private const double GateM = 1.0;

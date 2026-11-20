@@ -442,9 +442,11 @@ public static partial class GuidanceWindow
         {
             ReadOnlySpan<double> px = g.PlanState;
             ReadOnlySpan<double> pu = g.PlanControl;
+            // The plan's control count per node: the base controls and one per fin.
+            int nu = n > 0 ? pu.Length / n : 0;
             if (px.Length < n * 14)
                 return 1;
-            haveThrust = pu.Length >= n * Dynamics6Dof.NU;
+            haveThrust = nu >= Dynamics6Dof.NUBase && pu.Length >= n * nu;
 
             // KsaFrameBridge's site frame is Z-UP - (ex, ey, up) - unlike the G-FOLD frame above it, which is X-up. So height is index 2 and the horizon is 0 and 1, the other way round from DrawGfoldPlannedPath.
             for (int k = 0; k < n; k++)
@@ -456,8 +458,8 @@ public static partial class GuidanceWindow
                 if (!haveThrust)
                     continue;
 
-                // The control starts with thrust in BODY coordinates (Dynamics6Dof.NU doubles per node: lateral, lateral, axial, then the torques) - NOT three, and not in the site frame. It has to be rotated by the node's attitude quaternion before it means anything spatially, which is exactly what the world overlay does.
-                int c = k * Dynamics6Dof.NU;
+                // The control starts with thrust in BODY coordinates (the plan's control count per node: lateral, lateral, axial, then the torques and the fins) - NOT three, and not in the site frame. It has to be rotated by the node's attitude quaternion before it means anything spatially, which is exactly what the world overlay does.
+                int c = k * nu;
                 KsaFrameBridge.QuatToMatrix(px[b + 6], px[b + 7], px[b + 8], px[b + 9],
                     out double3 b0, out double3 b1, out double3 b2);
                 double3 tSite = b0 * pu[c + 0] + b1 * pu[c + 1] + b2 * pu[c + 2];

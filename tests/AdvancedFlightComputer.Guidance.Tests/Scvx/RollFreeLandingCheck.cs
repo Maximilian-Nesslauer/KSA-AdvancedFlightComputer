@@ -15,7 +15,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 internal static class RollFreeLandingCheck
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    private const int NU = Dynamics6Dof.NUBase;
 
     private const double Tmax = 6393.5;
     private const double MinThrust = 636.9;

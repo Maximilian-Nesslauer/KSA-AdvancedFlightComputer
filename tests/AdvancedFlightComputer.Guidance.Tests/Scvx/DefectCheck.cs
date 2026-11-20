@@ -22,7 +22,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 internal static class DefectCheck
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    private const int NU = Dynamics6Dof.NUBase;
 
     /// <summary>Mirrors Ksa6DofGuidance.MaxDefectM - the flight gate, in metres.</summary>
     private const double MaxDefectM = 1.0;

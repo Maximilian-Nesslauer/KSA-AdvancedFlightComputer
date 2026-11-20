@@ -23,7 +23,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 internal static class SpreadCheck
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    private const int NU = Dynamics6Dof.NUBase;
 
     /// <summary>A 60 fps frame - the budget one iteration has to fit inside.</summary>
     private const double FrameDt = 1.0 / 60.0;

@@ -8,7 +8,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 ///  Publishing is a single reference assignment, so a reader either sees the whole previous plan or the whole new one and never a mixture. No lock is involved, and none is needed: the arrays are freshly allocated by each solve and never written again once published, so they are immutable in practice even though double[] cannot say so in the type system. Nothing may mutate them in place - that is the one rule this type depends on.
 /// </summary>
 /// <param name="X">Node states, Nodes * Dynamics6Dof.NX. Never mutated after publish.</param>
-/// <param name="U">Node controls, Nodes * Dynamics6Dof.NU. Never mutated after publish.</param>
+/// <param name="U">Node controls, Nodes * the plan's control count (Scvx6DofConfig.NU: the base controls and one per fin). Never mutated after publish.</param>
 /// <param name="Sigma">Burn time this plan covers, seconds.</param>
 /// <param name="SolveTime">Sim time at which node 0 was the vehicle.</param>
 /// <param name="Nodes">Node count, so the reader does not have to infer it from a length.</param>
@@ -17,6 +17,9 @@ namespace AdvancedFlightComputer.Features.Guidance;
 public sealed record Ksa6DofPlan(double[] X, double[] U, double Sigma, double SolveTime, int Nodes,
                                  double Coast = 0.0, int CoastIntervals = 0)
 {
+    /// <summary>The plan's control count per node: the base controls and one per fin (Scvx6DofConfig.NU).</summary>
+    public int NU => Nodes > 0 ? U.Length / Nodes : 0;
+
     /// <summary>The whole plan's duration, s: the coast and the burn.</summary>
     public double Duration => Coast + Sigma;
 

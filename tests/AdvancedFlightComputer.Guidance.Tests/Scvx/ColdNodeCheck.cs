@@ -36,7 +36,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 internal static class ColdNodeCheck
 {
     private const int NX = Dynamics6Dof.NX;
-    private const int NU = Dynamics6Dof.NU;
+    private const int NU = Dynamics6Dof.NUBase;
 
     private const double ColdGateM = 15.0;
     private const double WarmGateM = 1.0;
