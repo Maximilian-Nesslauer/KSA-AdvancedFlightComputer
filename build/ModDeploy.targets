@@ -8,7 +8,9 @@
     Optional inputs, all with a default:
       ModDeployName          folder name under the game's mods directory (default: AssemblyName)
       PatchFile              XML patch items to deploy into <mod>\Patches\ (default: none)
-      DeployToMods           false builds without touching the game's mods folder
+      ModDeployDir           folder to deploy into (default: the mod's folder in the profile in Documents)
+      DeployToMods           true deploys, false only compiles (default: true inside Visual Studio
+                             or when ModDeployDir is given, false for other command-line builds)
       GenerateLaunchProfile  false skips writing a StarMap launch profile for this project
 
     Beyond the plain copy it does three things.
@@ -29,10 +31,15 @@
 
   <PropertyGroup>
     <ModDeployName Condition="'$(ModDeployName)' == ''">$(AssemblyName)</ModDeployName>
-    <DeployToMods Condition="'$(DeployToMods)' == ''">true</DeployToMods>
+    <!-- A build deploys only when it names where to: ModDeployDir on the command line (the scripts
+         that test in a game instance pass it), DeployToMods=true, or a build inside Visual Studio,
+         whose StarMap launch profile plays with the profile in Documents. Any other command-line
+         build only compiles, so a forgotten switch cannot replace the mods in that profile. -->
+    <DeployToMods Condition="'$(DeployToMods)' == '' AND ('$(ModDeployDir)' != '' OR '$(BuildingInsideVisualStudio)' == 'true')">true</DeployToMods>
+    <DeployToMods Condition="'$(DeployToMods)' == ''">false</DeployToMods>
     <GenerateLaunchProfile Condition="'$(GenerateLaunchProfile)' == ''">true</GenerateLaunchProfile>
 
-    <ModDeployDir>$(USERPROFILE)\Documents\My Games\Kitten Space Agency\mods\$(ModDeployName)\</ModDeployDir>
+    <ModDeployDir Condition="'$(ModDeployDir)' == ''">$(USERPROFILE)\Documents\My Games\Kitten Space Agency\mods\$(ModDeployName)\</ModDeployDir>
     <ModDeployStamp>$(ModDeployDir).deployed-from</ModDeployStamp>
     <LaunchProfile>$(MSBuildProjectDirectory)\Properties\launchSettings.json</LaunchProfile>
 
