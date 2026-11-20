@@ -278,7 +278,8 @@ internal static class BrakingHandoverCheck
         tol[13] = x0[13] * 1e-3;
 
         // The held command: the thrust the braking burn left, along the body axis, with no torque.
-        double[] held = [0.0, 0.0, HeldThrottle * cfg.Tmax, 0.0];
+        double[] held = new double[NU];
+        held[Dynamics6Dof.IT] = HeldThrottle * cfg.Tmax;
         // The braking burn that keeps flying the craft while the solve runs: the path that brings it to rest over the pad in the burn time.
         const double BurnDt = 0.02;
         int burnNodes = (int)Math.Round(o.Sigma / BurnDt) + 1;

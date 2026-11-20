@@ -84,7 +84,7 @@ internal static class Program
         Require(worker.TryCollect(out var result), "collect cold failure");
         Require(result.Matches(Ksa6DofJob.StepCold, guidance), "cold error belongs to its source");
         Require(!result.Ok && result.Faulted, "exception is distinct from more iterations needed");
-        Require(result.Error == "solve threw: native solver unavailable", "exception cause retained");
+        Require(result.Error.StartsWith("solve threw: native solver unavailable (InvalidOperationException at ", StringComparison.Ordinal), "exception cause retained");
     }
 
     private static void ColdRefusalIsNotAnException()
