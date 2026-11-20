@@ -195,7 +195,14 @@ public static partial class GuidanceWindow
         // Kept current for the staging check 6-DOF runs from its first step once it flies.
         _s.LastMass = vehicle.TotalMass;
 
-        if (_s.Worker.TryCollect(out Ksa6DofSolveResult result)
+        Ksa6DofSolveResult result = null;
+        if (_s.Worker.TryCollect(out result) && result.Job == Ksa6DofJob.Rebuild)
+        {
+            // A node step reseeded on the worker (BeginRebuild).
+            FinishNodeRebuild(result, now);
+            result = null;
+        }
+        if (result != null
             && result.Matches(_s.Converging ? Ksa6DofJob.StepCold : Ksa6DofJob.Track, _s.Guidance))
         {
             if (result.Faulted)
@@ -304,7 +311,7 @@ public static partial class GuidanceWindow
         if (!_s.SixDofStandbyPredicted)
             UpdateAccelBias(x, now, _s.LastThrottle > 0.0 ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle, ambientPa) : 0.0);
 
-        // The node ladder too, so the guidance handed over is already at the count 6-DOF would fly. Only off a fresh plan: a rebuild reseeds from the published plan, synchronously.
+        // The node ladder too, so the guidance handed over is already at the count 6-DOF would fly. Only off a fresh plan: a rebuild reseeds from the published plan, on the worker (BeginRebuild).
         if (_s.SixDofNodeGates && age <= SixDofStandbyMaxPlanAgeS && !_s.SixDofCoastPending)
             StepNodeGates(vehicle, parent, siteCci, x, now);
 

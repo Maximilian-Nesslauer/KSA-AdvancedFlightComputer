@@ -495,6 +495,9 @@ public sealed class VehicleAutopilotState
     /// <summary>The solve in progress, or null.</summary>
     public AscentPlanJob AscentPlanJob;
 
+    /// <summary>A node-count rebuild of touchdown guidance running on its solve worker, or null (GuidanceWindow.NodeRebuild, #226).</summary>
+    internal GuidanceWindow.NodeRebuild PendingNodeRebuild;
+
     /// <summary>The aero sweeps a requested convex plan waits on, running on their own threads, or null (GuidanceWindow.AscentAeroSweeps).</summary>
     internal GuidanceWindow.AscentAeroSweeps AscentAero;
 
