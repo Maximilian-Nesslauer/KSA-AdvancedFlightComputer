@@ -337,6 +337,8 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void ResampleBoostbackAero(Vehicle vehicle, IParentBody parent, bool force = false)
     {
+        // A surface pass finishes after its sweep was taken; its lines are written here.
+        KsaAeroSweep.WriteLog();
         if (_s.AeroJob != null)
         {
             if (!_s.AeroJob.TryTake(out KsaAeroSweep.Result result, out string error))

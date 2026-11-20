@@ -12,6 +12,7 @@
     <Compile Include="../../../AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/Ksa6DofGfoldSeed.cs" Link="Ksa6DofGfoldSeed.cs" />
     <Compile Include="../../../AdvancedFlightComputer/Features/RcsTranslation/RcsLpSolver.cs" Link="RcsLpSolver.cs" />
     <Compile Include="../../../AdvancedFlightComputer/Features/RcsTorque/RcsTorqueAllocator.cs" Link="RcsTorqueAllocator.cs" />
+    <Compile Include="../../../AdvancedFlightComputer/Features/AeroControl/AeroTorqueAllocator.cs" Link="AeroTorqueAllocator.cs" />
     <Using Include="AdvancedFlightComputer.Features.Guidance" />
   </ItemGroup>
 </Project>
