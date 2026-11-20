@@ -324,6 +324,9 @@ public static partial class GuidanceWindow
     private static void StepNodeGates(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                       double[] x, double now)
     {
+        // A rebuild on the worker: nothing moves until it lands (FinishNodeRebuild). Nor while a solve holds the worker: the rebuild goes there next (BeginRebuild), not onto this thread.
+        if (NodeRebuildRunning || (_s.Worker != null && !_s.Worker.IsIdle))
+            return;
         // RECOVERY.
         // A run of refusals means the vehicle is flying an ageing open-loop plan, and the commonest cause is a node step that landed on a count too coarse for the conditions - the flight log for 20260806-142450 shows a step to 5 nodes at 261 m taking the defect from 0.49 m to 390 m and refusing every re-solve thereafter.
         // One-way stepping cannot recover from that on its own, so step BACK UP one rung and refuse to go that coarse again for the rest of the run.
@@ -346,20 +349,9 @@ public static partial class GuidanceWindow
             _s.RungFloorSpeed = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
             _s.RefusalRun = 0;
 
-            if (RebuildAt(vehicle, parent, siteCci, x, now, NodeRungs[finer]))
-            {
-                SixDofLog.Event(_s, now,
-                    $"NODE BACK-OFF at alt {x[2]:F0} m: {NodeRungs[_s.GateIndex]} -> " +
-                    $"{NodeRungs[finer]} nodes, and no coarser this run");
-                _s.GateIndex = finer;
-                _s.BackedOffTo = finer;
-            }
-            else
-            {
-                SixDofLog.Event(_s, now,
-                    $"NODE BACK-OFF at alt {x[2]:F0} m to {NodeRungs[finer]} nodes FAILED; " +
-                    "not retrying - the node count is not what is wrong");
-            }
+            bool? backedOff = BeginRebuild(vehicle, parent, siteCci, x, now, NodeRungs[finer], finer, backOff: true);
+            if (backedOff.HasValue)
+                EndBackOff(backedOff.Value, finer, x[2], now);
             return;
         }
 
@@ -413,7 +405,34 @@ public static partial class GuidanceWindow
             return;
         }
 
-        if (RebuildAt(vehicle, parent, siteCci, x, now, nodes))
+        bool? stepped = BeginRebuild(vehicle, parent, siteCci, x, now, nodes, want, backOff: false);
+        if (stepped.HasValue)
+            EndStep(stepped.Value, want, speedNow);
+    }
+
+    /// <summary>The ladder after a back-off rebuild to rung <paramref name="finer"/>, done in place or landed from the worker.</summary>
+    private static void EndBackOff(bool ok, int finer, double altM, double now)
+    {
+        if (ok)
+        {
+            SixDofLog.Event(_s, now,
+                $"NODE BACK-OFF at alt {altM:F0} m: {NodeRungs[_s.GateIndex]} -> " +
+                $"{NodeRungs[finer]} nodes, and no coarser this run");
+            _s.GateIndex = finer;
+            _s.BackedOffTo = finer;
+        }
+        else
+        {
+            SixDofLog.Event(_s, now,
+                $"NODE BACK-OFF at alt {altM:F0} m to {NodeRungs[finer]} nodes FAILED; " +
+                "not retrying - the node count is not what is wrong");
+        }
+    }
+
+    /// <summary>The ladder after a step down to rung <paramref name="want"/>, done in place or landed from the worker; <paramref name="speed"/> is the craft's when the step was asked for.</summary>
+    private static void EndStep(bool ok, int want, double speed)
+    {
+        if (ok)
         {
             _s.GateIndex = want;
             return;
@@ -424,7 +443,57 @@ public static partial class GuidanceWindow
         // Measured offline on gentle descents, 0.5-1 s spacing costs 0.02 m of defect; on the logged 81 m/s, 92-degrees-off-vertical entry the same spacing cost 1.13 m, twenty times more, because defect follows how fast the state is changing and not spacing alone.
         // Rather than retune a number that cannot be right for every case, let the rung floor record what this descent will actually take, and stop asking again.
         _s.RungFloor = Math.Min(_s.RungFloor, want - 1);
-        _s.RungFloorSpeed = speedNow;
+        _s.RungFloorSpeed = speed;
+    }
+
+    /// <summary>
+    /// A node-count rebuild running on the solve worker (#226): what the ladder needs when it lands. The reseed (Ksa6DofGuidance.SeedFrom) starts the conic solver cold - its iterate cannot cross to another node count - and with RCS in the plan that ran to the iteration cap: 954 ms and 375 ms of the main thread at the 2026-11-20 16:53 booster's node steps, and the game fell to 0.77x real time through the burn. On the worker the craft flies the current plan meanwhile, as it does between re-solves.
+    /// </summary>
+    /// <param name="Why">Where the worker writes why a reseed was refused.</param>
+    internal sealed record NodeRebuild(Ksa6DofGuidance Source, int Nodes, int NodesWas, double SigmaWas, int Want,
+                                       bool BackOff, double Speed, double AltM, string[] Why);
+
+    /// <summary>Whether a node-count rebuild of the guidance flying now is running on the worker.</summary>
+    private static bool NodeRebuildRunning
+        => _s.PendingNodeRebuild is { } pending && ReferenceEquals(pending.Source, _s.Guidance);
+
+    /// <summary>
+    /// Starts a rebuild at <paramref name="nodes"/>: prepared here (PrepareRebuild reads the craft), then reseeded on the solve worker where there is one, and taken by FinishNodeRebuild when it lands - null meanwhile. Without a worker, or with a solve still on it, as before: in place (RebuildAt), true or false.
+    /// </summary>
+    private static bool? BeginRebuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                      double[] x, double now, int nodes, int want, bool backOff)
+    {
+        if (_s.Worker == null || !_s.Worker.IsIdle)
+            return RebuildAt(vehicle, parent, siteCci, x, now, nodes);
+        RebuildRequest req = PrepareRebuild(vehicle, parent, siteCci, x, now, nodes);
+        if (req == null)
+            return false;
+        Ksa6DofGuidance from = _s.Guidance;
+        var why = new string[1];
+        if (!_s.Worker.TryDispatchRebuild((source, x0, t) => ApplyRebuild(req, source, x0, t, out why[0]), from, x, now))
+            return RebuildAt(vehicle, parent, siteCci, x, now, nodes);
+        _s.PendingNodeRebuild = new NodeRebuild(from, nodes, from.Nodes, from.Sigma, want, backOff,
+                                                Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]), x[2], why);
+        return null;
+    }
+
+    /// <summary>
+    /// A rebuild landed from the worker: the new guidance adopted (AdoptRebuild) and the ladder moved on, or the refusal logged and the rung floored, as a rebuild in place does. One for a guidance no longer flying - a restart, a new engagement or a disengage while it ran - is dropped.
+    /// </summary>
+    private static void FinishNodeRebuild(Ksa6DofSolveResult result, double now)
+    {
+        NodeRebuild pending = _s.PendingNodeRebuild;
+        _s.PendingNodeRebuild = null;
+        // A restart that reused the guidance (converging again) has dropped the plan the rebuild was seeded from.
+        if (pending == null || _s.Converging || !ReferenceEquals(result.Source, pending.Source) || !ReferenceEquals(_s.Guidance, pending.Source))
+            return;
+        string why = result.Faulted ? result.Error : pending.Why[0] ?? result.Error;
+        bool ok = AdoptRebuild(result.Ok && !result.Faulted ? result.Produced : null, why,
+                               pending.Nodes, pending.NodesWas, pending.SigmaWas, pending.AltM, now);
+        if (pending.BackOff)
+            EndBackOff(ok, pending.Want, pending.AltM, now);
+        else
+            EndStep(ok, pending.Want, pending.Speed);
     }
 
     /// <summary>
@@ -504,8 +573,7 @@ public static partial class GuidanceWindow
         => new(req.Cfg, req.Dyn) { FixedTime = req.FixedTime, Inputs = req.Inputs };
 
     /// <summary>
-    /// Rebuild the guidance at a different node count. Prepare on the game thread,
-    /// apply off it - for now both happen here, back to back.
+    /// Rebuild the guidance at a different node count, prepared and reseeded here, back to back: for a craft with no solve worker, and for the cold solve's retry at more nodes. The node ladder reseeds on the worker (BeginRebuild).
     /// </summary>
     private static bool RebuildAt(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                   double[] x, double now, int nodes)
@@ -516,14 +584,21 @@ public static partial class GuidanceWindow
 
         double sigmaWas = _s.Guidance.Sigma;
         Ksa6DofGuidance next = ApplyRebuild(req, _s.Guidance, x, now, out string why);
+        return AdoptRebuild(next, why, nodes, _s.Guidance.Nodes, sigmaWas, x[2], now);
+    }
+
+    /// <summary>A reseeded guidance flown from now on, or the refusal logged and the current one kept: shared by a rebuild in place and one landed from the worker.</summary>
+    private static bool AdoptRebuild(Ksa6DofGuidance next, string why, int nodes, int nodesWas, double sigmaWas,
+                                     double altM, double now)
+    {
         if (next == null)
         {
-            SixDofLog.Event(_s, now, $"NODE STEP at alt {x[2]:F0} m FAILED to reseed at {nodes} " +
-                                 $"nodes - staying at {_s.Guidance.Nodes}: {why}");
+            SixDofLog.Event(_s, now, $"NODE STEP at alt {altM:F0} m FAILED to reseed at {nodes} " +
+                                 $"nodes - staying at {nodesWas}: {why}");
             return false;
         }
 
-        SixDofLog.Event(_s, now, $"NODE STEP at alt {x[2]:F0} m: {_s.Guidance.Nodes} -> {nodes} nodes " +
+        SixDofLog.Event(_s, now, $"NODE STEP at alt {altM:F0} m: {nodesWas} -> {nodes} nodes " +
                              $"(sigma {sigmaWas:F1} s -> dt {sigmaWas / Math.Max(nodes - 1, 1):F2} s, " +
                              $"defect {next.DefectText})");
         _s.Guidance = next;
@@ -851,6 +926,7 @@ public static partial class GuidanceWindow
         _s.EngagePending = false;
         _s.Converging = false;
         _s.SixDofConvergingSince = double.NaN;
+        _s.PendingNodeRebuild = null;
         _s.SixDofEntryBlendStart = double.NaN;
         _s.SixDofRestartOpenLoop = false;
         _s.SixDofStandby = false;
@@ -1355,7 +1431,13 @@ public static partial class GuidanceWindow
 
         // Collect before a restart or node rebuild can change the source guidance.
         Ksa6DofSolveResult coldResult = null;
-        if (_s.Worker != null && _s.Worker.TryCollect(out Ksa6DofSolveResult result)
+        Ksa6DofSolveResult result = null;
+        if (_s.Worker != null && _s.Worker.TryCollect(out result) && result.Job == Ksa6DofJob.Rebuild)
+        {
+            FinishNodeRebuild(result, now);
+            result = null;
+        }
+        if (result != null
             && (result.Matches(_s.Converging ? Ksa6DofJob.StepCold : Ksa6DofJob.Update, _s.Guidance)
                 || (!_s.Converging && result.Matches(Ksa6DofJob.Track, _s.Guidance))))
         {
