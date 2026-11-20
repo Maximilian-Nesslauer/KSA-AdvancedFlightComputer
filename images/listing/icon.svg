@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 120 120" role="img" aria-labelledby="title description">
+  <title id="title">AFC Flight Terminal</title>
+  <desc id="description">A cockpit flight computer with a trajectory display and the AFC wordmark below.</desc>
+  <rect id="tile" width="120" height="120" rx="19" fill="#121315"/>
+  <g id="flight-terminal">
+    <path d="M23 17H97L104 24V63L97 70H23L16 63V24Z" fill="#727A82"/>
+    <path d="M23 15H97L104 22V60L97 67H23L16 60V22Z" fill="#D1D5D9"/>
+    <path d="M26 22H73L78 27V55L73 60H26L21 55V27Z" fill="#202124"/>
+    <rect x="25" y="26" width="49" height="30" rx="4" fill="#121315"/>
+    <path d="M31 48C39 49 42 40 48 37S60 33 67 33" fill="none"
+          stroke="#50C8FF" stroke-width="3.8" stroke-linecap="round"/>
+    <circle cx="68" cy="33" r="2.6" fill="#50C8FF"/>
+    <path d="M85 25H97V31H85Z M85 35H97V41H85Z M85 45H97V51H85Z" fill="#535E66"/>
+    <rect x="84" y="55" width="15" height="6" rx="1.5" fill="#F2BF4C"/>
+  </g>
+  <g id="wordmark" transform="translate(20.04 80) scale(.36)" fill="#EBEBEB">
+    <path d="M0 34V20L13 0H53L66 20V74H51V51H15V74H0V42L15 35V36H51V25L44 14H22L15 25V27Z"/>
+    <path transform="translate(83)" d="M0 0H60V14H15V27L0 34Z M0 42L15 35H47V48H15V74H0Z"/>
+    <path transform="translate(159)" d="M14 0H63V14H20L15 21V29L0 36V17Z M0 44L15 37V53L20 60H63V74H14L0 57Z"/>
+  </g>
+</svg>
