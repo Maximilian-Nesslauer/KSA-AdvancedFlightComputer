@@ -102,13 +102,6 @@ public static partial class GuidanceWindow
         DrawLandMethodRows(vehicle, way, in situation, in read);
     }
 
-    /// <summary>The craft's LANDING ENGINES section, on every way of LAND, in setup and in flight.</summary>
-    internal static void DrawLandEngineRows(Vehicle vehicle)
-    {
-        if (vehicle.Parts?.Root is { } root)
-            DrawLandingEngineGroups(vehicle, root, LandingEngineGroups.CraftScope);
-    }
-
     internal static void DrawDeorbitFinishRows(LandWay way)
     {
         if (way == LandWay.FromOrbit)

@@ -18,7 +18,6 @@ using KSA;
 public sealed class VehicleAutopilotState
 {
     internal readonly Dictionary<string, LandingEngineGroups> EngineGroups = new(System.StringComparer.Ordinal);
-    internal readonly Dictionary<string, LandingEngineGroupDraft> EngineGroupDrafts = new(System.StringComparer.Ordinal);
     internal ManualEngineChange ManualEngineChange;
     internal GuidanceModeId? LandingEngineCommitPending;
     internal LandingEngineActivation EngineActivation;

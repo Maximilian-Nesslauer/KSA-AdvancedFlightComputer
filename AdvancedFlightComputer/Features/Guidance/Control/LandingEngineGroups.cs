@@ -1,5 +1,4 @@
 using System.Text;
-using Brutal.ImGuiApi;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.Guidance;
@@ -8,13 +7,6 @@ internal sealed record LandingEngineGroup(string Name, string[] Engines);
 
 internal sealed record ManualEngineChange(string[] Engines, bool? EnableSingle);
 
-internal sealed class LandingEngineGroupDraft
-{
-    internal const int NameLimit = 64;
-    internal readonly ImInputString Name = new(NameLimit + 1, ""u8);
-    internal readonly HashSet<string> Engines = new(StringComparer.Ordinal);
-}
-
 internal sealed record LandingEngineGroups(LandingEngineGroup[] Groups, string Selected)
 {
     internal static readonly LandingEngineGroups Empty = new([], "");
@@ -22,6 +14,7 @@ internal sealed record LandingEngineGroups(LandingEngineGroup[] Groups, string S
     internal LandingEngineGroup? Chosen => Array.Find(Groups, group => group.Name == Selected);
 
     internal const string CraftScope = "";
+    internal const int NameLimit = 64;
 
     internal bool IsValid()
     {
@@ -31,7 +24,7 @@ internal sealed record LandingEngineGroups(LandingEngineGroup[] Groups, string S
         foreach (LandingEngineGroup group in Groups)
         {
             if (group == null || string.IsNullOrWhiteSpace(group.Name) || !names.Add(group.Name)
-                || Encoding.UTF8.GetByteCount(group.Name) > LandingEngineGroupDraft.NameLimit || group.Name.Any(char.IsControl)
+                || Encoding.UTF8.GetByteCount(group.Name) > NameLimit || group.Name.Any(char.IsControl)
                 || group.Engines == null || group.Engines.Length == 0
                 || group.Engines.Any(string.IsNullOrWhiteSpace)
                 || group.Engines.Distinct(StringComparer.Ordinal).Count() != group.Engines.Length)
