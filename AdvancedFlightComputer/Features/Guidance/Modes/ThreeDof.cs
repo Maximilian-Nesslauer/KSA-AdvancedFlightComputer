@@ -138,6 +138,9 @@ public static partial class GuidanceWindow
     private static void Disengage3Dof(string why)
     {
         bool burning = _s.ThreeDofPhase == ThreeDofPhase.Burn;
+        // AFC's own attitude controller flew the glide: its RCS and surfaces stop with entry guidance.
+        if (_s.OwnAttitudeFlying && _s.OwnAttitudeVehicle is { } flown)
+            StopOwnAttitude(flown);
         StopSixDofStandby();
         // A coast nothing will fly any more: the next touchdown guidance plans without one unless entry guidance asks again.
         if (!_s.Active && !_s.EngagePending)
@@ -320,7 +323,8 @@ public static partial class GuidanceWindow
         double3 r = orbit.StateVectors.PositionCci;
         double3 vAir = orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r);
         double speed = vAir.Length();
-        if (!_s.ThreeDofTrim)
+        // Off under AFC's own attitude controller (ThreeDofOwnAttitude): it holds the command against the air itself, where the trim wound out the stock flight computer's standing error.
+        if (!_s.ThreeDofTrim || OwnsEntryAttitude(true))
             trim = default;
         else if (integrate && speed > ThreeDofTrimMinSpeedMs)
         {
@@ -526,6 +530,16 @@ public static partial class GuidanceWindow
             }
             float3 rcs = fc.RcsTorqueAuthority;
             float3 tvc = fc.TvcTorqueAuthorityMax;
+            // The RCS as fired, under either controller, and AFC's own attitude controller's last step when it flew.
+            double rcsFlow = double.NaN;
+            int rcsFiring = 0;
+            if (AdvancedFlightComputer.Features.RcsTorque.KsaRcsTorqueControl.FiredFlow(vehicle, physDt > 0.0 && physDt < 1.0 ? physDt : 0.02, out double firedFlow, out int firedCount))
+            {
+                rcsFlow = firedFlow;
+                rcsFiring = firedCount;
+            }
+            bool ownAtt = _s.OwnAttitudeFlying;
+            AttitudeController.Report ac = ownAtt ? AttitudeController.Last(vehicle) : default;
             double rcsTransverse = Math.Min(rcs.Y, rcs.Z);
             Guidance3Dof g = _s.ThreeDofGuidance;
 
@@ -581,6 +595,19 @@ public static partial class GuidanceWindow
                 PredMx = predMoment.X, PredMy = predMoment.Y, PredMz = predMoment.Z,
                 SolveWaitMs = _s.ThreeDofWorker?.LastWaitMs ?? double.NaN,
                 SolveRunMs = _s.ThreeDofWorker?.LastRunMs ?? double.NaN,
+                RcsFlowKgS = rcsFlow,
+                RcsFiring = rcsFiring,
+                OwnAtt = ownAtt,
+                AcErrDeg = ownAtt ? ac.ErrorDeg : double.NaN,
+                AcRateErrDegS = ownAtt ? ac.RateErrorDegS : double.NaN,
+                AcDeadband = ac.InDeadband,
+                AcAirKnown = ac.AirKnown,
+                AcDemand = ownAtt ? ac.DemandNm : new double3(double.NaN, double.NaN, double.NaN),
+                AcAir = ownAtt && ac.AirKnown ? ac.AirNm : new double3(double.NaN, double.NaN, double.NaN),
+                AcSurf = ownAtt ? ac.SurfacesNm : new double3(double.NaN, double.NaN, double.NaN),
+                AcRcsAsk = ownAtt ? ac.RcsAskedNm : new double3(double.NaN, double.NaN, double.NaN),
+                AcRcs = ownAtt ? ac.RcsNm : new double3(double.NaN, double.NaN, double.NaN),
+                AcRcsFlowKgS = ownAtt ? ac.RcsFlowKgS : double.NaN,
                 // Guidance results are the worker's while it solves; -1 then.
                 Refusals = g == null ? 0 : ThreeDofBusy ? -1 : g.ConsecutiveRefusals,
                 AxisOffsetDeg = axisOffset * Deg,

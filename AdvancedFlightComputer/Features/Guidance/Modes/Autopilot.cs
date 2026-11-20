@@ -1367,6 +1367,11 @@ public static partial class GuidanceWindow
             }
         }
 
+        // AFC's own attitude controller flies entry guidance's glide (ThreeDofOwnAttitude); anywhere else the stock flight computer steers, and the controller's actuators are let go the first step it does not fly.
+        bool ownAttitude = shouldCommand && OwnsEntryAttitude(threeDofGuides);
+        if (_s.OwnAttitudeFlying && !ownAttitude)
+            StopOwnAttitude(vehicle);
+
         if (shouldCommand)
         {
             // An ascent references its roll to its target plane (see SteerBody2Cci and AscentRollRef); a landing keeps the stock position-derived reference, which is well conditioned there because the thrust axis is fighting the velocity, not lying along the position vector.
@@ -1376,11 +1381,16 @@ public static partial class GuidanceWindow
             double3? rollRef = _s.Running ? AscentRollRef(vehicle, _s.CommandDir)
                 : holdRoll && _s.CommandDir.Length() > 0.5 ? ReturnRollRefCci(vehicle, parent)
                 : null;
-            CommandAttitude(vehicle, parent, _s.CommandDir,
-                            fullEngage: !_s.WasEngaged, rollRef: rollRef,
-                            rollMode: holdRoll ? FlightComputerRollMode.Up : null);
-            if (boosterReturn && _s.BoosterStrictProfile)
-                _s.AttitudeOwnership.WriteProfile(vehicle.FlightComputer, FlightComputerAttitudeProfile.Strict);
+            if (ownAttitude)
+                FlyOwnAttitude(vehicle, parent, rollRef);
+            else
+            {
+                CommandAttitude(vehicle, parent, _s.CommandDir,
+                                fullEngage: !_s.WasEngaged, rollRef: rollRef,
+                                rollMode: holdRoll ? FlightComputerRollMode.Up : null);
+                if (boosterReturn && _s.BoosterStrictProfile)
+                    _s.AttitudeOwnership.WriteProfile(vehicle.FlightComputer, FlightComputerAttitudeProfile.Strict);
+            }
 
             // Publish the attitude and its turning rate together so they describe the same instant.
             KsaAttitudeRate.Set(vehicle,
@@ -1971,6 +1981,45 @@ public static partial class GuidanceWindow
             _s.ReturnRollRefCcf = double3.Normalize(double3.Cross(up, double3.Normalize(d))).Transform(cci2Ccf);
         }
         return _s.ReturnRollRefCcf.Transform(doubleQuat.Inverse(cci2Ccf));
+    }
+
+    /// <summary>Whether AFC's own attitude controller flies this step: entry guidance in its glide, with the setting on and a command to fly.</summary>
+    private static bool OwnsEntryAttitude(bool threeDofGuides)
+        => threeDofGuides && _s.ThreeDofOwnAttitude && _s.ThreeDofPhase == ThreeDofPhase.Glide && _s.CommandDir.Length() > 0.5;
+
+    /// <summary>
+    /// One step of AFC's own attitude controller (AttitudeController) on the commanded direction and roll: the stock flight computer held at Manual so it steers nothing, the target built as CommandAttitude builds it, and the craft's surfaces and RCS driven for it.
+    /// </summary>
+    private static void FlyOwnAttitude(Vehicle vehicle, IParentBody parent, double3? rollRef)
+    {
+        if (!TryTakeCraft(vehicle, acquire: true))
+            return;
+        FlightComputer fc = vehicle.FlightComputer;
+        if (fc.AttitudeMode != FlightComputerAttitudeMode.Manual)
+        {
+            KsaAttitudeRate.Clear(vehicle);
+            _s.AttitudeOwnership.BeginWrite(fc);
+            fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+            _s.AttitudeOwnership.EndWrite(fc, writesRoll: false);
+        }
+        double3 dir = double3.Normalize(_s.CommandDir);
+        doubleQuat target = rollRef.HasValue
+            ? SteerBody2Cci(dir, rollRef.Value)
+            : BurnTarget.ComputeBurnBody2Cci(float3.Pack(double3.Normalize(vehicle.Orbit.StateVectors.PositionCci)), float3.Pack(dir));
+        var settings = new AttitudeController.Settings(_s.AttitudeBandwidthRadS, AttitudeController.Settings.Default.Damping,
+                                                       _s.AttitudeDeadbandDeg, AttitudeController.Settings.Default.RateDeadbandDegS);
+        AttitudeController.Step(vehicle, target, _s.CommandRate, _s.Aero, _s.MomentLimiterPerPa, settings);
+        _s.OwnAttitudeFlying = true;
+        _s.OwnAttitudeVehicle = vehicle;
+    }
+
+    /// <summary>Lets AFC's own attitude controller go: its surfaces home and its RCS released, and the stock flight computer engaged in full on its next command (CommandAttitude's fullEngage).</summary>
+    internal static void StopOwnAttitude(Vehicle vehicle)
+    {
+        AttitudeController.Release(vehicle);
+        _s.OwnAttitudeFlying = false;
+        _s.OwnAttitudeVehicle = null;
+        _s.WasEngaged = false;
     }
 
     private static doubleQuat SteerBody2Cci(double3 steerDir, double3 rollRef)

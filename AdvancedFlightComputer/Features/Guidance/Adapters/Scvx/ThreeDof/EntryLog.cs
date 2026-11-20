@@ -57,6 +57,7 @@ internal static class EntryLog
             _rows.Clear();
             _rows.AppendLine("# navbox entry guidance run " + name + "   vehicle: " + vehicleName + "   body: " + bodyName);
             _rows.AppendLine("# accelerations in m/s^2, site frame: meas* is the measured non-gravitational acceleration, pred* the model's at the thrust axis flown, without the learned bias (predLiftBody, predSideBody: at the body axis), live* the game's own aerodynamic force on the craft as it is (KsaAeroSweep.TryLiveAero) over its mass; drag is along the airflow, lift along the thrust axis's predicted lift, side across both. meas - live is what is not aerodynamic; live - pred is the model's error");
+            _rows.AppendLine("# rcsFlowKgS, rcsFiring: the RCS as fired this step, whoever commanded it (the stock flight computer or AFC's own attitude controller); ownAtt = AFC's own attitude controller flew (AttitudeController), its ac* columns in the model's axes (x, y across, z the thrust axis), N m: demand = feedback + gyroscopic - air, air its feedforward, surf what the control surfaces gave, rcsAsk/rcs what the RCS was asked for and gave");
             _rows.AppendLine("# angles in degrees; past = flown beyond the command along its angle of attack (+ away from the airflow); lag = flown along the command's motion (- behind it); aeroAccel = predicted aero moment / transverse inertia, rad/s^2, + turning the craft further off the airflow");
             _rows.AppendLine(string.Join(",",
                 "t", "phase", "onPlan", "alt", "speed", "mach", "q",
@@ -71,7 +72,10 @@ internal static class EntryLog
                 "rollRateDegS", "rollAccelDegS2", "rollIzz", "rollNetNm", "rollAirNm", "rollRcsNm", "rollResidNm", "rcsRollPosNm", "rcsRollNegNm",
                 "physDtS", "pitchNetNm", "pitchIntNm", "pitchAirNm", "pitchAirDtNm", "pitchRcsNm",
                 "yawNetNm", "yawIntNm", "yawAirNm", "yawAirDtNm", "yawRcsNm", "rollIntNm", "rollAirDtNm",
-                "liveMxNm", "liveMyNm", "liveMzNm", "predMxNm", "predMyNm", "predMzNm", "solveWaitMs", "solveRunMs", "solver"));
+                "liveMxNm", "liveMyNm", "liveMzNm", "predMxNm", "predMyNm", "predMzNm", "solveWaitMs", "solveRunMs",
+                "rcsFlowKgS", "rcsFiring", "ownAtt", "acErrDeg", "acRateErrDegS", "acDeadband", "acAirKnown",
+                "acDemandX", "acDemandY", "acDemandZ", "acAirX", "acAirY", "acAirZ", "acSurfX", "acSurfY", "acSurfZ",
+                "acRcsAskX", "acRcsAskY", "acRcsAskZ", "acRcsX", "acRcsY", "acRcsZ", "acRcsFlowKgS", "solver"));
             _pendingRows = 0;
             _failedFlushes = 0;
             _lastRow = double.NegativeInfinity;
@@ -130,6 +134,14 @@ internal static class EntryLog
             F(sb, r.YawNetNm); F(sb, r.YawIntNm); F(sb, r.YawAirNm); F(sb, r.YawAirDtNm); F(sb, r.YawRcsNm); F(sb, r.RollIntNm); F(sb, r.RollAirDtNm);
             F(sb, r.LiveMx); F(sb, r.LiveMy); F(sb, r.LiveMz); F(sb, r.PredMx); F(sb, r.PredMy); F(sb, r.PredMz);
             F(sb, r.SolveWaitMs); F(sb, r.SolveRunMs);
+            F(sb, r.RcsFlowKgS); sb.Append(r.RcsFiring).Append(',');
+            sb.Append(r.OwnAtt ? 1 : 0).Append(','); F(sb, r.AcErrDeg); F(sb, r.AcRateErrDegS);
+            sb.Append(r.AcDeadband ? 1 : 0).Append(','); sb.Append(r.AcAirKnown ? 1 : 0).Append(',');
+            F(sb, r.AcDemand.X); F(sb, r.AcDemand.Y); F(sb, r.AcDemand.Z);
+            F(sb, r.AcAir.X); F(sb, r.AcAir.Y); F(sb, r.AcAir.Z);
+            F(sb, r.AcSurf.X); F(sb, r.AcSurf.Y); F(sb, r.AcSurf.Z);
+            F(sb, r.AcRcsAsk.X); F(sb, r.AcRcsAsk.Y); F(sb, r.AcRcsAsk.Z);
+            F(sb, r.AcRcs.X); F(sb, r.AcRcs.Y); F(sb, r.AcRcs.Z); F(sb, r.AcRcsFlowKgS);
             sb.Append(Csv(r.Solver)).AppendLine();
             if (++_pendingRows >= FlushEveryRows)
                 Flush();
@@ -203,5 +215,14 @@ internal static class EntryLog
         /// <summary>The last finished entry solve's wait from dispatch to starting on its thread, and its run time, ms (Ksa3DofWorker).</summary>
         public double SolveWaitMs, SolveRunMs;
         public bool BodyAero;
+
+        /// <summary>The RCS as fired, whoever commanded it (KsaRcsTorqueControl.FiredFlow): propellant kg/s, thrusters firing.</summary>
+        public double RcsFlowKgS;
+        public int RcsFiring;
+
+        /// <summary>AFC's own attitude controller (AttitudeController.Report), when it flew this step (OwnAtt); torques in the model's axes, N m.</summary>
+        public bool OwnAtt, AcDeadband, AcAirKnown;
+        public double AcErrDeg, AcRateErrDegS, AcRcsFlowKgS;
+        public Brutal.Numerics.double3 AcDemand, AcAir, AcSurf, AcRcsAsk, AcRcs;
     }
 }

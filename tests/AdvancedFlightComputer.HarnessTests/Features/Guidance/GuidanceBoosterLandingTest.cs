@@ -154,7 +154,21 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
             }
             else
             {
+                // The craft's aero first: the sweep runs on its own thread (#223), and entry guidance refuses a craft whose aero is not ready yet. The sim is not stepped meanwhile, so the start stands.
+                object? before = ambient.GetValue(null);
+                ambient.SetValue(null, state);
+                MethodInfo resample = typeof(GuidanceWindow).GetMethod("ResampleBoostbackAero", PrivateStatic)!;
+                var aeroClock = System.Diagnostics.Stopwatch.StartNew();
+                while (state.Aero == null && aeroClock.Elapsed.TotalSeconds < 30.0)
+                {
+                    resample.Invoke(null, [booster, home, false]);
+                    Thread.Sleep(20);
+                }
+                ambient.SetValue(null, before);
+                t.Info($"aero ready after {aeroClock.Elapsed.TotalMilliseconds:F0} ms: {state.Aero != null}");
                 state.UseThreeDofLanding = true;
+                // AFC_LANDING_OWN_ATTITUDE=0 flies the glide on the stock flight computer, as before AttitudeController.
+                state.ThreeDofOwnAttitude = Env("AFC_LANDING_OWN_ATTITUDE", 1.0) > 0.0;
                 state.ThreeDofEngagePending = true;
             }
             state.LandingAccelLimitG = Env("AFC_LANDING_ACCEL_G", state.LandingAccelLimitG);
