@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 120 120" role="img" aria-labelledby="title description">
   <title id="title">AFC Flight Terminal</title>
   <desc id="description">A cockpit flight computer with a trajectory display and the AFC wordmark below.</desc>
-  <rect id="tile" width="120" height="120" rx="19" fill="#121315"/>
+  <rect id="tile" width="120" height="120" fill="#121315"/>
   <g id="flight-terminal">
     <path d="M23 17H97L104 24V63L97 70H23L16 63V24Z" fill="#727A82"/>
     <path d="M23 15H97L104 22V60L97 67H23L16 60V22Z" fill="#D1D5D9"/>
