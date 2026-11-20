@@ -43,7 +43,7 @@ public static partial class GuidanceWindow
                 foreach (LandingEngineGroup group in settings.Groups)
                 {
                     ImGui.PushID(group.Name);
-                    ConsoleUi.MutedWrapped($"{group.Name} ({group.Engines.Length})");
+                    ConsoleUi.MutedWrapped($"{group.Name} ({group.Engines.Length}){(ReferenceEquals(group, settings.Chosen) ? " - FOR LANDING" : "")}");
                     if (ConsoleWidgets.Button("USE FOR LANDING".AsSpan(), "SelectGroup".AsSpan(), default))
                         SetLandingEngineGroups(scope, settings with { Selected = group.Name });
                     ImGui.SameLine();
@@ -62,15 +62,21 @@ public static partial class GuidanceWindow
                     ImGui.PopID();
                 }
 
-                int index = 0;
+                // One row per controller under a line with its part's name: the box puts it in the group being edited, and on LAND the row shows its state and switches it by hand.
+                Part? lastPart = null;
                 foreach ((string key, EngineController? item) in candidates)
                 {
                     if (item == null)
                         continue;
                     EngineController engine = item;
+                    if (!ReferenceEquals(engine.Parent.FullPart, lastPart))
+                    {
+                        lastPart = engine.Parent.FullPart;
+                        ConsoleUi.MutedWrapped(lastPart.DisplayName.ToUpperInvariant());
+                    }
                     ImGui.PushID(key);
                     bool member = draft.Engines.Contains(key);
-                    string label = $"{++index}. {engine.Parent.DisplayName} - {engine.TemplateId} ({engine.Rockets.Length})";
+                    string label = engine.Rockets.Length > 1 ? $"{engine.TemplateId} x{engine.Rockets.Length}" : engine.TemplateId;
                     if (ImGui.Checkbox(label.AsSpan(), ref member))
                     {
                         if (member)
@@ -81,10 +87,14 @@ public static partial class GuidanceWindow
                     if (craft)
                     {
                         ImGui.SameLine();
-                        ConsoleUi.MutedWrapped(DescribeLandingEngine(vehicle, engine));
+                        ImGui.TextColored(in ConsoleStyle.TextMuted, DescribeLandingEngine(vehicle, engine).AsSpan());
                     }
-                    if (manual && ConsoleWidgets.Button((engine.IsActive ? "DISABLE" : "ENABLE").AsSpan(), "ToggleEngine".AsSpan(), default))
-                        _s.ManualEngineChange = new ManualEngineChange([key], !engine.IsActive);
+                    if (manual)
+                    {
+                        ImGui.SameLine();
+                        if (ConsoleWidgets.Button((engine.IsActive ? "OFF" : "ON").AsSpan(), "ToggleEngine".AsSpan(), default))
+                            _s.ManualEngineChange = new ManualEngineChange([key], !engine.IsActive);
+                    }
                     ImGui.PopID();
                 }
 
@@ -136,6 +146,7 @@ public static partial class GuidanceWindow
             if (state.IsPropellantAvailable) fed++;
             if (state.Throttle > 0) firing++;
         }
-        return $"{(engine.IsActive ? "Active" : "Inactive")}, {fed} fed, {firing} firing";
+        string supply = fed == engine.Rockets.Length ? "FED" : fed == 0 ? "DRY" : $"{fed}/{engine.Rockets.Length} FED";
+        return $"{(engine.IsActive ? "ACTIVE" : "OFF")}  {supply}{(firing > 0 ? "  FIRING" : "")}";
     }
 }
