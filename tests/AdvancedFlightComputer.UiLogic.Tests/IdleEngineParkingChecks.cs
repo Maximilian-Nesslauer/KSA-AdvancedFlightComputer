@@ -67,7 +67,7 @@ internal static partial class Program
         return least >= -1e-9;
     }
 
-    // The least rim gap of a parked pair (one at least idle) against what it must keep: 5 cm, a tenth of the radii, half the rest gap, or the rest gap where that is less. Written out here rather than through IdleEngineParking.Required.
+    // The least rim gap of a parked pair against what it must keep: 5 cm between two 1 m exits, in proportion for larger ones, or the rest gap where that is less. Written out here rather than through IdleEngineParking.Required.
     private static (double Least, double Kept) RimGaps(Engine[] engines, int[] choice, Func<int, bool> pick, Func<int, bool> other)
     {
         double least = double.PositiveInfinity, kept = double.NaN, worstSpare = double.PositiveInfinity;
@@ -79,7 +79,7 @@ internal static partial class Program
                 double radii = engines[i].RadiusM + engines[j].RadiusM;
                 double rest = V3.Distance(engines[i].Rest, engines[j].Rest) - radii;
                 double now = V3.Distance(engines[i].Exits[choice[i]], engines[j].Live ? engines[j].Rest : engines[j].Exits[choice[j]]) - radii;
-                double must = Math.Min(rest, Math.Max(0.05, Math.Max(0.1 * radii, 0.5 * rest)));
+                double must = Math.Min(rest, 0.05 * Math.Max(1.0, radii / 1.0));
                 if (now - must < worstSpare)
                 {
                     worstSpare = now - must;
@@ -92,9 +92,10 @@ internal static partial class Program
 
     private static void IdleEngineParkingRules()
     {
-        Check("the rim gap is 5 cm at least", IdleEngineParking.RimGapM(0.1, 0.1, 0.02) == 0.05);
-        Check("larger engines keep more", IdleEngineParking.RimGapM(1.5, 1.5, 0.2) > 0.25);
-        Check("a pair keeps half its rest gap", Math.Abs(IdleEngineParking.RimGapM(0.45, 0.45, 0.6) - 0.3) < 1e-12);
+        Check("two typical engines keep 5 cm", Math.Abs(IdleEngineParking.RimGapM(0.5, 0.5) - 0.05) < 1e-12);
+        Check("smaller engines keep 5 cm too", IdleEngineParking.RimGapM(0.05, 0.1) == 0.05);
+        Check("two LR91 Vac keep 7.2 cm", Math.Abs(IdleEngineParking.RimGapM(0.72, 0.72) - 0.072) < 1e-12);
+        Check("a large and a typical engine keep in proportion", Math.Abs(IdleEngineParking.RimGapM(2.3, 0.5) - 0.14) < 1e-12);
         // A ring of 8 around 3 at the centre.
         (double X, double Y)[] centre = Ring(3, 0.6, 90.0).ToArray();
         (double X, double Y)[] ring = Ring(8, 2.2).ToArray();
@@ -135,7 +136,7 @@ internal static partial class Program
         }
         Check("the middle ring keeps its clearance from the fixed outer ring", AllClear(fixedOuter, choice, out worst), worst);
         (double gap, double kept) = RimGaps(fixedOuter, choice, i => i >= 1 && i <= middle.Length, j => j > middle.Length);
-        Check("the middle ring keeps half its 25 cm rest gap to the fixed outer ring", gap >= kept - 1e-9 && kept >= 0.12,
+        Check("the middle ring keeps 5 cm to the fixed outer ring", gap >= kept - 1e-9 && kept >= 0.05 - 1e-12,
             $"least rim gap {gap:F3} m, kept {kept:F3} m");
         (gap, kept) = RimGaps(fixedOuter, choice, i => i >= 1 && i <= middle.Length, j => j >= 1 && j <= middle.Length);
         Check("the middle engines keep their gap to each other", gap >= kept - 1e-9, $"least rim gap {gap:F3} m, kept {kept:F3} m");

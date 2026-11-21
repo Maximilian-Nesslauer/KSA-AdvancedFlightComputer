@@ -6,7 +6,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 /// Where the gimbals of the engines a landing burn leaves off are parked, as Starship parks its idle engines: each idle nozzle tilts away from the lit ones, as far as it gains by it, without coming near another nozzle. It is for looks. An idle engine makes no thrust, so its deflection changes nothing in the flight.
 /// Game-independent, so the console checks run it without KSA: the adapter (KsaIdleEngineParking) gives every engine on the aft plane as the exits its nozzle can reach, in the vehicle frame, and takes back one choice per engine.
 ///  THE RULE. An idle nozzle takes the reachable exit that maximises its mean distance to the live exits less PushThreshold times how far it moved. The gradient of the mean distance is the mean of the unit vectors from the live exits to it: about 1 for an engine with all the lit engines on one side, such as a ring around a lit centre, and near 0 for one surrounded by them or at the centre of a lit ring. Under the threshold the engine stays at rest, over it it tilts to its limit, so a centre or surrounded engine stays put and a middle ring tilts out.
-///  THE CLEARANCE. Two rims keep the largest of MinGapM, RadiusGapShare of the two exit radii together and RestGapShare of the gap they have at rest, so the gap scales with the engines and with how the cluster is packed: a parked nozzle closes at most half the room it had. A live engine is taken as its rest exit plus the full swing of its gimbal, so its own steering can never reach a parked nozzle. A pair already closer than that at rest may not come closer than it is at rest. Every engine at rest therefore always passes, and the search starts there and keeps to choices that pass.
+///  THE CLEARANCE. Two rims keep MinGapM apart between two engines of TypicalExitRadiusM, the stock LR91 and VTR-10, and more between larger ones in proportion to their exit radii; never less than MinGapM. A live engine is taken as its rest exit plus the full swing of its gimbal, so its own steering can never reach a parked nozzle. A pair already closer than that at rest may not come closer than it is at rest. Every engine at rest therefore always passes, and the search starts there and keeps to choices that pass.
 ///  JOINTLY. The idle engines move together, so the search takes them in turns, each one's best given the others' current choices, until a sweep changes nothing. An engine blocked by an idle outer ring at rest can move once the outer ring has tilted out of its way.
 /// </summary>
 internal static class IdleEngineParking
@@ -14,14 +14,11 @@ internal static class IdleEngineParking
     /// <summary>The share of each metre moved that the mean distance to the live exits must gain for an idle nozzle to move at all.</summary>
     internal const double PushThreshold = 0.35;
 
-    /// <summary>The least space kept between two nozzle rims, m.</summary>
+    /// <summary>The space kept between two nozzle rims of typical engines, m, and the least kept between any two.</summary>
     internal const double MinGapM = 0.05;
 
-    /// <summary>The space kept between two rims as a share of their two exit radii together, so larger engines keep more.</summary>
-    internal const double RadiusGapShare = 0.1;
-
-    /// <summary>The share of the rim gap a pair has at rest that it keeps when parked.</summary>
-    internal const double RestGapShare = 0.5;
+    /// <summary>The exit radius of a typical engine, m: the stock LR91 Sea and VTR-10 have exits of about 1 m (the LR91 Vac 1.44 m).</summary>
+    internal const double TypicalExitRadiusM = 0.5;
 
     /// <summary>The search's sweeps at most. Each sweep moves every idle engine once.</summary>
     internal const int MaxSweeps = 8;
@@ -136,18 +133,14 @@ internal static class IdleEngineParking
         return (count > 0 ? sum / count : 0.0) - PushThreshold * V3.Distance(exit, engines[i].Rest);
     }
 
-    /// <summary>The space two rims keep, m (see <see cref="RimGapM(double, double, double)"/>).</summary>
-    internal static double RimGapM(Engine a, Engine b)
-        => RimGapM(a.RadiusM, b.RadiusM, V3.Distance(a.Rest, b.Rest) - a.RadiusM - b.RadiusM);
+    /// <summary>The space two rims keep, m: <see cref="MinGapM"/> for two engines of <see cref="TypicalExitRadiusM"/>, in proportion to their radii for larger ones, and never less.</summary>
+    internal static double RimGapM(double radiusA, double radiusB)
+        => MinGapM * Math.Max(1.0, (radiusA + radiusB) / (2.0 * TypicalExitRadiusM));
 
-    /// <summary>The space two rims keep, m: the largest of <see cref="MinGapM"/>, <see cref="RadiusGapShare"/> of their radii together and <see cref="RestGapShare"/> of their gap at rest.</summary>
-    internal static double RimGapM(double radiusA, double radiusB, double restGapM)
-        => Math.Max(MinGapM, Math.Max(RadiusGapShare * (radiusA + radiusB), RestGapShare * restGapM));
-
-    /// <summary>The distance two exits keep, m: their radii and <see cref="RimGapM(Engine, Engine)"/>, plus a live engine's swing; at most what they have at rest.</summary>
+    /// <summary>The distance two exits keep, m: their radii and <see cref="RimGapM"/>, plus a live engine's swing; at most what they have at rest.</summary>
     internal static double Required(Engine a, Engine b)
     {
-        double need = a.RadiusM + b.RadiusM + RimGapM(a, b) + (a.Live ? a.ReachM : 0.0) + (b.Live ? b.ReachM : 0.0);
+        double need = a.RadiusM + b.RadiusM + RimGapM(a.RadiusM, b.RadiusM) + (a.Live ? a.ReachM : 0.0) + (b.Live ? b.ReachM : 0.0);
         return Math.Min(need, V3.Distance(a.Rest, b.Rest));
     }
 
