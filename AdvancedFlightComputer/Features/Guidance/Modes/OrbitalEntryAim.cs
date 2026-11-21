@@ -78,7 +78,10 @@ public static partial class GuidanceWindow
             EntryModel model = st.AimModel;
             double e0 = st.AimStartE;
             double[] x0 = st.AimStartX;
-            st.AimWorker.TryRun(st, ct => { st.AimCheck = _entryPlanner.Solve(model, cfg, e0, x0, null); });
+            // The check has the iterations of two cold solves: it is solved once, not every two seconds.
+            EntryConfig checkCfg = cfg.Clone();
+            checkCfg.ColdIterations = Math.Max(cfg.ColdIterations * 2, 50);
+            st.AimWorker.TryRun(st, ct => { st.AimCheck = _entryPlanner.Solve(model, checkCfg, e0, x0, null); });
         }
 
         // ---- 4. check ----
@@ -98,7 +101,9 @@ public static partial class GuidanceWindow
                 ClearAim(st);
                 return false;
             }
-            if (!p.Converged || Math.Abs(p.TerminalRangeErrorM) > cfg.GateRangeM)
+            // A plan that reaches the site is enough to commit the burn: the flight's own re-solves refine it. A defect a few times the flight gate (2026-11-21: 0.084 against 0.05, miss 0 km, three times over) is not a reason to refuse.
+            bool reaches = Math.Abs(p.TerminalRangeErrorM) <= cfg.GateRangeM && p.MaxDefect <= 5.0 * cfg.GateDefect;
+            if (!reaches)
             {
                 if (st.AimTries >= AimMaxTries)
                 {

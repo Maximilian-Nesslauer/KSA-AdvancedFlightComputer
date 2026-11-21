@@ -23,7 +23,8 @@ public sealed class EntryTracker
         double ScaleHeightM,      // local, from the atmosphere table
         double CrossrangeRad,     // + target to the left
         double SpeedNorm,         // normalised speed
-        EntryPlan? Plan);
+        EntryPlan? Plan,
+        bool InAtmosphere = false);  // below the top of the air
 
     public readonly record struct Output(
         Phase Phase,
@@ -47,6 +48,7 @@ public sealed class EntryTracker
     double _overbankS;
     bool _reversing;
     bool _inAir;
+    double _uFilt = double.NaN;
 
     public EntryTracker(EntryConfig cfg) => _cfg = cfg;
 
@@ -63,6 +65,7 @@ public sealed class EntryTracker
         _overbankS = 0;
         _reversing = false;
         _inAir = false;
+        _uFilt = double.NaN;
     }
 
     public Output Update(in Input inp)
@@ -76,38 +79,51 @@ public sealed class EntryTracker
         if (inp.E >= inp.Plan.EF)
             return Hold(inp, Phase.HandOver, db, "HAND-OVER ENERGY REACHED");
 
-        if (inp.DragMs2 >= cfg.StartDrag)
+        // Takes hold on the first touch of the air, latched: inside the atmosphere where EngageInAtmosphere, or at the start drag.
+        if (inp.DragMs2 >= cfg.StartDrag || (cfg.EngageInAtmosphere && inp.InAtmosphere))
             _inAir = true;
         if (!_inAir)
         {
             Slew(0.0, inp.Dt);
             return new Output(Phase.PreEntry, _bank, 0, 0, 0, 0, 0, db, _side, false, false, false, false,
-                $"PRE-ENTRY: LIFT-UP UNTIL DRAG {cfg.StartDrag:F1} m/s²");
+                cfg.EngageInAtmosphere ? "PRE-ENTRY: LIFT-UP UNTIL THE AIR" : $"PRE-ENTRY: LIFT-UP UNTIL DRAG {cfg.StartDrag:F2} m/s²");
         }
 
         var p = inp.Plan.At(inp.E);
-        double d = Math.Max(inp.DragMs2, 1e-3);
+        // The gains are 1/D and 1/D^2, taken at the plan's reference drag (smooth, where the measured drag is not) and at no less than GainDragFloor, which matters at the first wisp of air.
+        double d = Math.Max(p.DragMs2, cfg.GainDragFloor);
         double w = cfg.TrackOmega, z = cfg.TrackZeta;
         double f1 = w * w * inp.ScaleHeightM / (d * d);
         double f2 = 2 * z * w / d;
-        double uCmd = p.U + f1 * (inp.DragMs2 - p.DragMs2) - f2 * (inp.HdotMs - p.HdotMs);
+        double uRaw = p.U + f1 * (inp.DragMs2 - p.DragMs2) - f2 * (inp.HdotMs - p.HdotMs);
 
         double ld = Math.Max(inp.LiftToDrag, 1e-3);
-        double cosB = uCmd / ld;
-        bool liftUp = cosB >= 1.0;
         double over = cfg.OverbankDeg * Math.PI / 180;
-        bool liftDown = cosB <= Math.Cos(over);
+        bool liftUp = uRaw >= ld;
+        bool liftDown = uRaw <= ld * Math.Cos(over);
+
+        // SMOOTHED: the command is held to what the craft can give, then low-passed, so a reference that steps (a new plan) or swings faster than the craft can follow is eased in rather than flipping the bank between its limits.
+        double uSat = Math.Clamp(uRaw, ld * Math.Cos(over), ld);
+        if (double.IsNaN(_uFilt)) _uFilt = uSat;
+        double k = cfg.CommandSmoothS > 0 ? Math.Clamp(inp.Dt / cfg.CommandSmoothS, 0.0, 1.0) : 1.0;
+        _uFilt += k * (uSat - _uFilt);
+        double uCmd = _uFilt;
+        double cosB = uCmd / ld;
+        // The limit flags from the smoothed command, so they do not flicker with the raw feedback.
+        liftUp &= cosB >= 0.995;
+        liftDown &= cosB <= Math.Cos(over) + 0.005;
         double bankMag = Math.Acos(Math.Clamp(cosB, Math.Cos(over), 1.0)) * 180 / Math.PI;
 
-        // Overbank: past the plan's largest bank only for a while.
+        // Overbank: past the plan's largest bank, for as long as the sink needs it unless OverbankMaxS limits it.
         bool overbank = bankMag > cfg.BankMaxDeg;
+        bool timed = cfg.OverbankMaxS > 0;
         if (overbank)
         {
             _overbankS += inp.Dt;
-            if (_overbankS > cfg.OverbankMaxS) bankMag = cfg.BankMaxDeg;
+            if (timed && _overbankS > cfg.OverbankMaxS) bankMag = cfg.BankMaxDeg;
         }
         else _overbankS = Math.Max(0, _overbankS - inp.Dt);
-        bool overbankHeld = overbank && _overbankS <= cfg.OverbankMaxS;
+        bool overbankHeld = overbank && (!timed || _overbankS <= cfg.OverbankMaxS);
 
         // Side: first roll towards the target, then reverse whenever the crossrange leaves the deadband.
         int prevSide = _side;
@@ -122,7 +138,7 @@ public sealed class EntryTracker
 
         string status;
         if (_reversing) status = $"ROLL REVERSAL TO THE {(_side > 0 ? "RIGHT" : "LEFT")}";
-        else if (overbankHeld) status = $"OVERBANK {bankMag:F0}° TO STOP THE SINK ({cfg.OverbankMaxS - _overbankS:F0} s LEFT)";
+        else if (overbankHeld) status = timed ? $"OVERBANK {bankMag:F0}° TO STOP THE SINK ({cfg.OverbankMaxS - _overbankS:F0} s LEFT)" : $"OVERBANK {bankMag:F0}° TO STOP THE SINK";
         else if (overbank) status = $"OVERBANK TIMED OUT: HELD AT {cfg.BankMaxDeg:F0}°";
         else if (liftUp) status = "LIFT-UP LIMIT: NEEDS MORE LIFT THAN THE VEHICLE HAS";
         else if (liftDown) status = "LIFT-DOWN LIMIT";

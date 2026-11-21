@@ -82,20 +82,33 @@ public sealed class EntryPlanner
         for (int k = 0; k < n; k++) qRef += c[k] * dyn.HeatPerEnergy(e[k], x[k, IR]);
         qRef = Math.Max(qRef, 1e-12);
 
+        // The plan before, on this grid, for the consistency term: a re-solve stays near what is being flown.
+        double[]? uPrev = null;
+        if (warm != null)
+        {
+            uPrev = new double[n];
+            for (int k = 0; k < n; k++) uPrev[k] = warm.At(e[k]).U;
+        }
+
         var lin = new Linearisation(n);
         double eta = cold ? 2.0 : 1.0;
         int maxIter = cold ? cfg.ColdIterations : cfg.WarmIterations;
         int iter = 0;
         double maxDefect = double.PositiveInfinity;
+        double lastStep = double.PositiveInfinity;
 
         for (; iter < maxIter; iter++)
         {
             Linearise(dyn, cfg, e, x, u, lin);
             maxDefect = MaxScaledDefect(lin, xs, n);
-            double jRef = Merit(dyn, cfg, e, x, u, lin.Defect, c, qRef, floor, rfMin, rfMax, xs);
+            // Done once the plan is well inside the gate and the steps have become small: the rest of the iterations would only polish it.
+            if (iter > 0 && maxDefect <= 0.25 * cfg.GateDefect && lastStep < 0.02
+                && Math.Abs(x[n - 1, IS]) * r0m <= 0.25 * cfg.GateRangeM)
+                break;
+            double jRef = Merit(dyn, cfg, e, x, u, lin.Defect, c, qRef, floor, rfMin, rfMax, xs, uPrev);
 
             var sub = BuildAndSolve(dyn, cfg, e, x0, x, u, lin, c, qRef, floor, rfMin, rfMax,
-                                    cosMin, cosMax, rollRate, xs, eta, out double jLin);
+                                    cosMin, cosMax, rollRate, xs, eta, uPrev, out double jLin);
             if (sub == null)
             {
                 eta *= 0.5;
@@ -106,7 +119,7 @@ public sealed class EntryPlanner
 
             var defC = new double[n - 1, NX];
             Defects(dyn, cfg, e, xc, uc, defC);
-            double jCand = Merit(dyn, cfg, e, xc, uc, defC, c, qRef, floor, rfMin, rfMax, xs);
+            double jCand = Merit(dyn, cfg, e, xc, uc, defC, c, qRef, floor, rfMin, rfMax, xs, uPrev);
 
             double predicted = jRef - jLin;
             double actual = jRef - jCand;
@@ -124,6 +137,7 @@ public sealed class EntryPlanner
                 continue;
             }
             Copy(xc, uc, x, u);
+            lastStep = step;
             if (ratio < 0.25) eta *= 0.5;
             else if (ratio > 0.7) eta = Math.Min(eta * 2.0, 20.0);
             if (step < 1e-3) { iter++; break; }
@@ -348,22 +362,41 @@ public sealed class EntryPlanner
 
     /// <summary>The true cost of a trajectory: heat, smoothness and exact penalties on what it violates.</summary>
     static double Merit(EntryDynamics dyn, EntryConfig cfg, double[] e, double[,] x, double[] u, double[,] def,
-                        double[] c, double qRef, double[] floor, double rfMin, double rfMax, double[] xs)
+                        double[] c, double qRef, double[] floor, double rfMin, double rfMax, double[] xs, double[]? uPrev)
     {
         int n = e.Length;
         double heat = 0;
         for (int k = 0; k < n; k++) heat += c[k] * dyn.HeatPerEnergy(e[k], x[k, IR]);
-        double j = cfg.HeatWeight * heat / qRef;
-        for (int k = 0; k < n - 1; k++)
-        {
-            double du = (u[k + 1] - u[k]) / US;
-            j += cfg.SmoothWeight * du * du;
-        }
+        double j = cfg.HeatWeight * heat / qRef + ShapeCost(cfg, u, uPrev);
         double pen = 0;
         for (int k = 0; k < n - 1; k++)
             for (int i = 0; i < NX; i++) pen += Math.Abs(def[k, i]) / xs[i];
         pen += SlackPenalty(x, floor, rfMin, rfMax, xs, n);
         return j + cfg.PenaltyWeight * pen;
+    }
+
+    /// <summary>The plan's shape terms: the change, the curvature, and the distance from the plan before (warm only), all in vertical L/D over U_s.</summary>
+    static double ShapeCost(EntryConfig cfg, double[] u, double[]? uPrev)
+    {
+        int n = u.Length;
+        double j = 0;
+        for (int k = 0; k < n - 1; k++)
+        {
+            double du = (u[k + 1] - u[k]) / US;
+            j += cfg.SmoothWeight * du * du;
+        }
+        for (int k = 1; k < n - 1; k++)
+        {
+            double d2 = (u[k + 1] - 2 * u[k] + u[k - 1]) / US;
+            j += cfg.CurvatureWeight * d2 * d2;
+        }
+        if (uPrev != null)
+            for (int k = 0; k < n; k++)
+            {
+                double dp = (u[k] - uPrev[k]) / US;
+                j += cfg.ConsistencyWeight * dp * dp / n;
+            }
+        return j;
     }
 
     static double SlackPenalty(double[,] x, double[] floor, double rfMin, double rfMax, double[] xs, int n)
@@ -384,7 +417,7 @@ public sealed class EntryPlanner
     static (double[,], double[])? BuildAndSolve(
         EntryDynamics dyn, EntryConfig cfg, double[] e, double[] x0, double[,] xr, double[] ur, Linearisation lin,
         double[] c, double qRef, double[] floor, double rfMin, double rfMax,
-        double cosMin, double cosMax, double rollRate, double[] xs, double eta, out double jLin)
+        double cosMin, double cosMax, double rollRate, double[] xs, double eta, double[]? uPrev, out double jLin)
     {
         jLin = double.PositiveInfinity;
         int n = e.Length;
@@ -439,6 +472,27 @@ public sealed class EntryPlanner
             }
             pu[k] += 2 * rp / (US * US);
             cvec[iU + k] += -2 * rp * ur[k] / (US * US);
+        }
+        // Curvature: (u_{k-1} - 2 u_k + u_{k+1})^2, each term's Hessian 2 w v v' with v = (1, -2, 1), upper triangle.
+        double wc = cfg.CurvatureWeight / (US * US);
+        for (int k = 1; k < n - 1; k++)
+        {
+            pu[k - 1] += 2 * wc;
+            pu[k] += 8 * wc;
+            pu[k + 1] += 2 * wc;
+            P.Add(iU + k - 1, iU + k, -4 * wc);
+            P.Add(iU + k, iU + k + 1, -4 * wc);
+            P.Add(iU + k - 1, iU + k + 1, 2 * wc);
+        }
+        // Consistency with the plan before: (u_k - u_prev,k)^2 / n.
+        if (uPrev != null)
+        {
+            double wp = cfg.ConsistencyWeight / (US * US * n);
+            for (int k = 0; k < n; k++)
+            {
+                pu[k] += 2 * wp;
+                cvec[iU + k] += -2 * wp * uPrev[k];
+            }
         }
         for (int k = 0; k < n; k++) P.Add(iU + k, iU + k, pu[k]);
 
@@ -560,11 +614,7 @@ public sealed class EntryPlanner
             double d = xc[k, IR] - xr[k, IR];
             jl += wq * c[k] * (heatF0[k] + heatF1[k] * d + 0.5 * heatF2[k] * d * d);
         }
-        for (int k = 0; k < nI; k++)
-        {
-            double du = (uc[k + 1] - uc[k]) / US;
-            jl += cfg.SmoothWeight * du * du;
-        }
+        jl += ShapeCost(cfg, uc, uPrev);
         double pen = 0;
         for (int k = 0; k < nI; k++)
             for (int j = 0; j < NX; j++) pen += Math.Abs(v[W(k, j)]) / xs[j];
@@ -667,7 +717,7 @@ public sealed class EntryPlanner
         var dyn = new EntryDynamics(model);
         double r0 = model.BodyRadius, g0 = model.G0;
         double r = radiusM / r0, v = speedMs / model.SpeedUnit, g = gammaRad, s = rangeRad;
-        double startD = cfg.StartDrag / g0;
+        double startD = cfg.PlanStartDrag / g0;
         double dt = 0.5 / model.TimeUnit;
         double tMax = 4 * 3600.0 / model.TimeUnit;
         double t = 0;

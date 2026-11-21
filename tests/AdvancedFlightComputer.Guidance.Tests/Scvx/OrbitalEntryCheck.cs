@@ -139,10 +139,10 @@ internal static class OrbitalEntryCheck
         if (plan == null) { Console.WriteLine("  FAIL start-drag latch: no plan"); return 1; }
         var tr = new EntryTracker(cfg);
         double e = plan.E0, vN = plan.SpeedMs[0] / model.SpeedUnit;
-        var before = tr.Update(new EntryTracker.Input(0.5, e, 0.1, 0, 0.3, 7200, 0, vN, plan));
-        var touch = tr.Update(new EntryTracker.Input(0.5, e, 0.3, 0, 0.3, 7200, 0, vN, plan));
-        var after = tr.Update(new EntryTracker.Input(0.5, e, 0.05, 0, 0.3, 7200, 0, vN, plan));
-        bool ok = before.Phase == EntryTracker.Phase.PreEntry && touch.Phase == EntryTracker.Phase.Tracking && after.Phase == EntryTracker.Phase.Tracking && cfg.StartDrag == 0.2;
+        var before = tr.Update(new EntryTracker.Input(0.5, e, 0.01, 0, 0.3, 7200, 0, vN, plan, InAtmosphere: false));
+        var touch = tr.Update(new EntryTracker.Input(0.5, e, 0.001, 0, 0.3, 7200, 0, vN, plan, InAtmosphere: true));
+        var after = tr.Update(new EntryTracker.Input(0.5, e, 0.0, 0, 0.3, 7200, 0, vN, plan, InAtmosphere: false));
+        bool ok = before.Phase == EntryTracker.Phase.PreEntry && touch.Phase == EntryTracker.Phase.Tracking && after.Phase == EntryTracker.Phase.Tracking;
         Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} start-drag latch at {cfg.StartDrag} m/s2: {before.Phase} -> {touch.Phase} -> {after.Phase} after the drag fell back");
         return ok ? 0 : 1;
     }
@@ -246,7 +246,7 @@ internal static class OrbitalEntryCheck
             {
                 var m = nominal.WithScales(rhoK, ldK);
                 double e0; double[] x0;
-                if (dMeas >= cfg.StartDrag) { e0 = e; x0 = [rN, y[4], s]; }
+                if (dMeas >= cfg.StartDrag || tracker.InAir) { e0 = e; x0 = [rN, y[4], s]; }
                 else
                 {
                     var st = EntryPlanner.PredictStart(m, cfg, y[0], vel, y[4], s);
@@ -260,7 +260,7 @@ internal static class OrbitalEntryCheck
                 nextSolve = t + (dMeas >= cfg.StartDrag ? 5.0 : 30.0);
             }
 
-            var outp = tracker.Update(new EntryTracker.Input(dt, e, dMeas, vel * Math.Sin(y[4]), ldMeas, Hs, cross, vN, plan));
+            var outp = tracker.Update(new EntryTracker.Input(dt, e, dMeas, vel * Math.Sin(y[4]), ldMeas, Hs, cross, vN, plan, h < Top));
             if (lastSide != 0 && outp.Side != lastSide) reversals++;
             if (outp.Side != 0) lastSide = outp.Side;
             // Positive bank lifts to the right; in Truth positive bank turns towards +heading (clockwise, right). Same sense.

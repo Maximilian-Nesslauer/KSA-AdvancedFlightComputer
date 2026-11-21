@@ -43,6 +43,8 @@ public static partial class GuidanceWindow
         HandoverAltitude = _s.OrbitalEntryHandoverAltKm * 1000.0,
         HandoverMach = _s.OrbitalEntryHandoverMach,
         TrackOmega = Math.Max(_s.OrbitalEntryTrackOmega, 0.01),
+        EngageInAtmosphere = _s.OrbitalEntryEngageInAir,
+        CommandSmoothS = Math.Max(_s.OrbitalEntrySmoothS, 0.0),
     };
 
     /// <summary>Take the craft for orbital entry. Draw code only sets OrbitalEntry.EngagePending; this runs from the step, ahead of the claim.</summary>
@@ -288,7 +290,7 @@ public static partial class GuidanceWindow
         {
             int side = st.Tracker.Side;
             var outp = st.Tracker.Update(new EntryTracker.Input(dt, e, drag, st.HdotMs, ld, atm.ScaleHeightAt(Math.Max(alt, 0.0)),
-                                                                crossRad, vMag / nominal.SpeedUnit, st.Plan));
+                                                                crossRad, vMag / nominal.SpeedUnit, st.Plan, alt < atm.TopAltitude));
             if (side != 0 && outp.Side != side) st.Reversals++;
             st.Last = outp;
             bankDeg = outp.BankDeg;
@@ -406,8 +408,8 @@ public static partial class GuidanceWindow
         double R0 = model.BodyRadius;
         double e0;
         double[] x0;
-        // Latched with the tracker's: once in the air, plan from the state as it is, whatever the drag does next.
-        if (drag >= cfg.StartDrag || (st.Tracker?.InAir ?? false))
+        // The plan starts at the plan start drag: from the state as it is once there, before it from the predicted coast down to it.
+        if (drag >= cfg.PlanStartDrag)
         {
             e0 = e;
             x0 = [rMag / R0, gamma, rangeRad];

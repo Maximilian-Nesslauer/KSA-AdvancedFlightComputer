@@ -1787,14 +1787,18 @@ public sealed class VehicleAutopilotState
     public double OrbitalEntryBankMaxDeg = 100.0;
     /// <summary>Largest bank the tracker may overbank to, deg, for at most OrbitalEntryOverbankS.</summary>
     public double OrbitalEntryOverbankDeg = 120.0;
-    public double OrbitalEntryOverbankS = 20.0;
+    public double OrbitalEntryOverbankS = 0.0;
     /// <summary>Roll rate the tracker slews at and the plan leaves room for, deg/s.</summary>
     public double OrbitalEntryRollRateDegS = 5.0;
     /// <summary>Hand-over altitude, km, and Mach (airspeed over the sea-level speed of sound, as the aero tables use).</summary>
     public double OrbitalEntryHandoverAltKm = 25.0;
     public double OrbitalEntryHandoverMach = 2.0;
     /// <summary>Drag at which the tracker takes hold, m/s^2. Above it the craft holds its entry attitude lift-up.</summary>
-    public double OrbitalEntryStartDragMs2 = 0.2;
+    public double OrbitalEntryStartDragMs2 = 0.02;
+    /// <summary>Take hold as soon as the craft is below the top of the air.</summary>
+    public bool OrbitalEntryEngageInAir = true;
+    /// <summary>Time constant of the low-pass on the commanded vertical L/D, s.</summary>
+    public double OrbitalEntrySmoothS = 0.0;
     /// <summary>Fly the pitch-trim angle of attack at each Mach (from the belly-first sweep); off flies OrbitalEntryAoaDeg throughout.</summary>
     public bool OrbitalEntryTrimAoa = true;
     /// <summary>Preferred (and fallback) angle of attack from nose-first, deg, and the band a trim must lie in.</summary>

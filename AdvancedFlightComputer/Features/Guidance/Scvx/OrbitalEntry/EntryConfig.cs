@@ -32,8 +32,8 @@ public sealed class EntryConfig
     /// <summary>Largest bank the tracker may command, deg, for at most <see cref="OverbankMaxS"/> at a time.</summary>
     public double OverbankDeg { get; set; } = 120.0;
 
-    /// <summary>How long the tracker may stay past <see cref="BankMaxDeg"/>, s.</summary>
-    public double OverbankMaxS { get; set; } = 20.0;
+    /// <summary>How long the tracker may stay past <see cref="BankMaxDeg"/>, s; 0 for as long as the sink needs it. On 2026-11-21 a 20 s limit dropped the bank back to 100 deg mid-correction and left every entry a little high.</summary>
+    public double OverbankMaxS { get; set; } = 0.0;
 
     /// <summary>Roll rate the vehicle can sustain, deg/s. Sets the plan's rate limit and the tracker's slew.</summary>
     public double RollRateDegS { get; set; } = 5.0;
@@ -44,7 +44,19 @@ public sealed class EntryConfig
     // ---- Start and end ----
 
     /// <summary>Drag at which entry guidance takes hold, m/s^2, latched once reached (EntryTracker.InAir). Before it the vehicle coasts lift-up.</summary>
-    public double StartDrag { get; set; } = 0.2;
+    public double StartDrag { get; set; } = 0.02;
+
+    /// <summary>Drag the plan starts from, m/s^2: before it the planner predicts the coast down to it. Kept apart from <see cref="StartDrag"/>: in air this thin the energy hardly changes while the altitude falls tens of km, and a plan started there does not converge.</summary>
+    public double PlanStartDrag { get; set; } = 0.5;
+
+    /// <summary>Take hold as soon as the craft is below the top of the air, whatever the drag: a shallow entry spends a long time in air too thin to reach any start drag.</summary>
+    public bool EngageInAtmosphere { get; set; } = true;
+
+    /// <summary>The least drag the tracker's gains are taken at, m/s^2: they go as 1/D and 1/D^2.</summary>
+    public double GainDragFloor { get; set; } = 1.0;
+
+    /// <summary>Time constant of the low-pass on the vertical L/D the tracker commands, s; 0 for none.</summary>
+    public double CommandSmoothS { get; set; } = 0.0;
 
     /// <summary>Hand-over altitude, m.</summary>
     public double HandoverAltitude { get; set; } = 25_000.0;
@@ -59,7 +71,7 @@ public sealed class EntryConfig
 
     public int Nodes { get; set; } = 60;
     public int SubSteps { get; set; } = 6;
-    public int ColdIterations { get; set; } = 25;
+    public int ColdIterations { get; set; } = 60;
     public int WarmIterations { get; set; } = 6;
 
     /// <summary>Spread the linearisation over the thread pool. Off in the game, where the planner has a thread of its own.</summary>
@@ -67,6 +79,12 @@ public sealed class EntryConfig
 
     /// <summary>Smoothness weight on changes in vertical L/D between nodes.</summary>
     public double SmoothWeight { get; set; } = 0.05;
+
+    /// <summary>Weight on the plan's curvature in vertical L/D (second differences between nodes): a reference that bends gently, so the tracker and the flaps are not asked to follow corners.</summary>
+    public double CurvatureWeight { get; set; } = 0.5;
+
+    /// <summary>Weight pulling a re-solve's vertical L/D towards the plan before it, so successive plans do not jump.</summary>
+    public double ConsistencyWeight { get; set; } = 0.2;
 
     /// <summary>Weight of the heat-load objective (normalised by the seed's).</summary>
     public double HeatWeight { get; set; } = 1.0;

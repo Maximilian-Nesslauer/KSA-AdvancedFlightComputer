@@ -281,15 +281,15 @@ internal static class GuidanceSettingSpecs
         "The largest bank the plan uses.");
     public static readonly SettingSpec OrbitalEntryOverbankDeg = new("OrbitalEntryOverbankDeg", "OVERBANK LIMIT", "deg", P, 120.0, 1.0, 180.0, "%.0f",
         "The largest bank the tracker may command past the plan's, to stop a sink quickly, as the Shuttle did after its pull-out.");
-    public static readonly SettingSpec OrbitalEntryOverbankS = new("OrbitalEntryOverbankS", "OVERBANK TIME", "s", P, 20.0, 0.0, 600.0, "%.0f",
-        "How long the tracker may stay past PLAN MAX BANK at a time.");
+    public static readonly SettingSpec OrbitalEntryOverbankS = new("OrbitalEntryOverbankS", "OVERBANK TIME", "s", P, 0.0, 0.0, 600.0, "%.0f",
+        "How long the tracker may stay past PLAN MAX BANK at a time; 0 for as long as the sink needs it.");
     public static readonly SettingSpec OrbitalEntryRollRateDegS = new("OrbitalEntryRollRateDegS", "ROLL RATE", "deg/s", P, 5.0, 0.5, 90.0, "%.1f",
         "The roll rate the tracker slews the bank at, a reversal included; the plan uses half of it.");
     public static readonly SettingSpec OrbitalEntryHandoverAltKm = new("OrbitalEntryHandoverAltKm", "HAND-OVER ALTITUDE", "km", P, 25.0, 1.0, 200.0, "%.1f",
         "Where orbital entry guidance ends, with HAND-OVER MACH: the craft holds its entry attitude from there.");
     public static readonly SettingSpec OrbitalEntryHandoverMach = new("OrbitalEntryHandoverMach", "HAND-OVER MACH", "", P, 2.0, 0.2, 20.0, "%.2f",
         "Airspeed over the sea-level speed of sound at the hand-over, as the aero tables measure Mach.");
-    public static readonly SettingSpec OrbitalEntryStartDragMs2 = new("OrbitalEntryStartDragMs2", "START DRAG", "m/s^2", P, 0.2, 0.01, 20.0, "%.2f",
+    public static readonly SettingSpec OrbitalEntryStartDragMs2 = new("OrbitalEntryStartDragMs2", "START DRAG", "m/s^2", P, 0.02, 0.01, 20.0, "%.2f",
         "Drag at which the tracker takes hold, latched once reached. Above the air the craft holds its entry attitude lift-up.");
     public static readonly SettingSpec OrbitalEntryAoaDeg = new("OrbitalEntryAoaDeg", "ENTRY AoA", "deg", P, 60.0, 0.0, 180.0, "%.0f",
         "Angle of attack from nose-first: the trim angle nearest this where a Mach row has several, and the angle flown where it has none.");
@@ -310,6 +310,10 @@ internal static class GuidanceSettingSpecs
 
     public static readonly SettingSpec OrbitalEntryTrackOmega = new("OrbitalEntryTrackOmega", "DRAG TRACKING", "rad/s", P, 0.12, 0.01, 2.0, "%.3f",
         "Natural frequency of the drag and sink-rate loop that holds the plan's drag: higher pulls the drag onto the plan's faster, at the cost of more bank activity.");
+    public static readonly SettingSpec OrbitalEntrySmoothS = new("OrbitalEntrySmoothS", "COMMAND SMOOTHING", "s", P, 0.0, 0.0, 60.0, "%.1f",
+        "Time constant of the low-pass on the vertical lift over drag the tracker asks for: a new plan, or a reference that changes faster than the craft can follow, is eased in rather than flipping the bank between its limits. 0 switches it off.");
+    public static readonly BoolSpec OrbitalEntryEngageInAir = new("OrbitalEntryEngageInAir", "ENGAGE IN AIR", P, true,
+        "The tracker takes hold as soon as the craft is below the top of the atmosphere, whatever the drag; off, it waits for START DRAG.");
     public static readonly SettingSpec OrbitalEntryAimFraction = new("OrbitalEntryAimFraction", "AIM IN CORRIDOR", "", P, 0.5, 0.0, 1.0, "%.2f",
         "Where DEORBIT ONLY aims the site in the corridor at the start of the air: 0 the short end (most drag), 1 the long end (the glide), 0.5 the middle, the most margin both ways.");
     public static readonly SettingSpec OrbitalEntryAimMaxCrossKm = new("OrbitalEntryAimMaxCrossKm", "AIM MAX CROSSRANGE", "km", P, 200.0, 1.0, 5000.0, "%.0f",
@@ -325,9 +329,9 @@ internal static class GuidanceSettingSpecs
         OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach,
         OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
         OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryOverbankS, OrbitalEntryRollRateDegS,
-        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryTrackOmega, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
+        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryTrackOmega, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
     };
-    public static readonly BoolSpec[] OrbitalEntryBools = { OrbitalEntryTrimAoa, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude };
+    public static readonly BoolSpec[] OrbitalEntryBools = { OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude };
 
     public static readonly BoolSpec ThreeDofFromGlide = new("ThreeDofFromGlide", "ENTRY ON GLIDE", P, true,
         "ENTRY takes over a boostback glide at AT IMPACT T- and flies the glide and the landing burn. Off, the glide continues until another mode takes the craft or it is stopped, and no landing burn is planned.");
@@ -469,7 +473,7 @@ internal static class GuidanceSettingSpecs
         OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach,
         OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
         OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryOverbankS, OrbitalEntryRollRateDegS,
-        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryTrackOmega, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
+        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryTrackOmega, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
     };
 
     public static readonly BoolSpec[] AllBools =
@@ -478,7 +482,7 @@ internal static class GuidanceSettingSpecs
         FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, AscentOwnAttitude, AscentAeroControl, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
         VehicleHeightAuto, LegsAutoDeploy, ParkIdleEngines, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
         SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ThreeDofFromGlide, ThreeDofSixDofHandover,
-        OrbitalEntryTrimAoa, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude,
+        OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude,
     };
 
     #endregion
