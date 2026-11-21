@@ -1807,6 +1807,14 @@ public sealed class VehicleAutopilotState
     public double OrbitalEntryResolveS = 2.0;
     /// <summary>Take orbital entry guidance at the end of a DEORBIT ONLY burn.</summary>
     public bool OrbitalEntryAfterDeorbit = true;
+    /// <summary>Time that DEORBIT ONLY burn so the site sits at OrbitalEntryAimFraction of the corridor at the start of the air (OrbitalEntryAim).</summary>
+    public bool OrbitalEntryAimDeorbit = true;
+    /// <summary>Where in the corridor the site is aimed: 0 at its short end (most drag), 1 at its long end (the glide).</summary>
+    public double OrbitalEntryAimFraction = 0.5;
+    /// <summary>The farthest the site may sit off the pass's ground track, km.</summary>
+    public double OrbitalEntryAimMaxCrossKm = 200.0;
+    /// <summary>How far ahead the aimed burn is searched for, h.</summary>
+    public double OrbitalEntryAimHorizonH = 24.0;
     /// <summary>Fly the entry attitude with AFC's own attitude controller; off steers through the stock flight computer.</summary>
     public bool OrbitalEntryOwnAttitude = true;
 

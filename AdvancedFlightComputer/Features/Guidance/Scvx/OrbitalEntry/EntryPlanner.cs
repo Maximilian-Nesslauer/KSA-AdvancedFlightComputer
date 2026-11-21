@@ -625,6 +625,37 @@ public sealed class EntryPlanner
         };
     }
 
+    // ---------------------------------------------------------------- corridor
+
+    /// <summary>
+    /// The range still reachable from energy <paramref name="e0"/> to the hand-over, m, without a solve: flying the most drag the limits allow (the altitude floors) gives the shortest, the equilibrium glide at the lateral-reserve bank the longest. Range per unit energy is 1/D with the flight-path angle small, so each is one quadrature of the model (the TRAJ display's two lines, which Publish draws the same way). It leaves out the pull-out after the entry interface and the roll between the extremes, so the real corridor is a little narrower, most at the start.
+    /// </summary>
+    public static (double ShortM, double LongM) Corridor(EntryModel model, EntryConfig cfg, double e0, int nodes = 40)
+    {
+        var dyn = new EntryDynamics(model);
+        double ef = FinalEnergy(model, cfg);
+        if (!(e0 < ef))
+            return (0.0, 0.0);
+        int n = Math.Max(nodes, 8);
+        double[] e = Grid(e0, ef, 1.0 + 80_000.0 / model.BodyRadius, cfg, model.BodyRadius, n);
+        double cosMin = Math.Cos(cfg.BankMinDeg * Math.PI / 180.0);
+        double shortR = 0, longR = 0, prevS = 0, prevL = 0;
+        for (int k = 0; k < n; k++)
+        {
+            double iS = 1.0 / Math.Max(dyn.Drag(e[k], dyn.FloorRadius(e[k], cfg)), EntryDynamics.DragFloor);
+            double iL = 1.0 / Math.Max(dyn.Drag(e[k], dyn.EquilibriumGlideRadius(e[k], cosMin, cfg)), EntryDynamics.DragFloor);
+            if (k > 0)
+            {
+                double h = e[k] - e[k - 1];
+                shortR += 0.5 * h * (iS + prevS);
+                longR += 0.5 * h * (iL + prevL);
+            }
+            prevS = iS;
+            prevL = iL;
+        }
+        return (shortR * model.BodyRadius, longR * model.BodyRadius);
+    }
+
     // ---------------------------------------------------------------- pre-entry
 
     /// <summary>

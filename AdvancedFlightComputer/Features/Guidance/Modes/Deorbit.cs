@@ -149,6 +149,7 @@ public static partial class GuidanceWindow
             return;
         }
         ClaimVehicle(GuidanceMode.Landing, vehicle);
+        ClearAim(_s.OrbitalEntry);
         _s.CutoffDone = false;
         _s.StagingActive = false;
         _s.HasCommand = false;
@@ -281,6 +282,7 @@ public static partial class GuidanceWindow
 
     private static void RestartDeorbitPlanning(string status)
     {
+        ClearAim(_s.OrbitalEntry);
         ClearDeorbitPlanState();
         _s.DeorbitNextValidationTick = GuidanceClock.NowMs + DeorbitSettleMs;
         _s.LandingPhase = LandingPhase.DeorbitPlanning;
@@ -326,6 +328,9 @@ public static partial class GuidanceWindow
 
     private static bool PlanEntryBurn(Vehicle vehicle, DeorbitRequest request)
     {
+        // An orbital entry aims its burn at the site (OrbitalEntryAim); a plain DEORBIT ONLY burns at the next chance.
+        if (_s.OrbitalEntryAfterDeorbit && _s.OrbitalEntryAimDeorbit)
+            return PlanAimedEntryBurn(vehicle, request.Parent, request);
         _s.DeorbitPlan = EntryDeorbitPlanner.Plan(request, out string reason, _s.DeorbitEntryMeasuredPreparation, SimNow());
         if (_s.DeorbitPlan is not { } entry)
         {

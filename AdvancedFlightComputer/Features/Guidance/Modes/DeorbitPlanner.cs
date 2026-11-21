@@ -117,6 +117,83 @@ internal static class EntryDeorbitPlanner
         return null;
     }
 
+    /// <summary>
+    /// The entry burn at a chosen departure time, the same burn as <see cref="Plan"/> makes (horizontal, down to the entry periapsis) but not snapped to apoapsis: an orbital entry aimed at its site picks the time (OrbitalEntryAim). Null, with the reason, where that time leaves too little to prepare, there is no propellant for it, or the lowered orbit does not meet the air in time.
+    /// </summary>
+    internal static DeorbitPlan? PlanAt(DeorbitRequest request, double departureSeconds, out string refusal, double measuredPreparation = 0.0)
+    {
+        refusal = "DEORBIT ONLY NEEDS A BOUND PARKING ORBIT ABOVE THE ATMOSPHERE.";
+        if (!request.Source.IsBound() || request.Engines.Length == 0 || !(request.ExhaustVelocity > 0.0))
+            return null;
+        if (!TryLowered(request, departureSeconds, out StateVectors state, out double3 velocity, out double3 dv, out Orbit lowered, out refusal))
+            return null;
+        double cutoff = request.Mass * Math.Exp(-dv.Length() / request.ExhaustVelocity);
+        if (request.Model.Stages.Count == 0 || cutoff < request.Model.Stages[0].MassDry)
+        {
+            refusal = "INSUFFICIENT PROPELLANT FOR THE ENTRY BURN.";
+            return null;
+        }
+        double duration = (request.Mass - cutoff) / request.Engines[0].MassFlow;
+        double preparation = Math.Max(request.StockPreparation, measuredPreparation);
+        if (departureSeconds < request.Epoch + preparation + 45.0 + duration * 0.6)
+        {
+            refusal = "THE AIMED ENTRY BURN IS TOO SOON TO PREPARE.";
+            return null;
+        }
+        UniverseTime departure = new(departureSeconds);
+        double entry = request.Parent.GetAtmosphereRadius();
+        double hi = InterfaceTime(lowered, departure, entry);
+        if (!(hi > departureSeconds + duration * 0.5 + request.StockPreparation))
+        {
+            refusal = "ENTRY STARTS TOO CLOSE TO THE STOCK BURN.";
+            return null;
+        }
+        StateVectors arrival = lowered.GetStateVectorsAt(new UniverseTime(hi));
+        refusal = "";
+        return new DeorbitPlan(departureSeconds, hi, state.PositionCci, velocity, dv,
+            arrival.PositionCci, arrival.VelocityCci, 0.0, entry - request.Parent.MeanRadius, cutoff);
+    }
+
+    /// <summary>
+    /// Where a horizontal burn down to the entry periapsis at <paramref name="departureSeconds"/> meets the top of the air: the time and the state there, CCI. The cheap part of <see cref="PlanAt"/>, for a search over departure times.
+    /// </summary>
+    internal static bool TryArrival(DeorbitRequest request, double departureSeconds, out double arrivalSeconds, out StateVectors arrival)
+    {
+        arrivalSeconds = double.NaN;
+        arrival = default;
+        if (!TryLowered(request, departureSeconds, out _, out _, out _, out Orbit lowered, out _))
+            return false;
+        double hi = InterfaceTime(lowered, new UniverseTime(departureSeconds), request.Parent.GetAtmosphereRadius());
+        if (!double.IsFinite(hi))
+            return false;
+        arrivalSeconds = hi;
+        arrival = lowered.GetStateVectorsAt(new UniverseTime(hi));
+        return true;
+    }
+
+    private static bool TryLowered(DeorbitRequest request, double departureSeconds, out StateVectors state, out double3 velocity,
+                                   out double3 dv, out Orbit lowered, out string refusal)
+    {
+        double periapsis = request.Parent.MeanRadius + request.Settings.EntryPeriapsis!.Value;
+        double entry = request.Parent.GetAtmosphereRadius();
+        UniverseTime departure = new(departureSeconds);
+        state = request.Source.GetStateVectorsAt(departure);
+        double radius = state.PositionCci.Length();
+        double3 radial = state.PositionCci / radius;
+        double3 transverse = state.VelocityCci - double3.Dot(state.VelocityCci, radial) * radial;
+        double semiMajor = (radius + periapsis) * 0.5;
+        double speed = Math.Sqrt(request.Parent.Mu * (2.0 / radius - 1.0 / semiMajor));
+        velocity = transverse.NormalizeOrZero() * speed;
+        dv = velocity - state.VelocityCci;
+        lowered = null;
+        refusal = "NO RETROGRADE BURN TO THAT ENTRY PERIAPSIS.";
+        if (!(radius > entry) || !(speed < transverse.Length()) || !DeorbitPlanner.Finite(dv))
+            return false;
+        lowered = Orbit.CreateFromStateCci(request.Parent, departure, state.PositionCci, velocity, request.Source.OrbitLineColor);
+        refusal = "";
+        return true;
+    }
+
     internal static double InterfaceTime(Orbit orbit, UniverseTime cutoff, double entry)
     {
         if (!orbit.IsBound() || !(orbit.GetPeriapsisPositionOrb().Length() < entry)

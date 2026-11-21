@@ -308,15 +308,24 @@ internal static class GuidanceSettingSpecs
     public static readonly BoolSpec OrbitalEntryOwnAttitude = new("OrbitalEntryOwnAttitude", "OWN ATTITUDE", P, true,
         "Fly the entry attitude with AFC's own attitude controller (surfaces and RCS). Off steers through the stock flight computer.");
 
+    public static readonly SettingSpec OrbitalEntryAimFraction = new("OrbitalEntryAimFraction", "AIM IN CORRIDOR", "", P, 0.5, 0.0, 1.0, "%.2f",
+        "Where DEORBIT ONLY aims the site in the corridor at the start of the air: 0 the short end (most drag), 1 the long end (the glide), 0.5 the middle, the most margin both ways.");
+    public static readonly SettingSpec OrbitalEntryAimMaxCrossKm = new("OrbitalEntryAimMaxCrossKm", "AIM MAX CROSSRANGE", "km", P, 200.0, 1.0, 5000.0, "%.0f",
+        "The farthest the site may sit off a pass's ground track for the aimed burn to take that pass. A burn cannot turn the orbit plane.");
+    public static readonly SettingSpec OrbitalEntryAimHorizonH = new("OrbitalEntryAimHorizonH", "AIM HORIZON", "h", P, 24.0, 0.1, 240.0, "%.1f",
+        "How far ahead the aimed entry burn is searched for.");
+    public static readonly BoolSpec OrbitalEntryAimDeorbit = new("OrbitalEntryAimDeorbit", "AIM AT SITE", P, true,
+        "DEORBIT ONLY times its burn so the site sits at AIM IN CORRIDOR of the corridor when the craft reaches the air. Off, it burns at the next chance.");
+
     /// <summary>The ENTRY TRAJ window's parameter rows, in order.</summary>
     public static readonly SettingSpec[] OrbitalEntryDoubles =
     {
         OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach,
         OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
         OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryOverbankS, OrbitalEntryRollRateDegS,
-        OrbitalEntryStartDragMs2, OrbitalEntryResolveS,
+        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
     };
-    public static readonly BoolSpec[] OrbitalEntryBools = { OrbitalEntryTrimAoa, OrbitalEntryAfterDeorbit, OrbitalEntryOwnAttitude };
+    public static readonly BoolSpec[] OrbitalEntryBools = { OrbitalEntryTrimAoa, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude };
 
     public static readonly BoolSpec ThreeDofFromGlide = new("ThreeDofFromGlide", "ENTRY ON GLIDE", P, true,
         "ENTRY takes over a boostback glide at AT IMPACT T- and flies the glide and the landing burn. Off, the glide continues until another mode takes the craft or it is stopped, and no landing burn is planned.");
@@ -458,7 +467,7 @@ internal static class GuidanceSettingSpecs
         OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach,
         OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
         OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryOverbankS, OrbitalEntryRollRateDegS,
-        OrbitalEntryStartDragMs2, OrbitalEntryResolveS,
+        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
     };
 
     public static readonly BoolSpec[] AllBools =
@@ -467,7 +476,7 @@ internal static class GuidanceSettingSpecs
         FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, AscentOwnAttitude, AscentAeroControl, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
         VehicleHeightAuto, LegsAutoDeploy, ParkIdleEngines, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
         SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ThreeDofFromGlide, ThreeDofSixDofHandover,
-        OrbitalEntryTrimAoa, OrbitalEntryAfterDeorbit, OrbitalEntryOwnAttitude,
+        OrbitalEntryTrimAoa, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude,
     };
 
     #endregion

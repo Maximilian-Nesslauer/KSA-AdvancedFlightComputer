@@ -61,6 +61,19 @@ public sealed class OrbitalEntryState
     public readonly List<TrajSample> Trace = new();
     public double NextTraceAt = double.NegativeInfinity;
 
+    // ---- aiming the deorbit burn (OrbitalEntryAim), kept across the entry's own resets ----
+    public enum AimSteps { None, Search, Check, Ready }
+    public AimSteps AimStage;
+    public KsaAeroSweep.Job AimJob;
+    public KsaAeroSweep.Result AimAero;
+    public EntryTrim AimTrim;
+    public EntryModel AimModel;
+    public Ksa3DofWorker AimWorker;
+    public volatile EntryPlanner.Result AimCheck;
+    public double AimDeparture, AimStartE, AimStartRangeM, AimCrossM, AimShortM, AimLongM, AimTargetM, AimShiftM;
+    public double[] AimStartX;
+    public int AimTries;
+
     // ---- status ----
     public string Status = "";
     public bool StatusWarn;

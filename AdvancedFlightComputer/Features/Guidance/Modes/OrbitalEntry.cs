@@ -429,9 +429,11 @@ public static partial class GuidanceWindow
     /// The planner's model of this craft: the sampled atmosphere, the trim schedule's drag and L/D on the sweep's reference area, the craft's mass now. Immutable and thread-safe, so the worker can fly it.
     /// </summary>
     private static EntryModel OrbitalEntryModel(Vehicle vehicle, IParentBody parent, OrbitalEntryState st, double densityScale, double ldScale)
+        => OrbitalEntryModel(parent, st.Aero, st.Trim, vehicle.TotalMass, densityScale, ldScale);
+
+    private static EntryModel OrbitalEntryModel(IParentBody parent, KsaAeroSweep.Result aero, EntryTrim trim, double massKg, double densityScale, double ldScale)
     {
-        var atm = st.Aero.Atmosphere;
-        EntryTrim trim = st.Trim;
+        var atm = aero.Atmosphere;
         return new EntryModel
         {
             BodyRadius = parent.MeanRadius,
@@ -441,8 +443,8 @@ public static partial class GuidanceWindow
             AtmosphereTop = atm.TopAltitude,
             DragCoefficient = trim.CdAt,
             LiftToDrag = trim.LiftToDragAt,
-            Mass = Math.Max(vehicle.TotalMass, 1.0),
-            ReferenceArea = st.Aero.ReferenceArea,
+            Mass = Math.Max(massKg, 1.0),
+            ReferenceArea = aero.ReferenceArea,
             NoseRadius = Math.Max(_s.OrbitalEntryNoseRadiusM, 0.05),
             DensityScale = densityScale,
             LiftToDragScale = ldScale,
@@ -452,8 +454,21 @@ public static partial class GuidanceWindow
     /// <summary>The angle-of-attack schedule from the belly-first sweep: the chosen belly axis, or the one of the four with the most trimmed Mach rows and then the best lift.</summary>
     private static bool BuildOrbitalEntryTrim(OrbitalEntryState st, out string why)
     {
+        if (!TryBuildEntryTrim(st.Aero, out EntryTrim trim, out int index, out why))
+            return false;
+        st.Trim = trim;
+        st.BellyIndex = index;
+        st.BellyAxisName = st.Aero.Belly[index].AxisName;
+        return true;
+    }
+
+    /// <summary>The trim schedule of a belly-first sweep, and the belly side it flies (KsaAeroSweep.BellyAxes index).</summary>
+    private static bool TryBuildEntryTrim(KsaAeroSweep.Result aero, out EntryTrim trim, out int index, out string why)
+    {
         why = "";
-        var sweeps = st.Aero.Belly;
+        trim = null;
+        index = -1;
+        var sweeps = aero.Belly;
         int choice = (int)Math.Round(_s.OrbitalEntryBellyAxis);
         EntryTrim Make(KsaAeroSweep.BellySweep b) => _s.OrbitalEntryTrimAoa
             ? EntryTrim.Build(b.MachGrid, b.AlphaDeg, b.Cd, b.Cl, b.Cm, _s.OrbitalEntryAoaMinDeg, _s.OrbitalEntryAoaMaxDeg, _s.OrbitalEntryAoaDeg)
@@ -485,9 +500,8 @@ public static partial class GuidanceWindow
             why = FormattableString.Invariant($"NO LIFT BELLY FIRST ON {sweeps[best].AxisName} (L/D {bestTrim.LiftToDragAt(10):F2} AT MACH 10).");
             return false;
         }
-        st.Trim = bestTrim;
-        st.BellyIndex = best;
-        st.BellyAxisName = sweeps[best].AxisName;
+        trim = bestTrim;
+        index = best;
         return true;
     }
 }

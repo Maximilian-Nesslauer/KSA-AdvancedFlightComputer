@@ -40,6 +40,7 @@ internal static class OrbitalEntryCheck
         int fails = TrimCheck() + FrameCheck();
         foreach (var v in Vehicles)
         {
+            fails += CorridorCheck(v);
             fails += OpenLoop(v, verbose);
             fails += ClosedLoop(v, verbose);
         }
@@ -101,6 +102,31 @@ internal static class OrbitalEntryCheck
         bool ok = worst < 1e-9 && old < 1e-12 && Math.Abs(ab * 180 / Math.PI - 30) < 1e-9 && Math.Abs(bb) < 1e-12;
         Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} table frames: round trip {worst:E1} deg, against the old formulas {old:E1} rad, belly-flop 60 deg reads alpha {ab * 180 / Math.PI:F2}");
         return ok ? 0 : 1;
+    }
+
+    /// <summary>
+    /// The corridor DEORBIT ONLY aims with (EntryPlanner.Corridor, a quadrature): a plan with the site in its middle must converge on it. Near its edges the quadrature, which leaves out the pull-out, is optimistic; the check reports how far.
+    /// </summary>
+    static int CorridorCheck(Vehicle v)
+    {
+        var cfg = Config(v);
+        var model = Model(v);
+        var start = EntryPlanner.PredictStart(model, cfg, R0 + 121_000, 7_600, -1.3 * Math.PI / 180, 0);
+        if (start == null) { Console.WriteLine($"  FAIL {v.Name} corridor: never meets the air"); return 1; }
+        var (shortM, longM) = EntryPlanner.Corridor(model, cfg, start.Value.E);
+        var planner = new EntryPlanner();
+        string Try(double f, out bool ok)
+        {
+            double s = shortM + f * (longM - shortM);
+            double[] x = [start.Value.X[0], start.Value.X[1], s / R0];
+            var r = planner.Solve(model, cfg, start.Value.E, x, null);
+            ok = r.Plan != null && r.Plan.Converged;
+            return r.Plan == null ? "none" : $"{(ok ? "ok" : "refused")} {r.Plan.TerminalRangeErrorM / 1000:F0} km";
+        }
+        string mid = Try(0.5, out bool midOk);
+        string lo = Try(0.1, out _), hi = Try(0.9, out _);
+        Console.WriteLine($"  {(midOk ? "ok  " : "FAIL")} {v.Name} corridor {shortM / 1000:F0}-{longM / 1000:F0} km: middle {mid}; at 0.1 {lo}, at 0.9 {hi}");
+        return midOk ? 0 : 1;
     }
 
     static EntryConfig Config(Vehicle v) => new() { HeatingRateMax = 0, DynamicPressureMax = 16_000, LoadFactorMax = v.GMax };
