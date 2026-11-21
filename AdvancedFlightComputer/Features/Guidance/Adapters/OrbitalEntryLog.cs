@@ -41,7 +41,7 @@ internal static class OrbitalEntryLog
         "ldMeas", "ldModel", "ldScale", "rhoScale",
         "uRef", "uCmd", "bankRef", "bankTarget", "bankCmd", "bankFlown", "side", "reversing", "overbank", "liftUp", "liftDown",
         "alphaCmd", "alphaFlown", "attErrDeg", "attRateErrDegS", "ownAtt", "airKnown",
-        "demandX", "demandY", "demandZ", "airX", "airY", "airZ", "surfX", "surfY", "surfZ", "rcsX", "rcsY", "rcsZ", "rcsFlowKgS",
+        "demandX", "demandY", "demandZ", "airX", "airY", "airZ", "surfX", "surfY", "surfZ", "rcsX", "rcsY", "rcsZ", "rcsFlowKgS", "spareAccXDegS2", "spareAccYDegS2", "spareAccZDegS2", "bankAccDegS2", "saturated",
         "fins", "fin1Cmd", "fin2Cmd", "fin3Cmd", "fin4Cmd", "fin1Deg", "fin2Deg", "fin3Deg", "fin4Deg",
         "plan", "planConverged", "planAgeS", "planMissKm", "planDefect", "planIter", "planMs", "solves", "refusals", "tablesReady",
         "status",

@@ -2213,7 +2213,12 @@ public static partial class GuidanceWindow
         else if (OrbitalEntryLive)
         {
             double entryCapture = Math.Max(10.0, _s.OrbitalEntryRollRateDegS);
-            settings = settings with { CaptureRateDegS = entryCapture, RollCaptureRateDegS = entryCapture };
+            // Authority-aware: the square-root capture and conditional integral (AttitudeController's AUTHORITY-AWARE CAPTURE), and the flaps lagged half the loop's time constant behind the allocator so the RCS takes the jitter (SURFACE SMOOTHING).
+            settings = settings with
+            {
+                CaptureRateDegS = entryCapture, RollCaptureRateDegS = entryCapture,
+                AuthorityCapture = true, SurfaceSmoothS = 0.5 / Math.Max(settings.BandwidthRadS, 0.1),
+            };
         }
         KsaAeroSweep.Result aero = OrbitalEntryLive ? _s.OrbitalEntry.Aero : _s.Aero;
         if (ascent)

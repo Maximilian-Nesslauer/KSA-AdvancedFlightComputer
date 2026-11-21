@@ -36,6 +36,8 @@ internal static class KsaAeroTorqueControl
     {
         public readonly List<ControlSurface> Surfaces = new();
         public Report Last;
+        /// <summary>The deflections commanded last, for the smoothing (Command's smoothS).</summary>
+        public double[] Commanded;
     }
 
     private static readonly ConditionalWeakTable<Vehicle, Slot> Slots = new();
@@ -158,9 +160,10 @@ internal static class KsaAeroTorqueControl
     /// </summary>
     /// <param name="stepS">The time to the next command, s: each surface is asked only for what its rate reaches by then, from where it is now (AeroTorqueAllocator.Allocate). Not positive: anywhere in its range.</param>
     /// <param name="backup">The RCS thrusters in the frame (mx, my, mz) (KsaRcsTorqueControl.Measure), to share the demand with in one programme: the surfaces then take the axes the RCS finds dear. The RCS is not fired here; the caller gives it what the surfaces leave.</param>
+    /// <param name="smoothS">With a backup that can give torque: the time the deflections follow the allocator's answer over, s, a first-order lag from the last command (dynamic control allocation: their rate of movement priced, not their deflection); the backup then takes what they give short. 0: none.</param>
     internal static Report Command(Vehicle vehicle, KsaAeroSweep.Result aero, double3 torqueAsmb,
                                    double3 mx, double3 my, double3 mz, ReadOnlySpan<double> priority, double momentLimiterPerPa,
-                                   double stepS = 0.0, RcsTorqueAllocator backup = null)
+                                   double stepS = 0.0, RcsTorqueAllocator backup = null, double smoothS = 0.0)
     {
         Slot slot = SlotOf(vehicle);
         AeroTorqueAllocator allocator = Measure(vehicle, aero, mx, my, mz, momentLimiterPerPa, slot.Surfaces, out Report condition);
@@ -189,6 +192,22 @@ internal static class KsaAeroTorqueControl
             slot.Last = condition with { ShortfallNm = torqueAsmb.Length() };
             return slot.Last;
         }
+        if (smoothS > 0.0 && stepS > 0.0 && backup != null && backup.Count > 0)
+        {
+            // The surfaces follow the answer through a lag, from where they were last sent; what they then give is the truth the backup is told.
+            double k = stepS / (smoothS + stepS);
+            bool known = slot.Commanded != null && slot.Commanded.Length == count;
+            for (int i = 0; i < count; i++)
+            {
+                double from = known ? slot.Commanded[i] : now[i];
+                double want = from + k * (deflection[i] - from);
+                if (reach[i] > 0.0)
+                    want = Math.Clamp(want, now[i] - reach[i], now[i] + reach[i]);
+                deflection[i] = want;
+            }
+            r = allocator.Evaluate(deflection, dx, dy, dz);
+        }
+        slot.Commanded = (double[])deflection.Clone();
         for (int i = 0; i < slot.Surfaces.Count; i++)
             slot.Surfaces[i].Command(deflection[i]);
         slot.Last = condition with

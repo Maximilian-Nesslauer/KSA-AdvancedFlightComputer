@@ -43,6 +43,7 @@ public static partial class GuidanceWindow
         HandoverMach = _s.OrbitalEntryHandoverMach,
         TrackOmega = Math.Max(_s.OrbitalEntryTrackOmega, 0.01),
         GainDragFloor = Math.Max(_s.OrbitalEntryGainDragFloor, 0.1),
+        MeasureSmoothS = Math.Max(_s.OrbitalEntryMeasureSmoothS, 0.0),
         TrackRollRateDegS = Math.Max(_s.OrbitalEntryTrackRollRateDegS, 0.5),
         CorridorWeight = Math.Max(_s.OrbitalEntryCorridorWeight, 0.0),
         ReversalBandDeg = Math.Max(_s.OrbitalEntryReversalBandDeg, 0.5),
@@ -301,7 +302,8 @@ public static partial class GuidanceWindow
         {
             int side = st.Tracker.Side;
             var outp = st.Tracker.Update(new EntryTracker.Input(dt, e, drag, st.HdotMs, ld, atm.ScaleHeightAt(Math.Max(alt, 0.0)),
-                                                                headingErr, vMag / nominal.SpeedUnit, st.Plan, alt < atm.TopAltitude));
+                                                                headingErr, vMag / nominal.SpeedUnit, st.Plan, alt < atm.TopAltitude,
+                                                                st.AttitudeOwn ? st.Attitude.AirAxisAccelRadS2 * 180.0 / Math.PI : double.NaN));
             if (side != 0 && outp.Side != side) st.Reversals++;
             st.Last = outp;
             bankDeg = outp.BankDeg;
@@ -422,6 +424,8 @@ public static partial class GuidanceWindow
         v.Add(st.AlphaDeg); v.Add(st.AlphaFlownDeg); v.Add(a.ErrorDeg); v.Add(a.RateErrorDegS); v.Add(st.AttitudeOwn ? 1 : 0); v.Add(a.AirKnown ? 1 : 0);
         v.Add(a.DemandNm.X); v.Add(a.DemandNm.Y); v.Add(a.DemandNm.Z); v.Add(a.AirNm.X); v.Add(a.AirNm.Y); v.Add(a.AirNm.Z);
         v.Add(a.SurfacesNm.X); v.Add(a.SurfacesNm.Y); v.Add(a.SurfacesNm.Z); v.Add(a.RcsNm.X); v.Add(a.RcsNm.Y); v.Add(a.RcsNm.Z); v.Add(a.RcsFlowKgS);
+        const double toDeg = 180.0 / Math.PI;
+        v.Add(a.SpareAccelRadS2.X * toDeg); v.Add(a.SpareAccelRadS2.Y * toDeg); v.Add(a.SpareAccelRadS2.Z * toDeg); v.Add(a.AirAxisAccelRadS2 * toDeg); v.Add(a.Saturated ? 1 : 0);
         v.Add(a.FinCommandDeg?.Length ?? 0);
         for (int i = 0; i < 4; i++) v.Add(a.FinCommandDeg != null && i < a.FinCommandDeg.Length ? a.FinCommandDeg[i] : double.NaN);
         for (int i = 0; i < 4; i++) v.Add(a.FinNowDeg != null && i < a.FinNowDeg.Length ? a.FinNowDeg[i] : double.NaN);

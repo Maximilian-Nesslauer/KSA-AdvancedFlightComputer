@@ -26,7 +26,8 @@ public sealed class EntryTracker
         double HeadingErrorRad,   // the site's bearing off the ground track, + to the left
         double SpeedNorm,         // normalised speed
         EntryPlan? Plan,
-        bool InAtmosphere = false);  // below the top of the air
+        bool InAtmosphere = false,   // below the top of the air
+        double BankAccelDegS2 = double.NaN);  // the angular acceleration the craft can spare about the airflow, deg/s^2 (its attitude controller's); NaN: unknown
 
     public readonly record struct Output(
         Phase Phase,
@@ -48,6 +49,8 @@ public sealed class EntryTracker
     double _bank;            // signed, as flown
     int _side;               // 0 until the first roll
     bool _reversing;
+    double _bankRate;        // the slew's own rate, deg/s, where the craft's authority shapes it
+    double _bankAccel = double.NaN;
     bool _inAir;
     double _uFilt = double.NaN;
     double _dragF = double.NaN, _hdotF = double.NaN;
@@ -65,6 +68,7 @@ public sealed class EntryTracker
         _bank = 0;
         _side = 0;
         _reversing = false;
+        _bankRate = 0;
         _inAir = false;
         _uFilt = double.NaN;
         _dragF = _hdotF = double.NaN;
@@ -74,6 +78,7 @@ public sealed class EntryTracker
     {
         var cfg = _cfg;
         double db = cfg.ReversalBand(inp.SpeedNorm);
+        _bankAccel = inp.BankAccelDegS2;
 
         if (inp.Plan == null)
             return Hold(inp, Phase.NoPlan, db, "NO PLAN: HOLDING BANK");
@@ -168,10 +173,33 @@ public sealed class EntryTracker
         => new(phase, _bank, _bank, 0, 0, 0, 0, db, _side, false, false, false, false, status);
 
     /// <summary>Move the flown bank towards the target at the roll rate. A sign change passes through zero, so a reversal rolls through lift-up.</summary>
+    /// <summary>The share of the craft's spare acceleration about the airflow the bank's slew counts on (the rest is the attitude controller's to close errors with).</summary>
+    const double BankAccelShare = 0.5;
+
+    /// <summary>
+    /// Moves the bank towards <paramref name="target"/> at up to <paramref name="rateDegS"/>. Where the craft's spare acceleration about the airflow is known (Input.BankAccelDegS2), the slew is held to what the craft can follow, a reference governor: its rate grows and falls by no more than BankAccelShare of that acceleration a second, and it is never faster than it can stop from in the bank left, sqrt(2 a delta). A bank swung faster than the craft can turn only runs away from it, and the surfaces slam from stop to stop chasing it (2026-11-21).
+    /// </summary>
     void Slew(double target, double dt, double rateDegS = double.NaN)
     {
-        double step = (double.IsFinite(rateDegS) ? rateDegS : _cfg.RollRateDegS) * dt;
+        double rate = double.IsFinite(rateDegS) ? rateDegS : _cfg.RollRateDegS;
         double diff = target - _bank;
-        _bank += Math.Abs(diff) <= step ? diff : Math.Sign(diff) * step;
+        if (!(double.IsFinite(_bankAccel) && _bankAccel > 0.0) || !(dt > 0.0))
+        {
+            double step = rate * dt;
+            _bank += Math.Abs(diff) <= step ? diff : Math.Sign(diff) * step;
+            _bankRate = 0.0;
+            return;
+        }
+        double a = BankAccelShare * _bankAccel;
+        double want = Math.Sign(diff) * Math.Min(rate, Math.Sqrt(2.0 * a * Math.Abs(diff)));
+        _bankRate += Math.Clamp(want - _bankRate, -a * dt, a * dt);
+        double move = _bankRate * dt;
+        if (Math.Abs(move) >= Math.Abs(diff) && Math.Sign(move) == Math.Sign(diff))
+        {
+            _bank = target;
+            _bankRate = 0.0;
+        }
+        else
+            _bank += move;
     }
 }

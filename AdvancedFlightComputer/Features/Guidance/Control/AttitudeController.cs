@@ -31,6 +31,10 @@ using AdvancedFlightComputer.Guidance.Numerics.Flight;
 ///
 /// THE SPLIT, in one programme. The control surfaces and the RCS thrusters share the demand (KsaAeroTorqueControl.Command with the RCS as its backup): a degree of fin costs next to nothing, a thruster its propellant, so the fins take every axis they can and the RCS only what they cannot - roll included, where a fixed "fins first, roll last" order had left roll to the RCS. Each fin is asked only for what its rate reaches by the next step, from where it is, and pays to move, so it does not chatter. The RCS is then fired for what the fins will give short of the demand (KsaRcsTorqueControl, pitch and yaw before roll). The engine's gimbals come in only where the settings use them (see THE GIMBALS).
 ///
+/// AUTHORITY-AWARE CAPTURE (Settings.AuthorityCapture; an orbital entry). The capture rate becomes the square-root law of a time-optimal stop: k theta near the target, and past theta = a / k^2, sqrt(2 a (theta - a / 2k^2)), the fastest the craft can still stop from in the angle left, joined to the linear part without a kink (ArduPilot's sqrt controller has the same shape). a is the angular acceleration the craft can spare about the axis now: what its surfaces and RCS can give each way (their Characterise) less the trim they hold against the air, over the inertia, at AuthorityShare of it, measured every AuthorityEveryS. Near the target nothing changes; far off, or with little authority, it asks only for rates it can stop from, so the demand stays within reach and the surfaces do not slam from stop to stop (2026-11-21: 1.5-4 MN m asked against 0.1-0.6 given, 34 full flap reversals a minute). The integral stands still while the actuators fall short of the demand (conditional integration, against wind-up). The report carries the acceleration the craft can spare about the airflow, which entry guidance holds its bank's slew to.
+///
+/// SURFACE SMOOTHING (Settings.SurfaceSmoothS; an orbital entry, where RCS backs the surfaces). The surfaces' deflections follow the allocator's through a first-order lag of that time, and the RCS takes what they then give short: dynamic control allocation (Harkegard), a price on the surfaces' rate of movement and none on their deflection, so slow demand goes to the surfaces and fast jitter to the RCS. In thin air the RCS's flutter about a held attitude swung the flaps 10 deg every half second for next to no torque (2026-11-21).
+///
 /// THE DEADBAND (Settings.DeadbandDeg, off by default). Inside it, turning at under RateDeadbandDegS from the target's rate, the feedback stands down and only the feedforward and the integral fly; it comes back past the deadband and stands down again under half of it. Off since the integral and the filtered rate went in: each return of the feedback kicked, and in the harness a 0.5 deg deadband cost 50 kg of RCS holding a tilt where none cost 46, and 1 deg cost 234 (2026-11-20).
 ///
 /// Main thread: it reads the craft and commands its actuators.
@@ -41,7 +45,8 @@ internal static class AttitudeController
                                              double IntegralPerS = 0.1, double CaptureRateDegS = 5.0, double RateFilterS = 0.2,
                                              double IntegralWithinDeg = 3.0, double IntegralMaxDegS = 8.0,
                                              bool UseSurfaces = true, bool UseGimbals = false, bool RollFree = false,
-                                             double RollCaptureRateDegS = double.NaN, double RollBandwidthRadS = double.NaN)
+                                             double RollCaptureRateDegS = double.NaN, double RollBandwidthRadS = double.NaN,
+                                             bool AuthorityCapture = false, double SurfaceSmoothS = 0.0)
     {
         public static readonly Settings Default = new(1.0, 0.8, 0.0, 0.5);
     }
@@ -52,7 +57,8 @@ internal static class AttitudeController
     internal readonly record struct Report(
         double ErrorDeg, double RateErrorDegS, bool InDeadband,
         double3 DemandNm, double3 AirNm, double3 SurfacesNm, double3 RcsAskedNm, double3 RcsNm, double RcsFlowKgS, bool AirKnown,
-        double3 IntegralNm = default, double[] FinCommandDeg = null, double[] FinNowDeg = null, double3 GimbalsNm = default);
+        double3 IntegralNm = default, double[] FinCommandDeg = null, double[] FinNowDeg = null, double3 GimbalsNm = default,
+        double3 SpareAccelRadS2 = default, double AirAxisAccelRadS2 = double.NaN, bool Saturated = false);
 
     private sealed class Slot
     {
@@ -67,6 +73,12 @@ internal static class AttitudeController
         /// <summary>The roll acceleration the lit gimbals and the RCS can give, rad/s^2 (RollAuthority), and when it was measured.</summary>
         public double RollAccel = double.NaN;
         public double RollAccelAt = double.NaN;
+        /// <summary>The most torque the surfaces and RCS can give about each model axis, each way, N m (Authority), and when measured.</summary>
+        public double3 MaxPlusNm, MaxMinusNm;
+        public double MaxAt = double.NaN;
+        public readonly List<ControlSurface> Scratch = new();
+        /// <summary>Last step the actuators fell short of the demand: the integral stands still.</summary>
+        public bool Saturated;
     }
 
     private static readonly ConditionalWeakTable<Vehicle, Slot> Slots = new();
@@ -111,8 +123,8 @@ internal static class AttitudeController
         double3 thetaRoll = settings.RollFree ? default : RollAngle(targetBody2Cci, cci2Body, mz) * mz;
         double withinRad = settings.IntegralWithinDeg * Math.PI / 180.0;
 
-        // The integral, near the target only, each part on its own error, and capped.
-        if (dt > 0.0)
+        // The integral, near the target only, each part on its own error, and capped; standing still while the actuators fell short last step (AuthorityCapture).
+        if (dt > 0.0 && !(settings.AuthorityCapture && slot.Saturated))
         {
             if (thetaPoint.Length() < withinRad)
                 slot.Integral += dt * thetaPoint;
@@ -130,6 +142,7 @@ internal static class AttitudeController
         else
             slot.Feedback = errorDeg > settings.DeadbandDeg || rateErrorDegS > 2.0 * settings.RateDeadbandDegS;
 
+        bool airKnown = TryAirMoment(vehicle, aero, momentLimiterPerPa, out double3 air);
         double kp = settings.BandwidthRadS * settings.BandwidthRadS, kd = 2.0 * settings.Damping * settings.BandwidthRadS;
         // The roll's own gains where RollBandwidthRadS is set (an ascent: see Settings).
         double rollBandwidth = double.IsFinite(settings.RollBandwidthRadS) ? settings.RollBandwidthRadS : settings.BandwidthRadS;
@@ -149,11 +162,22 @@ internal static class AttitudeController
         double3 integralRoll = double3.Dot(slot.Integral, mz) * mz, integralPoint = slot.Integral - integralRoll;
         double3 capturePoint = Capped(kd > 0.0 ? kp / kd * thetaPoint : default, captureMax);
         double3 captureRoll = Capped(kdRoll > 0.0 ? kpRoll / kdRoll * thetaRoll : default, rollCaptureMax);
+        double3 spare = default;
+        double airAxisAccel = double.NaN;
+        if (settings.AuthorityCapture)
+        {
+            // The acceleration the craft can spare about each model axis, after the trim it holds: the square-root law's a.
+            spare = SpareAccel(vehicle, slot, now, aero, momentLimiterPerPa, settings.UseSurfaces, mx, my, mz, ixx, iyy, izz,
+                               airKnown ? -Model(air, mx, my, mz) : default);
+            double rollCap = double.IsFinite(settings.RollCaptureRateDegS) ? settings.RollCaptureRateDegS * Math.PI / 180.0 : captureMax;
+            capturePoint = SqrtCapture(thetaPoint, kd > 0.0 ? kp / kd : 0.0, captureMax, Math.Min(spare.X, spare.Y));
+            captureRoll = SqrtCapture(thetaRoll, kdRoll > 0.0 ? kpRoll / kdRoll : 0.0, rollCap, spare.Z);
+            airAxisAccel = AirAxisAccel(vehicle, mx, my, mz, spare);
+        }
         double3 capture = capturePoint + captureRoll;
         double3 feedback = slot.Feedback ? Inertia(kd * (capturePoint + ratePoint) + kdRoll * (captureRoll + rateRoll), mx, my, mz, ixx, iyy, izz) : default;
         double3 integral = Inertia(settings.IntegralPerS * (kp * integralPoint + kpRoll * integralRoll), mx, my, mz, ixx, iyy, izz);
         double3 gyro = double3.Cross(w, Inertia(w, mx, my, mz, ixx, iyy, izz));
-        bool airKnown = TryAirMoment(vehicle, aero, momentLimiterPerPa, out double3 air);
         double3 demand = feedback + integral + gyro - air;
 
         // THE GIMBALS FIRST, where the settings use them (an ascent): the whole demand goes to the lit engines' allocation (KsaGimbalControl.SetLsq), and what it will give - pitch and yaw, and the roll the travel left allows - comes off what the rest are asked for. With no engine lit they give nothing and the rest take it all.
@@ -176,17 +200,20 @@ internal static class AttitudeController
         KsaAeroTorqueControl.Report surfaces = default;
         if (settings.UseSurfaces)
             surfaces = KsaAeroTorqueControl.Command(vehicle, aero, remaining, mx, my, mz, RcsPriority, momentLimiterPerPa,
-                                                    dt > 0.0 ? dt : 0.05, rcsColumns);
+                                                    dt > 0.0 ? dt : 0.05, rcsColumns, settings.SurfaceSmoothS);
         else
             KsaAeroTorqueControl.Release(vehicle);
         double3 surfacesBody = surfaces.GivenNm.X * mx + surfaces.GivenNm.Y * my + surfaces.GivenNm.Z * mz;
         double3 rcsAsked = remaining - surfacesBody;
         KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, RcsPriority);
+        // Short of the demand by more than SaturatedShare of it: the actuators are at their limits.
+        double3 givenBody = gimbalsBody + surfacesBody + rcs.GivenNm.X * mx + rcs.GivenNm.Y * my + rcs.GivenNm.Z * mz;
+        slot.Saturated = demand.Length() > 0.0 && (demand - givenBody).Length() > SaturatedShare * demand.Length();
 
         slot.Last = new Report(errorDeg, rateErrorDegS, !slot.Feedback,
             Model(demand, mx, my, mz), Model(air, mx, my, mz), surfaces.GivenNm, Model(rcsAsked, mx, my, mz),
             rcs.GivenNm, rcs.FlowKgS, airKnown, Model(integral, mx, my, mz), surfaces.CommandDeg, surfaces.NowDeg,
-            Model(gimbalsBody, mx, my, mz));
+            Model(gimbalsBody, mx, my, mz), spare, airAxisAccel, slot.Saturated);
         return slot.Last;
     }
 
@@ -207,6 +234,8 @@ internal static class AttitudeController
             slot.LastT = double.NaN;
             slot.RateKnown = false;
             slot.Integral = default;
+            slot.Saturated = false;
+            slot.MaxAt = double.NaN;
         }
     }
 
@@ -249,6 +278,93 @@ internal static class AttitudeController
 
     private static double3 Capped(double3 v, double max)
         => max > 0.0 && v.Length() > max ? v * (max / v.Length()) : v;
+
+    /// <summary>The share of the spare acceleration the square-root capture counts on to stop (AuthorityCapture): the estimate of the surfaces' reach can be off, and the same actuators also hold the other axes.</summary>
+    private const double AuthorityShare = 0.5;
+
+    /// <summary>The least acceleration the square-root capture assumes, rad/s^2, so a craft whose trim takes all it has still turns, slowly.</summary>
+    private const double AuthorityFloorRadS2 = 0.2 * Math.PI / 180.0;
+
+    /// <summary>How often the surfaces' and RCS's reach is measured again, s (six small LPs each).</summary>
+    private const double AuthorityEveryS = 0.5;
+
+    /// <summary>The share of the demand the actuators may fall short by before the step counts as saturated.</summary>
+    private const double SaturatedShare = 0.15;
+
+    /// <summary>
+    /// The capture rate along <paramref name="theta"/>: k theta near the target, and beyond theta = a / k^2 the square root of a time-optimal stop, sqrt(2 a (theta - a / 2k^2)), with a = AuthorityShare of <paramref name="accel"/> (floored at AuthorityFloorRadS2); capped at <paramref name="cap"/>. Unknown acceleration: the linear law, capped.
+    /// </summary>
+    private static double3 SqrtCapture(double3 theta, double k, double cap, double accel)
+    {
+        double m = theta.Length();
+        if (!(m > 0.0) || !(k > 0.0))
+            return default;
+        double rate = k * m;
+        if (double.IsFinite(accel))
+        {
+            double a = Math.Max(AuthorityShare * accel, AuthorityFloorRadS2);
+            double linear = a / (k * k);
+            if (m > linear)
+                rate = Math.Sqrt(2.0 * a * (m - 0.5 * linear));
+        }
+        if (cap > 0.0)
+            rate = Math.Min(rate, cap);
+        return theta * (rate / m);
+    }
+
+    /// <summary>
+    /// The angular acceleration the craft can spare about each model axis, rad/s^2: the most its surfaces and RCS give that way and the other (measured every AuthorityEveryS), less the trim torque <paramref name="trimModel"/> they hold against the air (model axes, N m), the smaller way round, over the inertia. NaN on an axis with no inertia.
+    /// </summary>
+    private static double3 SpareAccel(Vehicle vehicle, Slot slot, double now, KsaAeroSweep.Result aero, double momentLimiterPerPa, bool surfaces,
+                                      double3 mx, double3 my, double3 mz, double ixx, double iyy, double izz, double3 trimModel)
+    {
+        if (!(double.IsFinite(slot.MaxAt) && now - slot.MaxAt < AuthorityEveryS && now >= slot.MaxAt))
+        {
+            slot.MaxAt = now;
+            double[] plus = new double[3], minus = new double[3];
+            AeroTorqueAllocator fins = surfaces ? KsaAeroTorqueControl.Measure(vehicle, aero, mx, my, mz, momentLimiterPerPa, slot.Scratch, out _) : null;
+            RcsTorqueAllocator rcs = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out _);
+            for (int axis = 0; axis < 3; axis++)
+            {
+                if (fins != null)
+                {
+                    plus[axis] += Math.Max(fins.Characterise(axis, 1).MaxTorqueNm, 0.0);
+                    minus[axis] += Math.Max(fins.Characterise(axis, -1).MaxTorqueNm, 0.0);
+                }
+                if (rcs != null)
+                {
+                    plus[axis] += Math.Max(rcs.Characterise(axis, 1).MaxTorqueNm, 0.0);
+                    minus[axis] += Math.Max(rcs.Characterise(axis, -1).MaxTorqueNm, 0.0);
+                }
+            }
+            slot.MaxPlusNm = new double3(plus[0], plus[1], plus[2]);
+            slot.MaxMinusNm = new double3(minus[0], minus[1], minus[2]);
+        }
+        static double Spare(double up, double down, double trim, double inertia)
+            => inertia > 0.0 ? Math.Max(Math.Min(up - trim, down + trim), 0.0) / inertia : double.NaN;
+        return new double3(Spare(slot.MaxPlusNm.X, slot.MaxMinusNm.X, trimModel.X, ixx),
+                           Spare(slot.MaxPlusNm.Y, slot.MaxMinusNm.Y, trimModel.Y, iyy),
+                           Spare(slot.MaxPlusNm.Z, slot.MaxMinusNm.Z, trimModel.Z, izz));
+    }
+
+    /// <summary>
+    /// The angular acceleration the craft can spare about the airflow, rad/s^2 - the axis a bank turns about: the rate about a unit axis u (model components u_i) can grow at a only while a |u_i| stays within each axis's spare, so a = min a_i / |u_i|. NaN without air.
+    /// </summary>
+    private static double AirAxisAccel(Vehicle vehicle, double3 mx, double3 my, double3 mz, double3 spare)
+    {
+        float3 airF = PhysicsStates.ComputeAirVelocityBody(vehicle.BubbleOrigin, vehicle.KinematicStates, vehicle.PhysicsEnvironment);
+        double3 airBody = double3.Unpack(in airF);
+        if (!(airBody.Length() > 1.0))
+            return double.NaN;
+        double3 u = airBody / airBody.Length();
+        double best = double.PositiveInfinity;
+        double[] comp = { double3.Dot(u, mx), double3.Dot(u, my), double3.Dot(u, mz) };
+        double[] acc = { spare.X, spare.Y, spare.Z };
+        for (int i = 0; i < 3; i++)
+            if (Math.Abs(comp[i]) > 1e-3 && double.IsFinite(acc[i]))
+                best = Math.Min(best, acc[i] / Math.Abs(comp[i]));
+        return double.IsFinite(best) ? best : double.NaN;
+    }
 
     /// <summary>The share of the measured roll acceleration a fast roll counts on to stop (RollAuthority): the gimbals slew, and they also hold the pointing.</summary>
     private const double RollBrakingShare = 0.5;

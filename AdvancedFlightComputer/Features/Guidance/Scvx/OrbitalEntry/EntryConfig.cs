@@ -53,9 +53,9 @@ public sealed class EntryConfig
     public bool EngageInAtmosphere { get; set; } = true;
 
     /// <summary>
-    /// The least drag the tracker's gains are taken at, m/s^2: they go as 1/D and 1/D^2, because the vertical acceleration a change of L/D buys goes as D. Below it the loop keeps its damping and slows in proportion, to w D / floor. At 1 m/s^2 (2026-11-21) a 5-10 % drag error asked for five times the 35 % clamp at 70-75 km, and the bank banged between 55 and 100 deg every 10 s for little effect; the re-plans every 2 s absorb what a softer loop leaves. Offline, 1 to 8 changed no miss by more than 1 km.
+    /// The least drag the tracker's gains are taken at, m/s^2: they go as 1/D and 1/D^2, because the vertical acceleration a change of L/D buys goes as D. Below it the loop keeps its damping and slows in proportion, to w D / floor. At 1 m/s^2 (2026-11-21) a 5-10 % drag error asked for five times the 35 % clamp at 70-75 km, and the bank banged between 55 and 100 deg every 10 s for little effect; the re-plans every 2 s absorb what a softer loop leaves. Offline, 1 to 8 changed no miss by more than 1 km. The tuning (w 0.03, floor 10, 4 s measurement filter) is from --orbital-entry-gains with 3 % drag noise, the flutter measured in flight: the drag error was the same at every stiffness (6.5 % in thin air, 1 % lower down, set by the noise and the model), and this cut the bank's travel 5-25 times; a 4 s filter on the old w 0.06 left the low-L/D craft at its clamp and 21 km long.
     /// </summary>
-    public double GainDragFloor { get; set; } = 5.0;
+    public double GainDragFloor { get; set; } = 10.0;
 
     /// <summary>The roll rate the tracker slews its bank at while tracking, deg/s; reversals and the first roll use <see cref="RollRateDegS"/>.</summary>
     public double TrackRollRateDegS { get; set; } = 5.0;
@@ -114,13 +114,13 @@ public sealed class EntryConfig
     // ---- Tracker ----
 
     /// <summary>Natural frequency of the drag-tracking loop, rad/s.</summary>
-    public double TrackOmega { get; set; } = 0.06;
+    public double TrackOmega { get; set; } = 0.03;
 
     /// <summary>The most the drag feedback may add to or take from the plan's vertical L/D, as a share of the craft's L/D: the plan, re-solved every few seconds, does the work, the feedback only trims it.</summary>
     public double FeedbackShare { get; set; } = 0.35;
 
     /// <summary>Time constant of the low-pass on the measured drag and sink rate the feedback reads, s.</summary>
-    public double MeasureSmoothS { get; set; } = 1.0;
+    public double MeasureSmoothS { get; set; } = 4.0;
 
     /// <summary>Damping ratio of the drag-tracking loop.</summary>
     public double TrackZeta { get; set; } = 0.7;

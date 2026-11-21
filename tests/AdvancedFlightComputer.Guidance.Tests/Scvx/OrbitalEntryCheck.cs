@@ -237,9 +237,51 @@ internal static class OrbitalEntryCheck
         return (s, cross);
     }
 
-    static int ClosedLoop(Vehicle v, bool verbose)
+    /// <summary>What a closed-loop flight did with its bank: the bank target's travel per minute and the drag error, in bands of reference drag, while tracking.</summary>
+    sealed class BankStats
+    {
+        public static readonly double[] Bands = { 0, 3, 10, 1e9 };
+        public readonly double[] TravelDeg = new double[3], Seconds = new double[3], ErrSq = new double[3], Clamped = new double[3];
+        public double MissKm, CrossKm;
+        public bool Ok;
+    }
+
+    /// <summary>
+    /// --orbital-entry-gains: the drag tracker's spring gains swept on the belly-flop and the shuttle-like craft, with the drag measured 3 % noisy (its flutter below 3 m/s^2 in the 2026-11-21 flight; the sink rate there was clean), the same seed each run. Not in CI: a tool for choosing the gains.
+    /// </summary>
+    public static int SweepGains()
+    {
+        var grid = new List<(string Name, Action<EntryConfig> Tweak)>();
+        foreach (double w in new[] { 0.03, 0.045, 0.06 })
+            foreach (double floor in new[] { 1.0, 5.0, 10.0 })
+                foreach (double smooth in new[] { 1.0, 4.0 })
+                    grid.Add(($"w {w:F3} floor {floor,4:F1} filter {smooth:F0} s", c => { c.TrackOmega = w; c.GainDragFloor = floor; c.MeasureSmoothS = smooth; }));
+        foreach (var v in new[] { Vehicles[0], Vehicles[1] })
+        {
+            Console.WriteLine($"  {v.Name}, drag 3 % noise: bank-target travel deg/min | rms drag error % | feedback at its clamp %, in reference drag < 3, 3-10, > 10 m/s2");
+            foreach (var (name, tweak) in grid)
+            {
+                var st = new BankStats();
+                ClosedLoop(v, false, tweak, 0.03, 0.0, st);
+                string Band(int b) => st.Seconds[b] > 1
+                    ? FormattableString.Invariant($"{st.TravelDeg[b] / st.Seconds[b] * 60,6:F0} {100 * Math.Sqrt(st.ErrSq[b] / (st.Seconds[b] / 0.5)),5:F1} {100 * st.Clamped[b] / (st.Seconds[b] / 0.5),4:F0}")
+                    : "     -     -    -";
+                Console.WriteLine(FormattableString.Invariant($"    {name,-30} {Band(0)} | {Band(1)} | {Band(2)}   miss {st.MissKm,5:F1} km cross {st.CrossKm,5:F1}{(st.Ok ? "" : "  FAIL")}"));
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>The angular acceleration the closed-loop craft can spare about the airflow, deg/s^2: the tracker's bank slew is held to it, as in flight (EntryTracker.Slew).</summary>
+    const double BankAccelDegS2 = 3.0;
+
+    static int ClosedLoop(Vehicle v, bool verbose, Action<EntryConfig>? tweak = null, double dragNoise = 0, double hdotNoiseMs = 0, BankStats? stats = null)
     {
         var cfg = Config(v);
+        tweak?.Invoke(cfg);
+        var rng = new Random(7);
+        double Gauss() => Math.Sqrt(-2 * Math.Log(1 - rng.NextDouble())) * Math.Cos(2 * Math.PI * rng.NextDouble());
+        double prevTarget = double.NaN;
         var truth = Model(v, rhoScale: 1.15, ldScale: 0.92);
         var nominal = Model(v);
         double tLat = v.CrossKm * 1000 / R0, tLon = v.RangeKm * 1000 / R0;
@@ -265,7 +307,7 @@ internal static class OrbitalEntryCheck
             if (e >= ef || h < 5_000) break;
             var (s, cross) = RangeAndCross(y, tLat, tLon);
 
-            double dMeas = truth.DragAccel(h, vel);
+            double dMeas = truth.DragAccel(h, vel) * (1 + dragNoise * Gauss());
             double ldMeas = truth.Ld(truth.Mach(h, vel));
             if (dMeas > 0.3)
             {
@@ -299,7 +341,18 @@ internal static class OrbitalEntryCheck
                 nextSolve = t + (dMeas >= cfg.StartDrag ? 5.0 : 30.0);
             }
 
-            var outp = tracker.Update(new EntryTracker.Input(dt, e, dMeas, vel * Math.Sin(y[4]), ldMeas, Hs, HeadingError(y, tLat, tLon), vN, plan, h < Top));
+            var outp = tracker.Update(new EntryTracker.Input(dt, e, dMeas, vel * Math.Sin(y[4]) + hdotNoiseMs * Gauss(), ldMeas, Hs, HeadingError(y, tLat, tLon), vN, plan, h < Top, BankAccelDegS2));
+            if (stats != null && outp.Phase == EntryTracker.Phase.Tracking && outp.DragRefMs2 > 0)
+            {
+                int b = outp.DragRefMs2 < 3 ? 0 : outp.DragRefMs2 < 10 ? 1 : 2;
+                if (double.IsFinite(prevTarget) && !outp.Reversing) stats.TravelDeg[b] += Math.Abs(outp.BankTargetDeg - prevTarget);
+                stats.Seconds[b] += dt;
+                double trueD = truth.DragAccel(h, vel);
+                stats.ErrSq[b] += Math.Pow((trueD - outp.DragRefMs2) / outp.DragRefMs2, 2);
+                var ps = plan?.At(e);
+                if (ps != null && Math.Abs(outp.UCmd - ps.Value.U) >= 0.99 * cfg.FeedbackShare * ldMeas) stats.Clamped[b] += 1;
+            }
+            prevTarget = outp.Phase == EntryTracker.Phase.Tracking ? outp.BankTargetDeg : double.NaN;
             if (lastSide != 0 && outp.Side != lastSide) reversals++;
             if (outp.Side != 0) lastSide = outp.Side;
             // Positive bank lifts to the right; in Truth positive bank turns towards +heading (clockwise, right). Same sense.
@@ -324,6 +377,11 @@ internal static class OrbitalEntryCheck
         double rangeKm = sf * R0 / 1000, crossKm = cf * R0 / 1000;
         double hEnd = (y[0] - R0) / 1000;
         bool ok = plan != null && rangeKm < 20 && Math.Abs(crossKm) < 15 && gMax < cfg.LoadFactorMax * 1.15 && Math.Abs(hEnd - cfg.HandoverAltitude / 1000) < 6;
+        if (stats != null)
+        {
+            stats.MissKm = rangeKm; stats.CrossKm = crossKm; stats.Ok = ok;
+            return ok ? 0 : 1;
+        }
         Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} {v.Name} closed loop (rho x1.15, L/D x0.92): miss {rangeKm:F1} km, cross {crossKm:F1} km, "
                         + $"h_end {hEnd:F1} km, V_end {y[3]:F0} m/s, g max {gMax:F2}, q max {qMax / 1000:F1} kPa, reversals {reversals}, "
                         + $"solves {solves} ({refused} refused{(refused > 0 ? ": " + string.Join(", ", whys.Select(kv => kv.Key + " x" + kv.Value)) + $", worst defect {worstDefect:F3}" : "")}), worst {solveMsMax:F0} ms, t {t:F0} s");
