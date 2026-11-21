@@ -254,6 +254,12 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void ExecuteBoostback(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
+        if (SelectedLandingEngines != null && (!_s.ThreeDofFromGlide || !HasPhysicalAtmosphere(parent)))
+        {
+            _s.WarnBoostback("THE LANDING GROUP NEEDS ENTRY GUIDANCE FROM THE GLIDE.");
+            _s.HandoverPendingUntil = double.NegativeInfinity;
+            return;
+        }
         ResampleBoostbackAero(vehicle, parent);
         if (_s.AeroJob != null)
         {
@@ -698,12 +704,24 @@ public static partial class GuidanceWindow
                 double standbyQ = Math.Min(_s.ThreeDofStandbyQkPa > 0.0 ? _s.ThreeDofStandbyQkPa : _s.ThreeDofEngageQkPa, _s.ThreeDofEngageQkPa) * 1000.0;
                 bool airMatters = _s.ThreeDofEngageQkPa > 0.0 && _s.GlideQ >= standbyQ && vUp < 0.0;
                 bool lastChance = double.IsFinite(_s.GlideTgo) && _s.GlideTgo <= _s.ThreeDofEngageTgoS;
-                if (_s.ThreeDofFromGlide && (airMatters || lastChance) && Engage3Dof(vehicle, now))
+                if (_s.ThreeDofFromGlide && (airMatters || lastChance))
                 {
-                    _s.ThreeDofStandby = !lastChance && _s.GlideQ < _s.ThreeDofEngageQkPa * 1000.0;
-                    if (_s.ThreeDofStandby)
-                        GuidanceLog.Info(vehicle, FormattableString.Invariant($"Entry guidance on standby at {_s.GlideQ / 1000.0:F2} kPa: planning, holding the planned glide until {_s.ThreeDofEngageQkPa:0.##} kPa."));
-                    return;
+                    // A chosen landing engine set is switched on first, in this unpowered glide (EngageEntryForPhase).
+                    if (EngageEntryForPhase(vehicle, now, fromGlide: true))
+                    {
+                        _s.ThreeDofStandby = !lastChance && _s.GlideQ < _s.ThreeDofEngageQkPa * 1000.0;
+                        if (_s.ThreeDofStandby)
+                            GuidanceLog.Info(vehicle, FormattableString.Invariant($"Entry guidance on standby at {_s.GlideQ / 1000.0:F2} kPa: planning, holding the planned glide until {_s.ThreeDofEngageQkPa:0.##} kPa."));
+                        return;
+                    }
+                    if (_s.LandingGroupRefusal.Length > 0)
+                    {
+                        string reason = _s.LandingGroupRefusal;
+                        _s.ReleaseWithoutEngineCut = true;
+                        HandBackVehicle(vehicle);
+                        _s.WarnBoostback(reason + " TAKE CONTROL.");
+                        return;
+                    }
                 }
                 break;
 

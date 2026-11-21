@@ -117,6 +117,7 @@ internal static class LandPage
             ctx.ToInputs();
             GuidanceWindow.DrawDeorbitFinishRows(way);
             GuidanceWindow.DrawLandSiteRows(ctx.Subject, way, in ctx.Frame.Situation, pickSite: true);
+            GuidanceWindow.DrawLandEngineRows(ctx.Subject);
             ctx.ToPicture();
             GuidanceWindow.DrawLandMethodRows(ctx.Subject, way, in ctx.Frame.Situation, in read);
             GuidanceWindow.DrawLandPicture(ctx.Subject, ctx.PictureHeight, way, sentence: !AfcConsole.HasPanes || !LandWays.HasSolver(way));

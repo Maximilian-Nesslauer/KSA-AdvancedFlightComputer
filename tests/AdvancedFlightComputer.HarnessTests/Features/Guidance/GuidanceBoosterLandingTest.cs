@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Reflection;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Guidance;
+using AdvancedFlightComputer.Features.Ui.Logic;
 using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
@@ -42,6 +43,9 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
     private static readonly ConcurrentQueue<string> GuidanceLines = new();
 
     private static void QueueGuidanceLine(Vehicle vehicle, string message) => GuidanceLines.Enqueue(message);
+    private static Vehicle? _blockedActivationVehicle;
+
+    private static bool PermitActivation(Vehicle? __0) => !ReferenceEquals(__0, _blockedActivationVehicle);
 
     private static readonly AccessTools.FieldRef<Vehicle, ManualControlInputs> Inputs =
         AccessTools.FieldRefAccess<Vehicle, ManualControlInputs>("_manualControlInputs");
@@ -62,6 +66,15 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
         double groundSpeedMs = Env("AFC_LANDING_GROUND_SPEED_MS", 20.0);
         double propellantKg = Env("AFC_LANDING_PROPELLANT_KG", 5000.0);
         double pace = Math.Max(Env("AFC_LANDING_PACE", 1.0), 0.05);
+        string saveId = Environment.GetEnvironmentVariable("AFC_LANDING_SAVE") ?? Save;
+        string? groupKeys = Environment.GetEnvironmentVariable("AFC_LANDING_GROUP");
+        bool refuseGroup = Env("AFC_LANDING_EXPECT_REFUSAL", 0.0) > 0.0;
+        bool blockActivation = Env("AFC_LANDING_BLOCK_ACTIVATION", 0.0) > 0.0;
+        string expectedRefusal = blockActivation ? "COULD NOT BE CONFIRMED"
+            : refuseGroup ? "INSUFFICIENT MAXIMUM THRUST" : "";
+        string? cutFeedKeys = Environment.GetEnvironmentVariable("AFC_LANDING_CUT_FEED");
+        string? cutPartDuringGlide = Environment.GetEnvironmentVariable("AFC_LANDING_CUT_PART_DURING_GLIDE");
+        string? switchGroupDuringGlide = Environment.GetEnvironmentVariable("AFC_LANDING_SWITCH_GROUP_DURING_GLIDE");
 
         FieldInfo ambient = typeof(GuidanceWindow).GetField("_s", PrivateStatic)!;
         object? previousAmbient = ambient.GetValue(null);
@@ -115,11 +128,15 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
             Vehicle stack;
             try
             {
-                stack = Spawn(Save, t.System, home, "HarnessBoosterLanding", orbit, body2Cce);
+                // A craft design (a save with parts only, such as an editor build) needs its tanks assigned and filled on spawn. AFC_LANDING_FRESH_DESIGN=1 asks for that; the default save and AFC_LANDING_SAVE keep their saved tanks.
+                stack = Spawn(saveId, t.System, home, "HarnessBoosterLanding", orbit, body2Cce, Env("AFC_LANDING_FRESH_DESIGN", 0.0) > 0.0);
             }
             catch (InvalidOperationException e)
             {
-                t.Skip($"{Save}: {e.Message}");
+                if (saveId == Save)
+                    t.Skip($"{saveId}: {e.Message}");
+                else
+                    t.Fail(saveId, e.Message);
                 return;
             }
             PhysicsBubble._forceOffRails = true;
@@ -138,21 +155,60 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                    $"starting {heightM:F0} m over the site, {rangeM:F0} m short, sinking {sinkMs:F0} m/s, closing at {groundSpeedMs:F0} m/s");
 
             VehicleAutopilotState state = VehicleAutopilotState.For(booster);
+            if (blockActivation)
+            {
+                _blockedActivationVehicle = booster;
+                harmony.Patch(AccessTools.DeclaredMethod(typeof(EngineController), nameof(EngineController.SetIsActive)),
+                    prefix: new HarmonyMethod(typeof(GuidanceBoosterLandingTest), nameof(PermitActivation)));
+            }
+            HashSet<ulong>? expectedRockets = null;
+            LandingEngineGroups? changedSelection = null;
+            if (groupKeys != null)
+            {
+                var names = new HashSet<string>(groupKeys.Split(','), StringComparer.Ordinal);
+                var controllers = LandingEngineGroups.Controllers(booster, booster.Parts.Root);
+                var members = controllers.Where(item => item.Value != null && names.Contains(item.Value.TemplateId)).ToArray();
+                if (!t.Check("all selected controllers resolve", members.Length == names.Count && members.Length > 0, groupKeys))
+                    return;
+                var group = new LandingEngineGroup("Approach", members.Select(item => item.Key).ToArray());
+                state.EngineGroups[LandingEngineGroups.CraftScope] = new LandingEngineGroups([group], group.Name);
+                expectedRockets = members.SelectMany(item => item.Value!.Rockets).Select(rocket => rocket.InstanceId).ToHashSet();
+                t.Info($"approach group: {groupKeys}, expected rocket IDs {string.Join(", ", expectedRockets)}");
+                if (!string.IsNullOrEmpty(switchGroupDuringGlide))
+                {
+                    string[] keys = controllers.Where(item => item.Value?.TemplateId == switchGroupDuringGlide)
+                        .Select(item => item.Key).ToArray();
+                    if (!t.Check("the replacement controller resolves", keys.Length == 1, switchGroupDuringGlide))
+                        return;
+                    var replacement = new LandingEngineGroup("Replacement", keys);
+                    changedSelection = new LandingEngineGroups([group, replacement], replacement.Name);
+                }
+            }
             state.SixDofLogging = true;
             state.SixDofTrack = Env("AFC_LANDING_SIXDOF_TRACK", 1.0) > 0.0;
             state.LandingPlanFloorMargin = Env("AFC_LANDING_FLOOR_MARGIN", state.LandingPlanFloorMargin);
             state.AutoStage = true;
             // AFC_LANDING_MODE=6dof engages touchdown guidance directly, as its EXECUTE does, for a start low enough to be a hand-over; anything else engages entry guidance.
-            if (string.Equals(Environment.GetEnvironmentVariable("AFC_LANDING_MODE"), "6dof", StringComparison.OrdinalIgnoreCase))
+            string? mode = Environment.GetEnvironmentVariable("AFC_LANDING_MODE");
+            if (string.Equals(mode, "6dof", StringComparison.OrdinalIgnoreCase))
             {
                 // Its cold solve straight through on the worker rather than spread over frames: a hand-over finds the standby's plan ready, and a spread solve from this low falls for seconds first.
                 state.SixDofSpreadCold = Env("AFC_LANDING_SPREAD", 0.0) > 0.0;
                 object? before = ambient.GetValue(null);
                 ambient.SetValue(null, state);
-                typeof(GuidanceWindow).GetMethod("Engage6Dof", PrivateStatic, [typeof(Vehicle), typeof(bool), typeof(double), typeof(bool)])!
-                    .Invoke(null, [booster, false, double.NaN, false]);
+                if (expectedRockets == null)
+                    typeof(GuidanceWindow).GetMethod("Engage6Dof", PrivateStatic, [typeof(Vehicle), typeof(bool), typeof(double), typeof(bool)])!
+                        .Invoke(null, [booster, false, double.NaN, false]);
+                else
+                    Method("RunCommit").Invoke(null, [booster, GuidanceModeId.SixDofHere, false]);
                 ambient.SetValue(null, before);
                 t.Info("touchdown guidance engaged directly");
+            }
+            else if (string.Equals(mode, "glide", StringComparison.OrdinalIgnoreCase))
+            {
+                state.BoostbackGlideOnly = true;
+                state.BoostbackEngagePending = true;
+                t.Info("returning on the glide without a boostback burn");
             }
             else
             {
@@ -208,10 +264,12 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                     t.Info(row.ToString());
                 }
 
-            Fly(t, booster, state, driver, home, ambient, pace);
+            Fly(t, booster, state, driver, home, ambient, pace, expectedRockets, expectedRefusal, cutFeedKeys,
+                cutPartDuringGlide, changedSelection);
         }
         finally
         {
+            _blockedActivationVehicle = null;
             harmony.UnpatchAll(harmony.Id);
             GuidanceFeature.DisableDriver();
             SharedVehicleHooks.GuidanceEnabled = previousEnabled;
@@ -226,7 +284,8 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
     }
 
     private static void Fly(TestContext t, Vehicle booster, VehicleAutopilotState state, SimDriver driver, IParentBody home,
-                            FieldInfo ambient, double pace)
+                            FieldInfo ambient, double pace, HashSet<ulong>? expectedRockets, string expectedRefusal, string? cutFeedKeys,
+                            string? cutPartDuringGlide, LandingEngineGroups? changedSelection)
     {
         var wall = Stopwatch.StartNew();
         double sim = 0.0, nextSample = 0.0, sampleMass = double.NaN;
@@ -244,6 +303,12 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
         double3 turnW = default;
         int dumps = 0;
         double lastLegs = double.NaN, lastVz = double.NaN, lastVh = double.NaN, lastRange = double.NaN;
+        var fired = new HashSet<ulong>();
+        int initialParts = booster.Parts.Parts.Length, minParts = initialParts;
+        double lastAirDown = double.NaN, lastAirSideways = double.NaN;
+        var cutFeeds = new HashSet<string>((cutFeedKeys ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+        var cutRockets = new HashSet<Rocket>();
+        double cutFeedAt = double.NaN;
 
         while (sim < TimeoutS && sim < endAt)
         {
@@ -297,6 +362,71 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
             (lastLegs, lastVz, lastVh, lastRange) = (legs, vz, vh, range);
             bool contact = booster.Situation.HasAnyContact();
             if (!contact) airborne = true;
+            minParts = Math.Min(minParts, booster.Parts.Parts.Length);
+            if (expectedRockets != null && minParts < initialParts)
+            {
+                t.Info($"Parts lost at {sim:F2} s, {lastAirDown:F2} m/s down and {lastAirSideways:F2} m/s sideways on the preceding airborne sample.");
+                break;
+            }
+            if (!contact)
+                (lastAirDown, lastAirSideways) = (-vz, vh);
+            if (expectedRockets != null)
+            {
+                ReadOnlySpan<RocketState> rockets = RocketStates.Of(booster.Parts);
+                foreach (EngineController engine in booster.Parts.Modules.Get<EngineController>())
+                    foreach (Rocket rocket in engine.Rockets)
+                        if ((uint)rocket.StatesIdx < (uint)rockets.Length && rockets[rocket.StatesIdx].Throttle > 0)
+                            fired.Add(rocket.InstanceId);
+                if ((!string.IsNullOrEmpty(cutPartDuringGlide) || changedSelection != null) && fired.Count == 0
+                    && state.ThreeDofPlan is { } oldPlan && oldPlan.IgnitionTime > driver.Elapsed.Seconds() + 3.0)
+                {
+                    CheckPreIgnitionChange(t, booster, state, driver, oldPlan, cutPartDuringGlide, changedSelection);
+                    return;
+                }
+                if (cutFeeds.Count > 0 && cutRockets.Count == 0 && fired.SetEquals(expectedRockets))
+                {
+                    cutFeedAt = sim;
+                    foreach (EngineController engine in booster.Parts.Modules.Get<EngineController>())
+                    {
+                        if (!cutFeeds.Contains(engine.TemplateId))
+                            continue;
+                        foreach (Rocket rocket in engine.Rockets)
+                        {
+                            cutRockets.Add(rocket);
+                            foreach (RocketCore core in rocket.Cores)
+                                if (core is PlumbedCore plumbed)
+                                    plumbed.ResourceManager = null!;
+                        }
+                    }
+                    t.Info($"Cut the fuel feed at {sim:F2} s for rockets {string.Join(", ", cutRockets.Select(rocket => rocket.InstanceId))}.");
+                }
+                if (cutRockets.Count > 0 && sim - cutFeedAt >= 0.1)
+                {
+                    t.Check("the physical rockets lost supply and stopped firing", cutRockets.All(RocketDrained));
+                    LandingEngineActivation? remaining = state.EngineActivation;
+                    bool oldPlanReleased = remaining == null && !state.Active && !state.EngagePending
+                        && state.ThreeDofPlan == null && state.GfoldPlan == null && state.Guidance == null;
+                    t.Check("a changed group abandons obsolete guidance or keeps only the reduced group",
+                        oldPlanReleased || (remaining != null && remaining.SuppliedRockets.Count > 0
+                            && !remaining.SuppliedRockets.Overlaps(cutRockets)
+                            && remaining.SuppliedRockets.All(rocket => expectedRockets.Contains(rocket.InstanceId))));
+                    return;
+                }
+                if (expectedRefusal.Length > 0 && !state.ThreeDofEngagePending && !engaged)
+                {
+                    t.Check("the requested group is refused before ignition",
+                        fired.Count == 0 && state.ThreeDofStatus.Contains(expectedRefusal, StringComparison.Ordinal),
+                        state.ThreeDofStatus);
+                    return;
+                }
+
+                bool RocketDrained(Rocket rocket)
+                {
+                    ReadOnlySpan<RocketState> sample = RocketStates.Of(booster.Parts);
+                    return (uint)rocket.StatesIdx < (uint)sample.Length
+                        && !sample[rocket.StatesIdx].IsPropellantAvailable && sample[rocket.StatesIdx].Throttle == 0;
+                }
+            }
 
             bool threeDof = state.ThreeDofPhase is GuidanceWindow.ThreeDofPhase.Glide or GuidanceWindow.ThreeDofPhase.Burn;
             bool landing = state.LandingPhase is not (GuidanceWindow.LandingPhase.Idle or GuidanceWindow.LandingPhase.Done);
@@ -432,7 +562,7 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                 touchSink = -vz;
                 touchSideways = vh;
                 touchMiss = range;
-                endAt = sim + 1.0;
+                endAt = sim + (expectedRockets == null ? 1.0 : 6.0);
                 t.Info($"  t {sim,6:F2}  CONTACT at {touchSink:F2} m/s down, {touchSideways:F2} m/s sideways, {touchMiss:F1} m from the site");
             }
             // Guidance let go in the air: a few seconds more to see where it goes. The hand-over from entry to touchdown guidance passes through a frame of neither, so a release that ends puts the clock back.
@@ -452,6 +582,18 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
             t.Info("6-DOF log: none written");
 
         t.Check("the booster touched down", touched);
+        if (expectedRockets != null)
+        {
+            if (cutFeeds.Count > 0)
+                t.Fail("fuel loss was exercised", "the planned group did not ignite before the flight ended");
+            if (!string.IsNullOrEmpty(cutPartDuringGlide) || changedSelection != null)
+                t.Fail("pre-ignition change was exercised", "no sufficiently early entry plan was published");
+            t.Check("only and all planned rockets fired", fired.SetEquals(expectedRockets),
+                $"expected {string.Join(", ", expectedRockets)}, fired {string.Join(", ", fired)}");
+            t.Check("last air sample below limits", lastAirDown < 3.0 && lastAirSideways < 1.0,
+                $"{lastAirDown:F2} m/s down, {lastAirSideways:F2} m/s sideways");
+            t.Check("all parts retained through settling", minParts == initialParts, $"{minParts}/{initialParts}");
+        }
         if (touched)
         {
             t.Check("touchdown under 3 m/s down", touchSink < 3.0, $"{touchSink:F2} m/s");
@@ -461,6 +603,55 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
     }
 
     // One entry-guidance plan's burn: per node the time from the plan's start, height, sideways and vertical speed, the thrust axis's tilt off vertical resolved along and across the sideways motion (positive along = leaning with it), the turn rate and turn acceleration to the next node, and the throttle.
+    private static void CheckPreIgnitionChange(TestContext t, Vehicle booster, VehicleAutopilotState state,
+        SimDriver driver, Plan3Dof oldPlan, string? cutPart, LandingEngineGroups? changedSelection)
+    {
+        LandingEngineActivation? original = state.EngineActivation;
+        EngineController? controller = null;
+        if (changedSelection != null)
+        {
+            state.EngineGroups[LandingEngineGroups.CraftScope] = changedSelection;
+        }
+        else
+        {
+            controller = original?.Engines.FirstOrDefault(engine => engine.Rockets.Any(rocket => rocket.Parent.Id == cutPart));
+            Rocket? removed = controller?.Rockets.Single(rocket => rocket.Parent.Id == cutPart);
+            if (!t.Check("the requested rocket belongs to the selected group", removed != null, cutPart))
+                return;
+            foreach (RocketCore core in removed!.Cores)
+                if (core is PlumbedCore plumbed)
+                    plumbed.ResourceManager = null!;
+        }
+        t.Info($"Changing the engine inputs in the glide at {driver.Elapsed.Seconds():F2} s; the old plan would ignite at {oldPlan.IgnitionTime:F2} s.");
+        // Long enough for the buffered switch of the dry controller to be confirmed and entry guidance to engage again.
+        driver.Step(StepS, 25);
+        while (GuidanceLines.TryDequeue(out string? line))
+            t.Info(line);
+
+        t.Check("the obsolete entry plan was discarded without ignition",
+            !ReferenceEquals(state.ThreeDofPlan, oldPlan) && !LandingEngineTelemetry.MainEnginesFiring(booster));
+        if (changedSelection != null)
+        {
+            t.Check("an external group change hands back the old guidance",
+                state.EngineActivation == null && state.ThreeDofPlan == null && !state.Active);
+            return;
+        }
+
+        // A dry rocket with its own gimbal on a controller that stays active would leave that gimbal in the models, so that case hands back.
+        if (controller!.Rockets.Length > 1)
+        {
+            t.Check("a dry rocket on a shared controller hands the old guidance back",
+                state.EngineActivation == null && state.ThreeDofPlan == null && !state.Active);
+            return;
+        }
+        LandingEngineActivation? reduced = state.EngineActivation;
+        t.Check("the dry controller is switched off and entry guidance replans in the glide with the rest",
+            reduced is { Ready: true } && !ReferenceEquals(reduced, original) && !controller.IsActive
+            && reduced.Engines.Length == original!.Engines.Length - 1 && Array.IndexOf(reduced.Engines, controller) < 0
+            && state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Glide,
+            reduced == null ? "no activation" : $"{reduced.Engines.Length} engines, ready {reduced.Ready}, phase {state.ThreeDofPhase}");
+    }
+
     private static void DumpBurnPlan(TestContext t, double sim, Plan3Dof p)
     {
         int nx = PointMass3Dof.NX, nu = PointMass3Dof.NU, g = p.GlideIntervals, n = p.Nodes;
@@ -515,7 +706,8 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
     }
 
     // VehicleSpawner.SpawnFromSave with an attitude: it spawns at identity, which would put the booster on its side.
-    private static Vehicle Spawn(string saveId, CelestialSystem system, IParentBody parent, string id, Orbit orbit, doubleQuat body2Cce)
+    private static Vehicle Spawn(string saveId, CelestialSystem system, IParentBody parent, string id, Orbit orbit, doubleQuat body2Cce,
+                                 bool freshDesign)
     {
         VehicleSave? save = null;
         foreach (VehicleSave candidate in VehicleSaves.AsSpan())
@@ -536,7 +728,14 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
         vehicle.Parts.SequenceList.ApplyEnvironments(save.VehicleSaveData.SequenceEnvironments);
         vehicle.Parts.FuelLinks.ApplySaveData(save.VehicleSaveData.FuelLinks, design);
         parent.Children.Add(vehicle);
-        RestoreTanks(vehicle.Parts, design);
+        if (freshDesign)
+        {
+            vehicle.Parts.RecomputeAllDerivedData();
+            vehicle.Parts.ApplyTankAssignments();
+            vehicle.Parts.RefillConsumables();
+        }
+        else
+            RestoreTanks(vehicle.Parts, design);
         VehicleSpawner.SeatRandomCrew(vehicle);
         return vehicle;
     }

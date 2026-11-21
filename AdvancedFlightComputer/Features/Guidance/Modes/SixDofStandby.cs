@@ -372,6 +372,7 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void PromoteSixDofStandby(Vehicle vehicle, double now, double[] x)
     {
+        LogLandingEngineState(vehicle, now, "touchdown handover");
         bool converging = _s.Converging;
         Ksa6DofPlan plan = _s.Guidance.Published;
         _s.SixDofStandby = false;

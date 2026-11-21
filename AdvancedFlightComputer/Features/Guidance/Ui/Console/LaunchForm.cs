@@ -99,7 +99,7 @@ public static partial class GuidanceWindow
         try
         {
             DrawUnavailableReturns(vehicle);
-            DrawReturnableStageRows();
+            DrawReturnableStageRows(vehicle);
             DrawBoosterReserve();
         }
         finally

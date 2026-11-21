@@ -45,6 +45,7 @@ public static partial class GuidanceWindow
         /// identity - stable for the life of the craft, which is what lets a target set
         /// on the pad still be attached to the right stage at separation.</summary>
         public uint RootId;
+        internal string EngineGroupScope = "";
 
         /// <summary>The root part's display name, for the list.</summary>
         public string Name = "";
@@ -155,6 +156,7 @@ public static partial class GuidanceWindow
                     cache[rootId] = stage;
                 }
                 stage.Name = name;
+                stage.EngineGroupScope = LandingEngineGroups.PartAddress(root, tree.Root) ?? "";
                 stage.SequenceIndex = i;
                 stage.SequenceNumber = sequences[i].Number;
                 // Every craft the first separating row drops is next, and none of a later row's: a dumb interstage coming off first does not make the booster behind it next.

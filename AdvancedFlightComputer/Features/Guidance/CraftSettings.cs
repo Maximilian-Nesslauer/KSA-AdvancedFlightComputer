@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Ui.Logic;
 using Brutal.Logging;
@@ -27,6 +28,7 @@ internal static class CraftSettings
     private const string AscentMethodKey = nameof(VehicleAutopilotState.AscentMethod);
     private const string MoonKey = nameof(VehicleAutopilotState.MoonTransferId);
     private const string MoonCaptureKey = nameof(VehicleAutopilotState.MoonTransferCapture);
+    private const string EngineGroupsKey = "LandingEngineGroups";
     // The body whose defaults the record is measured against (BodySettings). A record without one, from before per-body defaults, is measured against the defaults of every body.
     private const string BodyKey = nameof(VehicleAutopilotState.DefaultsBody);
 
@@ -165,6 +167,8 @@ internal static class CraftSettings
             if (state.MoonTransferCapture)
                 record.Add((MoonCaptureKey, "true"));
         }
+        if (state.EngineGroups.Count != 0)
+            record.Add((EngineGroupsKey, Quote(JsonSerializer.Serialize(state.EngineGroups))));
         return record;
     }
 
@@ -209,6 +213,24 @@ internal static class CraftSettings
             {
                 state.MoonTransferCapture = captureOn;
                 applied++;
+            }
+        }
+        if (record.TryGetValue(EngineGroupsKey, out string? engineRaw) && TryUnquote(engineRaw, out string engineJson))
+        {
+            try
+            {
+                var groups = JsonSerializer.Deserialize<Dictionary<string, LandingEngineGroups>>(engineJson);
+                if (groups != null && groups.Values.All(settings => settings != null && settings.IsValid()))
+                {
+                    state.EngineGroups.Clear();
+                    foreach ((string scope, LandingEngineGroups settings) in groups)
+                        state.EngineGroups.Add(scope, settings);
+                    applied++;
+                }
+            }
+            catch (JsonException)
+            {
+                // An unreadable group record must not prevent the other craft settings from loading.
             }
         }
         return applied;

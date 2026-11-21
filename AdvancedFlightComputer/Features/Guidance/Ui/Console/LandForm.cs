@@ -98,6 +98,7 @@ public static partial class GuidanceWindow
     {
         DrawDeorbitFinishRows(way);
         DrawLandSiteRows(vehicle, way, in situation, pickSite);
+        DrawLandEngineRows(vehicle);
         DrawLandMethodRows(vehicle, way, in situation, in read);
     }
 
