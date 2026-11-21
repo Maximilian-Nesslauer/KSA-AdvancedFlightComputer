@@ -324,8 +324,9 @@ public static class Ksa6DofSetup
         double3 unit = axis / length;
         var commands = new double[2 * gimbals.Length];
         // Far beyond anything the gimbals can give - thrust times a kilometre - so the result is the saturation point.
+        //  WITHOUT REDISTRIBUTION: the min-norm solution scaled to its first gimbal at a stop, which keeps the roll at zero. Past that point the free gimbals can bring roll with them (KsaTvcAllocator.Redistribute), which the plan's lateral cone does not model; the flight's allocation has that margin on top, for the attitude feedback.
         TvcAllocationResult a = KsaTvcAllocator.Solve(gimbals, thrusts, vehicle.CenterOfMassAsmbF,
-                                                      unit * (Math.Max(total, 1.0) * 1000.0), commands);
+                                                      unit * (Math.Max(total, 1.0) * 1000.0), commands, redistribute: false);
         return Math.Max(double3.Dot(a.AchievedTorque, unit), 0.0);
     }
 

@@ -106,11 +106,13 @@ public static class KsaTvcAllocator
     /// <summary>An axis whose capability is under this share of the strongest axis's is the weak one, allocated last (see Solve).</summary>
     private const double WeakAxisShare = 0.25;
 
+    /// <param name="redistribute">When a gimbal reaches its stop, hold it there and give the rest of the demand to the gimbals still free (Redistribute). False scales the whole solution to the first gimbal at its stop, the conservative figure the plan's limits are measured with (Ksa6DofSetup.TorqueAlong).</param>
     public static TvcAllocationResult Solve(ReadOnlySpan<GimbalController> gimbals,
                                             ReadOnlySpan<double> thrusts,
                                             float3 comAsmb,
                                             double3 desiredTorque,
-                                            double[] commands)
+                                            double[] commands,
+                                            bool redistribute = true)
     {
         int n = gimbals.Length;
         var result = new TvcAllocationResult { GimbalCount = n, SaturationScale = 1.0 };
@@ -183,12 +185,26 @@ public static class KsaTvcAllocator
         // Saturation: scale the WHOLE solution rather than clipping per component, so the torque DIRECTION survives.
         //  That policy is only sound when the axes have COMPARABLE authority. Measured in flight this vehicle has roll capability of 2.8 kN-m against 1902 kN-m in pitch and yaw - a factor of 700. A roll demand a few percent over its limit then dragged the entire command down to 29%, so pitch and yaw arrived at a third of their value despite being well inside capability. Preserving the direction of a vector whose smallest component is 700x cheaper to satisfy is not a meaningful thing to preserve.
         //  The weak axis is therefore clamped to what it can do and allocated apart, in the travel left (above and below); uniform scaling then handles only the strong axes' magnitude, rather than one weak axis vetoing the other two.
+        //  And the scaling only finds the first gimbal at its stop: the rest of the demand then goes to the gimbals still free (Redistribute), so the smallest actuator no longer sets the whole craft's torque.
         if (peak > 1.0)
         {
             double scale = 1.0 / peak;
             for (int c = 0; c < cols; c++)
                 commands[c] *= scale;
             result.SaturationScale = scale;
+            if (redistribute)
+            {
+                Redistribute(bTorque, cols, strong, weak, lambda, commands);
+                // The share of the strong axes' demand the allocation gives along it.
+                double3 got = default;
+                for (int c = 0; c < cols; c++)
+                    got += new double3(bTorque[3 * c], bTorque[3 * c + 1], bTorque[3 * c + 2]) * commands[c];
+                if (weak == 0) got = new double3(0.0, got.Y, got.Z);
+                else if (weak == 1) got = new double3(got.X, 0.0, got.Z);
+                else if (weak == 2) got = new double3(got.X, got.Y, 0.0);
+                double want = double3.Dot(strong, strong);
+                result.SaturationScale = want > 0.0 ? Math.Clamp(double3.Dot(got, strong) / want, 0.0, 1.0) : 1.0;
+            }
         }
 
         // The weak axis, in the travel left: the largest share of its own solution that keeps every gimbal inside its range.
@@ -248,6 +264,74 @@ public static class KsaTvcAllocator
             torque += bTorque[3 * c + axis] * u;
         }
         return peak > 0.0 ? torque / peak : 0.0;
+    }
+
+    /// <summary>
+    /// SATURATED GIMBALS HOLD, THE OTHERS CARRY ON (cascaded generalised inverse). <paramref name="commands"/> comes in as the min-norm solution scaled until its first gimbal reached a stop. Each pass holds every gimbal at its stop, solves the part of the strong axes' demand still missing on the gimbals left free, and moves them along that solution until the next reaches a stop or the demand is met. The weak axis is held where the commands have it (its row's target is zero), and is allocated afterwards in the travel left, as before.
+    ///  WHY. Scaling the whole solution to the first gimbal at its stop let the smallest actuator set the craft's torque. On 2026-11-21 one 10 deg engine of a triple plate landed with its main gimbal at a third of its travel while a 70 deg vernier sat at its stop, and the allocation delivered 51-69 % of the demand for the last 1.5 s of the burn: the craft could not make the turn its plan flew and touched down at 4.5 m/s sideways.
+    ///  Where the free gimbals cannot make the missing torque without roll (a single engine whose verniers are at their stops), the solve is a least-squares compromise between the two, the regularisation keeping it well defined.
+    /// </summary>
+    private static void Redistribute(double[] b, int cols, double3 strong, int weak, double lambda, double[] commands)
+    {
+        Span<bool> held = stackalloc bool[cols];
+        Span<double> g = stackalloc double[9];
+        double size = Math.Sqrt(double3.Dot(strong, strong));
+        for (int pass = 0; pass < cols; pass++)
+        {
+            int free = 0;
+            for (int c = 0; c < cols; c++)
+            {
+                if (!held[c] && Math.Abs(commands[c]) >= 1.0 - 1e-9)
+                    held[c] = true;
+                if (!held[c])
+                    free++;
+            }
+            if (free == 0)
+                return;
+
+            double3 got = default;
+            for (int c = 0; c < cols; c++)
+                got += new double3(b[3 * c], b[3 * c + 1], b[3 * c + 2]) * commands[c];
+            var r = new double3(weak == 0 ? 0.0 : strong.X - got.X, weak == 1 ? 0.0 : strong.Y - got.Y, weak == 2 ? 0.0 : strong.Z - got.Z);
+            if (!(Math.Sqrt(double3.Dot(r, r)) > 1e-9 * (size + 1.0)))
+                return;
+
+            g.Clear();
+            for (int c = 0; c < cols; c++)
+            {
+                if (held[c])
+                    continue;
+                double x = b[3 * c], y = b[3 * c + 1], z = b[3 * c + 2];
+                g[0] += x * x; g[1] += x * y; g[2] += x * z;
+                g[4] += y * y; g[5] += y * z;
+                g[8] += z * z;
+            }
+            g[3] = g[1]; g[6] = g[2]; g[7] = g[5];
+            g[0] += lambda; g[4] += lambda; g[8] += lambda;
+            if (!Invert3x3(g, out Span<double> inv))
+                return;
+            double wx = inv[0] * r.X + inv[1] * r.Y + inv[2] * r.Z;
+            double wy = inv[3] * r.X + inv[4] * r.Y + inv[5] * r.Z;
+            double wz = inv[6] * r.X + inv[7] * r.Y + inv[8] * r.Z;
+
+            // As far along this solution as the first free gimbal's stop allows, or all of it.
+            double step = 1.0;
+            for (int c = 0; c < cols; c++)
+            {
+                if (held[c])
+                    continue;
+                double u = b[3 * c] * wx + b[3 * c + 1] * wy + b[3 * c + 2] * wz;
+                if (Math.Abs(u) < 1e-15)
+                    continue;
+                double room = u > 0.0 ? (1.0 - commands[c]) / u : (-1.0 - commands[c]) / u;
+                step = Math.Min(step, Math.Max(room, 0.0));
+            }
+            for (int c = 0; c < cols; c++)
+                if (!held[c])
+                    commands[c] += step * (b[3 * c] * wx + b[3 * c + 1] * wy + b[3 * c + 2] * wz);
+            if (step >= 1.0)
+                return;
+        }
     }
 
     private static bool Invert3x3(ReadOnlySpan<double> m, out Span<double> inv)
