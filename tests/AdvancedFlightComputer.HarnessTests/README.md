@@ -82,6 +82,11 @@ The game-free G-FOLD executable accepts `--terminal-braking` for vertical contro
 - `afc-maneuver-transpilers` checks the shortcut injections into the orbit right-click menu against the current game IL and verifies exception boundaries with Harmony-patched test methods.
 - `afc-target-identity` asserts that a Match Inclination target selection keeps naming the same body while vehicles are spawned and despawned around it, because the game's lookup swap-removes on deregister and a held index would drift.
 
+### Burns that stock AUTO flies
+
+- `afc-burn-turn-warp` arms stock AUTO on a node of a light probe and checks the warp to the turn: it is offered only with AUTO on and ends 30 s before `BurnTarget.AlignmentStartTime`, it leaves AUTO armed, a warp to the ignition replaces it and a cancel then leaves that warp running, and with `Universe.ProcessAutoWarp` called after each step it ends about 30 s before the turn with the burn not started.
+- `afc-burn-pointing-check` reads the pointing check of the next node on a light probe: full-size RCS blocks are warned about as too strong to aim, blocks at 0.15 scale and a 30 m/s burn give no warning, RCS switched off is named, and a 0.05 m/s burn at a planned full throttle is shorter than the engine needs to settle its aim.
+
 ### Flyby targeting
 
 - `afc-flyby-targeting` asserts the flyby impact-parameter closed forms against the game's own hyperbolic orbit elements, the periapsis reference resolution, and the airless-body case where no atmosphere reference is offered.
