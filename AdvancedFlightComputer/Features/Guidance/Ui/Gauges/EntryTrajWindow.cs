@@ -211,14 +211,14 @@ public static partial class GuidanceWindow
     private const int TrajPages = 4;
 
     /// <summary>
-    /// The speed band of each page: the plan's speeds where its range to go has fallen by a quarter, a half and three quarters. Each page then spans a like share of the range, and early on, where the speed hardly falls over thousands of km, its own few hundred m/s fill the height instead of a sliver at the top.
+    /// The Mach band of each page: the plan's Mach where its range to go has fallen by a quarter, a half and three quarters. Each page then spans a like share of the range, and early on, where the speed hardly falls over thousands of km, its own few Mach fill the height instead of a sliver at the top.
     /// </summary>
     private static double[] TrajPageEdges(EntryPlan plan)
     {
         var edges = new double[TrajPages + 1];
         double s0 = plan.S[0], sF = plan.S[^1];
-        edges[0] = plan.SpeedMs[0];
-        edges[TrajPages] = plan.SpeedMs[^1];
+        edges[0] = plan.Mach[0];
+        edges[TrajPages] = plan.Mach[^1];
         int k = 0;
         for (int page = 1; page < TrajPages; page++)
         {
@@ -226,24 +226,25 @@ public static partial class GuidanceWindow
             while (k < plan.Count - 2 && plan.S[k + 1] > sCut) k++;
             double ds = plan.S[k + 1] - plan.S[k];
             double f = ds != 0 ? Math.Clamp((sCut - plan.S[k]) / ds, 0.0, 1.0) : 0.0;
-            edges[page] = plan.SpeedMs[k] + f * (plan.SpeedMs[k + 1] - plan.SpeedMs[k]);
+            edges[page] = plan.Mach[k] + f * (plan.Mach[k + 1] - plan.Mach[k]);
         }
         return edges;
     }
 
     /// <summary>
-    /// The pages' axes, fixed for the entry as the Shuttle's pre-printed ENTRY TRAJ pages were: built from the first plan the window sees and kept until the entry is reset, so the plan, the corridor and the flown path stay where they are and the craft's bug moves across them, in at the top of page 1. Later plans are drawn on the same axes; whatever leaves a page is cut at its edge, and the bug pegs there.
+    /// The pages, fixed for the entry as the Shuttle's pre-printed ENTRY TRAJ pages were: built from the first plan the window sees and kept until the entry is reset. The axes and the corridor's high- and low-energy lines are that plan's, so they stay where they are; the bug, its trailers, the flown path and the current plan move across them, in at the top of page 1. Whatever leaves a page is cut at its edge, and the bug pegs there.
     /// </summary>
     private sealed class TrajLayout
     {
-        public readonly double[] Edges = new double[TrajPages + 1];   // the pages' speed bands, fast to slow
+        public readonly double[] Edges = new double[TrajPages + 1];   // the pages' Mach bands, fast to slow
         public readonly double[] Top = new double[TrajPages], Bottom = new double[TrajPages];
         public readonly double[] XMin = new double[TrajPages], XMax = new double[TrajPages];
+        public double[] Mach, RangeShortM, RangeLongM;               // the corridor, as the first plan drew it
 
-        public int PageAt(double speedMs)
+        public int PageAt(double mach)
         {
             int page = 0;
-            while (page < TrajPages - 1 && speedMs < Edges[page + 1]) page++;
+            while (page < TrajPages - 1 && mach < Edges[page + 1]) page++;
             return page;
         }
     }
@@ -262,26 +263,31 @@ public static partial class GuidanceWindow
 
     private static TrajLayout BuildLayout(EntryPlan plan)
     {
-        var L = new TrajLayout();
+        var L = new TrajLayout
+        {
+            Mach = (double[])plan.Mach.Clone(),
+            RangeShortM = (double[])plan.RangeShortM.Clone(),
+            RangeLongM = (double[])plan.RangeLongM.Clone(),
+        };
         double[] edges = TrajPageEdges(plan);
         Array.Copy(edges, L.Edges, edges.Length);
         double r0 = plan.BodyRadius;
         for (int page = 0; page < TrajPages; page++)
         {
             double hi = edges[page], lo = edges[page + 1];
-            double vPad = 0.05 * Math.Max(hi - lo, 50.0);
+            double mPad = 0.05 * Math.Max(hi - lo, 0.2);
             // Page 1 reaches above the plan's start, so the bug comes in from the top while the craft coasts down to it.
-            L.Top[page] = hi + (page == 0 ? Math.Max(vPad, 0.015 * hi) : vPad);
-            L.Bottom[page] = Math.Max(0, lo - vPad);
+            L.Top[page] = hi + (page == 0 ? Math.Max(mPad, 0.015 * hi) : mPad);
+            L.Bottom[page] = Math.Max(0, lo - mPad);
 
             double xLo = double.PositiveInfinity, xHi = double.NegativeInfinity;
-            FitBand(ref xLo, ref xHi, i => plan.S[i] * r0, i => plan.SpeedMs[i], plan.Count, L.Bottom[page], L.Top[page]);
-            FitBand(ref xLo, ref xHi, i => plan.RangeShortM[i], i => plan.SpeedMs[i], plan.Count, L.Bottom[page], L.Top[page]);
+            FitBand(ref xLo, ref xHi, i => plan.S[i] * r0, i => plan.Mach[i], plan.Count, L.Bottom[page], L.Top[page]);
+            FitBand(ref xLo, ref xHi, i => plan.RangeShortM[i], i => plan.Mach[i], plan.Count, L.Bottom[page], L.Top[page]);
             if (double.IsFinite(xHi))
             {
                 // The low-energy edge runs out far beyond: show it to about twice the band's span past the plan.
                 double longLo = double.PositiveInfinity, longHi = double.NegativeInfinity;
-                FitBand(ref longLo, ref longHi, i => plan.RangeLongM[i], i => plan.SpeedMs[i], plan.Count, L.Bottom[page], L.Top[page]);
+                FitBand(ref longLo, ref longHi, i => plan.RangeLongM[i], i => plan.Mach[i], plan.Count, L.Bottom[page], L.Top[page]);
                 if (double.IsFinite(longHi)) xHi = Math.Max(xHi, Math.Min(longHi, xHi + 1.5 * Math.Max(xHi - xLo, 0.25 * Math.Abs(xHi))));
             }
             if (!double.IsFinite(xLo) || !double.IsFinite(xHi)) { xLo = 0; xHi = Math.Max(plan.S[0] * r0, 1000.0); }
@@ -294,11 +300,10 @@ public static partial class GuidanceWindow
             L.XMin[page] = xMin;
             L.XMax[page] = xMax;
         }
-
         return L;
     }
 
-    /// <summary>Widens [lo, hi] to the x of a polyline's part inside the speed band, its crossings of the band's edges included.</summary>
+    /// <summary>Widens [lo, hi] to the x of a polyline's part inside the band in y, its crossings of the band's edges included.</summary>
     private static void FitBand(ref double lo, ref double hi, Func<int, double> x, Func<int, double> v, int count, double vLo, double vHi)
     {
         for (int i = 0; i < count; i++)
@@ -323,69 +328,74 @@ public static partial class GuidanceWindow
 
     private static double Finite(double v, double fallback) => double.IsFinite(v) ? v : fallback;
 
-    // ---------------------------------------------------------------- range to go against speed
+    // ---------------------------------------------------------------- range to go against Mach
 
     private static void DrawTrajPlot(ImDrawListPtr dl, OrbitalEntryState st, EntryPlan plan, float2 a, float2 b, float s)
     {
         float left = 50f * s, bottom = 16f * s, top = ImGui.GetFontSize() + 4f * s;
         float2 p0 = new float2(a.X + left, a.Y + top), p1 = new float2(b.X - 4f * s, b.Y - bottom);
-        dl.AddText(new float2(a.X + left, a.Y), Palette.Dim.Solid, "RANGE TO GO (km) vs SPEED (km/s)  ·  BOX: DRAG ERROR");
+        dl.AddText(new float2(a.X + left, a.Y), Palette.Dim.Solid, "UP: MACH   ACROSS: RANGE TO GO, km   BOX: DRAG ERROR");
         if (p1.Y - p0.Y < 30f * s)
             return;
         Frame(dl, p0, p1);
 
-        // The page holding the craft's speed, on the entry's fixed axes.
+        // The page holding the craft's Mach, on the entry's fixed axes.
         var tr = st.Trace;
         TrajLayout L = LayoutFor(st, plan);
-        double xMin, xMax, vMin, vMax;
+        double xMin, xMax, mMin, mMax;
         if (L != null)
         {
-            int page = L.PageAt(Finite(st.SpeedMs, L.Edges[0]));
-            xMin = L.XMin[page]; xMax = L.XMax[page]; vMin = L.Bottom[page]; vMax = L.Top[page];
+            int page = L.PageAt(Finite(st.Mach, L.Edges[0]));
+            xMin = L.XMin[page]; xMax = L.XMax[page]; mMin = L.Bottom[page]; mMax = L.Top[page];
             string pageName = FormattableString.Invariant($"PAGE {page + 1}/{TrajPages}");
             dl.AddText(new float2(p1.X - ImGui.CalcTextSize(pageName).X, a.Y), Palette.Dim.Solid, pageName);
         }
         else
         {
             xMin = 0; xMax = NiceCeiling(Math.Max(Finite(st.RangeM, 0), 1000.0) * 1.1);
-            vMin = 0; vMax = Math.Max(Finite(st.SpeedMs, 0), 1000.0) * 1.02;
+            mMin = 0; mMax = Math.Max(Finite(st.Mach, 0), 1.0) * 1.02;
         }
 
-        // Range across (low at the left), speed down the page (fast at the top); the units are in the title, so the numbers fit the margin.
-        var area = new PlotArea(p0, p1, xMin, xMax, vMin, vMax);
-        AxisLabels(dl, p0, p1, s, $"{xMax / 1000:F0}", $"{xMin / 1000:F0}", $"{vMax / 1000:F2}", $"{vMin / 1000:F2}");
+        // Range across (low at the left), Mach up the side (fast at the top).
+        var area = new PlotArea(p0, p1, xMin, xMax, mMin, mMax);
+        AxisLabels(dl, p0, p1, s, $"{xMax / 1000:F0} km", $"{xMin / 1000:F0}", $"M{mMax:F1}", $"M{mMin:F1}");
 
+        if (L != null)
+        {
+            // The corridor as the first plan drew it: fixed, as the Shuttle's printed lines were.
+            ImColor8 edge = Palette.Text.Solid;
+            double labelBelow = mMax - 0.3 * (mMax - mMin);
+            int hiLabel = -1, loLabel = -1;
+            for (int k = 0; k < L.Mach.Length - 1; k++)
+            {
+                area.ClippedLine(dl, L.RangeShortM[k], L.Mach[k], L.RangeShortM[k + 1], L.Mach[k + 1], edge, 2f * s);
+                area.ClippedLine(dl, L.RangeLongM[k], L.Mach[k], L.RangeLongM[k + 1], L.Mach[k + 1], edge, 2f * s);
+                if (hiLabel < 0 && L.Mach[k] < labelBelow && area.Inside(L.RangeShortM[k], L.Mach[k])) hiLabel = k;
+                if (loLabel < 0 && L.Mach[k] < labelBelow && area.Inside(L.RangeLongM[k], L.Mach[k])) loLabel = k;
+            }
+            if (hiLabel >= 0 && area.Map(L.RangeShortM[hiLabel], L.Mach[hiLabel], out float2 hi))
+                dl.AddText(new float2(Math.Max(p0.X + 2f * s, hi.X - 84f * s), hi.Y), Palette.Dim.Solid, "HIGH ENERGY");
+            if (loLabel >= 0 && area.Map(L.RangeLongM[loLabel], L.Mach[loLabel], out float2 lo))
+                dl.AddText(new float2(Math.Min(lo.X + 6f * s, p1.X - 80f * s), lo.Y), Palette.Dim.Solid, "LOW ENERGY");
+        }
         if (plan != null)
         {
-            ImColor8 edge = Palette.Text.Solid;
             double r0 = plan.BodyRadius;
-            double labelBelow = vMax - 0.3 * (vMax - vMin);
-            int hiLabel = -1, loLabel = -1;
             for (int k = 0; k < plan.Count - 1; k++)
-            {
-                area.ClippedLine(dl, plan.RangeShortM[k], plan.SpeedMs[k], plan.RangeShortM[k + 1], plan.SpeedMs[k + 1], edge, 2f * s);
-                area.ClippedLine(dl, plan.RangeLongM[k], plan.SpeedMs[k], plan.RangeLongM[k + 1], plan.SpeedMs[k + 1], edge, 2f * s);
-                area.ClippedLine(dl, plan.S[k] * r0, plan.SpeedMs[k], plan.S[k + 1] * r0, plan.SpeedMs[k + 1], Palette.Plan.Solid, 2.5f * s);
-                if (hiLabel < 0 && plan.SpeedMs[k] < labelBelow && area.Inside(plan.RangeShortM[k], plan.SpeedMs[k])) hiLabel = k;
-                if (loLabel < 0 && plan.SpeedMs[k] < labelBelow && area.Inside(plan.RangeLongM[k], plan.SpeedMs[k])) loLabel = k;
-            }
-            if (hiLabel >= 0 && area.Map(plan.RangeShortM[hiLabel], plan.SpeedMs[hiLabel], out float2 hi))
-                dl.AddText(new float2(Math.Max(p0.X + 2f * s, hi.X - 84f * s), hi.Y), Palette.Dim.Solid, "HIGH ENERGY");
-            if (loLabel >= 0 && area.Map(plan.RangeLongM[loLabel], plan.SpeedMs[loLabel], out float2 lo))
-                dl.AddText(new float2(Math.Min(lo.X + 6f * s, p1.X - 80f * s), lo.Y), Palette.Dim.Solid, "LOW ENERGY");
+                area.ClippedLine(dl, plan.S[k] * r0, plan.Mach[k], plan.S[k + 1] * r0, plan.Mach[k + 1], Palette.Plan.Solid, 2.5f * s);
         }
 
         // The flown path, and a trailer every 30 s for the last 150 s.
         for (int i = 1; i < tr.Count; i++)
-            area.ClippedLine(dl, tr[i - 1].RangeM, tr[i - 1].SpeedMs, tr[i].RangeM, tr[i].SpeedMs, Palette.Flown.Solid, 1.2f * s);
+            area.ClippedLine(dl, tr[i - 1].RangeM, tr[i - 1].Mach, tr[i].RangeM, tr[i].Mach, Palette.Flown.Solid, 1.2f * s);
         for (int n = 1; n <= 5; n++)
         {
             int i = tr.Count - 1 - 30 * n;
             if (i < 0) break;
-            if (area.Inside(tr[i].RangeM, tr[i].SpeedMs) && area.Map(tr[i].RangeM, tr[i].SpeedMs, out float2 at))
+            if (area.Inside(tr[i].RangeM, tr[i].Mach) && area.Map(tr[i].RangeM, tr[i].Mach, out float2 at))
                 Bug(dl, at, 4f * s, Palette.Flown.Solid, filled: false);
         }
-        if (st.SpeedMs > 0 && area.Map(st.RangeM, st.SpeedMs, out float2 now))
+        if (st.Mach > 0 && area.Map(st.RangeM, st.Mach, out float2 now))
         {
             DragErrorBox(dl, st, now, p0, p1, s);
             Bug(dl, now, 6f * s, Palette.Target.Solid, filled: true);
@@ -400,10 +410,11 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void DragErrorBox(ImDrawListPtr dl, OrbitalEntryState st, float2 bug, float2 p0, float2 p1, float s)
     {
-        double dRef = st.Last.DragRefMs2, d = st.DragMs2;
-        if (!(dRef > 0) || !double.IsFinite(d) || st.Last.Phase != EntryTracker.Phase.Tracking)
+        // The error smoothed over DragErrorSmoothS (OrbitalEntry), so the box shows the trend rather than every flutter of the measured drag.
+        double dRef = st.Last.DragRefMs2, err = st.DragErrorF;
+        if (!(dRef > 0) || !double.IsFinite(err) || st.Last.Phase != EntryTracker.Phase.Tracking)
             return;
-        double share = (d - dRef) / Math.Max(dRef, 1.0);
+        double share = err / Math.Max(dRef, 1.0);
         float half = 7f * s;
         float x = bug.X + (float)(share * DragBoxWidthPerError * (p1.X - p0.X));
         x = Math.Clamp(x, p0.X + half, p1.X - half);
@@ -411,7 +422,7 @@ public static partial class GuidanceWindow
         dl.AddRect(new float2(x - half, bug.Y - half), new float2(x + half, bug.Y + half), c, 0f, ImDrawFlags.None, 1.5f * s);
         if (Math.Abs(x - bug.X) > half)
             dl.AddLine(new float2(bug.X, bug.Y), new float2(x + (x > bug.X ? -half : half), bug.Y), c, 1f * s);
-        string label = FormattableString.Invariant($"{d - dRef:+0.0;-0.0}");
+        string label = FormattableString.Invariant($"{err:+0.0;-0.0}");
         float tw = ImGui.CalcTextSize(label).X;
         float lx = x > bug.X ? Math.Min(x + half + 3f * s, p1.X - tw) : Math.Max(x - half - 3f * s - tw, p0.X);
         dl.AddText(new float2(lx, bug.Y - ImGui.GetFontSize() * 0.5f), c, label);
@@ -424,7 +435,7 @@ public static partial class GuidanceWindow
         var o = st.Last;
         return new[]
         {
-            FormattableString.Invariant($"DRAG {st.DragMs2:F1}  REF {o.DragRefMs2:F1}  ERR {st.DragMs2 - o.DragRefMs2:+0.0;-0.0} m/s²"),
+            FormattableString.Invariant($"DRAG {st.DragMs2:F1}  REF {o.DragRefMs2:F1}  ERR {st.DragErrorF:+0.0;-0.0} m/s²"),
             FormattableString.Invariant($"HDOT {st.HdotMs:F0}  REF {o.HdotRefMs:F0} m/s"),
             FormattableString.Invariant($"BANK {(o.BankDeg >= 0 ? "R" : "L")}{Math.Abs(o.BankDeg):F0}  PLAN {o.BankRefDeg:F0}°{(o.Overbanked ? "  OVERBANK" : "")}"),
             FormattableString.Invariant($"AoA {st.AlphaFlownDeg:F0}° (ASKED {st.AlphaDeg:F0})  MACH {st.Mach:F1}"),

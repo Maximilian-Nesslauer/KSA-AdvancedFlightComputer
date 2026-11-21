@@ -61,6 +61,9 @@ public sealed class OrbitalEntryState
     public double PlanAt = double.NaN;
     public double HeadingErrorDeg;
 
+    /// <summary>Measured drag less the reference, m/s^2, smoothed for the display (the tracker filters its own).</summary>
+    public double DragErrorF = double.NaN;
+
     /// <summary>The ENTRY TRAJ window's fixed axes for this entry, built from its first plan; cleared by a reset so the next entry builds its own.</summary>
     public object TrajLayout;
 
@@ -89,7 +92,7 @@ public sealed class OrbitalEntryState
     public string Status = "";
     public bool StatusWarn;
 
-    public readonly record struct TrajSample(double SpeedMs, double RangeM, double DragMs2, double DragRefMs2, double BankDeg, double AltitudeM);
+    public readonly record struct TrajSample(double SpeedMs, double RangeM, double DragMs2, double DragRefMs2, double BankDeg, double AltitudeM, double Mach);
 
     public void SetStatus(string text, bool warn = false)
     {
@@ -132,6 +135,7 @@ public sealed class OrbitalEntryState
         RollRefCci = default;
         NextTraceAt = double.NegativeInfinity;
         TrajLayout = null;
+        DragErrorF = double.NaN;
         PrevNoseCci = PrevRollRefCci = TargetRateCci = default;
     }
 }

@@ -282,7 +282,9 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec OrbitalEntryOverbankDeg = new("OrbitalEntryOverbankDeg", "TRACKER MAX BANK", "deg", P, 120.0, 1.0, 180.0, "%.0f",
         "The largest bank the tracker may command: further than PLAN MAX BANK, so it has room to absorb a spike in lift or a climb the plan did not foresee.");
     public static readonly SettingSpec OrbitalEntryRollRateDegS = new("OrbitalEntryRollRateDegS", "ROLL RATE", "deg/s", P, 10.0, 0.5, 90.0, "%.1f",
-        "The roll rate the tracker slews the bank at, a reversal included, and the fastest the attitude controller closes a roll error at during entry (never under 10 deg/s); the plan uses half of it.");
+        "The roll rate of a reversal, and the fastest the attitude controller closes a roll error at during entry (never under 10 deg/s); the plan uses half of it. Tracking slews at TRACKING ROLL RATE.");
+    public static readonly SettingSpec OrbitalEntryTrackRollRateDegS = new("OrbitalEntryTrackRollRateDegS", "TRACKING ROLL RATE", "deg/s", P, 5.0, 0.5, 90.0, "%.1f",
+        "The roll rate the tracker slews the bank at while it tracks the drag; reversals use ROLL RATE.");
     public static readonly SettingSpec OrbitalEntryHandoverAltKm = new("OrbitalEntryHandoverAltKm", "HAND-OVER ALTITUDE", "km", P, 25.0, 1.0, 200.0, "%.1f",
         "Where orbital entry guidance ends, with HAND-OVER MACH: the craft holds its entry attitude from there.");
     public static readonly SettingSpec OrbitalEntryHandoverMach = new("OrbitalEntryHandoverMach", "HAND-OVER MACH", "", P, 2.0, 0.2, 20.0, "%.2f",
@@ -308,6 +310,8 @@ internal static class GuidanceSettingSpecs
 
     public static readonly SettingSpec OrbitalEntryTrackOmega = new("OrbitalEntryTrackOmega", "DRAG TRACKING", "rad/s", P, 0.06, 0.01, 2.0, "%.3f",
         "Natural frequency of the drag and sink-rate loop that holds the plan's drag: higher pulls the drag onto the plan's faster, at the cost of more bank activity.");
+    public static readonly SettingSpec OrbitalEntryGainDragFloor = new("OrbitalEntryGainDragFloor", "GAIN DRAG FLOOR", "m/s²", P, 5.0, 0.1, 50.0, "%.1f",
+        "The least drag the tracking gains are worked out at. Below it, in thin air where the bank buys little, the loop slows in proportion to the drag instead of banging the bank about; the re-plans take up the rest.");
     public static readonly SettingSpec OrbitalEntryReversalBandDeg = new("OrbitalEntryReversalBandDeg", "REVERSAL BAND", "deg", P, 5.0, 0.5, 45.0, "%.1f",
         "The heading error to the site, the angle between the ground track and the way to the site, at which the bank reverses. It narrows below 2 km/s, to half at 1 km/s, so the craft lines up on the site at the end. Wider means fewer reversals.");
     public static readonly SettingSpec OrbitalEntryCorridorWeight = new("OrbitalEntryCorridorWeight", "CORRIDOR MARGIN", "", P, 1.0, 0.0, 100.0, "%.2f",
@@ -330,8 +334,8 @@ internal static class GuidanceSettingSpecs
     {
         OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach,
         OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
-        OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryReversalBandDeg, OrbitalEntryRollRateDegS,
-        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryTrackOmega, OrbitalEntryCorridorWeight, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
+        OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryReversalBandDeg, OrbitalEntryRollRateDegS, OrbitalEntryTrackRollRateDegS,
+        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryTrackOmega, OrbitalEntryGainDragFloor, OrbitalEntryCorridorWeight, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
     };
     public static readonly BoolSpec[] OrbitalEntryBools = { OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude };
 
@@ -474,8 +478,8 @@ internal static class GuidanceSettingSpecs
         TermKpV, TermKiV, TermKdV, TermKpL, TermKiL, TermKdL,
         OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach,
         OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
-        OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryReversalBandDeg, OrbitalEntryRollRateDegS,
-        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryTrackOmega, OrbitalEntryCorridorWeight, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
+        OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryReversalBandDeg, OrbitalEntryRollRateDegS, OrbitalEntryTrackRollRateDegS,
+        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryTrackOmega, OrbitalEntryGainDragFloor, OrbitalEntryCorridorWeight, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
     };
 
     public static readonly BoolSpec[] AllBools =

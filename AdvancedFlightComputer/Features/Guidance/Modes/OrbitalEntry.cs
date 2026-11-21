@@ -42,6 +42,8 @@ public static partial class GuidanceWindow
         HandoverAltitude = _s.OrbitalEntryHandoverAltKm * 1000.0,
         HandoverMach = _s.OrbitalEntryHandoverMach,
         TrackOmega = Math.Max(_s.OrbitalEntryTrackOmega, 0.01),
+        GainDragFloor = Math.Max(_s.OrbitalEntryGainDragFloor, 0.1),
+        TrackRollRateDegS = Math.Max(_s.OrbitalEntryTrackRollRateDegS, 0.5),
         CorridorWeight = Math.Max(_s.OrbitalEntryCorridorWeight, 0.0),
         ReversalBandDeg = Math.Max(_s.OrbitalEntryReversalBandDeg, 0.5),
         EngageInAtmosphere = _s.OrbitalEntryEngageInAir,
@@ -363,6 +365,12 @@ public static partial class GuidanceWindow
         _s.CommandDir = nose;
         // The target's own turning rate, fed forward: the bank slews at the roll rate, the AoA follows its Mach schedule and the airflow turns with the path, and with no rate the controller only learns of each after the error has built (a reversal lagged at a zero rate target until 2026-11-21).
         st.TargetRateCci = TargetRate(st, nose, st.RollRefCci, dt);
+        if (st.Last.Phase == EntryTracker.Phase.Tracking && st.Last.DragRefMs2 > 0 && double.IsFinite(st.DragMs2))
+        {
+            double err = st.DragMs2 - st.Last.DragRefMs2;
+            st.DragErrorF = double.IsFinite(st.DragErrorF) ? st.DragErrorF + Math.Clamp(dt / DragErrorSmoothS, 0.0, 1.0) * (err - st.DragErrorF) : err;
+        }
+        else st.DragErrorF = double.NaN;
         _s.CommandRate = st.TargetRateCci;
         _s.HasCommand = true;
 
@@ -384,7 +392,7 @@ public static partial class GuidanceWindow
         if (now >= st.NextTraceAt)
         {
             st.NextTraceAt = now + 1.0;
-            st.Trace.Add(new OrbitalEntryState.TrajSample(vMag, st.RangeM, drag, st.Last.DragRefMs2, bankDeg, alt));
+            st.Trace.Add(new OrbitalEntryState.TrajSample(vMag, st.RangeM, drag, st.Last.DragRefMs2, bankDeg, alt, st.Mach));
             if (st.Trace.Count > 4000)
                 st.Trace.RemoveRange(0, 1000);
         }
@@ -472,6 +480,9 @@ public static partial class GuidanceWindow
         var (omega, latitude, heading) = RotationAt(parent, r, vRel);
         return model.WithRotation(omega, latitude, heading);
     }
+
+    /// <summary>The time the displayed drag error is smoothed over, s: the measured drag flutters with every twitch of the attitude.</summary>
+    private const double DragErrorSmoothS = 3.0;
 
     /// <summary>The time over which the target's turning rate is smoothed, s: a step's jitter in the measured path should not reach the fins.</summary>
     private const double TargetRateSmoothS = 0.3;

@@ -144,7 +144,8 @@ public sealed class EntryTracker
         if (prevSide != 0 && _side != prevSide) _reversing = true;
 
         double target = _side * bankMag;
-        Slew(target, inp.Dt);
+        // A reversal rolls at the full rate; tracking at its own, gentler one.
+        Slew(target, inp.Dt, _reversing ? cfg.RollRateDegS : cfg.TrackRollRateDegS);
         if (_reversing && Math.Abs(_bank - target) < 1.0) _reversing = false;
 
         string status;
@@ -167,9 +168,9 @@ public sealed class EntryTracker
         => new(phase, _bank, _bank, 0, 0, 0, 0, db, _side, false, false, false, false, status);
 
     /// <summary>Move the flown bank towards the target at the roll rate. A sign change passes through zero, so a reversal rolls through lift-up.</summary>
-    void Slew(double target, double dt)
+    void Slew(double target, double dt, double rateDegS = double.NaN)
     {
-        double step = _cfg.RollRateDegS * dt;
+        double step = (double.IsFinite(rateDegS) ? rateDegS : _cfg.RollRateDegS) * dt;
         double diff = target - _bank;
         _bank += Math.Abs(diff) <= step ? diff : Math.Sign(diff) * step;
     }

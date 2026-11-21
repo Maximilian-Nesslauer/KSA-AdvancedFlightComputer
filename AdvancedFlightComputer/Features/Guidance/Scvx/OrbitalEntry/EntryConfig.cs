@@ -52,8 +52,13 @@ public sealed class EntryConfig
     /// <summary>Take hold as soon as the craft is below the top of the air, whatever the drag: a shallow entry spends a long time in air too thin to reach any start drag.</summary>
     public bool EngageInAtmosphere { get; set; } = true;
 
-    /// <summary>The least drag the tracker's gains are taken at, m/s^2: they go as 1/D and 1/D^2.</summary>
-    public double GainDragFloor { get; set; } = 1.0;
+    /// <summary>
+    /// The least drag the tracker's gains are taken at, m/s^2: they go as 1/D and 1/D^2, because the vertical acceleration a change of L/D buys goes as D. Below it the loop keeps its damping and slows in proportion, to w D / floor. At 1 m/s^2 (2026-11-21) a 5-10 % drag error asked for five times the 35 % clamp at 70-75 km, and the bank banged between 55 and 100 deg every 10 s for little effect; the re-plans every 2 s absorb what a softer loop leaves. Offline, 1 to 8 changed no miss by more than 1 km.
+    /// </summary>
+    public double GainDragFloor { get; set; } = 5.0;
+
+    /// <summary>The roll rate the tracker slews its bank at while tracking, deg/s; reversals and the first roll use <see cref="RollRateDegS"/>.</summary>
+    public double TrackRollRateDegS { get; set; } = 5.0;
 
     /// <summary>Time constant of the low-pass on the vertical L/D the tracker commands, s; 0 for none.</summary>
     public double CommandSmoothS { get; set; } = 0.0;

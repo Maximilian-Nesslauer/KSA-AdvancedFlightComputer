@@ -1810,6 +1810,10 @@ public sealed class VehicleAutopilotState
     public double OrbitalEntryResolveS = 2.0;
     /// <summary>Natural frequency of the drag-tracking loop, rad/s: higher pulls the drag onto the plan's faster.</summary>
     public double OrbitalEntryTrackOmega = 0.06;
+    /// <summary>The least drag the tracker's gains are taken at, m/s^2 (EntryConfig.GainDragFloor).</summary>
+    public double OrbitalEntryGainDragFloor = 5.0;
+    /// <summary>The tracker's bank slew while tracking, deg/s; reversals use OrbitalEntryRollRateDegS.</summary>
+    public double OrbitalEntryTrackRollRateDegS = 5.0;
     /// <summary>Weight keeping the plan in the middle of the corridor, against the heat load that pushes it to the high-energy edge.</summary>
     public double OrbitalEntryCorridorWeight = 1.0;
     /// <summary>The heading error to the site at which the bank reverses, deg, narrowing below 2 km/s.</summary>
