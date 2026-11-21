@@ -17,6 +17,8 @@ internal sealed class LandingEngineActivation(LandingEngineGroup group, EngineCo
     internal PartTree? Tree;
     internal Part[] Parts = [];
     internal string Refusal = "";
+    // The group's moment was more than its gimbals hold (GimbalsHoldMoment), so this activation flies every engine of the craft instead.
+    internal bool Fallback;
 }
 
 /// <summary>Main engine output as the craft delivers it, for the landing group checks and log lines.</summary>
@@ -56,6 +58,26 @@ public static partial class GuidanceWindow
 
     private static LandingEngineGroup? SelectedLandingEngines
         => _s.GetEngineGroups(LandingEngineGroups.CraftScope).Chosen;
+
+    /// <summary>The share of the gimbals' torque an engine set's own moment may take: the rest is the plan's turns and the attitude feedback's.</summary>
+    internal const double LandingMomentShare = 0.8;
+
+    /// <summary>True when the gimbals of these engines can hold the moment the engines make about the centre of mass now within <see cref="LandingMomentShare"/> of what they can give (KsaThrustMoment.LateralAgainstGimbals). The moment and the capability are both in proportion to the thrust, so one check holds at every throttle.</summary>
+    private static bool GimbalsHoldMoment(Vehicle vehicle, EngineController[] engines, out double momentNm, out double capabilityNm)
+    {
+        (momentNm, capabilityNm) = KsaThrustMoment.LateralAgainstGimbals(vehicle, engines);
+        return momentNm <= LandingMomentShare * capabilityNm;
+    }
+
+    /// <summary>Every engine controller of the craft that the landing models can fly: throttleable rockets only.</summary>
+    private static EngineController[] AllLandingEngines(Vehicle vehicle)
+    {
+        var all = new List<EngineController>();
+        foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
+            if (engine.Rockets.Length > 0 && engine.Rockets.All(KsaEnginePerf.FollowsThrottle))
+                all.Add(engine);
+        return all.ToArray();
+    }
 
     private static bool CanSwitchEnginesManually(Vehicle vehicle)
         => vehicle.IsControllable && vehicle.FlightComputer?.BurnMode == FlightComputerBurnMode.Manual
@@ -113,9 +135,28 @@ public static partial class GuidanceWindow
                 reason = $"LANDING GROUP '{group.Name}' CANNOT THROTTLE AS LOW AS THE OTHER ENGINES OF THE CRAFT.";
                 return LandingEnginePreparation.Refused;
             }
+            // THE MOMENT, from the centre of mass as it is when entry guidance engages: the arm shrinks as the propellant burns and the centre of mass comes down, so the engage is where it is largest. Over what the gimbals can hold, the landing goes on all engines instead.
+            bool fallback = false;
+            if (!GimbalsHoldMoment(vehicle, engines, out double momentNm, out double capabilityNm))
+            {
+                EngineController[] all = AllLandingEngines(vehicle);
+                bool allLand = all.Length > engines.Length && !SplitsLandingGimbal(vehicle, all)
+                    && GimbalsHoldMoment(vehicle, all, out _, out _);
+                string share = capabilityNm > 0.0 ? FormattableString.Invariant($"{momentNm / capabilityNm:P0} OF") : "MORE THAN";
+                GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                    $"Landing group '{group.Name}' moment {momentNm:F0} N m against {capabilityNm:F0} N m its gimbals hold, limit {LandingMomentShare:P0}: {(allLand ? "landing on all engines" : "all engines cannot land either")}."));
+                if (!allLand)
+                {
+                    reason = $"LANDING GROUP '{group.Name}' NEEDS {share} ITS GIMBALS TO HOLD ITS MOMENT, AND ALL ENGINES CANNOT LAND EITHER.";
+                    return LandingEnginePreparation.Refused;
+                }
+                _s.WarnLanding($"LANDING GROUP '{group.Name}' NEEDS {share} ITS GIMBALS TO HOLD ITS MOMENT: LANDING ON ALL ENGINES.");
+                engines = all;
+                fallback = true;
+            }
             double wait = fromGlide && double.IsFinite(_s.GlideTgo)
                 ? Math.Clamp(0.1 * _s.GlideTgo, 0.1, LandingEngineActivationLimitS) : LandingEngineActivationLimitS;
-            _s.EngineActivation = activation = new LandingEngineActivation(group, engines, now + wait);
+            _s.EngineActivation = activation = new LandingEngineActivation(group, engines, now + wait) { Fallback = fallback };
         }
 
         if (activation.Refusal.Length > 0)
@@ -308,7 +349,7 @@ public static partial class GuidanceWindow
     }
 
     private static string DescribeSelection(LandingEngineActivation activation)
-        => string.Join(", ", activation.Engines.Select(engine =>
+        => (activation.Fallback ? "(all engines, the group's moment was over its gimbals) " : "") + string.Join(", ", activation.Engines.Select(engine =>
             $"{engine.Parent.InstanceId}/{engine.TemplateId}[{string.Join("+", engine.Rockets.Where(activation.SuppliedRockets.Contains).Select(rocket => rocket.InstanceId))}]"));
 
     private static void StepLandingEngineCommit(Vehicle vehicle, double now)
@@ -402,6 +443,13 @@ public static partial class GuidanceWindow
         EngineController[] remaining = activation.Engines.Where(engine => engine.Rockets.Any(surviving.Contains)).ToArray();
         if (SplitsLandingGimbal(vehicle, remaining, surviving) || HasDryActiveGimbal(vehicle, remaining, surviving))
             return false;
+        // The engines left can be off centre where the whole group was not (one of a pair ran dry): the same moment check as at the engage, from the centre of mass now.
+        if (!GimbalsHoldMoment(vehicle, remaining, out double momentNm, out double capabilityNm))
+        {
+            GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                $"Landing group '{activation.Group.Name}' lost supply; the engines left make {momentNm:F0} N m against {capabilityNm:F0} N m their gimbals hold: not replanned."));
+            return false;
+        }
 
         double now = SimNow();
         double3 r = vehicle.Orbit.StateVectors.PositionCci;
@@ -426,7 +474,7 @@ public static partial class GuidanceWindow
 
         // The new activation switches the dry controllers off and is confirmed like the first one, then the engage request rebuilds entry guidance (FinishLandingGroupReplan).
         double wait = double.IsFinite(_s.GlideTgo) ? Math.Clamp(0.1 * _s.GlideTgo, 0.1, LandingEngineActivationLimitS) : LandingEngineActivationLimitS;
-        _s.EngineActivation = new LandingEngineActivation(activation.Group, remaining, now + wait);
+        _s.EngineActivation = new LandingEngineActivation(activation.Group, remaining, now + wait) { Fallback = activation.Fallback };
         _s.LandingGroupReplanPending = true;
         _s.ThreeDofEngagePending = true;
         _s.WarnEntry("LANDING GROUP LOST SUPPLY. REPLANNING WITH THE REMAINING ENGINES.");

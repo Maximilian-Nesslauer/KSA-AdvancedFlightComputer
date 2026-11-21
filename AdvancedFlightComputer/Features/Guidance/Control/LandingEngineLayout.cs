@@ -24,7 +24,7 @@ internal sealed record LandingEngineOption(string Name, string[] Keys, LandingEn
 internal sealed class LandingEngineLayout
 {
     internal const double AftPlaneDepthM = 2.5;
-    // A choice whose thrust center is further than this from the cluster's axis turns the stage, and the landing refuses to plan on it.
+    // A choice whose thrust center is further than this from the cluster's axis turns the stage: the picker marks it OFF AXIS and suggests none. The flight measures the moment from the centre of mass at entry guidance's engage and lands on all engines when it is over LandingMomentShare of the gimbals (LandingEngineSelection).
     internal const double BalancedOffsetM = 0.05;
     // The landing burn needs braking room over gravity at the start of the burn, and the flight refuses a choice under 1.0.
     internal const double WeakTwr = 1.5;

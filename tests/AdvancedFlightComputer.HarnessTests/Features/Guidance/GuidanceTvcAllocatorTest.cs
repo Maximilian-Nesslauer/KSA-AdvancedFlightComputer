@@ -36,6 +36,72 @@ public sealed class GuidanceTvcAllocatorTest : AfcTest
         RealEnginesMatchStock(t);
         EnginesOffTheGimbalsCountInTheModelThrust(t);
         TheRollModelTakesACraftWithoutRollTorque(t);
+        ASaturatedGimbalLeavesTheRestToTheOthers(t);
+        TheCoupledRollGoesWithTheLateralTorque(t);
+    }
+
+    // One main gimbal 1 m off the axis, and a gimbal with a hundredth of its thrust beside it that stands for the verniers. A sideways deflection of the main one turns the craft about Y and rolls it by 1/PivotArm of that. Asked for Y torque at zero roll, the small gimbal has to take the roll out and its stops end the allocation early; asked with that roll named as coupled, the main gimbal gives its full travel.
+    private static void TheCoupledRollGoesWithTheLateralTorque(TestContext t)
+    {
+        var com = new float3(0f, 0f, 0f);
+        GimbalController main = Synthetic(floatQuat.Identity, new float3(-PivotArm, 1f, 0f), new float3(-NozzleOffset, 0f, 0f));
+        GimbalController small = Synthetic(floatQuat.Identity, new float3(-PivotArm, 0f, 1.2f), new float3(-NozzleOffset, 0f, 0f));
+        GimbalController[] gimbals = [main, small];
+        double[] thrusts = [Thrust, 0.01 * Thrust];
+        Columns(main, com, Thrust, out double3[] mainTorque, out _);
+        // The main gimbal's column about Y, with the roll that comes with it.
+        double3 column = Math.Abs(mainTorque[0].Y) > Math.Abs(mainTorque[1].Y) ? mainTorque[0] : mainTorque[1];
+        double full = Math.Abs(column.Y), rollPerY = column.X / column.Y;
+        double size = 10.0 * full;
+        var unit = new double3(0, 1, 0);
+
+        // The zero-roll figure the plan's cone was sized with: the min-norm solution scaled to its first stop.
+        var zeroRoll = new double[4];
+        TvcAllocationResult held = KsaTvcAllocator.Solve(gimbals, thrusts, com, unit * size, zeroRoll, redistribute: false);
+        var coupledCommands = new double[4];
+        var roll = new double3(rollPerY * size, 0, 0);
+        TvcAllocationResult coupled = KsaTvcAllocator.Solve(gimbals, thrusts, com, unit * size + roll, coupledCommands, coupled: roll);
+
+        double heldGot = held.AchievedTorque.Y, coupledGot = coupled.AchievedTorque.Y;
+        t.Check("at zero roll the small gimbal's stops end the allocation early", heldGot < 0.5 * full,
+            $"{heldGot:E3} of {full:E3} N m");
+        int mainAxis = Math.Abs(mainTorque[0].Y) > Math.Abs(mainTorque[1].Y) ? 0 : 1;
+        t.Check("with its roll named as coupled, the main gimbal goes to its stop", Math.Abs(coupledCommands[mainAxis]) >= 1.0 - 1e-6 && coupledGot >= (1.0 - 2e-3) * full,
+            $"main command {coupledCommands[mainAxis]:F4}, {coupledGot:E3} of the main gimbal's {full:E3} N m");
+        t.CheckRel("and the roll is the one that comes with it", coupled.AchievedTorque.X, rollPerY * coupledGot, 2e-3, 1.0);
+        t.Check("every command stays inside its stop", coupledCommands.All(c => Math.Abs(c) <= 1.0 + 1e-9),
+            string.Join(", ", coupledCommands.Select(c => c.ToString("F4"))));
+    }
+
+    // Two gimbals on the centre line, one with twice the other's range: the min-norm solution gives the wide one the larger command, so it reaches its stop first. Scaled to that, the narrow one gives only half of what it has; redistributed, it carries on to its own stop and the craft gets both gimbals' full torque, in the demanded direction, inside every stop.
+    private static void ASaturatedGimbalLeavesTheRestToTheOthers(TestContext t)
+    {
+        var com = new float3(0f, 0f, 0f);
+        GimbalController wide = Synthetic(floatQuat.Identity, com - new float3(PivotArm, 0f, 0f), new float3(-NozzleOffset, 0f, 0f), 2f * MaxAngle);
+        GimbalController narrow = Synthetic(floatQuat.Identity, com - new float3(PivotArm, 0f, 0f), new float3(-NozzleOffset, 0f, 0f), MaxAngle);
+        GimbalController[] gimbals = [wide, narrow];
+        double[] thrusts = [Thrust, Thrust];
+        Columns(wide, com, Thrust, out double3[] wideTorque, out _);
+        Columns(narrow, com, Thrust, out double3[] narrowTorque, out _);
+        // Far more than both can give, about Y alone.
+        double3 unit = double3.Normalize(wideTorque[0]);
+        double3 demand = unit * (10.0 * (wideTorque[0].Length() + narrowTorque[0].Length()));
+
+        var scaledCommands = new double[4];
+        TvcAllocationResult scaled = KsaTvcAllocator.Solve(gimbals, thrusts, com, demand, scaledCommands, redistribute: false);
+        var commands = new double[4];
+        TvcAllocationResult shared = KsaTvcAllocator.Solve(gimbals, thrusts, com, demand, commands);
+
+        double both = wideTorque[0].Length() + narrowTorque[0].Length();
+        double scaledGot = double3.Dot(scaled.AchievedTorque, unit), sharedGot = double3.Dot(shared.AchievedTorque, unit);
+        t.CheckRel("scaled to the first stop, the narrow gimbal gives half of its torque", scaledGot, wideTorque[0].Length() + 0.5 * narrowTorque[0].Length(), 1e-3);
+        t.CheckRel("redistributed, both gimbals give their full torque", sharedGot, both, 1e-3);
+        double off = (shared.AchievedTorque - unit * sharedGot).Length();
+        t.Check("the redistributed torque keeps the demanded direction", off <= 1e-6 * both, $"off the direction {off:E2} N m");
+        bool inside = commands.All(c => Math.Abs(c) <= 1.0 + 1e-9);
+        t.Check("every command stays inside its stop", inside, string.Join(", ", commands.Select(c => c.ToString("F4"))));
+        t.Check("the reported share is all the demand the gimbals can give", Math.Abs(shared.SaturationScale - sharedGot / demand.Length()) < 1e-6,
+            $"scale {shared.SaturationScale:F4}, given {sharedGot / demand.Length():F4}");
     }
 
     // A craft whose gimbals give no roll torque at all is planned with the roll left free and a roll bound above zero, and the choice of the first plan of a landing stands while the roll inertia falls with the propellant.
@@ -314,11 +380,11 @@ public sealed class GuidanceTvcAllocatorTest : AfcTest
     }
 
     // The fields GimbalController.RecomputeStaticData fills, with the rest thrust along gimbal +X.
-    private static GimbalController Synthetic(floatQuat gimbalToVehicle, float3 pivot, float3 offsetGimbal)
+    private static GimbalController Synthetic(floatQuat gimbalToVehicle, float3 pivot, float3 offsetGimbal, float maxAngle = MaxAngle)
     {
         Gimbal gimbal = Uninitialized<Gimbal>();
-        gimbal.AxisY = new GimbalAxis { MaxAngle = MaxAngle };
-        gimbal.AxisZ = new GimbalAxis { MaxAngle = MaxAngle };
+        gimbal.AxisY = new GimbalAxis { MaxAngle = maxAngle };
+        gimbal.AxisZ = new GimbalAxis { MaxAngle = maxAngle };
         GimbalController gc = Uninitialized<GimbalController>();
         gc.Gimbal = gimbal;
         gc.Data = new GimbalControllerData();

@@ -303,7 +303,7 @@ public static partial class GuidanceWindow
             LandingEngineBindings = groups.Groups.Length == 0 ? null : LandingEngineGroups.Controllers(vehicle, root, leaving),
         });
         GuidanceLog.Info(vehicle, FormattableString.Invariant(
-            $"booster hand-over armed for '{root.DisplayName}' on sequence {decoupler.Sequence}, site lat {site.X:F3} lon {site.Y:F3}."));
+            $"booster hand-over armed for '{root.DisplayName}' on sequence {decoupler.Sequence}, site lat {site.X:F3} lon {site.Y:F3}, landing engines {(groups.Chosen is { } chosen ? $"'{chosen.Name}' ({chosen.Engines.Length})" : "as staged")}."));
     }
 
     // The player's staging key and AutoStage can both announce one row, so a root already recorded from this stack is not recorded twice.
@@ -517,6 +517,7 @@ public static partial class GuidanceWindow
 
             // The returnable stage list and the reserve ride the same tick: their inputs - the stage model and the part tree the separation walks read - only change when staging does, and StageModelDirty is already set exactly then. The list goes first, because the reserve arms on its booster's target.
             RefreshReturnableStages(vehicle);
+            RememberStageEngineChoices(vehicle);
             RefreshReserve(vehicle);
             _s.StageModelFailures = 0;
         }
@@ -1116,14 +1117,21 @@ public static partial class GuidanceWindow
 
         // Use creates state, so reserve it for the focused vehicle and reuse existing state elsewhere.
         bool focused = ReferenceEquals(vehicle, Program.ControlledVehicle);
+        // A craft just split off a stack takes its stage's landing choice on its first step; one without state gets state for it.
         if (focused)
+        {
             Use(vehicle);
+            TakeStageEngineChoice(vehicle, createState: false);
+        }
         else if (VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState state))
         {
             _s = state;
             BodySettings.Follow(_s, vehicle);
+            TakeStageEngineChoice(vehicle, createState: false);
         }
-        else if (!TryAdoptBooster(vehicle))
+        else if (TryAdoptBooster(vehicle))
+            TakeStageEngineChoice(vehicle, createState: false);
+        else if (!TakeStageEngineChoice(vehicle, createState: true))
             return;
 
         LogModeChanges(vehicle);

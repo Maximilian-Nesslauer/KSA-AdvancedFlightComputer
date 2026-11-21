@@ -759,11 +759,15 @@ public sealed class Scvx6DofSubproblemScs
                 _b[row++] = 0;
                 continue;
             }
+            // Centred on the deflection that holds the engines' own moment (Scvx6DofConfig.GimbalTrimX/Y): s = (tan T, tdx - x T, tdy - y T).
             AddA(row, IU(k, Dynamics6Dof.IT), -_cfg.TanGimbal);
             _b[row++] = 0;
             AddA(row, IU(k, Dynamics6Dof.ITDX), -1.0);
+            // Only a trim that is there: the config is fixed for the solver's life, so the pattern still never changes between fills, and a balanced craft's cone stays exactly the matrix it was (explicit zeros moved SCS onto another path and lost the roll-free landing at -0.092/0.060/0.086 rad/s).
+            if (_cfg.GimbalTrimX != 0.0) AddA(row, IU(k, Dynamics6Dof.IT), _cfg.GimbalTrimX);
             _b[row++] = 0;
             AddA(row, IU(k, Dynamics6Dof.ITDY), -1.0);
+            if (_cfg.GimbalTrimY != 0.0) AddA(row, IU(k, Dynamics6Dof.IT), _cfg.GimbalTrimY);
             _b[row++] = 0;
         }
 

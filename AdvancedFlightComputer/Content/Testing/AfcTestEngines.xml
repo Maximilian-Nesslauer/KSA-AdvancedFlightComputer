@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Assets>
+  <!--
+    LOCAL TESTING ONLY. Debug builds deploy this file and add it to the deployed mod.toml (AdvancedFlightComputer.csproj,
+    DeployTestParts); release packages never carry it (the payload is Content\*.xml, not this folder).
+
+    A copy of the stock "LR91 Vac + Verniers" (CorePropulsionA_Prefab_EngineA5, KSA 5901) with the main chamber's gimbal widened
+    from 2 to 10 deg each axis and its slew from 4 to 10 deg/s, closer to a landing booster's engines (Raptor class), for testing
+    landing engine groups whose thrust centre sits off the axis. Everything else is the stock part: the first Part is its asset
+    definition from CorePropulsionAAssets.xml, the second its game data patch from CorePropulsionAGameData.xml, both renamed.
+  -->
+  <Part Id="AfcTest_Prefab_EngineA5_Gimbal10">
+    <SubParts>
+      <SubPart Key="CorePropulsionA_Subpart_EngineA2WBase2" Ref="CorePropulsionA_Subpart_EngineA2WBase">
+        <Transform>
+          <Position X="0.9454" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="FlexiPipe_EndNode1" Ref="FlexiPipe_EndNode">
+        <Transform>
+          <Position X="0.5678" Y="-0.3128" Z="-0.3221" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="FlexiPipe_StartNode1" Ref="FlexiPipe_StartNode">
+        <Transform>
+          <Position X="0.4664" Y="-0.259" Z="-0.2723" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="CorePropulsionA_Subpart_EngineAActuatorHousing7" Ref="CorePropulsionA_Subpart_EngineAActuatorHousing">
+        <Transform>
+          <Position X="0.9644" Z="-0.4789" />
+          <Rotation Y="0.5236" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="CorePropulsionA_Subpart_EngineAActuatorHousing8" Ref="CorePropulsionA_Subpart_EngineAActuatorHousing">
+        <Transform>
+          <Position X="0.9644" Y="0.4789" />
+          <Rotation X="1.5708" Z="0.5236" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="FlexiPipe_EndNode2" Ref="FlexiPipe_EndNode">
+        <Transform>
+          <Position X="0.4457" Y="0.2572" Z="0.3974" />
+          <Rotation X="-3.0107" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="FlexiPipe_StartNode2" Ref="FlexiPipe_StartNode">
+        <Transform>
+          <Position X="0.4397" Y="0.2383" Z="0.3005" />
+          <Rotation X="-3.0107" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="CorePropulsionA_Subpart_EngineAActuatorShaft7" Ref="CorePropulsionA_Subpart_EngineAActuatorShaft">
+        <Transform>
+          <Position X="0.7521" Z="-0.3549" />
+          <Rotation Y="0.5236" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="CorePropulsionA_Subpart_EngineAActuatorShaft8" Ref="CorePropulsionA_Subpart_EngineAActuatorShaft">
+        <Transform>
+          <Position X="0.7521" Y="0.3549" />
+          <Rotation X="1.5708" Z="0.5236" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="CorePropulsionA_Subpart_EngineALargeVacAssembly3" Ref="CorePropulsionA_Subpart_EngineALargeVacAssembly">
+        <Transform>
+          <Position X="-0.3442" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="CorePropulsionA_Subpart_EngineAVernierFrameA2" Ref="CorePropulsionA_Subpart_EngineAVernierFrameA">
+        <Transform>
+          <Position X="0.6046" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="CorePropulsionA_Subpart_EngineAVernierNozzle5" Ref="CorePropulsionA_Subpart_EngineAVernierNozzle">
+        <Transform>
+          <Position X="0.1014" Y="-0.8877" Z="-0.8564" />
+          <Rotation X="2.2941" Y="-0.3389" Z="0.3797" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="CorePropulsionA_Subpart_EngineAVernierNozzle4" Ref="CorePropulsionA_Subpart_EngineAVernierNozzle">
+        <Transform>
+          <Position X="0.1014" Y="-0.8564" Z="0.8877" />
+          <Rotation X="0.8552" Y="0.3571" Z="0.3628" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="CorePropulsionA_Subpart_EngineAVernierNozzle7" Ref="CorePropulsionA_Subpart_EngineAVernierNozzle">
+        <Transform>
+          <Position X="0.1014" Y="0.8877" Z="0.8564" />
+          <Rotation X="-0.8475" Y="0.3389" Z="-0.3797" />
+        </Transform>
+      </SubPart>
+      <SubPart Key="CorePropulsionA_Subpart_EngineAVernierNozzle6" Ref="CorePropulsionA_Subpart_EngineAVernierNozzle">
+        <Transform>
+          <Position X="0.1014" Y="0.8564" Z="-0.8877" />
+          <Rotation X="-2.2864" Y="-0.3571" Z="-0.3628" />
+        </Transform>
+      </SubPart>
+    </SubParts>
+    <Gimbals>
+      <Gimbal Key="CorePropulsionA_Subpart_EngineALargeVacAssembly3">
+        <SubPart KeyRef="CorePropulsionA_Subpart_EngineALargeVacAssembly3" />
+        <Transform>
+          <Position X="1.1575" />
+        </Transform>
+      </Gimbal>
+      <Gimbal Key="CorePropulsionA_Subpart_EngineAVernierNozzle5">
+        <SubPart KeyRef="CorePropulsionA_Subpart_EngineAVernierNozzle5" />
+        <Transform>
+          <Position X="0.1246" Y="0.0026" Z="-0.0645" />
+          <Rotation X="1.5632" Y="-0.5032" Z="0.0157" />
+        </Transform>
+      </Gimbal>
+      <Gimbal Key="CorePropulsionA_Subpart_EngineAVernierNozzle4">
+        <SubPart KeyRef="CorePropulsionA_Subpart_EngineAVernierNozzle4" />
+        <Transform>
+          <Position X="0.1246" Y="0.0026" Z="-0.0645" />
+          <Rotation X="1.5632" Y="-0.5032" Z="0.0157" />
+        </Transform>
+      </Gimbal>
+      <Gimbal Key="CorePropulsionA_Subpart_EngineAVernierNozzle7">
+        <SubPart KeyRef="CorePropulsionA_Subpart_EngineAVernierNozzle7" />
+        <Transform>
+          <Position X="0.1246" Y="0.0026" Z="-0.0645" />
+          <Rotation X="1.5632" Y="-0.5032" Z="0.0157" />
+        </Transform>
+      </Gimbal>
+      <Gimbal Key="CorePropulsionA_Subpart_EngineAVernierNozzle6">
+        <SubPart KeyRef="CorePropulsionA_Subpart_EngineAVernierNozzle6" />
+        <Transform>
+          <Position X="0.1246" Y="0.0026" Z="-0.0645" />
+          <Rotation X="1.5632" Y="-0.5032" Z="0.0157" />
+        </Transform>
+      </Gimbal>
+    </Gimbals>
+    <Connectors>
+      <Connector Key="_connector5">
+        <Transform>
+          <Position X="1.4962" />
+          <Scale X="2" Y="2" Z="2" />
+        </Transform>
+      </Connector>
+    </Connectors>
+  </Part>
+  <Part Id="AfcTest_Prefab_EngineA5_Gimbal10" Modify="Patch" DisplayName="LR91 Vac + Verniers, 10 deg gimbal (AFC test)">
+    <EditorTags Modify="Extend">
+      <EditorTag Ref="Engines" />
+    </EditorTags>
+    <Diameters Modify="Extend">
+      <Diameter M="1"/>
+    </Diameters>
+    <RocketEngineControllers Modify="Extend">
+      <RocketEngineController Key="LR91-AJ-3">
+        <Rockets>
+          <Rocket SubPart="CorePropulsionA_Subpart_EngineALargeVacAssembly3" KeyRef="Engine" />
+          <Rocket KeyRef="GasGenerator" />
+        </Rockets>
+      </RocketEngineController>
+    </RocketEngineControllers>
+    <ConsumerFeedWirings Modify="Extend">
+      <ConsumerFeedWiring SubPart="CorePropulsionA_Subpart_EngineALargeVacAssembly3" KeyRef="ThrustChamber">
+        <FeedsFroms>
+          <FeedsFrom>
+            <Connector KeyRef="_connector5" />
+          </FeedsFrom>
+        </FeedsFroms>
+      </ConsumerFeedWiring>
+    </ConsumerFeedWirings>
+    <Connectors Modify="Extend">
+      <Connector Key="_connector5" Modify="Patch">
+        <Capabilities>BulkFluid</Capabilities>
+      </Connector>
+    </Connectors>
+    <Rockets Modify="Extend">
+      <Rocket Key="GasGenerator">
+        <Core KeyRef="GasGeneratorChamber" />
+        <Nozzles>
+          <Nozzle SubPart="CorePropulsionA_Subpart_EngineAVernierNozzle4" KeyRef="VernierNozzle" />
+          <Nozzle SubPart="CorePropulsionA_Subpart_EngineAVernierNozzle5" KeyRef="VernierNozzle" />
+          <Nozzle SubPart="CorePropulsionA_Subpart_EngineAVernierNozzle6" KeyRef="VernierNozzle" />
+          <Nozzle SubPart="CorePropulsionA_Subpart_EngineAVernierNozzle7" KeyRef="VernierNozzle" />
+        </Nozzles>
+        <MinimumThrottle Value="0.1" />
+      </Rocket>
+    </Rockets>
+    <RocketCores Modify="Extend">
+      <Combustor Key="GasGeneratorChamber">
+        <FeedsFroms>
+          <FeedsFrom>
+            <Connector KeyRef="_connector5" />
+          </FeedsFrom>
+        </FeedsFroms>
+        <Reaction Ref="Hydrolox">
+            <MixtureRatio>5.5</MixtureRatio>
+        </Reaction>
+        <MaxPressure Bar="49" />
+        <ThermalEfficiency Value="0.95" />
+      </Combustor>
+    </RocketCores>
+    <Gimbals Modify="Extend">
+      <Gimbal Key="CorePropulsionA_Subpart_EngineAVernierNozzle4" Modify="Patch">
+        <MaxAngleY Degrees="70" />
+        <MaxSlewRate DegreesPerSecond="90" />
+      </Gimbal>
+      <Gimbal Key="CorePropulsionA_Subpart_EngineAVernierNozzle5" Modify="Patch">
+        <MaxAngleY Degrees="70" />
+        <MaxSlewRate DegreesPerSecond="90" />
+      </Gimbal>
+      <Gimbal Key="CorePropulsionA_Subpart_EngineAVernierNozzle6" Modify="Patch">
+        <MaxAngleY Degrees="70" />
+        <MaxSlewRate DegreesPerSecond="90" />
+      </Gimbal>
+      <Gimbal Key="CorePropulsionA_Subpart_EngineAVernierNozzle7" Modify="Patch">
+        <MaxAngleY Degrees="70" />
+        <MaxSlewRate DegreesPerSecond="90" />
+      </Gimbal>
+      <Gimbal Key="CorePropulsionA_Subpart_EngineALargeVacAssembly3" Modify="Patch">
+        <MaxAngleY Degrees="10" />
+        <MaxAngleZ Degrees="10" />
+        <ConstrainToCircle Value="false" />
+        <MaxSlewRate DegreesPerSecond="10" />
+      </Gimbal>
+    </Gimbals>
+    <InertMasses Modify="Extend">
+      <SolidSphereMass>
+        <Mass Kg="300" />
+        <Radius M="0.25" />
+      </SolidSphereMass>
+    </InertMasses>
+  </Part>
+</Assets>
