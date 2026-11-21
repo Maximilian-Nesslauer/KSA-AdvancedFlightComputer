@@ -6,7 +6,9 @@ namespace AdvancedFlightComputer.Features.Transfer;
 /// <summary>Scores the transfer grid without propagating a trajectory for each point.</summary>
 internal sealed class PorkchopScores
 {
-    internal readonly record struct Cell(UniverseTime Start, UniverseTime Transit, double DepartureDv, double ArrivalSpeed)
+    /// <param name="DepartureImpact">The transfer arc passes its periapsis below the surface of the departure body before it arrives, so the propagated trajectory impacts.</param>
+    internal readonly record struct Cell(UniverseTime Start, UniverseTime Transit, double DepartureDv, double ArrivalSpeed,
+                                         bool DepartureImpact)
     {
         internal bool Valid => Transit > UniverseTime.Zero && double.IsFinite(DepartureDv) && double.IsFinite(ArrivalSpeed);
     }
@@ -57,7 +59,7 @@ internal sealed class PorkchopScores
                     transfer.Transit = _minTransit + column * _transitStep;
                     if (Solve(ref transfer))
                         Data[row, column] = new Cell(transfer.Start, transfer.Transit,
-                            transfer.TransferDvVlf.Length(), transfer.RelativeVelocityCci.Length());
+                            transfer.TransferDvVlf.Length(), transfer.RelativeVelocityCci.Length(), transfer.Impacts);
                 }
                 Interlocked.Increment(ref _rowsComplete);
             });
@@ -103,6 +105,7 @@ internal sealed class PorkchopScores
 
     private bool Solve(ref OrbitalTransfers.TransferData transfer)
     {
+        transfer.Impacts = false;
         if (!ReferenceEquals(_snapshot.Source, _snapshot.Vehicle))
             return OrbitalTransfers.SolveLambert(_snapshot, ref transfer);
 
@@ -126,6 +129,31 @@ internal sealed class PorkchopScores
         transfer.TransferDvVlf = excess.Transform(vlf.Inverse());
         transfer.VesselSpeed = Math.Sqrt(mu / from.PositionCci.Length());
         transfer.DepartureInclination = speed > 0.0 ? Math.Asin(Math.Clamp(excess.Z / speed, -1.0, 1.0)) : 0.0;
+        transfer.Impacts = PassesPeriapsisBelow(mu, from.PositionCci, departure, to.PositionCci, _targetOrbit.Parent.MeanRadius);
         return double.IsFinite(transfer.RelativeVelocityCci.Length());
+    }
+
+    /// <summary>
+    /// Whether the conic through <paramref name="position"/> with <paramref name="velocity"/> reaches its
+    /// periapsis before <paramref name="arrival"/> and that periapsis is below <paramref name="radius"/>.
+    /// Stock's FlightPlan then ends the departure patch with an impact (PatchedConic.SearchForParentCollision),
+    /// and the trajectory check marks the transfer Impacts. A single-revolution arc moves forward in true
+    /// anomaly, so it passes the periapsis when the true anomaly at arrival is below the one at departure.
+    /// </summary>
+    internal static bool PassesPeriapsisBelow(double mu, double3 position, double3 velocity, double3 arrival, double radius)
+    {
+        double3 h = double3.Cross(position, velocity);
+        double3 e = double3.Cross(velocity, h) / mu - position.Normalized();
+        double eccentricity = e.Length();
+        double periapsis = double3.Dot(h, h) / mu / (1.0 + eccentricity);
+        if (!(periapsis < radius) || eccentricity < 1e-9)
+            return false;
+        return TrueAnomaly(h, e, arrival) < TrueAnomaly(h, e, position);
+    }
+
+    private static double TrueAnomaly(double3 h, double3 e, double3 position)
+    {
+        double angle = Math.Atan2(double3.Dot(h.Normalized(), double3.Cross(e, position)), double3.Dot(e, position));
+        return angle < 0.0 ? angle + 2.0 * Math.PI : angle;
     }
 }

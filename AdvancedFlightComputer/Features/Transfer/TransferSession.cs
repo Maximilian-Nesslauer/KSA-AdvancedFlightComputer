@@ -250,7 +250,7 @@ internal static class TransferSession
             for (int n = 0; n < Size; n++)
             {
                 var cell = data[m, n];
-                if (!cell.Valid || _rejected.Contains(new int2(m, n)))
+                if (!cell.Valid || cell.DepartureImpact || _rejected.Contains(new int2(m, n)))
                     continue;
                 double dv = cell.DepartureDv;
                 if (dv < bestDv)
@@ -306,6 +306,8 @@ internal static class TransferSession
             return;
         SelectBestRel = byArrival;
         PresetUnavailable = false;
+        if (Info != null && _scores != null)
+            UpdateBestScores(Info, _scores.Data);
         _bestAttempts = 0;
     }
 
@@ -323,6 +325,8 @@ internal static class TransferSession
         if (choice.X < 0 || attempts >= AutomaticValidationLimit)
         {
             PresetUnavailable = true;
+            // A best index names a propagated and accepted entry or none, also when the search stops at its limit.
+            ClearUnvalidatedBest();
             if (!IsValidated(Selected))
             {
                 Selected = new int2(-1, -1);
@@ -332,6 +336,19 @@ internal static class TransferSession
         }
         _bestAttempts = null;
         Calculating = false;
+    }
+
+    private static void ClearUnvalidatedBest()
+    {
+        if (!IsValidated(BestDv))
+            BestDv = new int2(-1, -1);
+        if (!IsValidated(BestDvRel))
+            BestDvRel = new int2(-1, -1);
+        if (Info != null)
+        {
+            Info.BestDvTransferIndex = BestDv;
+            Info.BestDvRelSpeedTransferIndex = BestDvRel;
+        }
     }
 
     private static bool TrySelect(int2 index, bool automatic)
