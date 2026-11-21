@@ -110,6 +110,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --ascent-solids solid motors' thrust curves, pinned burns and a core throttled to outlast its boosters
           --ascent-glimit a thrust acceleration limit that binds, one that does not, and which stages take it
           --ascent-aoa    drag that grows with the angle of attack, as KSA's does, on 2stage_new
+          --ascent-lift   the full aero force (lift, side force) from a nose-first body-axis table, on 2stage_new
           --ascent-recovery the booster reserve chosen by the solve, held to what the booster needs to come home
           --ascent-booster-return each booster's way down from the plan, and the optimal return (a drone ship)
           --ascent-side-boosters a reserve kept in side boosters beside a core on one throttle, the core's share carried on
@@ -246,6 +247,11 @@ if (args.Contains("--ascent-booster-return"))
 if (args.Contains("--ascent-side-boosters"))
 {
     return AscentSideBoosterCheck.Run(verbose);
+}
+
+if (args.Contains("--ascent-lift"))
+{
+    return AscentLiftCheck.Run(verbose);
 }
 
 if (args.Contains("--ascent-aoa"))

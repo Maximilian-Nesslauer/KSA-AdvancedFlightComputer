@@ -197,6 +197,27 @@ public sealed class VehicleAutopilotState
     public bool ForceRoll = true;
     public double ForceRollDeg = 180.0;
 
+    /// <summary>
+    /// Steer the ascent with AFC's own attitude controller (AttitudeController), not the stock flight computer: the engines' gimbals take the torque first (KsaGimbalControl.SetLsq), the RCS the rest - roll, and what the gimbals' travel cannot reach - against the air's moment, which the feedforward reads off the ascent's nose-first aero tables (AscentFlightAero). The roll is held where the stock flight computer would track it (FORCE ROLL, clear of the pad) and left free, its rate damped, where stock decoupled it. On by default; off points through the stock flight computer as before.
+    /// </summary>
+    public bool AscentOwnAttitude = true;
+
+    /// <summary>
+    /// Let the ascent's attitude controller use the craft's control surfaces too (KsaAeroTorqueControl, from their nose-first tables). OFF by default: the plan models the bare airframe, and fins turned to steer push the climb with forces it never planned for; off, they are held at rest and the gimbals and RCS steer.
+    /// </summary>
+    public bool AscentAeroControl = false;
+
+    /// <summary>The ascent's attitude controller gains (AttitudeController.Settings): natural frequency, rad/s, damping, and the rate error's filter, s. Stiffer than the glide's (Autopilot.FlyOwnAttitude says why).</summary>
+    public double AscentAttitudeBandwidthRadS = 2.0;
+    public double AscentAttitudeDamping = 1.0;
+    public double AscentRateFilterS = 0.05;
+
+    /// <summary>The craft's nose-first aero sweep the ascent's controller reads its feedforward from (KsaAeroSweep.Result.NoseBodyMoment): the plan's, then one swept again whenever the craft's aero mesh changes (staging), on its own thread (AscentFlightAeroJob). Used only while its mesh hash is the craft's.</summary>
+    internal KsaAeroSweep.Result AscentFlightAero;
+    internal KsaAeroSweep.Job AscentFlightAeroJob;
+    internal double AscentFlightAeroRetryAt = double.NegativeInfinity;
+    internal double AscentAttitudeLogAt = double.NegativeInfinity;
+
     public bool CutoffDone;
     public bool StagingActive;
     public double LastSequenceTime = double.NegativeInfinity;

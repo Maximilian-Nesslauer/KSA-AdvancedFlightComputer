@@ -453,6 +453,11 @@ public static partial class GuidanceWindow
         using (new ImGuiDisabledScope(!_s.ForceRoll))
             GaugeRow(Specs.ForceRollDeg, ref _s.ForceRollDeg);
 
+        // AFC's own attitude controller steers the ascent (gimbals, then RCS); the fins stay at rest unless STEER WITH FINS is on (VehicleAutopilotState.AscentOwnAttitude, AscentAeroControl).
+        GaugeRowCheck(Specs.AscentOwnAttitude, ref _s.AscentOwnAttitude);
+        using (new ImGuiDisabledScope(!_s.AscentOwnAttitude))
+            GaugeRowCheck(Specs.AscentAeroControl, ref _s.AscentAeroControl);
+
         GuidanceRegion.End();
     }
 

@@ -85,10 +85,20 @@ internal readonly struct SolidPoint
 ///
 /// DRAG DEPENDS ON THE ATTITUDE, which launch3dof.py's does not: alpha is the angle between u and v_rel, and KSA's drag grows with it (see <see cref="KsaAscentAtmosphere"/>). It is atan2(|w|, u_hat . v_rel_hat) with the same lateral vector w the q-alpha limit uses, but with |w| rounded to |w|^2 / sqrt(|w|^2 + e^2), e = <see cref="AscentSettings.AlphaRounding"/>. The drag's |sin alpha| has a corner at alpha = 0, exactly where an ascent flies through the thick air, and a linearisation at the corner promises gains the true drag never pays out: the plan stalls there. The rounding is zero at alpha = 0, so nose-on drag is exact, and reads |w| = e 30 % low and larger angles about e^2 / 2|w| low. Its curvature at the corner, 2/e, is why the trust region's floor sits below the script's; see <see cref="AscentSettings.TrustMin"/>. An atmosphere whose drag ignores the attitude - the script's - never reads alpha, so its arithmetic is unchanged.
 ///
+/// THE FULL AERO FORCE, LIFT AND SIDE FORCE INCLUDED (#216), where the atmosphere carries a nose-first body-axis table (<see cref="AscentAtmosphere.BodyForce"/>):
+///   a_aero = (Kd rho(h) |v_rel|^2 / m) (C_x x_b + C_y y_b + C_z z_b)
+/// in place of a_drag. The body axes are the ones the flight holds (GuidanceWindow.AscentRollRef): x_b = u_hat, the thrust axis; y_b the plane's -n square to it, turned about x_b by the held roll (<see cref="AscentProblem.RollAngleRad"/>); z_b = x_b x y_b. The coefficients are read at the air direction in those axes, alpha = atan2(h_z, h_x), beta = atan2(h_y, h_x), h = v_rel_hat. A tilt off the airflow then pushes sideways as well as back: on KSA 5901 the lift at a few degrees is close to the drag, which the drag-only model left out, so the flown path left the plan wherever it flew off the airflow, and the plan could not use the lift to turn.
+///  - THE AXIAL COEFFICIENT IS READ AT THE ROUNDED TILT, for the drag's reason above: the tilt's size |w| is rounded as there, its direction kept. The lateral coefficients are read at the true one: the normal force grows from zero smoothly (sin alpha, sin alpha |sin alpha|), and rounding it would hide its slope at alpha = 0 from the linearisation, where a plan starts every turn.
+///  - Past the table (NoseAngleMaxDeg, 20 deg) each angle is softly bounded, x / (1 + (x/A)^8)^(1/8), A = <see cref="SoftAngleRad"/>: identity to 0.2 % inside the table (2e-6 at 10 deg), bounded where an ascent coasts at a large tilt in air too thin to matter, so the spline's linear extension never runs away. The Mach number is held inside the table.
+///  - Without a body table (an older problem file, an airless body) the drag-only law stands.
+///
 /// Every regularising epsilon is the script's, and T_EPS2 is carried into throttle units, so a constant-thrust problem matches the script's arithmetic exactly.
 /// </summary>
 internal sealed class AscentDynamics
 {
+    /// <summary>Where the soft bound on the body table's alpha and beta levels off, radians (see the type summary): 35 deg, so the table's 20 deg reads 19.97.</summary>
+    internal const double SoftAngleRad = 35.0 * Math.PI / 180.0;
+
     public const int NX = 7;
     public const int NU = 3;
     public const int IM = 6;
@@ -104,6 +114,8 @@ internal sealed class AscentDynamics
     private readonly AscentStage[] _stages;
     private readonly double[] _mdotC, _kd, _uEps2;
     private readonly double _alphaRounding;
+    private readonly AdvancedFlightComputer.Guidance.Numerics.Flight.BodyAeroTable? _bodyForce;
+    private readonly double _nx, _ny, _nz, _rollCos, _rollSin;
     private int[] _nodeStage = [];
     private SolidPoint[] _nodeSolid = [];
 
@@ -120,6 +132,14 @@ internal sealed class AscentDynamics
         _atm = p.Atmosphere;
         _stages = p.Stages;
         _alphaRounding = p.Settings.AlphaRounding;
+        // The body-axis force, about the plane's held roll: the unturned plane normal, which the flight's roll reference is built on.
+        _bodyForce = _atm.BodyForce is { NoseFirst: true } table ? table : null;
+        double nn = Math.Sqrt(p.PlaneNormal[0] * p.PlaneNormal[0] + p.PlaneNormal[1] * p.PlaneNormal[1] + p.PlaneNormal[2] * p.PlaneNormal[2]);
+        _nx = p.PlaneNormal[0] / nn;
+        _ny = p.PlaneNormal[1] / nn;
+        _nz = p.PlaneNormal[2] / nn;
+        _rollCos = Math.Cos(p.RollAngleRad);
+        _rollSin = Math.Sin(p.RollAngleRad);
         int s = _stages.Length;
         _mdotC = new double[s];
         _kd = new double[s];
@@ -185,8 +205,17 @@ internal sealed class AscentDynamics
         Dual tmax = _stages[stage].MaxThrust(pressure) / FU;
 
         Dual umag = Dual.Sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2] + _uEps2[stage]);
-        Dual cd = _atm.DragCoefficient(mach, AngleOfAttack(u, umag, ax, ay, az, vrn));
-        Dual kdrag = _kd[stage] * rho * cd * vrn / m;
+        Dual aeroX, aeroY, aeroZ;
+        if (_bodyForce != null)
+            BodyForce(u, umag, ax, ay, az, vrn, mach, _kd[stage] * rho * vrn * vrn / m, out aeroX, out aeroY, out aeroZ);
+        else
+        {
+            Dual cd = _atm.DragCoefficient(mach, AngleOfAttack(u, umag, ax, ay, az, vrn));
+            Dual kdrag = _kd[stage] * rho * cd * vrn / m;
+            aeroX = -kdrag * ax;
+            aeroY = -kdrag * ay;
+            aeroZ = -kdrag * az;
+        }
         Dual rn3 = rn * rn * rn;
         // Liquid thrust scales with u; the solids' along u's direction only, so per unit of u they push ts / |u|.
         Dual tm = tmax / m;
@@ -196,10 +225,101 @@ internal sealed class AscentDynamics
         dx[0] = x[3];
         dx[1] = x[4];
         dx[2] = x[5];
-        dx[3] = tm * u[0] - x[0] / rn3 - kdrag * ax;
-        dx[4] = tm * u[1] - x[1] / rn3 - kdrag * ay;
-        dx[5] = tm * u[2] - x[2] / rn3 - kdrag * az;
+        dx[3] = tm * u[0] - x[0] / rn3 + aeroX;
+        dx[4] = tm * u[1] - x[1] / rn3 + aeroY;
+        dx[5] = tm * u[2] - x[2] / rn3 + aeroZ;
         dx[6] = -(_mdotC[stage] * umag + solid.MassFlowC);
+    }
+
+    /// <summary>
+    /// The aero acceleration from the nose-first body-axis table (see the type summary): <paramref name="scale"/> = Kd rho |v_rel|^2 / m, canonical, times the table's coefficients turned out of the body axes the flight holds.
+    /// </summary>
+    private void BodyForce(ReadOnlySpan<Dual> u, Dual umag, Dual ax, Dual ay, Dual az, Dual vrn, Dual mach, Dual scale,
+                           out Dual fx, out Dual fy, out Dual fz)
+    {
+        var table = _bodyForce!;
+        // Body x: the thrust axis.
+        Dual xx = u[0] / umag, xy = u[1] / umag, xz = u[2] / umag;
+        // Body y: -n square to x, turned about x by the held roll; z = x x y.
+        Dual along = -(xx * _nx + xy * _ny + xz * _nz);
+        Dual y0x = -_nx - along * xx, y0y = -_ny - along * xy, y0z = -_nz - along * xz;
+        Dual y0n = Dual.Sqrt(y0x * y0x + y0y * y0y + y0z * y0z + 1e-12);
+        y0x /= y0n;
+        y0y /= y0n;
+        y0z /= y0n;
+        Dual z0x = xy * y0z - xz * y0y, z0y = xz * y0x - xx * y0z, z0z = xx * y0y - xy * y0x;
+        Dual yx = _rollCos * y0x + _rollSin * z0x, yy = _rollCos * y0y + _rollSin * z0y, yz = _rollCos * y0z + _rollSin * z0z;
+        Dual zx = _rollCos * z0x - _rollSin * y0x, zy = _rollCos * z0y - _rollSin * y0y, zz = _rollCos * z0z - _rollSin * y0z;
+
+        // The air direction in the body: the craft's velocity through the air, unit.
+        Dual hx = ax / vrn, hy = ay / vrn, hz = az / vrn;
+        Dual bx = hx * xx + hy * xy + hz * xz;
+        Dual by = hx * yx + hy * yy + hz * yz;
+        Dual bz = hx * zx + hy * zy + hz * zz;
+
+        Dual m = mach;
+        if (m.V < table.MachMin) m = new Dual(table.MachMin);
+        else if (m.V > table.MachMax) m = new Dual(table.MachMax);
+
+        // Lateral coefficients at the true angles.
+        table.Coefficients(m, Soft(Dual.Atan2(bz, bx)), Soft(Dual.Atan2(by, bx)), out _, out Dual cy, out Dual cz);
+        // The axial one at the rounded tilt: |w| -> |w|^2 / sqrt(|w|^2 + e^2), its direction kept.
+        Dual w2 = by * by + bz * bz;
+        Dual k = Dual.Sqrt(w2 + 1e-18) / Dual.Sqrt(w2 + _alphaRounding * _alphaRounding);
+        table.Coefficients(m, Soft(Dual.Atan2(k * bz, bx)), Soft(Dual.Atan2(k * by, bx)), out Dual cx, out _, out _);
+
+        fx = scale * (cx * xx + cy * yx + cz * zx);
+        fy = scale * (cx * xy + cy * yy + cz * zy);
+        fz = scale * (cx * xz + cy * yz + cz * zz);
+    }
+
+    /// <summary>The soft bound on a table angle: x / (1 + (x/A)^8)^(1/8), A = <see cref="SoftAngleRad"/>.</summary>
+    private static Dual Soft(Dual angle)
+    {
+        Dual r = angle / SoftAngleRad;
+        Dual r2 = r * r;
+        Dual r4 = r2 * r2;
+        return angle / Dual.Sqrt(Dual.Sqrt(Dual.Sqrt(1.0 + r4 * r4)));
+    }
+
+    /// <summary>
+    /// The aero acceleration at a state and liquid-only throttle, canonical, whichever law the dynamics fly: for the offline check against the table.
+    /// </summary>
+    public void AeroAt(ReadOnlySpan<double> x, ReadOnlySpan<double> u, int stage, Span<double> accel)
+    {
+        Span<Dual> dxs = stackalloc Dual[NX];
+        Span<Dual> dus = stackalloc Dual[NU];
+        Span<Dual> fo = stackalloc Dual[NX];
+        for (int i = 0; i < NX; i++) dxs[i] = new Dual(x[i]);
+        for (int j = 0; j < NU; j++) dus[j] = new Dual(u[j]);
+        F(dxs, dus, stage, SolidPoint.None, fo);
+        Air(dxs, out Dual rn, out _, out _, out _, out _, out _);
+        // Less gravity and the liquid thrust: what is left is the air's.
+        Dual tmax = _stages[stage].MaxThrust(_atm.Pressure((rn - 1.0) * LU)) / FU / dxs[IM];
+        Dual rn3 = rn * rn * rn;
+        for (int r = 0; r < 3; r++)
+            accel[r] = fo[3 + r].V - tmax.V * u[r] + x[r] / rn3.V;
+    }
+
+    /// <summary>Whether the dynamics fly the full body-axis force (the type summary), not drag alone.</summary>
+    public bool HasBodyForce => _bodyForce != null;
+
+    /// <summary>
+    /// The aero acceleration the dynamics apply, SI (m/s^2), at a position and velocity (inertial, m and m/s), mass (kg) and throttle vector in a stage: what a check compares with the table it was built from.
+    /// </summary>
+    public static double[] AeroAcceleration(AscentProblem p, int stage, double[] r, double[] v, double mass, double[] u)
+    {
+        var d = new AscentDynamics(p);
+        Span<double> x = stackalloc double[NX];
+        for (int i = 0; i < 3; i++)
+        {
+            x[i] = r[i] / d.LU;
+            x[3 + i] = v[i] / d.VU;
+        }
+        x[IM] = mass / d.MU;
+        Span<double> a = stackalloc double[3];
+        d.AeroAt(x, u, stage, a);
+        return [a[0] * d.AU, a[1] * d.AU, a[2] * d.AU];
     }
 
     /// <summary>
@@ -357,4 +477,12 @@ internal sealed class AscentDynamics
         double rn = Math.Sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2] + REps2);
         return _atm.Pressure(new Dual((rn - 1.0) * LU));
     }
+}
+
+/// <summary>The ascent dynamics' aero law, for checks outside the solver (AscentDynamics is internal to it).</summary>
+public static class AscentAeroLaw
+{
+    /// <summary>AscentDynamics.AeroAcceleration: the aero acceleration the plan flies, m/s^2.</summary>
+    public static double[] Acceleration(AscentProblem p, int stage, double[] r, double[] v, double mass, double[] u)
+        => AscentDynamics.AeroAcceleration(p, stage, r, v, mass, u);
 }

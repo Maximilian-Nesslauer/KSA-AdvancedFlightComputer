@@ -551,7 +551,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 double planThrustKn = PlanThrustAt(sol, profile, state.ConvexPlanTime) / 1000.0;
                 t.Info($"t={time,6:F1}s {state.Phase,-10} alt {altKm,6:F1} km  air {air,6:F0} m/s  plan stage {state.ConvexStage + 1} t {state.ConvexPlanTime,6:F1} s alt {profile.AltitudeAt(state.ConvexPlanTime) / 1000.0,6:F1} km {profile.SpeedAt(state.ConvexPlanTime),6:F0} m/s  "
                      + $"cmd pitch {pitch,5:F1} (plan {planPitch * 180.0 / Math.PI,5:F1})  plan throttle {100.0 * profile.Throttle(state.ConvexPlanTime, state.ConvexStage),3:F0} %  "
-                     + $"thrust {thrustKn,6:F0} kN (plan {planThrustKn,6:F0})  tgo {state.Upfg.Tgo,6:F1}s  mass {vehicle.TotalMass / 1000.0,7:F1} t  '{state.Status}'");
+                     + $"thrust {thrustKn,6:F0} kN (plan {planThrustKn,6:F0})  tgo {state.Upfg.Tgo,6:F1}s  mass {vehicle.TotalMass / 1000.0,7:F1} t  '{state.Status}'"
+                     + AttitudeText(vehicle, home, r, state, sol, state.ConvexPlanTime));
             }
         }
 
@@ -637,6 +638,32 @@ public abstract class ConvexAscentFlightTest : AfcTest
         for (int k = 1; k < sol.Nodes; k++)
             if (Math.Abs(sol.Time[k] - planTime) <= Math.Abs(sol.Time[best] - planTime)) best = k;
         return sol.FullThrust.Length > best ? sol.FullThrust[best] : double.NaN;
+    }
+
+    /// <summary>
+    /// How the craft holds the command: its thrust axis off the command, its angle off the airflow against the plan's at the nearest node, the dynamic pressure, and the torque AFC's attitude controller asked for and what the gimbals and RCS gave (kN m), when it flies the craft.
+    /// </summary>
+    private static string AttitudeText(Vehicle vehicle, IParentBody home, double3 r, VehicleAutopilotState state, AscentSolution sol, double planTime)
+    {
+        double3 axis = KsaFrameBridge.ThrustAxisCci(vehicle);
+        if (!(axis.Length() > 0.5) || !(state.CommandDir.Length() > 0.5))
+            return "";
+        axis = double3.Normalize(axis);
+        double off = Math.Acos(Math.Clamp(double3.Dot(axis, double3.Normalize(state.CommandDir)), -1.0, 1.0)) * 180.0 / Math.PI;
+        double3 air = vehicle.Orbit.StateVectors.VelocityCci - double3.Cross(home.GetAngularVelocityCci(), r);
+        double aoa = air.Length() > 1.0 ? Math.Acos(Math.Clamp(double3.Dot(axis, double3.Normalize(air)), -1.0, 1.0)) * 180.0 / Math.PI : double.NaN;
+        double q = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * air.Length() * air.Length();
+        int best = 0;
+        for (int k = 1; k < sol.Nodes; k++)
+            if (Math.Abs(sol.Time[k] - planTime) <= Math.Abs(sol.Time[best] - planTime)) best = k;
+        double planAoa = sol.AngleOfAttackDeg.Length > best ? sol.AngleOfAttackDeg[best] : double.NaN;
+        string text = FormattableString.Invariant($"  off cmd {off:F2} deg  aoa {aoa:F1} (plan {planAoa:F1}) deg  q {q / 1000.0:F2} kPa");
+        if (state.OwnAttitudeFlying)
+        {
+            AttitudeController.Report a = AttitudeController.Last(vehicle);
+            text += FormattableString.Invariant($"  ctrl |demand| {a.DemandNm.Length() / 1000.0:F0} gimbals {a.GimbalsNm.Length() / 1000.0:F0} rcs {a.RcsNm.Length() / 1000.0:F1} air {(a.AirKnown ? (a.AirNm.Length() / 1000.0).ToString("F0") : "-")} kN m");
+        }
+        return text;
     }
 
     private static void CheckStageBoundary(TestContext t, AscentSolution sol, IParentBody home)

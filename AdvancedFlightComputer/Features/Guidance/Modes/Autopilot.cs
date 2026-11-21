@@ -1367,8 +1367,8 @@ public static partial class GuidanceWindow
             }
         }
 
-        // AFC's own attitude controller flies entry guidance's glide (ThreeDofOwnAttitude); anywhere else the stock flight computer steers, and the controller's actuators are let go the first step it does not fly.
-        bool ownAttitude = shouldCommand && OwnsGlideAttitude(vehicle, boostbackGuides, threeDofGuides);
+        // AFC's own attitude controller flies the ascent (AscentOwnAttitude) and entry guidance's glide (ThreeDofOwnAttitude); anywhere else the stock flight computer steers, and the controller's actuators are let go the first step it does not fly.
+        bool ownAttitude = shouldCommand && OwnsAttitude(vehicle, boostbackGuides, threeDofGuides);
         if (_s.OwnAttitudeFlying && !ownAttitude)
             StopOwnAttitude(vehicle);
 
@@ -1935,6 +1935,29 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
+    /// The roll <see cref="AscentRollRef"/> will hold, radians, in its frame about the thrust axis built on the plane <paramref name="normal"/>: the forced roll, the latched one, or the one the vehicle has now, which the latch takes at engagement. For the convex plan's body-axis force (AscentProblem.RollAngleRad); reads nothing it changes.
+    /// </summary>
+    internal static double AscentRollAngle(Vehicle vehicle, double3 normal)
+    {
+        if (_s.ForceRoll)
+            return UpfgTarget.DegToRad(_s.ForceRollDeg);
+        if (_s.RollLatched)
+            return _s.RollOffset;
+        double3 x = KsaFrameBridge.ThrustAxisCci(vehicle);
+        if (!(x.Length() > 0.5))
+            return 0.0;
+        x = double3.Normalize(x);
+        double3 yRef = -normal - double3.Dot(-normal, x) * x;
+        if (!(yRef.Length() > 1e-9))
+            return 0.0;
+        yRef = double3.Normalize(yRef);
+        double3 zRef = double3.Cross(x, yRef);
+        double3 bodyY = new double3(0, 1, 0).Transform(KsaFrameBridge.BodyToCci(vehicle));
+        double c = double3.Dot(bodyY, yRef), s = double3.Dot(bodyY, zRef);
+        return (Math.Abs(c) > 1e-9 || Math.Abs(s) > 1e-9) ? Math.Atan2(s, c) : 0.0;
+    }
+
+    /// <summary>
     /// The body->CCI orientation that points thrust along <paramref name="steerDir"/>,
     /// built exactly as KSA's BurnTarget.ComputeBurnBody2Cci builds it (body X along
     /// thrust, body Y the roll reference, body Z their cross) but with the roll
@@ -2035,10 +2058,14 @@ public static partial class GuidanceWindow
         _s.GlideWingSite = KsaFrameBridge.BuildSiteFrame(siteCci).VecToLocal(ReturnRollRefCci(vehicle, parent)).NormalizeOrZero();
     }
 
-    /// <summary>Whether AFC's own attitude controller flies this step: a returning booster gliding with its engine off - entry guidance's glide, or the boostback's (BoostbackGlideOwnAttitude) - with the setting on and a command to fly.</summary>
-    private static bool OwnsGlideAttitude(Vehicle vehicle, bool boostbackGuides, bool threeDofGuides)
+    /// <summary>Whether AFC's own attitude controller flies this step, with a command to fly: an ascent (AscentOwnAttitude), or a returning booster gliding with its engine off - entry guidance's glide, or the boostback's (BoostbackGlideOwnAttitude) - with the setting on.</summary>
+    private static bool OwnsAttitude(Vehicle vehicle, bool boostbackGuides, bool threeDofGuides)
     {
-        if (!_s.ThreeDofOwnAttitude || _s.CommandDir.Length() <= 0.5)
+        if (_s.CommandDir.Length() <= 0.5)
+            return false;
+        if (_s.Running)
+            return _s.AscentOwnAttitude;
+        if (!_s.ThreeDofOwnAttitude)
             return false;
         if (threeDofGuides)
             return _s.ThreeDofPhase == ThreeDofPhase.Glide;
@@ -2048,6 +2075,7 @@ public static partial class GuidanceWindow
 
     /// <summary>
     /// One step of AFC's own attitude controller (AttitudeController) on the commanded direction and roll: the stock flight computer held at Manual so it steers nothing, the target built as CommandAttitude builds it, and the craft's surfaces and RCS driven for it.
+    ///  ON AN ASCENT the gimbals take the torque first and the RCS the rest; the fins only with STEER WITH FINS (AscentAeroControl), held at rest otherwise; the roll held only where the stock flight computer would track it (AscentHoldsRoll), free with its rate damped elsewhere; and the air's moment read off the ascent's nose-first tables (AscentControllerAero).
     /// </summary>
     /// <param name="heldRoll">The roll is the returning booster's held one (ReturnRollRefCci), which the glide may turn to its least rolling moment (UpdateGlideRoll).</param>
     private static void FlyOwnAttitude(Vehicle vehicle, IParentBody parent, double3? rollRef, bool heldRoll)
@@ -2071,11 +2099,103 @@ public static partial class GuidanceWindow
         doubleQuat target = rollRef.HasValue
             ? SteerBody2Cci(dir, rollRef.Value)
             : BurnTarget.ComputeBurnBody2Cci(float3.Pack(double3.Normalize(vehicle.Orbit.StateVectors.PositionCci)), float3.Pack(dir));
-        var settings = new AttitudeController.Settings(_s.AttitudeBandwidthRadS, AttitudeController.Settings.Default.Damping,
-                                                       _s.AttitudeDeadbandDeg, AttitudeController.Settings.Default.RateDeadbandDegS);
-        AttitudeController.Step(vehicle, target, _s.CommandRate, _s.Aero, _s.MomentLimiterPerPa, settings);
+        bool ascent = _s.Running;
+        // THE ASCENT'S GAINS are its own (AscentAttitudeBandwidthRadS, AscentAttitudeDamping, AscentRateFilterS): a stack unstable nose first under gimbals that lag their command oscillated 2 to 5.5 deg about the command through max q at the glide's 1 rad/s, damping 0.8 and 0.2 s rate filter, with or without the filter, where stock held 0.05 to 0.4; at 2 rad/s, damping 1 and a 0.05 s filter it held 0.04 to 0.35 (harness, Test Vehicle 1, 2026-11-21). The fins' reason for the filter - chasing rate jitter - is not the gimbals'.
+        var settings = new AttitudeController.Settings(ascent ? _s.AscentAttitudeBandwidthRadS : _s.AttitudeBandwidthRadS,
+                                                       ascent ? _s.AscentAttitudeDamping : AttitudeController.Settings.Default.Damping,
+                                                       _s.AttitudeDeadbandDeg, AttitudeController.Settings.Default.RateDeadbandDegS)
+        {
+            UseSurfaces = !ascent || _s.AscentAeroControl,
+            UseGimbals = ascent,
+            RollFree = ascent && !AscentHoldsRoll(vehicle, parent),
+        };
+        if (ascent)
+            settings = settings with { RateFilterS = _s.AscentRateFilterS };
+        KsaAeroSweep.Result aero = _s.Aero;
+        if (ascent)
+        {
+            aero = AscentControllerAero(vehicle, parent);
+            UpdateMomentLimiter(vehicle, SimNow());
+        }
+        AttitudeController.Report report = AttitudeController.Step(vehicle, target, _s.CommandRate, aero, _s.MomentLimiterPerPa, settings);
+        if (ascent)
+            LogAscentAttitude(vehicle, report, settings);
         _s.OwnAttitudeFlying = true;
         _s.OwnAttitudeVehicle = vehicle;
+    }
+
+    /// <summary>
+    /// Whether the ascent holds its roll this step, by the stock flight computer's rule (CommandAttitude): only with FORCE ROLL on, and only clear of the pad (PadHold), or ForceRollMinAltM up for an ascent engaged in flight. Elsewhere the roll is free.
+    /// </summary>
+    private static bool AscentHoldsRoll(Vehicle vehicle, IParentBody parent)
+    {
+        if (!_s.ForceRoll)
+            return false;
+        double3 r = vehicle.Orbit.StateVectors.PositionCci;
+        return double.IsFinite(_s.LiftoffRadius) ? !PadHold(r) : r.Length() - parent.MeanRadius >= ForceRollMinAltM;
+    }
+
+    /// <summary>How long the ascent's controller waits after a failed aero sweep before it asks again, s.</summary>
+    private const double AscentAeroRetryS = 5.0;
+
+    /// <summary>The dynamic pressure under which a new sweep is not worth asking for, Pa: the feedforward reads no air below 50 Pa (AttitudeController.TryAirMoment).</summary>
+    private const double AscentAeroMinQPa = 50.0;
+
+    /// <summary>
+    /// The nose-first aero tables the ascent's controller reads the air's moment from (AscentFlightAero): the plan's sweep while the craft is the craft it swept, then, once staging has changed its aero mesh, a new sweep, nose first, on its own thread. Null - no feedforward, the feedback and integral alone - while none matches the craft.
+    /// </summary>
+    private static KsaAeroSweep.Result AscentControllerAero(Vehicle vehicle, IParentBody parent)
+    {
+        ulong live = KsaAeroSweep.LiveMeshHash(vehicle);
+        KsaAeroSweep.Result have = _s.AscentFlightAero;
+        if (have != null && have.MeshHash == live && ReferenceEquals(have.Parent, parent))
+            return have;
+        double now = SimNow();
+        if (_s.AscentFlightAeroJob != null)
+        {
+            if (!_s.AscentFlightAeroJob.TryTake(out KsaAeroSweep.Result swept, out string error))
+                return null;
+            _s.AscentFlightAeroJob = null;
+            if (swept == null)
+            {
+                _s.AscentFlightAeroRetryAt = now + AscentAeroRetryS;
+                GuidanceLog.Info(vehicle, $"ascent attitude: no aero table ({GuidanceLog.Cut(error, 39)}); steering without the air's moment.");
+                return null;
+            }
+            _s.AscentFlightAero = swept;
+            GuidanceLog.Debug(vehicle, swept.NoseBodyMoment != null
+                ? "ascent attitude: aero tables of the craft as it is now, nose first."
+                : "ascent attitude: the new aero tables have no nose-first moment; steering without the air's moment.");
+            return swept.MeshHash == live && ReferenceEquals(swept.Parent, parent) ? swept : null;
+        }
+        if (now < _s.AscentFlightAeroRetryAt || KsaAeroSweep.MeshRebuilding(vehicle))
+            return null;
+        float3 airF = PhysicsStates.ComputeAirVelocityBody(vehicle.BubbleOrigin, vehicle.KinematicStates, vehicle.PhysicsEnvironment);
+        double airSpeed = double3.Unpack(in airF).Length();
+        if (!(0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * airSpeed * airSpeed > AscentAeroMinQPa))
+            return null;
+        if (KsaAeroSweep.TryStart(vehicle, parent, now, out KsaAeroSweep.Job job, out _, noseFirst: true))
+            _s.AscentFlightAeroJob = job;
+        else
+            _s.AscentFlightAeroRetryAt = now + AscentAeroRetryS;
+        return null;
+    }
+
+    /// <summary>How often the ascent's controller writes its debug line, s.</summary>
+    private const double AscentAttitudeLogEveryS = 2.0;
+
+    /// <summary>The ascent controller's state every AscentAttitudeLogEveryS, Debug builds: error, and in kN m about the model's axes the demand, the air's moment it is asked against, and what the gimbals, fins and RCS give.</summary>
+    private static void LogAscentAttitude(Vehicle vehicle, in AttitudeController.Report r, in AttitudeController.Settings settings)
+    {
+        if (!GuidanceLog.Enabled)
+            return;
+        double now = SimNow();
+        if (now - _s.AscentAttitudeLogAt < AscentAttitudeLogEveryS)
+            return;
+        _s.AscentAttitudeLogAt = now;
+        static string K(double3 v) => FormattableString.Invariant($"({v.X / 1000.0:F1}, {v.Y / 1000.0:F1}, {v.Z / 1000.0:F1})");
+        GuidanceLog.Debug(vehicle, FormattableString.Invariant(
+            $"ascent attitude: {r.ErrorDeg:F2} deg, {r.RateErrorDegS:F2} deg/s off{(settings.RollFree ? ", roll free" : "")}; kN m demand {K(r.DemandNm)}, air {(r.AirKnown ? K(r.AirNm) : "unknown")}, gimbals {K(r.GimbalsNm)}, fins {(settings.UseSurfaces ? K(r.SurfacesNm) : "off")}, RCS {K(r.RcsNm)} at {r.RcsFlowKgS:F2} kg/s."));
     }
 
     /// <summary>Lets AFC's own attitude controller go: its surfaces home and its RCS released, and the stock flight computer engaged in full on its next command (CommandAttitude's fullEngage).</summary>

@@ -75,6 +75,14 @@ public static class KsaAeroSweep
     /// <summary>The largest alpha and beta the body table and the surface tables reach, degrees.</summary>
     internal static double BodyAngleMaxDeg => BodyAngleBreakpointsDeg[^1];
 
+    /// <summary>
+    /// Alpha and beta breakpoints of the NOSE-FIRST body-axis table (Result.NoseBodyAero, #216), degrees about the nose: the convex ascent's. Every degree to 2 and wider to 20: the ascent stays within a few degrees of the airflow where q is large (the q-alpha limit) and pitches further off it only as the air thins - to 20 deg near 1 kPa on 2stage_new. Coarser than the retrograde table's, so the extra sweep stays about half of it.
+    /// </summary>
+    private static readonly double[] NoseAngleBreakpointsDeg = { -20, -15, -10, -6, -4, -2, -1, 0, 1, 2, 4, 6, 10, 15, 20 };
+
+    /// <summary>The largest alpha and beta the nose-first tables reach, degrees.</summary>
+    internal static double NoseAngleMaxDeg => NoseAngleBreakpointsDeg[^1];
+
     /// <summary>Highest Mach row of the body-axis table: above a returning booster's fastest, with the boostback's coast in thin air above it read at this row.</summary>
     private const double BodyAeroMaxMach = 8.0;
 
@@ -143,6 +151,12 @@ public static class KsaAeroSweep
 
         /// <summary>The centre of mass <see cref="BodyMoment"/> is taken about, assembly axes, m.</summary>
         public double3 BodyMomentComAsmb;
+
+        /// <summary>
+        /// The body-axis force and moment NOSE FIRST (BodyAeroTable.NoseFirst), over Mach and the nose-first alpha and beta (NoseAngleBreakpointsDeg), in the same units and about the same centre of mass as <see cref="BodyAero"/> and <see cref="BodyMoment"/>: what an ascent flies with (#216), lift and side force included, and the moment AFC's attitude controller holds the ascent against. Swept only when asked for (TryStart's noseFirst), null otherwise and on an airless body.
+        /// </summary>
+        public BodyAeroTable NoseBodyAero;
+        public BodyAeroTable NoseBodyMoment;
 
         /// <summary>
         /// Each control surface's effect (ControlSurfaces), swept like the body table and on its grid: the change its deflection makes to the body-axis force and moment, per deflection swept. Empty for a craft with none, or one swept on an airless body.
@@ -225,7 +239,7 @@ public static class KsaAeroSweep
     /// <returns>False with a reason in <paramref name="error"/> if the vehicle has no
     /// usable geometry, the game's force function gives no drag, or the game rebuilds the aero mesh (<see cref="RebuildingError"/>). A body with no atmosphere is NOT an error: the game applies no aerodynamic force there, so nothing is measured, Atmosphere comes back null and the tables are zero.</returns>
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double simTime,
-                                out Result result, out string error)
+                                out Result result, out string error, bool noseFirst = false)
     {
         result = null;
         error = "";
@@ -236,8 +250,10 @@ public static class KsaAeroSweep
             return false;
         }
 
-        return TryPrepareCraft(vehicle, parent, simTime, out Prepared prepared, out error)
-            && Run(prepared, Log, out result, out error);
+        if (!TryPrepareCraft(vehicle, parent, simTime, out Prepared prepared, out error))
+            return false;
+        prepared.NoseFirst = noseFirst;
+        return Run(prepared, Log, out result, out error);
     }
 
     /// <summary>
@@ -284,6 +300,9 @@ public static class KsaAeroSweep
         public double[] DeflectionDeg = [];
         public BodyAeroTable[] Force = [];
         public BodyAeroTable[] Moment = [];
+        /// <summary>The same nose first (Result.NoseBodyAero's grid), per deflection; empty where the sweep had no nose-first pass.</summary>
+        public BodyAeroTable[] NoseForce = [];
+        public BodyAeroTable[] NoseMoment = [];
         public double SweepMillis;
     }
 
@@ -322,6 +341,9 @@ public static class KsaAeroSweep
         public ulong MeshHash;
         /// <summary>A booster sweep logs its whole time under this name; empty for the whole craft.</summary>
         public string BoosterName = "";
+
+        /// <summary>Sweep the nose-first tables too (Result.NoseBodyAero): an ascent's. Whole-craft sweeps only.</summary>
+        public bool NoseFirst;
 
         /// <summary>The control surfaces to sweep (ControlSurfaces), each with the binder that finds it in the private mesh. Whole-craft sweeps only.</summary>
         public List<(ControlSurface Surface, Func<Aerodynamics, Action<double>> Binder)> Surfaces = new();
@@ -530,11 +552,13 @@ public static class KsaAeroSweep
     }
 
     /// <summary>The whole craft's sweep, started on its own thread. False, with the reason, where it cannot be prepared - <see cref="RebuildingError"/> while the game rebuilds the mesh. Main thread.</summary>
-    public static bool TryStart(Vehicle vehicle, IParentBody parent, double simTime, out Job job, out string error)
+    /// <param name="noseFirst">Sweep the nose-first tables too (Result.NoseBodyAero), for an ascent.</param>
+    public static bool TryStart(Vehicle vehicle, IParentBody parent, double simTime, out Job job, out string error, bool noseFirst = false)
     {
         job = null;
         if (!TryPrepareCraft(vehicle, parent, simTime, out Prepared prepared, out error))
             return false;
+        prepared.NoseFirst = noseFirst;
         job = Job.StartFor(prepared);
         return true;
     }
@@ -670,44 +694,58 @@ public static class KsaAeroSweep
         }
         // THE BODY-AXIS TABLE near retrograde (BodyAeroTable): for each alpha and beta, the air direction in body axes, and per Mach row the force the game applies, kept whole - axial, and across the body in y and z - with no averaging over roll. The same calls as above, in the same order: the baseline at a crawl, then the flow prepared for the direction, then the rows.
         double[] bodyMach = machGrid.Where(m => m <= BodyAeroMaxMach + 1e-9).ToArray();
-        int nbm = bodyMach.Length, nab = BodyAngleBreakpointsDeg.Length;
-        var bodyCoefficients = new double[nbm * nab * nab * 3];
-        var bodyMoments = new double[nbm * nab * nab * 3];
+        int nbm = bodyMach.Length, nab = BodyAngleBreakpointsDeg.Length, nan = NoseAngleBreakpointsDeg.Length;
         double momentLength = dx;
-        for (int ja = 0; ja < nab; ja++)
+        // One grid of directions flown: per alpha and beta of the grid (about the nose for a nose-first one), the coefficients of the force and the moment, as BodyAeroTable lays them out.
+        void FlyGrid(double[] anglesDeg, bool nose, double[] coefficients, double[] moments)
         {
-            for (int jb = 0; jb < nab; jb++)
+            int na2 = anglesDeg.Length;
+            for (int ja = 0; ja < na2; ja++)
             {
-                (double ux, double uy, double uz) = BodyAeroTable.AirDirection(BodyAngleBreakpointsDeg[ja] * Math.PI / 180.0, BodyAngleBreakpointsDeg[jb] * Math.PI / 180.0);
-                var u = new double3(ux, uy, uz);
-                probe.Wrench(BaselineSpeed * u, out double3 baseline, out double3 baselineTorque);
-                flow.Prepare(u);
-                for (int i = 0; i < nbm; i++)
+                for (int jb = 0; jb < na2; jb++)
                 {
-                    double speed = Math.Max(bodyMach[i], MinProbeMach) * speedOfSound;
-                    probe.Wrench(speed * u, out double3 rawForce, out double3 rawTorque);
-                    double3 force = rawForce - baseline;
-                    double3 torque = rawTorque - baselineTorque;
-                    double qa = 0.5 * sea.Density * speed * speed * refArea;
-                    int node = ((i * nab + ja) * nab + jb) * 3;
-                    bodyCoefficients[node] = force.X / qa;
-                    bodyCoefficients[node + 1] = force.Y / qa;
-                    bodyCoefficients[node + 2] = force.Z / qa;
-                    if (momentLength > 0.0)
+                    (double ux, double uy, double uz) = BodyAeroTable.AirDirection(anglesDeg[ja] * Math.PI / 180.0, anglesDeg[jb] * Math.PI / 180.0, nose);
+                    var u = new double3(ux, uy, uz);
+                    probe.Wrench(BaselineSpeed * u, out double3 baseline, out double3 baselineTorque);
+                    flow.Prepare(u);
+                    for (int i = 0; i < nbm; i++)
                     {
-                        // A torque the game did not report reads as none, as in the roll-averaged table.
-                        bodyMoments[node] = double.IsFinite(torque.X) ? torque.X / (qa * momentLength) : 0.0;
-                        bodyMoments[node + 1] = double.IsFinite(torque.Y) ? torque.Y / (qa * momentLength) : 0.0;
-                        bodyMoments[node + 2] = double.IsFinite(torque.Z) ? torque.Z / (qa * momentLength) : 0.0;
+                        double speed = Math.Max(bodyMach[i], MinProbeMach) * speedOfSound;
+                        probe.Wrench(speed * u, out double3 rawForce, out double3 rawTorque);
+                        double3 force = rawForce - baseline;
+                        double3 torque = rawTorque - baselineTorque;
+                        double qa = 0.5 * sea.Density * speed * speed * refArea;
+                        int node = ((i * na2 + ja) * na2 + jb) * 3;
+                        coefficients[node] = force.X / qa;
+                        coefficients[node + 1] = force.Y / qa;
+                        coefficients[node + 2] = force.Z / qa;
+                        if (momentLength > 0.0)
+                        {
+                            // A torque the game did not report reads as none, as in the roll-averaged table.
+                            moments[node] = double.IsFinite(torque.X) ? torque.X / (qa * momentLength) : 0.0;
+                            moments[node + 1] = double.IsFinite(torque.Y) ? torque.Y / (qa * momentLength) : 0.0;
+                            moments[node + 2] = double.IsFinite(torque.Z) ? torque.Z / (qa * momentLength) : 0.0;
+                        }
                     }
                 }
             }
+        }
+        var bodyCoefficients = new double[nbm * nab * nab * 3];
+        var bodyMoments = new double[nbm * nab * nab * 3];
+        FlyGrid(BodyAngleBreakpointsDeg, false, bodyCoefficients, bodyMoments);
+        // NOSE FIRST, for an ascent (#216): the same, about the nose.
+        double[] noseCoefficients = null, noseMoments = null;
+        if (p.NoseFirst)
+        {
+            noseCoefficients = new double[nbm * nan * nan * 3];
+            noseMoments = new double[nbm * nan * nan * 3];
+            FlyGrid(NoseAngleBreakpointsDeg, true, noseCoefficients, noseMoments);
         }
         res.SweepMillis = clock.Elapsed.TotalMilliseconds;
         res.MeshHash = p.MeshHash;
         res.Parent = parent;
         log(FormattableString.Invariant(
-            $"[AFC] Aero sweep of '{name}' over {(parent as Astronomical)?.Id}: {na * RollSamples} directions, {na * RollSamples * (nm + 1)} samples, {res.SweepMillis:F0} ms."));
+            $"[AFC] Aero sweep of '{name}' over {(parent as Astronomical)?.Id}: {na * RollSamples} directions, {na * RollSamples * (nm + 1)} samples{(p.NoseFirst ? FormattableString.Invariant($", nose first {nan * nan} directions") : "")}, {res.SweepMillis:F0} ms."));
 
         var cdTable = new double[nm * na];
         var clTable = new double[nm * na];
@@ -816,6 +854,11 @@ public static class KsaAeroSweep
             res.BodyAero = new BodyAeroTable(bodyMach, BodyAngleBreakpointsDeg, BodyAngleBreakpointsDeg, bodyCoefficients);
             res.BodyMoment = momentLength > 0.0 ? new BodyAeroTable(bodyMach, BodyAngleBreakpointsDeg, BodyAngleBreakpointsDeg, bodyMoments) : null;
             res.BodyMomentComAsmb = new double3(props.CenterOfMassAsmb.X, props.CenterOfMassAsmb.Y, props.CenterOfMassAsmb.Z);
+            if (noseCoefficients != null)
+            {
+                res.NoseBodyAero = new BodyAeroTable(bodyMach, NoseAngleBreakpointsDeg, NoseAngleBreakpointsDeg, noseCoefficients, noseFirst: true);
+                res.NoseBodyMoment = momentLength > 0.0 ? new BodyAeroTable(bodyMach, NoseAngleBreakpointsDeg, NoseAngleBreakpointsDeg, noseMoments, noseFirst: true) : null;
+            }
         }
         catch (Exception ex)
         {
@@ -829,6 +872,10 @@ public static class KsaAeroSweep
             log(FormattableString.Invariant($"[AFC] Body-axis force of '{name}' near retrograde at Mach 0.4 (C_x, C_y, C_z): {BodyAeroText(res.BodyAero, 0.4)}."));
         if (res.BodyMoment != null)
             log(FormattableString.Invariant($"[AFC] Body-axis moment of '{name}' near retrograde at Mach 0.4 (C_l, C_m, C_n about the centre of mass, L {res.ReferenceLength:F1} m): {BodyAeroText(res.BodyMoment, 0.4)}."));
+        if (res.NoseBodyAero != null)
+            log(FormattableString.Invariant($"[AFC] Body-axis force of '{name}' nose first at Mach 0.4 (C_x, C_y, C_z): {BodyAeroText(res.NoseBodyAero, 0.4)}."));
+        if (res.NoseBodyMoment != null)
+            log(FormattableString.Invariant($"[AFC] Body-axis moment of '{name}' nose first at Mach 0.4 (C_l, C_m, C_n): {BodyAeroText(res.NoseBodyMoment, 0.4)}."));
         // Logged once the moment table exists, which BalanceText reads.
         if (double.IsFinite(worstCp))
             log(FormattableString.Invariant(
@@ -858,43 +905,35 @@ public static class KsaAeroSweep
                 double[] grid = SurfaceDeflections(surface.MinDeg, surface.MaxDeg);
                 var forceTables = new BodyAeroTable[grid.Length];
                 var momentTables = new BodyAeroTable[grid.Length];
+                var noseForceTables = p.NoseFirst ? new BodyAeroTable[grid.Length] : [];
+                var noseMomentTables = p.NoseFirst ? new BodyAeroTable[grid.Length] : [];
+                // The change from the body's own: the grid flown with the surface turned, less the body table at rest.
+                void Delta(double[] anglesDeg, bool nose, double[] restForce, double[] restMoment, int d, BodyAeroTable[] forceOut, BodyAeroTable[] momentOut)
+                {
+                    int n3 = nbm * anglesDeg.Length * anglesDeg.Length * 3;
+                    var df = new double[n3];
+                    var dm = new double[n3];
+                    if (grid[d] != 0.0)
+                    {
+                        FlyGrid(anglesDeg, nose, df, dm);
+                        for (int k = 0; k < n3; k++)
+                        {
+                            df[k] -= restForce[k];
+                            dm[k] -= restMoment[k];
+                        }
+                    }
+                    forceOut[d] = new BodyAeroTable(bodyMach, anglesDeg, anglesDeg, df, nose);
+                    momentOut[d] = new BodyAeroTable(bodyMach, anglesDeg, anglesDeg, dm, nose);
+                }
                 try
                 {
                     for (int d = 0; d < grid.Length; d++)
                     {
-                        var df = new double[nbm * nab * nab * 3];
-                        var dm = new double[nbm * nab * nab * 3];
                         if (grid[d] != 0.0)
-                        {
                             pose(grid[d]);
-                            for (int ja = 0; ja < nab; ja++)
-                            {
-                                for (int jb = 0; jb < nab; jb++)
-                                {
-                                    (double ux, double uy, double uz) = BodyAeroTable.AirDirection(BodyAngleBreakpointsDeg[ja] * Math.PI / 180.0, BodyAngleBreakpointsDeg[jb] * Math.PI / 180.0);
-                                    var u = new double3(ux, uy, uz);
-                                    probe.Wrench(BaselineSpeed * u, out double3 baseline, out double3 baselineTorque);
-                                    flow.Prepare(u);
-                                    for (int i = 0; i < nbm; i++)
-                                    {
-                                        double speed = Math.Max(bodyMach[i], MinProbeMach) * speedOfSound;
-                                        probe.Wrench(speed * u, out double3 rawForce, out double3 rawTorque);
-                                        double3 force = rawForce - baseline;
-                                        double3 torque = rawTorque - baselineTorque;
-                                        double qa = 0.5 * sea.Density * speed * speed * refArea;
-                                        int node = ((i * nab + ja) * nab + jb) * 3;
-                                        df[node] = force.X / qa - bodyCoefficients[node];
-                                        df[node + 1] = force.Y / qa - bodyCoefficients[node + 1];
-                                        df[node + 2] = force.Z / qa - bodyCoefficients[node + 2];
-                                        dm[node] = (double.IsFinite(torque.X) ? torque.X / (qa * momentLength) : 0.0) - bodyMoments[node];
-                                        dm[node + 1] = (double.IsFinite(torque.Y) ? torque.Y / (qa * momentLength) : 0.0) - bodyMoments[node + 1];
-                                        dm[node + 2] = (double.IsFinite(torque.Z) ? torque.Z / (qa * momentLength) : 0.0) - bodyMoments[node + 2];
-                                    }
-                                }
-                            }
-                        }
-                        forceTables[d] = new BodyAeroTable(bodyMach, BodyAngleBreakpointsDeg, BodyAngleBreakpointsDeg, df);
-                        momentTables[d] = new BodyAeroTable(bodyMach, BodyAngleBreakpointsDeg, BodyAngleBreakpointsDeg, dm);
+                        Delta(BodyAngleBreakpointsDeg, false, bodyCoefficients, bodyMoments, d, forceTables, momentTables);
+                        if (p.NoseFirst)
+                            Delta(NoseAngleBreakpointsDeg, true, noseCoefficients, noseMoments, d, noseForceTables, noseMomentTables);
                     }
                 }
                 finally
@@ -905,6 +944,7 @@ public static class KsaAeroSweep
                 {
                     Part = surface.Part, Name = surface.Name, MinDeg = surface.MinDeg, MaxDeg = surface.MaxDeg,
                     DeflectionDeg = grid, Force = forceTables, Moment = momentTables,
+                    NoseForce = noseForceTables, NoseMoment = noseMomentTables,
                     SweepMillis = surfaceClock.Elapsed.TotalMilliseconds,
                 };
                 surfaceTables.Add(table);

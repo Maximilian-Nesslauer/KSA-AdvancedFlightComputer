@@ -341,7 +341,7 @@ public static partial class GuidanceWindow
         double3 vAir = orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r);
         double speed = vAir.Length();
         // Off under AFC's own attitude controller (ThreeDofOwnAttitude): it holds the command against the air itself, where the trim wound out the stock flight computer's standing error.
-        if (!_s.ThreeDofTrim || OwnsGlideAttitude(vehicle, false, true))
+        if (!_s.ThreeDofTrim || OwnsAttitude(vehicle, false, true))
             trim = default;
         else if (integrate && speed > ThreeDofTrimMinSpeedMs)
         {

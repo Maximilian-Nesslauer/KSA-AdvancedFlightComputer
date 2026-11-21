@@ -228,6 +228,33 @@ public static class KsaGimbalControl
         return thrust;
     }
 
+    /// <summary>
+    /// What an Lsq command of <paramref name="torqueNm"/> (KSA body axes, N m) will give, as the worker's allocation will solve it (KsaTvcAllocator.Solve) on the lit gimbals with the thrust of the last step: the torque it delivers once the gimbals reach their commands, and the solve's diagnostics. Zero with no lit gimbal: unlike the worker, no nameplate thrust stands in, because a prediction for a caller sharing the torque with other actuators must not promise torque an unlit engine cannot give. Main thread, between the workers' steps.
+    /// </summary>
+    public static double3 PredictLsq(Vehicle vehicle, double3 torqueNm, out TvcAllocationResult result)
+    {
+        result = default;
+        if (vehicle?.Parts?.States == null
+            || !ModuleStateful<GimbalController, GimbalControllerState, EmptyStruct, EmptyStruct>
+                .TryGetFrom(vehicle.Parts.States, out var gimbals))
+            return default;
+        var lit = new System.Collections.Generic.List<GimbalController>();
+        var thrusts = new System.Collections.Generic.List<double>();
+        foreach (var gimbal in gimbals.ModulesAndStates)
+        {
+            Gimbal g = gimbal.Module.Gimbal;
+            if (g == null || !(Math.Max(g.AxisY.MaxAngle, g.AxisZ.MaxAngle) > 0f) || !(gimbal.State.TotalThrust > 0.0))
+                continue;
+            lit.Add(gimbal.Module);
+            thrusts.Add(gimbal.State.TotalThrust);
+        }
+        if (lit.Count == 0)
+            return default;
+        var commands = new double[2 * lit.Count];
+        result = KsaTvcAllocator.Solve(lit.ToArray(), thrusts.ToArray(), vehicle.CenterOfMassAsmbF, torqueNm, commands);
+        return result.AchievedTorque;
+    }
+
     // Physical allocation: solve for the deflections delivering the commanded N*m.
     //  Two passes over the gimbals because the solve needs every gimbal's thrust before it can produce any command.
     //  FlightComputer.VehicleConfig.Gimbals holds only the gimbals whose engine is activated, so a stage that is not staged yet never enters the solve.

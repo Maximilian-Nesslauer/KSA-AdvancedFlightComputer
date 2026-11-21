@@ -7,6 +7,7 @@ using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.AeroControl;
 using AdvancedFlightComputer.Features.RcsTorque;
+using AdvancedFlightComputer.Guidance.Numerics.Flight;
 
 /// <summary>
 /// AFC's own attitude controller: holds a target attitude and rate with a torque that knows the air, and spends it on the craft's control surfaces first and its RCS for the rest, in place of the stock flight computer's attitude hold.
@@ -22,7 +23,11 @@ using AdvancedFlightComputer.Features.RcsTorque;
 ///  - M_air: the air's moment on the craft as it flies now, from the sweep's body moment table at the Mach, alpha and beta flown, moved to the present centre of mass and divided by the game's moment limiter (BodyAero6Dof.MomentLimiterPerPa). Cancelled before any error builds: the feedforward. None outside the table (20 deg off engine first).
 ///  - I: the inertia about the model's axes (Ksa6DofSetup.Inertia), and w x I w its gyroscopic part.
 ///
-/// THE SPLIT, in one programme. The control surfaces and the RCS thrusters share the demand (KsaAeroTorqueControl.Command with the RCS as its backup): a degree of fin costs next to nothing, a thruster its propellant, so the fins take every axis they can and the RCS only what they cannot - roll included, where a fixed "fins first, roll last" order had left roll to the RCS. Each fin is asked only for what its rate reaches by the next step, from where it is, and pays to move, so it does not chatter. The RCS is then fired for what the fins will give short of the demand (KsaRcsTorqueControl, pitch and yaw before roll). The engine is not used: this flies a craft whose engine is off.
+/// THE GIMBALS, on a burn (Settings.UseGimbals: an ascent). The lit engines' allocation (KsaGimbalControl.SetLsq, the one touchdown guidance flies) is given the whole demand first; the torque it will give (KsaGimbalControl.PredictLsq) comes off what the surfaces and RCS are asked for, so they take only the roll and whatever the gimbals' travel cannot reach.
+///
+/// THE ROLL, held or free (Settings.RollFree). Free, as an ascent flies until its forced roll, no roll angle is held - only the roll rate damped - as the stock flight computer's decoupled roll held none.
+///
+/// THE SPLIT, in one programme. The control surfaces and the RCS thrusters share the demand (KsaAeroTorqueControl.Command with the RCS as its backup): a degree of fin costs next to nothing, a thruster its propellant, so the fins take every axis they can and the RCS only what they cannot - roll included, where a fixed "fins first, roll last" order had left roll to the RCS. Each fin is asked only for what its rate reaches by the next step, from where it is, and pays to move, so it does not chatter. The RCS is then fired for what the fins will give short of the demand (KsaRcsTorqueControl, pitch and yaw before roll). The engine's gimbals come in only where the settings use them (see THE GIMBALS).
 ///
 /// THE DEADBAND (Settings.DeadbandDeg, off by default). Inside it, turning at under RateDeadbandDegS from the target's rate, the feedback stands down and only the feedforward and the integral fly; it comes back past the deadband and stands down again under half of it. Off since the integral and the filtered rate went in: each return of the feedback kicked, and in the harness a 0.5 deg deadband cost 50 kg of RCS holding a tilt where none cost 46, and 1 deg cost 234 (2026-11-20).
 ///
@@ -32,7 +37,8 @@ internal static class AttitudeController
 {
     internal readonly record struct Settings(double BandwidthRadS, double Damping, double DeadbandDeg, double RateDeadbandDegS,
                                              double IntegralPerS = 0.1, double CaptureRateDegS = 5.0, double RateFilterS = 0.2,
-                                             double IntegralWithinDeg = 3.0, double IntegralMaxDegS = 8.0)
+                                             double IntegralWithinDeg = 3.0, double IntegralMaxDegS = 8.0,
+                                             bool UseSurfaces = true, bool UseGimbals = false, bool RollFree = false)
     {
         public static readonly Settings Default = new(1.0, 0.8, 0.0, 0.5);
     }
@@ -43,7 +49,7 @@ internal static class AttitudeController
     internal readonly record struct Report(
         double ErrorDeg, double RateErrorDegS, bool InDeadband,
         double3 DemandNm, double3 AirNm, double3 SurfacesNm, double3 RcsAskedNm, double3 RcsNm, double RcsFlowKgS, bool AirKnown,
-        double3 IntegralNm = default, double[] FinCommandDeg = null, double[] FinNowDeg = null);
+        double3 IntegralNm = default, double[] FinCommandDeg = null, double[] FinNowDeg = null, double3 GimbalsNm = default);
 
     private sealed class Slot
     {
@@ -53,6 +59,8 @@ internal static class AttitudeController
         public bool RateKnown;
         public double3 RateErrorFiltered;
         public double3 Integral;
+        /// <summary>The gimbals were given a torque (KsaGimbalControl.SetLsq), so they are handed back when the controller lets go or stops using them.</summary>
+        public bool GimbalsOwned;
     }
 
     private static readonly ConditionalWeakTable<Vehicle, Slot> Slots = new();
@@ -79,6 +87,9 @@ internal static class AttitudeController
         double3 theta = default;
         foreach (double3 e in new[] { new double3(1, 0, 0), new double3(0, 1, 0), new double3(0, 0, 1) })
             theta += 0.5 * double3.Cross(e, e.Transform(targetBody2Cci).Transform(cci2Body));
+        // Roll free (Settings.RollFree): no roll angle is held, only the roll rate damped.
+        if (settings.RollFree)
+            theta -= double3.Dot(theta, mz) * mz;
         double3 w = vehicle.BodyRates;
         double3 rawRateError = targetRateCci.Transform(cci2Body) - w;
         if (!slot.RateKnown || !(settings.RateFilterS > 0.0))
@@ -123,17 +134,37 @@ internal static class AttitudeController
         bool airKnown = TryAirMoment(vehicle, aero, momentLimiterPerPa, out double3 air);
         double3 demand = feedback + integral + gyro - air;
 
-        // One programme for fins and RCS (the RCS as the fins' backup): the fins are commanded, the RCS fired for what they will give short.
+        // THE GIMBALS FIRST, where the settings use them (an ascent): the whole demand goes to the lit engines' allocation (KsaGimbalControl.SetLsq), and what it will give - pitch and yaw, and the roll the travel left allows - comes off what the rest are asked for. With no engine lit they give nothing and the rest take it all.
+        double3 remaining = demand, gimbalsBody = default;
+        if (settings.UseGimbals)
+        {
+            gimbalsBody = KsaGimbalControl.PredictLsq(vehicle, demand, out _);
+            KsaGimbalControl.SetLsq(vehicle, demand);
+            slot.GimbalsOwned = true;
+            remaining -= gimbalsBody;
+        }
+        else if (slot.GimbalsOwned)
+        {
+            KsaGimbalControl.Disengage(vehicle);
+            slot.GimbalsOwned = false;
+        }
+
+        // One programme for fins and RCS (the RCS as the fins' backup): the fins are commanded, the RCS fired for what they will give short. Fins off (Settings.UseSurfaces) are held at rest and the RCS takes it all.
         RcsTorqueAllocator rcsColumns = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out _);
-        KsaAeroTorqueControl.Report surfaces = KsaAeroTorqueControl.Command(vehicle, aero, demand, mx, my, mz, RcsPriority, momentLimiterPerPa,
-                                                                           dt > 0.0 ? dt : 0.05, rcsColumns);
+        KsaAeroTorqueControl.Report surfaces = default;
+        if (settings.UseSurfaces)
+            surfaces = KsaAeroTorqueControl.Command(vehicle, aero, remaining, mx, my, mz, RcsPriority, momentLimiterPerPa,
+                                                    dt > 0.0 ? dt : 0.05, rcsColumns);
+        else
+            KsaAeroTorqueControl.Release(vehicle);
         double3 surfacesBody = surfaces.GivenNm.X * mx + surfaces.GivenNm.Y * my + surfaces.GivenNm.Z * mz;
-        double3 rcsAsked = demand - surfacesBody;
+        double3 rcsAsked = remaining - surfacesBody;
         KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, RcsPriority);
 
         slot.Last = new Report(errorDeg, rateErrorDegS, !slot.Feedback,
             Model(demand, mx, my, mz), Model(air, mx, my, mz), surfaces.GivenNm, Model(rcsAsked, mx, my, mz),
-            rcs.GivenNm, rcs.FlowKgS, airKnown, Model(integral, mx, my, mz), surfaces.CommandDeg, surfaces.NowDeg);
+            rcs.GivenNm, rcs.FlowKgS, airKnown, Model(integral, mx, my, mz), surfaces.CommandDeg, surfaces.NowDeg,
+            Model(gimbalsBody, mx, my, mz));
         return slot.Last;
     }
 
@@ -146,6 +177,9 @@ internal static class AttitudeController
         KsaRcsTorqueControl.Release(vehicle);
         if (Slots.TryGetValue(vehicle, out Slot slot))
         {
+            if (slot.GimbalsOwned)
+                KsaGimbalControl.Disengage(vehicle);
+            slot.GimbalsOwned = false;
             slot.Feedback = false;
             slot.Last = default;
             slot.LastT = double.NaN;
@@ -173,13 +207,16 @@ internal static class AttitudeController
         if (!(speed > 1.0) || !(q > 50.0))
             return false;
         double3 u = airVelocity / speed;
-        double alpha = Math.Atan2(u.Z, -u.X), beta = Math.Atan2(u.Y, -u.X);
-        double limit = KsaAeroSweep.BodyAngleMaxDeg * Math.PI / 180.0;
-        if (!(-u.X > 0.0) || Math.Abs(alpha) > limit || Math.Abs(beta) > limit)
+        // Nose first (an ascent) from the nose-first tables, where the sweep has them (KsaAeroSweep.Result.NoseBodyAero).
+        bool nose = u.X > 0.0 && aero.NoseBodyAero != null && aero.NoseBodyMoment != null;
+        BodyAeroTable forceTable = nose ? aero.NoseBodyAero : aero.BodyAero, momentTable = nose ? aero.NoseBodyMoment : aero.BodyMoment;
+        forceTable.Angles(u.X, u.Y, u.Z, out double alpha, out double beta);
+        double limit = (nose ? KsaAeroSweep.NoseAngleMaxDeg : KsaAeroSweep.BodyAngleMaxDeg) * Math.PI / 180.0;
+        if (!(forceTable.Lead * u.X > 0.0) || Math.Abs(alpha) > limit || Math.Abs(beta) > limit)
             return false;
-        double mach = aero.Atmosphere.Mach(speed);
-        aero.BodyAero.Coefficients(mach, alpha, beta, out double cx, out double cy, out double cz);
-        aero.BodyMoment.Coefficients(mach, alpha, beta, out double cl, out double cm, out double cn);
+        double mach = Math.Clamp(aero.Atmosphere.Mach(speed), forceTable.MachMin, forceTable.MachMax);
+        forceTable.Coefficients(mach, alpha, beta, out double cx, out double cy, out double cz);
+        momentTable.Coefficients(mach, alpha, beta, out double cl, out double cm, out double cn);
         double qs = q * aero.ReferenceArea;
         var force = new double3(qs * cx, qs * cy, qs * cz);
         float3 comNow = vehicle.CenterOfMassAsmbF;

@@ -26,6 +26,14 @@ public abstract class AscentAtmosphere
     /// Drag coefficient at a Mach number and an angle of attack, radians from nose-first: the angle between the thrust axis and the air-relative velocity. The drag still acts straight against the relative wind; only its size depends on the attitude. The default ignores the attitude, which is launch3dof.py's law.
     /// </summary>
     public virtual Dual DragCoefficient(Dual mach, Dual angleOfAttack) => DragCoefficient(mach);
+
+    /// <summary>
+    /// The craft's body-axis force nose first (BodyAeroTable.NoseFirst, KsaAeroSweep.Result.NoseBodyAero), referenced like the drag to each stage's <see cref="AscentStage.DragArea"/>, or null for drag alone. Where set, the dynamics fly the whole force - lift and side force too - in place of the drag law (AscentDynamics, #216).
+    /// </summary>
+    public virtual BodyAeroTable? BodyForce => null;
+
+    /// <summary>The same air with drag alone, no body-axis force: the plan job's last fall-back (AscentPlanJob).</summary>
+    public virtual AscentAtmosphere DragOnly() => this;
 }
 
 /// <summary>
@@ -44,7 +52,9 @@ public sealed class VacuumAscentAtmosphere : AscentAtmosphere
 /// <summary>
 /// KSA's air: the game's layered atmosphere as KsaAeroSweep samples it, and the drag table sampled off the vehicle.
 ///
-/// DRAG DEPENDS ON THE ANGLE OF ATTACK. launch3dof.py's drag depends on Mach alone. The game integrates pressure and skin friction over the surface of the craft, so the flanks add drag as soon as the body turns off the airflow, and a planner that treats the attitude as free flies degrees off the airflow wherever q-alpha allows it and meets much more drag there than it planned. So the table is read at the flown angle: alpha from nose-first, which is pi minus the table's retrograde-first angle. The drag acts straight against the relative wind. The lift the game also applies at an angle of attack is not modelled here, and the q-alpha limit is what keeps it small.
+/// DRAG DEPENDS ON THE ANGLE OF ATTACK. launch3dof.py's drag depends on Mach alone. The game integrates pressure and skin friction over the surface of the craft, so the flanks add drag as soon as the body turns off the airflow, and a planner that treats the attitude as free flies degrees off the airflow wherever q-alpha allows it and meets much more drag there than it planned. So the table is read at the flown angle: alpha from nose-first, which is pi minus the table's retrograde-first angle. The drag acts straight against the relative wind.
+///
+/// LIFT AND SIDE FORCE come with a nose-first body-axis table (<see cref="BodyForce"/>, #216): the force the game applies at the pointing and roll flown, kept whole, which the dynamics then fly in place of the drag table. The drag table stays for the readouts and as the law of a problem without one.
 ///
 /// The Mach axis carries what the game's pressure law does with the Mach number. The sweep measures every Mach row at sea level density and temperature, and the Mach number of a lookup is the airspeed over the sea level speed of sound (see AtmosphereModel), so the Reynolds number and the lower speed of sound at altitude are not modelled.
 /// </summary>
@@ -57,12 +67,22 @@ public sealed class KsaAscentAtmosphere : AscentAtmosphere
     /// <param name="atmosphere">The body's atmosphere, as KsaAeroSweep mirrors it.</param>
     /// <param name="table">Sampled drag table, or null to use <paramref name="constantCd"/>.</param>
     /// <param name="constantCd">Drag coefficient when there is no table.</param>
-    public KsaAscentAtmosphere(AtmosphereModel atmosphere, AeroTable? table, double constantCd = 0.0)
+    /// <param name="bodyForce">The nose-first body-axis table (<see cref="AscentAtmosphere.BodyForce"/>), or null for drag alone.</param>
+    public KsaAscentAtmosphere(AtmosphereModel atmosphere, AeroTable? table, double constantCd = 0.0, BodyAeroTable? bodyForce = null)
     {
         _atmosphere = atmosphere ?? throw new ArgumentNullException(nameof(atmosphere));
         _table = table;
         _cd = constantCd;
+        if (bodyForce is { NoseFirst: false })
+            throw new ArgumentException("The ascent's body-axis table must be taken nose first.", nameof(bodyForce));
+        _bodyForce = bodyForce;
     }
+
+    private readonly BodyAeroTable? _bodyForce;
+
+    public override BodyAeroTable? BodyForce => _bodyForce;
+
+    public override AscentAtmosphere DragOnly() => _bodyForce == null ? this : new KsaAscentAtmosphere(_atmosphere, _table, _cd);
 
     public AtmosphereModel Atmosphere => _atmosphere;
 
@@ -452,7 +472,7 @@ public sealed class AscentProblem
         Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
         Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
         TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-        PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, Settings = Settings,
+        PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, RollAngleRad = RollAngleRad, Settings = Settings,
         Recoveries = recoveries,
     };
 
@@ -474,7 +494,7 @@ public sealed class AscentProblem
             Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = stages,
             Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
             TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-            PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, Settings = Settings,
+            PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, RollAngleRad = RollAngleRad, Settings = Settings,
             Recoveries = Recoveries.Select(r => r.Stage == rec.Stage ? r.WithInitialReserve(reserveKg) : r).ToArray(),
         };
     }
@@ -485,7 +505,17 @@ public sealed class AscentProblem
         Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
         Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
         TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-        PlaneTurnMin = min, PlaneTurnMax = max, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, Settings = Settings, Recoveries = Recoveries,
+        PlaneTurnMin = min, PlaneTurnMax = max, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, RollAngleRad = RollAngleRad, Settings = Settings, Recoveries = Recoveries,
+    };
+
+    /// <summary>This problem with another atmosphere and q-alpha limit, Pa rad: the plan job's fall-backs when lift cannot be solved for (AscentPlanJob). The settings object is shared.</summary>
+    public AscentProblem WithAero(AscentAtmosphere atmosphere, double qAlphaMax) => new()
+    {
+        Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
+        Atmosphere = atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
+        TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = qAlphaMax,
+        PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, PadRoll = PadRoll, RollAngleRad = RollAngleRad, Settings = Settings,
+        Recoveries = Recoveries,
     };
 
     /// <summary>
@@ -497,6 +527,11 @@ public sealed class AscentProblem
     public sealed record RollProgram(double ClearanceM, double MaxSeconds, double MaxTurnRateDegS = 5.0);
 
     public RollProgram? PadRoll { get; init; }
+
+    /// <summary>
+    /// The roll the ascent holds about its thrust axis, radians, as GuidanceWindow.AscentRollRef builds it: body y is the plane's -n square to the thrust axis, turned by this about it. Only a body-axis force reads it (AscentAtmosphere.BodyForce), and only an airframe that is not symmetric about its axis cares.
+    /// </summary>
+    public double RollAngleRad { get; init; }
 
     public AscentSettings Settings { get; init; } = new();
 
