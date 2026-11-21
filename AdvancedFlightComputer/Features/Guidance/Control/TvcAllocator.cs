@@ -138,42 +138,33 @@ public static class KsaTvcAllocator
         if (trace <= 0.0)
             return result;                        // no authority at all (no thrust)
 
-        // Per-axis capability first, so the demand can be clamped to what each axis can actually deliver. Without this a weak axis (roll here: 700x weaker than pitch/yaw) sends the least-squares solution far outside the deflection box, and the uniform saturation scaling below then throttles the STRONG axes too.
-        double lambda0 = RelativeRegularization * trace;
-        Span<double> g0 = stackalloc double[9];
-        for (int i = 0; i < 9; i++) g0[i] = g[i];
-        g0[0] += lambda0; g0[4] += lambda0; g0[8] += lambda0;
-        if (Invert3x3(g0, out Span<double> inv0))
-        {
-            var cap = new double3(
-                AxisCapability(bTorque, cols, inv0, 0),
-                AxisCapability(bTorque, cols, inv0, 1),
-                AxisCapability(bTorque, cols, inv0, 2));
-            desiredTorque = new double3(
-                Math.Clamp(desiredTorque.X, -Math.Abs(cap.X), Math.Abs(cap.X)),
-                Math.Clamp(desiredTorque.Y, -Math.Abs(cap.Y), Math.Abs(cap.Y)),
-                Math.Clamp(desiredTorque.Z, -Math.Abs(cap.Z), Math.Abs(cap.Z)));
-            result.DemandClamped = true;
-        }
-
         double lambda = RelativeRegularization * trace;
         g[0] += lambda; g[4] += lambda; g[8] += lambda;
 
         if (!Invert3x3(g, out Span<double> inv))
             return result;
 
+        // THE WEAK AXIS IS CLAMPED TO ITS CAPABILITY, AND ONLY IT. Without the clamp a weak axis (roll here: 700x weaker than pitch/yaw) sends the least-squares solution far outside the deflection box, and the uniform saturation scaling below then throttles the strong axes too.
+        //  The strong axes were clamped per axis as well until 2026-11-21, and that bent their direction. Each vehicle axis's capability is that axis ALONE, with no torque about the other two, and for an engine off the stack's axis on a diagonal (one engine of a ring, a pair beside the center) pure pitch or pure yaw each drags roll in that only the verniers can take out: their caps came out small while the direction the engine's own moment needs, which brings no roll, had over twice that (one 10 deg engine of the triple plate: 1429 kN m clamped, 3332 kN m along the direction, afc-guidance-engine-moment-diag). A demand along that direction was clamped to the box corner of the two small caps and scaled down to fit, so the gimbals held under half the moment they could. The strong axes now keep their direction and scale together, the saturation policy below.
+        result.DemandClamped = true;
+        double3 cap = new double3(
+            Math.Abs(AxisCapability(bTorque, cols, inv, 0)),
+            Math.Abs(AxisCapability(bTorque, cols, inv, 1)),
+            Math.Abs(AxisCapability(bTorque, cols, inv, 2)));
+
         // THE WEAK AXIS GIVES WAY. The gimbals' deflection is one budget: torque about the weak axis (roll, for engines near the thrust line) is made by deflecting them against each other, and pitch and yaw by deflecting them together. Each axis's demand is inside what that axis can do alone, but both at their limits ask every gimbal for twice its travel, and scaling the whole solution then HALVED the pitch and yaw torque for the sake of a roll torque a hundredth of its size. On 2026-11-18 a booster that the air's roll moment had turning 3-6 deg/s at the hand-over asked 15-18 kN m of roll, the allocation was scaled to 0.5-0.7 on 85 % of the steps, the craft got half the pitch and yaw torque its plan flew on, and it left the plan within a second. Before KSA 5901 nothing rolled a booster, the roll demand was near nothing, and the allocation was whole.
         //  So an axis with under WeakAxisShare of the strongest's capability is allocated SEPARATELY and LAST: the other two take what they need, scaled together only if they alone exceed the travel, and the weak axis gets as much of its demand as the travel left over allows.
         int weak = -1;
-        if (result.DemandClamped)
         {
-            double cx = Math.Abs(AxisCapability(bTorque, cols, inv, 0)), cy = Math.Abs(AxisCapability(bTorque, cols, inv, 1)), cz = Math.Abs(AxisCapability(bTorque, cols, inv, 2));
+            double cx = cap.X, cy = cap.Y, cz = cap.Z;
             double strongest = Math.Max(cx, Math.Max(cy, cz));
             if (cx < WeakAxisShare * strongest && cx <= cy && cx <= cz) weak = 0;
             else if (cy < WeakAxisShare * strongest && cy <= cx && cy <= cz) weak = 1;
             else if (cz < WeakAxisShare * strongest && cz <= cx && cz <= cy) weak = 2;
         }
-        double weakDemand = weak == 0 ? desiredTorque.X : weak == 1 ? desiredTorque.Y : weak == 2 ? desiredTorque.Z : 0.0;
+        double weakDemand = weak == 0 ? Math.Clamp(desiredTorque.X, -cap.X, cap.X)
+                          : weak == 1 ? Math.Clamp(desiredTorque.Y, -cap.Y, cap.Y)
+                          : weak == 2 ? Math.Clamp(desiredTorque.Z, -cap.Z, cap.Z) : 0.0;
         var strong = new double3(weak == 0 ? 0.0 : desiredTorque.X, weak == 1 ? 0.0 : desiredTorque.Y, weak == 2 ? 0.0 : desiredTorque.Z);
 
         // w = G^-1 tau, then u = B^T w.
@@ -191,7 +182,7 @@ public static class KsaTvcAllocator
 
         // Saturation: scale the WHOLE solution rather than clipping per component, so the torque DIRECTION survives.
         //  That policy is only sound when the axes have COMPARABLE authority. Measured in flight this vehicle has roll capability of 2.8 kN-m against 1902 kN-m in pitch and yaw - a factor of 700. A roll demand a few percent over its limit then dragged the entire command down to 29%, so pitch and yaw arrived at a third of their value despite being well inside capability. Preserving the direction of a vector whose smallest component is 700x cheaper to satisfy is not a meaningful thing to preserve.
-        //  The demand is therefore clamped PER AXIS to what that axis can actually do, BEFORE allocation (see Solve's caller-facing clamp above); uniform scaling then only ever handles a genuinely unachievable magnitude rather than one weak axis vetoing the other two.
+        //  The weak axis is therefore clamped to what it can do and allocated apart, in the travel left (above and below); uniform scaling then handles only the strong axes' magnitude, rather than one weak axis vetoing the other two.
         if (peak > 1.0)
         {
             double scale = 1.0 / peak;
