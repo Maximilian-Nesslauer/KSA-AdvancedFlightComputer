@@ -1656,9 +1656,10 @@ public sealed class VehicleAutopilotState
     public double3 ThreeDofMeasuredAccel;
 
     /// <summary>
-    /// A returning booster's roll reference, body-fixed (CCF): the wing direction up x d, horizontal and square to the ground track to its site, from where it was first commanded, frozen (GuidanceWindow.ReturnRollRefCci says why). The body's +y is held along its part square to the axis, wings level to the local vertical (KsaPointMassModel.RollRef). Zero until set.
+    /// A returning booster's roll reference, body-fixed (CCF): the wing direction up x d, level to the local horizon and square to the track to its site from where the booster is now, turned to follow that at a limited rate and held still near the site (GuidanceWindow.ReturnRollRefCci and UpdateReturnRollRef say why). The body's +y is held along its part square to the axis, wings level to the local vertical (KsaPointMassModel.RollRef). Zero until set; and the sim time it was last moved.
     /// </summary>
     public double3 ReturnRollRefCcf;
+    internal double ReturnRollRefAt = double.NegativeInfinity;
 
     /// <summary>
     /// Roll entry guidance's glide to the nearest roll at which the air's rolling moment is zero and restoring (GuidanceWindow.UpdateGlideRoll), under AFC's own attitude controller. OFF by default since 2026-11-20: on 2stage_KSAero no roll trims (the rolling moment is a near-constant bias), and the search only wandered; the glide flies wings level to the local vertical, as before. The offset it has turned the held wing direction by, rad, about the engine-first axis (ReturnRollRefCci); when it last chose; and the air's rolling moment at the held roll and at the one it heads for then, N m.

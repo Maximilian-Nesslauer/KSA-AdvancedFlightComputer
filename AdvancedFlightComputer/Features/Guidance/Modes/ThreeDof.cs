@@ -257,6 +257,13 @@ public static partial class GuidanceWindow
             if (_s.ThreeDofNominal == null)
                 _s.DiagEntry(error);
         }
+        // The roll the flight holds follows the bearing to the site (ReturnRollRefCci): the model reads the body-axis table at the one held now, so each re-solve plans the roll the craft flies.
+        if (_s.ThreeDofNominal is { } nominal && (nominal.RollRefX != 0.0 || nominal.RollRefY != 0.0 || nominal.RollRefZ != 0.0))
+        {
+            double3 held = ReturnRollRefLocal(vehicle, parent, frame);
+            if (held.Length() > 0.5 && held.X * nominal.RollRefX + held.Y * nominal.RollRefY + held.Z * nominal.RollRefZ < RollRefMoveCos)
+                _s.ThreeDofNominal = nominal with { RollRefX = held.X, RollRefY = held.Y, RollRefZ = held.Z };
+        }
         _s.ThreeDofEstimator ??= new AeroScaleEstimator();
         if (_s.ThreeDofNominal != null)
         {
@@ -332,6 +339,9 @@ public static partial class GuidanceWindow
         Log3Dof(vehicle, x, att, now);
         EntryLogRow(vehicle, parent, frame, x, att, now, onPlan: true);
     }
+
+    /// <summary>The cosine of the least turn of the held wing direction, 0.1 deg, worth a new model (Step3Dof).</summary>
+    private static readonly double RollRefMoveCos = Math.Cos(0.1 * Math.PI / 180.0);
 
     /// <summary>The held roll's reference in the site frame, for the model (KsaPointMassModel.RollRef), or zero when the roll is not held.</summary>
     private static double3 ReturnRollRefLocal(Vehicle vehicle, IParentBody parent, KsaFrameBridge.SiteFrame frame)

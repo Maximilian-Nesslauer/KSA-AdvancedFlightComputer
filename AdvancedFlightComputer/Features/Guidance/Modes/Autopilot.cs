@@ -2021,30 +2021,17 @@ public static partial class GuidanceWindow
     /// the pad to cutoff, with no discontinuity anywhere in between.
     /// </summary>
     /// <summary>
-    /// A returning booster's roll reference in CCI now (VehicleAutopilotState.ReturnRollRefCcf): the direction its wing, body +y, is held along - up x d, with up the local vertical and d the horizontal direction to the site, set on first use and then frozen in the body's frame. The body's +y is that direction less its part along the axis (SteerBody2Cci, BodyAeroTable.WorldCoefficients).
-    ///  WINGS LEVEL TO THE LOCAL VERTICAL. up x d is the normal of the great circle through the booster and the site, so it is horizontal everywhere along the ground track: the booster pitches in the vertical plane of its track and skids across it, and its roll on the navball stays 0 through the boostback burn, the flip, the glide and entry guidance. It is undefined only for an axis along it, flat and square to the track, which a returning booster never flies.
+    /// A returning booster's roll reference in CCI now (VehicleAutopilotState.ReturnRollRefCcf): the direction its wing, body +y, is held along - up x d, with up the local vertical and d the horizontal direction to the site, both where the booster is NOW (UpdateReturnRollRef). The body's +y is that direction less its part along the axis (SteerBody2Cci, BodyAeroTable.WorldCoefficients).
+    ///  WINGS LEVEL TO THE LOCAL HORIZON, SQUARE TO THE TRACK TO THE SITE. up x d is horizontal, so the booster pitches in the vertical plane through it and the site, and its roll on the navball stays 0 through the boostback burn, the flip, the glide and entry guidance. It is undefined only for an axis along it, flat and square to the track, which a returning booster never flies.
+    ///  LIVE, NOT FROZEN (2026-11-21). Until then w was taken once, at first use, and frozen: the normal of the great circle through the booster and the site at that moment. Once the booster was off that circle its pitch plane no longer pointed at the site, and it could only correct the cross-range by skidding across its own wings. It now follows the bearing to the site, turned at no more than ReturnRollTurnDegS so the craft's roll (and the plan's held roll) keep up with it, and stands still within ReturnRollFreezeM of the site, where the bearing to it swings.
     ///  Until 2026-11-20 the reference was w = (d - up) / sqrt 2, 45 deg below the horizon towards the site, with the wing along axis x w. An engine-first glide's axis is the reverse of its velocity, so a glide path through 45 deg put the axis along -w: there axis x w had no direction and swung with the slightest skid, and either side of it pointed opposite ways - the booster rolled through the boostback glide as if it kept redefining "up".
     /// </summary>
     internal static double3 ReturnRollRefCci(Vehicle vehicle, IParentBody parent)
     {
         doubleQuat cci2Ccf = parent.GetCci2Ccf();
-        if (_s.ReturnRollRefCcf.Length() < 0.5)
-        {
-            double3 r = vehicle.Orbit.StateVectors.PositionCci;
-            double3 up = r.NormalizeOrZero();
-            double3 site = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
-            double3 toSite = site - r;
-            double3 d = toSite - double3.Dot(toSite, up) * up;
-            // Over the site itself there is no direction to it: the horizontal part of the velocity, reversed, is where it came from.
-            if (d.Length() < 1.0)
-            {
-                double3 vAir = vehicle.Orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r);
-                d = -(vAir - double3.Dot(vAir, up) * up);
-            }
-            if (d.Length() < 1e-6)
-                d = double3.Cross(up, Math.Abs(up.Z) < 0.9 ? new double3(0, 0, 1) : new double3(1, 0, 0));
-            _s.ReturnRollRefCcf = double3.Normalize(double3.Cross(up, double3.Normalize(d))).Transform(cci2Ccf);
-        }
+        double now = SimNow();
+        if (_s.ReturnRollRefCcf.Length() < 0.5 || now > _s.ReturnRollRefAt)
+            UpdateReturnRollRef(vehicle, parent, cci2Ccf, now);
         double3 w = _s.ReturnRollRefCcf.Transform(doubleQuat.Inverse(cci2Ccf));
         // The glide's roll offset (UpdateGlideRoll), about the engine-first axis the airflow sets: zero until entry guidance's glide picks one.
         double phi = _s.ReturnRollOffsetRad;
@@ -2052,6 +2039,54 @@ public static partial class GuidanceWindow
             return w;
         double3 axis = GlideRollAxisCci(vehicle, parent);
         return axis.Length() > 0.5 ? RotateAbout(w, axis, phi) : w;
+    }
+
+    /// <summary>The fastest the held wing direction turns to follow the bearing to the site, deg/s: the glide controller's own roll capture rate (AttitudeController.Settings.CaptureRateDegS), so the craft's roll keeps up with it.</summary>
+    private const double ReturnRollTurnDegS = 5.0;
+
+    /// <summary>Within this horizontal distance of the site, m, the held wing direction stops following the bearing to it: over the site the bearing swings round, and a small miss would roll the craft through it in the last seconds.</summary>
+    private const double ReturnRollFreezeM = 1000.0;
+
+    /// <summary>
+    /// The held wing direction, once a sim step (ReturnRollRefCci): up x d where the booster is now, d the horizontal direction to the site, turned towards from the last at no more than ReturnRollTurnDegS; within ReturnRollFreezeM of the site the last one, laid level to the local horizon. Taken outright the first time; over the site, with no wing direction yet, from the reversed horizontal velocity, where it came from.
+    /// </summary>
+    private static void UpdateReturnRollRef(Vehicle vehicle, IParentBody parent, doubleQuat cci2Ccf, double now)
+    {
+        double dt = double.IsFinite(_s.ReturnRollRefAt) ? Math.Clamp(now - _s.ReturnRollRefAt, 0.0, 1.0) : 0.0;
+        _s.ReturnRollRefAt = now;
+        double3 r = vehicle.Orbit.StateVectors.PositionCci;
+        double3 up = r.NormalizeOrZero();
+        double3 site = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+        double3 toSite = site - r;
+        double3 d = toSite - double3.Dot(toSite, up) * up;
+        bool held = _s.ReturnRollRefCcf.Length() > 0.5;
+        double3 live = d.Length() >= ReturnRollFreezeM || !held ? d : default;
+        if (!held && live.Length() < 1.0)
+        {
+            double3 vAir = vehicle.Orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r);
+            live = -(vAir - double3.Dot(vAir, up) * up);
+            if (live.Length() < 1e-6)
+                live = double3.Cross(up, Math.Abs(up.Z) < 0.9 ? new double3(0, 0, 1) : new double3(1, 0, 0));
+        }
+        double3 want = live.Length() > 1e-6 ? double3.Cross(up, double3.Normalize(live)).NormalizeOrZero() : default;
+        if (!held)
+        {
+            _s.ReturnRollRefCcf = want.Transform(cci2Ccf);
+            return;
+        }
+        // The last one, level to the horizon here.
+        double3 last = _s.ReturnRollRefCcf.Transform(doubleQuat.Inverse(cci2Ccf));
+        last = (last - double3.Dot(last, up) * up).NormalizeOrZero();
+        if (last.Length() < 0.5)
+            last = want;
+        if (want.Length() > 0.5 && last.Length() > 0.5)
+        {
+            double turn = Math.Atan2(double3.Dot(double3.Cross(last, want), up), double3.Dot(last, want));
+            double step = ReturnRollTurnDegS * Math.PI / 180.0 * dt;
+            last = RotateAbout(last, up, Math.Clamp(turn, -step, step)).NormalizeOrZero();
+        }
+        if (last.Length() > 0.5)
+            _s.ReturnRollRefCcf = last.Transform(cci2Ccf);
     }
 
     /// <summary>The engine-first axis of a glide, CCI: the reverse of the craft's velocity through the air. Zero when it is not moving through it.</summary>

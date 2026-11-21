@@ -73,7 +73,7 @@ public sealed record KsaPointMassModel : IPointMassModel
     public BodyAeroTable? BodyAero { get; init; }
 
     /// <summary>
-    /// THE ROLL THE CRAFT IS HELD AT, site frame: the fixed wing direction w - up x d, horizontal and square to the ground track, frozen at separation - with the body's +y along w's part square to b. The guidance commands that same roll (GuidanceWindow.ReturnRollRefCci), so the model knows the body axes for any pointing b and can read the body-axis table for the actual tilt: pitch in the body x-z plane, yaw towards +-y. In the glide it is wings level along the ground track, navball roll 0, and it stays defined as the axis passes vertical and through a boostback burn. Zero for none.
+    /// THE ROLL THE CRAFT IS HELD AT, site frame: the wing direction w - up x d, horizontal and square to the track to the site; fixed in the model, which entry guidance gives the one the flight holds as it moves (GuidanceWindow.ReturnRollRefCci) - with the body's +y along w's part square to b. The guidance commands that same roll (GuidanceWindow.ReturnRollRefCci), so the model knows the body axes for any pointing b and can read the body-axis table for the actual tilt: pitch in the body x-z plane, yaw towards +-y. In the glide it is wings level along the ground track, navball roll 0, and it stays defined as the axis passes vertical and through a boostback burn. Zero for none.
     /// </summary>
     public double RollRefX { get; init; }
     public double RollRefY { get; init; }
