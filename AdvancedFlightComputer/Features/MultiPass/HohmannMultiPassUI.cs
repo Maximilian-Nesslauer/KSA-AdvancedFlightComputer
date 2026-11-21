@@ -588,7 +588,7 @@ internal static class HohmannMultiPassUI
         if (!_hasCachedPreview || _cachedPreview.Failed) return;
         if (_cachedPreview.Advisory == null) return;
         ImGui.Spacing();
-        ConsoleUi.WarningWrapped(ConsoleUi.EscapeFormat(_cachedPreview.Advisory));
+        ConsoleUi.WarningWrapped(_cachedPreview.Advisory);
     }
 
     private static void DrawAutoClampIfApplicable()

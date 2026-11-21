@@ -468,10 +468,10 @@ internal static class TransferPage
         if (TransferSession.ScoreAt(row, col2) is { } score
             && ConsoleUi.BeginPlacedCard("TRANSFER POINT", "TRANSFER POINT".AsSpan()))
         {
-            ConsoleWidgets.Readout("DEPART IN".AsSpan(), FormatHelper.FormatDuration(Math.Max(0.0, (score.Start - Universe.GetElapsedTime()).Seconds())).AsSpan());
-            ConsoleWidgets.Readout("FLIGHT TIME".AsSpan(), FormatHelper.FormatDuration(score.Transit.Seconds()).AsSpan());
-            ConsoleWidgets.Readout("DEPARTURE DV".AsSpan(), Fmt.Dv(score.DepartureDv).AsSpan());
-            ConsoleWidgets.Readout("ARRIVAL SPEED".AsSpan(), Fmt.Speed(score.ArrivalSpeed).AsSpan());
+            ConsoleWidgets.Readout("DEPART IN".AsSpan(), ConsoleUi.EscapeFormat(FormatHelper.FormatDuration(Math.Max(0.0, (score.Start - Universe.GetElapsedTime()).Seconds()))).AsSpan());
+            ConsoleWidgets.Readout("FLIGHT TIME".AsSpan(), ConsoleUi.EscapeFormat(FormatHelper.FormatDuration(score.Transit.Seconds())).AsSpan());
+            ConsoleWidgets.Readout("DEPARTURE DV".AsSpan(), ConsoleUi.EscapeFormat(Fmt.Dv(score.DepartureDv)).AsSpan());
+            ConsoleWidgets.Readout("ARRIVAL SPEED".AsSpan(), ConsoleUi.EscapeFormat(Fmt.Speed(score.ArrivalSpeed)).AsSpan());
             ConsoleWidgets.EndTooltipCard();
         }
     }

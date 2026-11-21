@@ -61,11 +61,26 @@ internal static partial class Program
         SiteSlopeRules();
         IdleEngineParkingRules();
         BurnTurnChecks();
+        PrintfTexts();
 
         Console.WriteLine(_failures == 0
             ? $"PASS {_checks} checks"
             : $"FAIL {_failures} of {_checks} checks");
         return _failures == 0 ? 0 : 1;
+    }
+
+    private static void PrintfTexts()
+    {
+        Check("a forecast note with a percent sign is caught at a formatted call",
+            PrintfTextCalls.UnsafeTexts("ImGui.TextWrapped(forecast.Text); ConsoleWidgets.Readout(\"BURN\".AsSpan(), note.AsSpan());").Count() == 2);
+        Check("an escaped text, a literal and a title card pass",
+            !PrintfTextCalls.UnsafeTexts("ImGui.TextDisabled(ConsoleUi.EscapeFormat(note)); ImGui.TextColored(in ink, \"AT 3 THROTTLE\"u8);"
+                + " ConsoleWidgets.BeginTooltipCard(EscapeFormat(title).AsSpan(), 14f);").Any());
+        Check("a literal with a percent sign is caught", PrintfTextCalls.UnsafeTexts("ImGui.TextDisabled(\"at 3 % throttle\");").Any());
+        List<string> offenders = PrintfTextCalls.Offenders();
+        Check("the console and the constellation feature pass no raw text to a printf format", offenders.Count == 0, string.Join(" | ", offenders));
+        string consoleUi = File.ReadAllText(Path.Combine(PrintfTextCalls.SourceRoot(), "Core", "ConsoleUi.cs"));
+        Check("the wrapped console sentences draw unformatted", !consoleUi.Contains("ImGui.TextWrapped(", StringComparison.Ordinal));
     }
 
     private static void FormWords()
