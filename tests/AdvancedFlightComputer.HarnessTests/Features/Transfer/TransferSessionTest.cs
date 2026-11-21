@@ -16,11 +16,15 @@ namespace AdvancedFlightComputer.HarnessTests;
 // the thread pool with the public TransferTask.WorkerTask, the session collects it from its tick, the
 // best entry is selected, the binned raster has cells and its lowest value is not above the best
 // departure dV, and the calculation flag of the stock planner is not touched. A cancelled calculation
-// never reports a result, and CancelAll drops everything.
+// never reports a result, and CancelAll drops everything. The best departure depends on where the
+// destination is when the calculation starts, so a second case plans again at a fixed epoch. There the
+// lowest Lambert costs belong to more than eight cells whose arcs pass below the surface of the home body.
 public sealed class TransferSessionTest : AfcTest
 {
     private static readonly TimeSpan CalculationTimeout = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan RefineTimeout = TimeSpan.FromMinutes(1);
+    private const double FixedEpochSeconds = 98589.69;
+    private const double EpochStepSeconds = 10.0;
 
     public override string Name => "afc-transfer-session";
 
@@ -41,6 +45,23 @@ public sealed class TransferSessionTest : AfcTest
             return;
         }
 
+        t.Info($"case: the current epoch {Universe.GetElapsedSeconds():F3} s");
+        PlanOnce(t, home, destination, save, firstCase: true);
+
+        // The sim clock only runs forward, so the fixed epoch is reachable only when no earlier test passed it.
+        double wait = FixedEpochSeconds - Universe.GetElapsedSeconds();
+        if (wait < 0.0)
+        {
+            t.Skip($"the sim clock is already at {Universe.GetElapsedSeconds():F3} s, after the fixed epoch {FixedEpochSeconds:F3} s");
+            return;
+        }
+        t.Session.CreateDriver().StepFor(wait, EpochStepSeconds);
+        t.Info($"case: the fixed epoch {Universe.GetElapsedSeconds():F3} s");
+        PlanOnce(t, home, destination, save, firstCase: false);
+    }
+
+    private static void PlanOnce(TestContext t, IParentBody home, IOrbiter destination, VehicleSave save, bool firstCase)
+    {
         FieldInfo? stockCalculated = AccessTools.Field(typeof(TransferPlanner), "_transferCalculated");
         object? stockBefore = stockCalculated?.GetValue(null);
         string id = "TransferSession_" + Guid.NewGuid().ToString("N");
@@ -48,12 +69,13 @@ public sealed class TransferSessionTest : AfcTest
         TransferSession.CancelAll();
         try
         {
-            vehicle = VehicleFixtures.SpawnDesign(t.System, home, save.VehicleSaveData.RootPartInstance, id,
+            vehicle = VehicleFixtures.SpawnDesign(t.System, home, save.VehicleSaveData.RootPartInstance!, id,
                 OrbitFixtures.CircularAt(home, 400_000, Universe.GetElapsedTime()));
             t.Info($"planning from {((Astronomical)home).Id} orbit to {((Astronomical)destination).Id}");
 
             TransferSession.SetSource(vehicle);
-            CheckMissionDefault(t, vehicle);
+            if (firstCase)
+                CheckMissionDefault(t, vehicle);
             TransferSession.SetDestination(destination);
             t.Check("the destination has transfer bounds", TransferSession.Info != null
                 && TransferSession.MinTofSec > 0.0 && TransferSession.MaxTofSec > TransferSession.MinTofSec,
@@ -62,7 +84,8 @@ public sealed class TransferSessionTest : AfcTest
             if (!t.Check("CALCULATE is allowed", refusal.Length == 0, refusal))
                 return;
 
-            CheckCancelReportsNothing(t);
+            if (firstCase)
+                CheckCancelReportsNothing(t);
 
             TransferSession.StartCalculation();
             t.Check("the calculation starts", TransferSession.Calculating);
@@ -77,6 +100,7 @@ public sealed class TransferSessionTest : AfcTest
                 return;
 
             OrbitalTransfers.TransferInfo info = TransferSession.Info!;
+            LogPropagated(t, info);
             int2 best = TransferSession.BestDv;
             bool bestValid = best.X >= 0 && best.Y >= 0 && info.PorkChopData?[best.X, best.Y]?.TransferData != null;
             if (!t.Check("a best departure is found", bestValid, $"index {best.X}, {best.Y}"))
@@ -98,6 +122,7 @@ public sealed class TransferSessionTest : AfcTest
             while (TransferSession.Refining && DateTime.UtcNow - refineStart < RefineTimeout)
                 Thread.Sleep(50);
             t.Check("the intercept refinement ends", !TransferSession.Refining);
+            CheckDepartureImpactScore(t, info);
 
             if (stockCalculated != null)
                 t.Check("the calculation flag of the stock planner is untouched", Equals(stockCalculated.GetValue(null), stockBefore));
@@ -161,6 +186,56 @@ public sealed class TransferSessionTest : AfcTest
             vehicle.Parts.Mission = originalMission;
             rules.LifeSupport = originalLifeSupport;
         }
+    }
+
+    private static void LogPropagated(TestContext t, OrbitalTransfers.TransferInfo info)
+    {
+        if (info.PorkChopData == null)
+            return;
+        for (int m = 0; m < TransferSession.Size; m++)
+        {
+            for (int n = 0; n < TransferSession.Size; n++)
+            {
+                if (info.PorkChopData[m, n]?.TransferData is not { } data)
+                    continue;
+                t.Info($"propagated ({m}, {n}): dV {data.TransferDvVlf.Length():F1} m/s, impacts {data.Impacts}, " +
+                       $"bad encounter {data.BadEncounter}, departure infeasible {data.DepartureInfeasible}, " +
+                       $"{info.PorkChopData[m, n].FlightPlan.Patches.Count} patches");
+            }
+        }
+        t.Info($"best {TransferSession.BestDv.X}, {TransferSession.BestDv.Y}, preset unavailable {TransferSession.PresetUnavailable}");
+    }
+
+    // The scorer marks a cell whose Lambert arc passes below the surface without a trajectory. The
+    // cheapest such cell is propagated here, and the stock trajectory check has to find the impact too.
+    private static void CheckDepartureImpactScore(TestContext t, OrbitalTransfers.TransferInfo info)
+    {
+        int2 flagged = new(-1, -1);
+        double lowest = double.MaxValue;
+        for (int m = 0; m < TransferSession.Size; m++)
+        {
+            for (int n = 0; n < TransferSession.Size; n++)
+            {
+                if (TransferSession.ScoreAt(m, n) is { DepartureImpact: true } score && score.DepartureDv < lowest)
+                {
+                    flagged = new int2(m, n);
+                    lowest = score.DepartureDv;
+                }
+            }
+        }
+        if (flagged.X < 0)
+        {
+            t.Info("no scored cell passes below the surface of the departure body");
+            return;
+        }
+        TransferSession.Select(flagged);
+        // A selection without the impact starts a refinement that reads the craft, so it has to end before the craft goes.
+        DateTime start = DateTime.UtcNow;
+        while (TransferSession.Refining && DateTime.UtcNow - start < RefineTimeout)
+            Thread.Sleep(50);
+        OrbitalTransfers.TransferData? data = info.PorkChopData?[flagged.X, flagged.Y]?.TransferData;
+        t.Check("the cheapest cell scored as a departure impact impacts in its propagated trajectory",
+            data is { Impacts: true }, $"index {flagged.X}, {flagged.Y}, {lowest:F1} m/s");
     }
 
     private static void CheckCancelReportsNothing(TestContext t)
