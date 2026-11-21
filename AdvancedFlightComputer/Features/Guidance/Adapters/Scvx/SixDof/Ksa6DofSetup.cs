@@ -515,9 +515,14 @@ public static class Ksa6DofSetup
 
         // THE FLOOR AS THE THRUST IT GIVES, not as a fraction of Tmax. The nozzle's back-pressure loss is the same newtons at any throttle, so the minimum throttle gives less than that fraction of full thrust. On the 2026-10-08 boosters, floor x Tmax took 13.3 % throttle to deliver against a real 10 % floor, putting the model's minimum thrust above the weight of a booster that could in fact hover - and its plans climbed off the pad. The model's floor is the real thrust at the minimum throttle over Tmax, both at the same pressure.
         (double floorThrust, double floorFlow) = KsaEnginePerf.AtThrottle(vehicle, throttleFloor, LastAmbientPressurePa);
-        // THE PLAN'S FLOOR sits above the engines' by floorMargin, so the tracker has thrust to take off; the real floor stays what the flow is fitted through and what the over-powered check falls back to.
+        // THE PLAN'S FLOOR sits above the engines' by floorMargin of the thrust range, so the tracker has thrust to take off, and under the hover line when the engines can go under it (KsaEnginePerf.LandingPlanFloorThrottle); the real floor stays what the flow is fitted through and what the over-powered check falls back to.
+        //  The weight is the one at the end of the burn, where hovering matters: no lighter than dry, and no heavier than now less the burn's seed time at the floor's flow.
+        double siteGravity = parent.Mu / siteCci.LengthSquared();
+        double endMass = Math.Max(vehicle.TotalMass - vehicle.PropellantMass, vehicle.TotalMass - Math.Max(sigmaSeed, 0.0) * Math.Max(floorFlow, 0.0));
         double planFloorThrust = floorMargin > 0.0
-            ? KsaEnginePerf.ThrustAtThrottle(vehicle, Math.Min(throttleFloor + floorMargin, 0.8), LastAmbientPressurePa)
+            ? KsaEnginePerf.ThrustAtThrottle(vehicle,
+                KsaEnginePerf.LandingPlanFloorThrottle(vehicle, throttleFloor, floorMargin, LastAmbientPressurePa, endMass * siteGravity),
+                LastAmbientPressurePa)
             : floorThrust;
         double realFloorFraction = floorThrust > 0.0 && floorThrust < thrust ? floorThrust / thrust : throttleFloor;
         if (planFloorThrust > 0.0 && planFloorThrust < thrust)

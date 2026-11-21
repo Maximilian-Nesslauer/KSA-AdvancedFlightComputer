@@ -290,6 +290,34 @@ internal static class KsaEnginePerf
             StructuralThrottleCap(vehicle, ambientPressure));
     }
 
+    /// <summary>A landing plan's floor is held under this share of the craft's weight whenever the engines' own minimum is (LandingPlanFloorThrottle).</summary>
+    internal const double LandingFloorHoverTwr = 0.9;
+
+    /// <summary>
+    /// The throttle a landing plan's floor sits at (VehicleAutopilotState.LandingPlanFloorMargin): the engines' minimum plus <paramref name="margin"/> of the THRUST range above it, at <paramref name="ambientPressure"/>, so the tracker has thrust to take off. Held under LandingFloorHoverTwr of <paramref name="weightN"/> when the engines' minimum is, so a craft that can hover is planned as one that can.
+    ///  WHY IN THRUST. The margin was throttle points, and under back pressure the thrust is steepest at the bottom of the range: the nozzle loses the same newtons at any throttle. On the 2026-11-21 stock booster, 10 % throttle gave 149 kN at the pad and 15 % gave 249 kN, so five points made the plan's minimum 1.24 of the weight against the engines' 0.85. A plan whose minimum lifts the craft cannot sink near the ground, has to end its braking exactly at the plan end, and stopped 2.3 m above it, rising, which the stop-short rule cut.
+    /// </summary>
+    internal static double LandingPlanFloorThrottle(Vehicle vehicle, double minimumThrottle, double margin, double ambientPressure, double weightN)
+    {
+        if (!(margin > 0.0))
+            return minimumThrottle;
+        double ceiling = Math.Max(minimumThrottle, 0.8);
+        double floorThrust = ThrustAtThrottle(vehicle, minimumThrottle, ambientPressure);
+        double fullThrust = ThrustAtThrottle(vehicle, 1.0, ambientPressure);
+        if (!(floorThrust > 0.0 && fullThrust > floorThrust))
+            return Math.Clamp(minimumThrottle + margin, minimumThrottle, ceiling);
+        double target = floorThrust + margin * (fullThrust - floorThrust);
+        // A craft whose minimum is under its weight keeps a margin only up to the hover line, and none past its own minimum when that is already above the line; one that cannot throttle under its weight keeps the whole margin, which is what it is for.
+        if (weightN > 0.0 && floorThrust < weightN)
+            target = Math.Min(target, Math.Max(floorThrust, LandingFloorHoverTwr * weightN));
+        if (!(target > floorThrust))
+            return minimumThrottle;
+        ThrustCommand command = CommandForThrust(vehicle, target, ambientPressure);
+        return command.Status == ThrustStatus.Available && command.Throttle > 0.0
+            ? Math.Clamp(command.Throttle, minimumThrottle, ceiling)
+            : Math.Clamp(minimumThrottle + margin, minimumThrottle, ceiling);
+    }
+
     // The throttle that gets a fraction of the liquid engines' full thrust out of them alone, for a plan whose throttle is theirs: solid motors burning alongside ignore it and add their own thrust on top. Everything the throttle reaches is liquid, so CommandForThrust's refusal while a solid burns does not apply.
     internal static ThrustCommand CommandLiquidFraction(Vehicle vehicle, double fraction, double ambientPressure)
     {

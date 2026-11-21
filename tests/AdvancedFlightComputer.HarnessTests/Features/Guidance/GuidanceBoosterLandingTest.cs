@@ -230,6 +230,18 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
             t.Info($"engines: vacuum {vacThrust / 1e3:F0} kN at {vacFlow:F1} kg/s, sea level {seaThrust / 1e3:F0} kN; min throttle {minThrottle:P0}, " +
                    $"there {KsaEnginePerf.AtThrottle(booster, minThrottle, 101325.0).thrust / 1e3:F0} kN at {KsaEnginePerf.AtThrottle(booster, minThrottle, 101325.0).massFlow:F1} kg/s; " +
                    $"structural cap {KsaEnginePerf.StructuralThrottleCap(booster, 101325.0):P0}, limit {KsaEnginePerf.StructuralAccelerationLimit(booster):F1} m/s2");
+            // THE PLANS' FLOOR (KsaEnginePerf.LandingPlanFloorThrottle): the margin is a share of the thrust range above the minimum, and a booster whose minimum is under its weight is planned with a floor under the hover line, not past its weight. In throttle points the margin made the stock booster's planned minimum 1.24 of its weight against the engines' 0.85 (2026-11-21), and it stopped short.
+            {
+                double weight = booster.TotalMass * 9.80665;
+                double floorN = KsaEnginePerf.AtThrottle(booster, minThrottle, 101325.0).thrust;
+                double planThrottle = KsaEnginePerf.LandingPlanFloorThrottle(booster, minThrottle, state.LandingPlanFloorMargin, 101325.0, weight);
+                double planN = KsaEnginePerf.ThrustAtThrottle(booster, planThrottle, 101325.0);
+                double pointsN = KsaEnginePerf.ThrustAtThrottle(booster, Math.Min(minThrottle + state.LandingPlanFloorMargin, 0.8), 101325.0);
+                t.Info($"plans' floor: throttle {planThrottle:P1}, {planN / 1e3:F0} kN, TWR {planN / weight:F2} (engines' minimum {floorN / weight:F2}; {state.LandingPlanFloorMargin:P0} in throttle points would be {pointsN / weight:F2})");
+                if (floorN < weight)
+                    t.Check("a booster that can hover is planned as one: the plans' floor under its weight, no lower than the engines'",
+                        planN < weight && planN >= floorN * (1.0 - 1e-6), $"{planN / 1e3:F0} kN against {weight / 1e3:F0} kN weight and {floorN / 1e3:F0} kN minimum");
+            }
             // The gimbals' torque authority as touchdown guidance plans it: the allocator's capability per newton of the thrust it was evaluated at.
             double planningThrust = Ksa6DofSetup.PlanningThrust(booster), lateral = Ksa6DofSetup.LateralTorqueLimit(booster), roll = Ksa6DofSetup.RollTorqueLimit(booster), arm = Ksa6DofSetup.EngineArm(booster);
             t.Info($"gimbals: capability at {planningThrust / 1e3:F0} kN planning thrust - lateral {lateral / 1e3:F0} kN m, roll {roll / 1e3:F0} kN m, arm {arm:F1} m; " +

@@ -927,12 +927,14 @@ public static partial class GuidanceWindow
         bool fixedCoast = _s.ThreeDofTurnAccelDegS2 == 0.0 && coastTurn == 0.0;
         // THE PROVEN NODE COUNT, 12 glide intervals and 17 in the burn, from wherever entry guidance takes over. From higher up (it engages on dynamic pressure, ThreeDofEngageQkPa) each interval is longer; as the horizon closes they shrink back to the sizes flown for months. More intervals instead took 0.7-0.9 s a re-solve up high (2026-11-20).
         const int glideIntervals = 12;
+        // The plans' floor margin is read off the thrust range at the site's pressure (KsaEnginePerf.LandingPlanFloorThrottle).
+        double sitePressure = vehicle.Orbit?.Parent is { } siteBody ? KsaEnginePerf.AmbientPressureAt(siteBody, SiteTerrainHeight(siteBody)) : double.NaN;
         Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: glideIntervals, _s.GlideMaxAoaDeg,
             _s.VehicleHeightM, settings.GlideAccelMax(LandingAccelLimitMs2), _s.LandingPlanFloorMargin, turn,
-            fixedGlideAttitude: fixedCoast, burnTiltPerSDeg: _s.ThreeDofBurnTiltPerSDeg);
+            fixedGlideAttitude: fixedCoast, burnTiltPerSDeg: _s.ThreeDofBurnTiltPerSDeg, sitePressurePa: sitePressure);
         Scvx3DofConfig burn = Ksa3DofSetup.Config(vehicle, nodes: 20, glideIntervals: 0, _s.GlideMaxAoaDeg,
                                                    _s.VehicleHeightM, LandingAccelLimitMs2, _s.LandingPlanFloorMargin, turn,
-                                                   burnTiltPerSDeg: _s.ThreeDofBurnTiltPerSDeg);
+                                                   burnTiltPerSDeg: _s.ThreeDofBurnTiltPerSDeg, sitePressurePa: sitePressure);
         var g = new Guidance3Dof(glide, burn, _s.ThreeDofEstimator.Apply(_s.ThreeDofNominal), settings);
         _s.ThreeDofWorker ??= new Ksa3DofWorker();
         // Zero/zero: the legs on the pad, at rest. The plan flies the CoM, VehicleHeightM above the legs.

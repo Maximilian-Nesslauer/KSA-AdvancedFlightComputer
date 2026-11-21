@@ -788,7 +788,8 @@ public sealed class VehicleAutopilotState
     public double LandingAccelLimitG = 3.0;
 
     /// <summary>
-    /// Throttle the landing plans keep in hand below them, as a fraction of full: the 3-DOF and the 6-DOF both plan from the engines' minimum throttle plus this, and their feedback (BurnTracker3Dof, Tracker6Dof) may use the rest, down to the real minimum. A min-fuel burn otherwise rides the minimum, and a craft that cannot throttle below its weight, slowed a little more than planned, has no thrust to take off and stops short above the pad (headless, 2026-10-08: 33 m up at a minimum TWR of 1.09). 0 plans on the minimum itself.
+    /// Thrust the landing plans keep in hand below them, as a share of the thrust range above the engines' minimum at the site's pressure: the 3-DOF and the 6-DOF both plan from that floor (KsaEnginePerf.LandingPlanFloorThrottle), and their feedback (BurnTracker3Dof, Tracker6Dof) may use the rest, down to the real minimum. A min-fuel burn otherwise rides the minimum, and a craft that cannot throttle below its weight, slowed a little more than planned, has no thrust to take off and stops short above the pad (headless, 2026-10-08: 33 m up at a minimum TWR of 1.09). A craft whose minimum is under its weight keeps its plan's floor under the hover line too. 0 plans on the minimum itself.
+    ///  A share of the thrust range, not throttle points, since 2026-11-21: under back pressure the thrust is steepest at the bottom of the range, and five points at the stock booster's 10 % floor were 67 % more thrust, a planned minimum of 1.24 of the weight against the engines' 0.85.
     /// </summary>
     public double LandingPlanFloorMargin = 0.05;
 
