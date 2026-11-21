@@ -272,6 +272,7 @@ internal static partial class AfcConsole
         HeadDrawer.Reset();
         GuidanceWindow.ResetWorldRequests();
         Pages.RcsPage.Reset();
+        Burns.TurnWarp.Reset();
     }
 
     internal static void Reset()
