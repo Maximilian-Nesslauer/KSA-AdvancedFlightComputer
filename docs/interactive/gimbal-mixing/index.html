@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gimbal mixing</title>
+<link rel="icon" href="data:,">
+<script src="../theme.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a reading column for the maths, widening to a two-pane bench (controls and engine plate | torque plot) */
+:root{
+  --bg:#f2f4f3; --panel:#ffffff; --ink:#17201d; --muted:#57635e; --line:#d3dbd7; --gridline:#e5eae7; --code-bg:#e7ece9;
+  --accent:#0d6b63; --set-fill:rgba(13,107,99,.13); --minnorm:#bf5d17; --redis:#4a52c4; --demand:#c0392b; --given:#17201d;
+  --trim:#7b3fa0; --stop:#b8860b; --main:#3d6f99; --vernier:#5e8c2f; --ok:#1f7a3a; --box:#8a9690;
+  --f-head:"Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --f-body:"Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono:"JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#111614; --panel:#192120; --ink:#e4ebe8; --muted:#9aa8a2; --line:#2d3834; --gridline:#212a27; --code-bg:#1f2826;
+  --accent:#4cc3b2; --set-fill:rgba(76,195,178,.14); --minnorm:#f0954a; --redis:#8f97ff; --demand:#ff7a6e; --given:#e4ebe8;
+  --trim:#c48cf0; --stop:#f2c14e; --main:#7fb0dd; --vernier:#9fcf6a; --ok:#5fd27f; --box:#7b8883; color-scheme:dark; } }
+:root[data-theme="dark"]{
+  --bg:#111614; --panel:#192120; --ink:#e4ebe8; --muted:#9aa8a2; --line:#2d3834; --gridline:#212a27; --code-bg:#1f2826;
+  --accent:#4cc3b2; --set-fill:rgba(76,195,178,.14); --minnorm:#f0954a; --redis:#8f97ff; --demand:#ff7a6e; --given:#e4ebe8;
+  --trim:#c48cf0; --stop:#f2c14e; --main:#7fb0dd; --vernier:#9fcf6a; --ok:#5fd27f; --box:#7b8883; color-scheme:dark; }
+:root{color-scheme:light}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.6;
+  padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:28px 64px}
+.wrap{max-width:1080px;margin:0 auto;display:flex;flex-direction:column;gap:40px}
+.col{max-width:70ch}
+h1,h2,h3{font-family:var(--f-head);text-wrap:balance;line-height:1.2;margin:0}
+h1{font-size:2rem;font-weight:700;letter-spacing:-.01em}
+h2{font-size:1.35rem;font-weight:600;margin-bottom:12px}
+h3{font-size:1rem;font-weight:600}
+p{margin:0 0 12px}
+.lede{color:var(--muted);font-size:1.05rem;margin-top:8px}
+.eyebrow{font-family:var(--f-mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+code,.mono{font-family:var(--f-mono);font-size:.88em}
+code{background:var(--code-bg);padding:1px 5px;border-radius:4px}
+.eq{font-family:var(--f-head);font-size:1.9rem;font-weight:500;padding:18px 0 6px;letter-spacing:.01em;overflow-wrap:anywhere}
+.eq i{font-style:italic}
+.eq b{font-weight:700}
+.eq .side{font-size:1.1rem;color:var(--muted);margin-left:18px;white-space:nowrap;display:inline-block}
+dl.terms{display:grid;grid-template-columns:auto 1fr;gap:10px 18px;margin:16px 0 0}
+dl.terms dt{font-family:var(--f-head);font-weight:700;font-size:1.15rem;white-space:nowrap}
+dl.terms dd{margin:0;min-width:0}
+.derive{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-top:18px;font-size:.93rem}
+.derive .mono{display:block;margin:8px 0;white-space:pre-wrap;overflow-x:auto}
+.bench{display:grid;grid-template-columns:minmax(0,330px) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:820px){.bench{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
+.ctrl{display:flex;flex-direction:column;gap:18px}
+.group{display:flex;flex-direction:column;gap:8px}
+.label{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+button,.chip{font:inherit;font-size:.85rem;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:999px;padding:5px 11px;cursor:pointer}
+button:hover,.chip:hover{border-color:var(--accent)}
+button:focus-visible,.chip:focus-within,input:focus-visible,svg:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.on{background:var(--accent);color:var(--panel);border-color:var(--accent)}
+.chip{display:inline-flex;align-items:center;gap:6px}
+.chip input{margin:0;accent-color:var(--accent)}
+.sw{width:10px;height:10px;border-radius:2px;display:inline-block;flex:none}
+.row{display:grid;grid-template-columns:7.5em minmax(0,1fr) 5.6em;align-items:center;gap:8px;font-size:.85rem}
+.row input[type=range]{width:100%;accent-color:var(--accent)}
+.row output{font-family:var(--f-mono);font-size:.8rem;text-align:right;font-variant-numeric:tabular-nums}
+.plotwrap{display:flex;flex-direction:column;gap:12px}
+svg#plot{width:100%;max-width:560px;aspect-ratio:1;display:block;margin:0 auto;touch-action:none;cursor:crosshair;user-select:none}
+svg#roll{width:100%;max-width:560px;display:block;margin:0 auto}
+svg#plate{width:100%;max-width:300px;aspect-ratio:1;display:block;margin:0 auto;user-select:none}
+.eng{cursor:pointer}
+.eng:focus{outline:none}
+.eng:focus-visible .hit{stroke:var(--accent);stroke-width:2}
+.eng.stop .box{stroke:var(--stop);stroke-width:3;animation:flash .7s ease-in-out infinite alternate}
+@keyframes flash{from{stroke-opacity:1}to{stroke-opacity:.25}}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.8rem;color:var(--muted);justify-content:center}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.read{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.read div{border-top:1px solid var(--line);padding-top:6px;min-width:0}
+.read .k{font-size:.72rem;color:var(--muted);font-family:var(--f-mono);letter-spacing:.05em;text-transform:uppercase}
+.read .v{font-family:var(--f-mono);font-size:.86rem;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.pill{display:inline-block;font-family:var(--f-mono);font-size:.75rem;padding:2px 8px;border-radius:999px;border:1px solid currentColor}
+.pill.yes{color:var(--ok)} .pill.no{color:var(--demand)}
+.note{font-size:.82rem;color:var(--muted)}
+.englist{display:flex;flex-direction:column;gap:6px;font-size:.8rem}
+.englist .e{border-top:1px solid var(--line);padding-top:5px}
+.englist .h{display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;font-weight:600}
+.englist .h .st{font-family:var(--f-mono);font-size:.7rem;font-weight:400;color:var(--muted)}
+.englist .h .st.at{color:var(--stop)}
+.englist .m{font-family:var(--f-mono);font-size:.74rem;color:var(--muted);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.flow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+@media (max-width:720px){.flow{grid-template-columns:minmax(0,1fr)}}
+.flow .panel h3{margin-bottom:6px}
+.flow .panel p{font-size:.9rem;margin:0}
+ul,ol{margin:0 0 12px;padding-left:20px} li{margin:4px 0}
+a{color:var(--accent)}
+.tag{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:0 5px;margin-right:4px;white-space:nowrap}
+.tag.meas{color:var(--ok)} .tag.ill{color:var(--minnorm)} .tag.harn{color:var(--main)}
+footer{font-size:.8rem;color:var(--muted)}
+footer p{margin:0}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<header class="col">
+  <div class="eyebrow">Attitude · gimbals · KsaTvcAllocator</div>
+  <h1>Gimbal mixing</h1>
+  <p class="lede">How AFC turns a body torque in newton metres into a deflection for every engine gimbal, and what happens when the engines sit off the centre line or a gimbal reaches its stop.</p>
+</header>
+
+<section class="col">
+  <h2>The equation</h2>
+  <div class="eq" aria-label="u equals B transpose times the inverse of B B transpose plus lambda I, times tau. Lambda is ten to the minus six times the trace of B B transpose, and each command u c lies between minus one and one."><b><i>u</i></b> = <i>B</i><sup>T</sup>(<i>BB</i><sup>T</sup> + <i>λI</i>)<sup>−1</sup> <b><i>τ</i></b><span class="side"><i>λ</i> = 10<sup>−6</sup> tr(<i>BB</i><sup>T</sup>), −1 ≤ <i>u</i><sub>c</sub> ≤ 1</span></div>
+  <dl class="terms">
+    <dt><b><i>τ</i></b></dt><dd>The torque the gimbals are asked for, in N m, in the 6-DOF model's body axes: <i>x</i> and <i>y</i> across the thrust axis (pitch and yaw), <i>z</i> along it (roll). It is the gimbals' share only. The engines' rest moment comes on top of it.</dd>
+    <dt><i>B</i></dt><dd>The 3 × 2<i>N</i> effectiveness matrix. Column <i>c</i> is the torque one unit of command <i>c</i> adds, from rest. Each gimbal has two columns, one per axis.</dd>
+    <dt><b><i>u</i></b></dt><dd>The commands, two per gimbal: <i>u</i><sub>2i</sub> turns it about its own <i>x</i>, <i>u</i><sub>2i+1</sub> about its own <i>y</i>. Each is a fraction of the gimbal's range, −1 at one stop and +1 at the other. KSA clamps each axis on its own, so a gimbal's range is a square, not a disc.</dd>
+    <dt><i>λ</i></dt><dd>A small Tikhonov term, a millionth of the trace of <i>BB</i><sup>T</sup>. It keeps an axis with no authority, such as roll on one central engine, from making the inverse blow up. An unreachable torque then gives a small command, not a huge one.</dd>
+  </dl>
+  <div class="derive">
+    <strong>Where <i>B</i> comes from.</strong> Gimbal <i>i</i> has its pivot <b><i>p</i></b><sub>i</sub> at <i>z</i> = −<i>L</i>, its thrust point <b><i>ℓ</i></b><sub>i</sub> one nozzle further back, and thrust <i>T</i><sub>i</sub> along +<i>z</i> at rest. A command turns the thrust and the thrust point together, first about <i>x</i>, then about <i>y</i>. <code>FillColumns</code> differentiates the whole torque by central differences:
+    <span class="mono">τᵢ(u) = (pᵢ + R(u)·ℓᵢ − r_cm) × Tᵢ·R(u)·d̂₀
+R(u)  = R_y(u₂ᵢ₊₁·θmax) · R_x(u₂ᵢ·θmax)
+B[:,c] = (τᵢ(+h·e_c) − τᵢ(−h·e_c)) / 2h,   h = 0.5</span>
+    For one engine on the centre line this gives τ<sub>x</sub> = −<i>L T</i> sin(<i>u</i>θ<sub>max</sub>) exactly: the nozzle's swing and the side force cancel, and the arm is the one to the <strong>pivot</strong>. So the gain per unit command is <i>L T</i> θ<sub>max</sub> whatever the nozzle's length, less the central difference's slope error, sin(<i>h</i>θ)/(<i>h</i>θ), 0.05 % at 6°. <span class="tag meas">Measured</span> taken at the rest thrust point instead, a booster's torques came out 1.37 times what its engines gave (2026-10-08).
+  </div>
+</section>
+
+<section>
+  <div class="col"><h2>After the solve</h2>
+  <p>The closed-form solve is the start. Three things follow in <code>KsaTvcAllocator.Solve</code>, and the explorer below shows each.</p></div>
+  <div class="flow">
+    <div class="panel"><h3>The weak axis gives way</h3><p>An axis with under a quarter of the strongest axis's capability (<code>WeakAxisShare</code>, usually roll) is clamped to what it can do and allocated <strong>last</strong>, in the travel pitch and yaw leave. <span class="tag meas">Measured</span> one craft had 2.8 kN m of roll against 1902 kN m of pitch.</p></div>
+    <div class="panel"><h3>Redistribution at the stops</h3><p>If a command passes 1, the whole solution is scaled to the first gimbal at its stop. Then <code>Redistribute</code> holds that gimbal there and solves the rest on the gimbals still free, pass by pass. <span class="tag meas">Measured</span> without it a landing got 51–69 % of its torque (2026-11-21).</p></div>
+    <div class="panel"><h3>The coupled roll</h3><p>An engine off the axis rolls the craft as it steers: <i>τ</i><sub>z,coupled</sub> = (<i>m</i><sub>x</sub><i>τ</i><sub>y</sub> − <i>m</i><sub>y</sub><i>τ</i><sub>x</sub>) / <i>L</i>, with <b><i>m</i></b> the rest moment per newton. Named apart as <code>coupled</code>, it is solved with pitch and yaw, not held at zero by the verniers.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="col"><h2>See it</h2>
+  <p>Drag on the torque plot, or focus it and use the arrow keys, to set <b><i>τ</i></b> across the thrust axis; the roll slider sets the plan's own roll. Click an engine on the plate to light or unlight it. Everything below is the JavaScript port of <code>KsaTvcAllocator.Solve</code> running live.</p></div>
+  <div class="bench">
+    <div class="panel ctrl">
+      <div class="group"><div class="label">Example craft</div><div class="chips" id="presets"></div><div class="note" id="presetnote"></div></div>
+      <div class="group"><div class="label">Engine plate · bottom view</div>
+        <svg id="plate" viewBox="0 0 300 300" role="group" aria-label="Engine plate seen from below. Each engine is a button that lights or unlights it."></svg>
+        <div class="legend">
+          <span><span class="sw" style="border:2px solid var(--main)"></span>main engine</span>
+          <span><span class="sw" style="border:2px solid var(--vernier)"></span>vernier</span>
+          <span><span class="sw" style="border:1px dashed var(--muted)"></span>unlit</span>
+          <span><span class="sw" style="border:2px solid var(--stop)"></span>at a stop</span>
+        </div>
+        <div class="note">Each square is one gimbal's two per-axis stops. The filled dot is where the allocator tells it to go, the hollow one where scaling to the first stop alone left it.</div>
+        <div class="englist" id="englist"></div>
+      </div>
+      <div class="group"><div class="label">Geometry</div>
+        <div class="row"><label for="arm">Arm <i>L</i></label><input id="arm" type="range" min="2" max="30" step="0.1"><output id="armo"></output></div>
+        <div class="row"><label for="noz">Nozzle <i>ℓ</i></label><input id="noz" type="range" min="0" max="5" step="0.1"><output id="nozo"></output></div>
+        <div class="note">The nozzle slider moves every main engine's thrust point. Verniers keep theirs.</div>
+      </div>
+      <div class="group"><div class="label">Demand</div>
+        <div class="row"><label for="rollin">Roll <i>τ</i><sub>z</sub></label><input id="rollin" type="range" min="-1" max="1" step="0.005"><output id="rollo"></output></div>
+        <div class="chips"><button id="trimbtn" type="button">Hold the trim</button><button id="zerobtn" type="button">Zero</button></div>
+      </div>
+      <div class="group"><div class="label">Allocator</div>
+        <label class="chip"><input type="checkbox" id="redis">Redistribute at the stops</label>
+        <label class="chip"><input type="checkbox" id="coupled">Name the coupled roll</label>
+        <div class="note">Both on is how touchdown guidance flies. Off, redistribution scales the whole solution to the first gimbal at its stop; off, the coupled roll is held at zero by whatever gives roll.</div>
+      </div>
+    </div>
+    <div class="panel plotwrap">
+      <svg id="plot" viewBox="0 0 400 400" tabindex="0" role="img" aria-label="Torque across the thrust axis"></svg>
+      <svg id="roll" viewBox="0 0 400 78" role="img" aria-label="Roll torque"></svg>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--set-fill);border:1px solid var(--accent)"></span>attainable: gimbal box through <i>B</i></span>
+        <span><span class="sw" style="border:1px dashed var(--minnorm)"></span>min-norm, scaled to first stop</span>
+        <span><span class="sw" style="border:1px solid var(--redis)"></span>with redistribution</span>
+        <span><span class="sw" style="background:var(--demand);border-radius:50%"></span>demand <b><i>τ</i></b></span>
+        <span><span class="sw" style="background:var(--given);border-radius:50%"></span>given <i>B</i><b><i>u</i></b></span>
+        <span><span class="sw" style="background:var(--trim);transform:rotate(45deg)"></span>trim</span>
+      </div>
+      <div class="read" id="read"></div>
+      <p class="note"><span class="tag harn">Harness</span> the harness presets use the exact numbers of <code>GuidanceTvcAllocatorTest</code>: 1 MN, 0.105 rad of range, pivot 8 m behind the centre of mass, nozzle 2 m; the coupled-roll pair adds a 1 % gimbal 1.2 m out.</p>
+      <p class="note"><span class="tag ill">Illustrative</span> the triple plate is made up: three 700 kN engines with 10° of range on a 0.8 m radius, <i>L</i> = 10 m, and two 7 kN verniers 1.5 m out, canted 70° inwards, with 10° of range. The shaded set lets the roll go free; the two curves are what the allocator gives with roll held to its demand.</p>
+    </div>
+  </div>
+</section>
+
+<section class="col">
+  <h2>Things to try</h2>
+  <ol>
+    <li><strong>Gain.</strong> On <em>Harness test</em>, read the engine's column under the plate: 839.6 kN m per unit command against <i>L T</i> θ<sub>max</sub> = 840.0. Move the nozzle slider: the column does not change.</li>
+    <li><strong>No roll on one central engine.</strong> Same preset: the roll slider gives nothing, and the roll capability reads 0. Roll is the weak axis and <i>λ</i> keeps the solve finite.</li>
+    <li><strong>Trim.</strong> On <em>Triple plate</em>, light E1 alone. The rest moment is 0.8 m per newton on a 10 m arm, so the trim is atan(0.08) = 4.57°. <em>Hold the trim</em> puts the demand on it; the linear columns send E1 to 4.59°, the central difference's 0.13 % slope at 10°.</li>
+    <li><strong>Coupled roll.</strong> Light E1 and both verniers and drag along <i>τ</i><sub>x</sub>. The roll bar's demand moves by (<i>m</i><sub>x</sub><i>τ</i><sub>y</sub> − <i>m</i><sub>y</sub><i>τ</i><sub>x</sub>) / <i>L</i>. Switch <em>Name the coupled roll</em> off: the verniers must hold the roll at zero and reach their stops, and the dashed curve shrinks to a sliver, which is where E1 stops with <em>Redistribute</em> off too. With redistribution on, E1 carries on, but as a least-squares compromise: the craft gets the roll anyway, unasked, and it shows as a roll shortfall.</li>
+    <li><strong>Redistribution.</strong> On <em>Harness test</em>, drag the demand past the right edge of the square, a little above the axis. Scaled to the first stop (the hollow point), the whole demand shrinks and the <i>τ</i><sub>y</sub> goes with it. Redistributed, the <i>x</i> axis holds at its stop, the box flashes, and the <i>y</i> axis carries on until <i>τ</i><sub>y</sub> is met. Across gimbals it is the same: on <em>Triple plate</em> with the coupled roll unnamed, the verniers stop first (badges 1 and 2) and E1 carries on.</li>
+  </ol>
+</section>
+
+<footer class="col">
+  <p>Part of the AFC docs. JavaScript port of KsaTvcAllocator as of main 155357c (2026-11-21).</p>
+</footer>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* ---------- Port of KsaTvcAllocator (TvcAllocator.cs, main 155357c) ---------- */
+const DIFF_STEP = 0.5;                 // DiffStep
+const RELATIVE_REGULARIZATION = 1e-6;  // RelativeRegularization
+const WEAK_AXIS_SHARE = 0.25;          // WeakAxisShare
+const DEG = Math.PI / 180;
+
+const add = (a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]];
+const sub = (a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const mul = (a,s)=>[a[0]*s,a[1]*s,a[2]*s];
+const dot = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross = (a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const clamp = (x,lo,hi)=>Math.min(hi,Math.max(lo,x));
+const sign = x => x>0?1:x<0?-1:0;
+function mv(M,v){ return [M[0]*v[0]+M[1]*v[1]+M[2]*v[2], M[3]*v[0]+M[4]*v[1]+M[5]*v[2], M[6]*v[0]+M[7]*v[1]+M[8]*v[2]]; }
+function mm(A,B){ const C=new Array(9); for(let r=0;r<3;r++) for(let c=0;c<3;c++) C[3*r+c]=A[3*r]*B[c]+A[3*r+1]*B[3+c]+A[3*r+2]*B[6+c]; return C; }
+function rx(a){ const c=Math.cos(a), s=Math.sin(a); return [1,0,0, 0,c,-s, 0,s,c]; }
+function ry(a){ const c=Math.cos(a), s=Math.sin(a); return [c,0,s, 0,1,0, -s,0,c]; }
+function rz(a){ const c=Math.cos(a), s=Math.sin(a); return [c,-s,0, s,c,0, 0,0,1]; }
+
+// The model's gimbal: frame Q (gimbal to body), pivot p at z = -L, thrust point l behind it, rest thrust along local +z.
+function makeGimbal(e, L, nozzle){
+  return { Q: mm(rz((e.psi||0)*DEG), rx((e.cant||0)*DEG)), p:[e.x, e.y, -L],
+           ell:[0,0,-(e.nozzle!=null ? e.nozzle : nozzle)], maxY:e.range, maxZ:e.range };
+}
+function deflection(g, commandY, commandZ){
+  const a = clamp(commandY,-1,1)*g.maxY, b = clamp(commandZ,-1,1)*g.maxZ;
+  return mm(g.Q, mm(ry(b), rx(a)));            // about x, then about y
+}
+function thrustDirection(g, cy, cz){ return mv(deflection(g,cy,cz), [0,0,1]); }
+function thrustLocation(g, cy, cz){ return add(g.p, mv(deflection(g,cy,cz), g.ell)); }
+
+function fillColumns(g, com, thrust, bTorque, bForce, gimbalIndex){
+  for(let axis=0; axis<2; axis++){
+    const cy = axis===0 ? DIFF_STEP : 0, cz = axis===1 ? DIFF_STEP : 0;
+    const plus = thrustDirection(g, cy, cz), minus = thrustDirection(g, -cy, -cz);
+    const torquePlus = cross(sub(thrustLocation(g,cy,cz), com), mul(plus, thrust));
+    const torqueMinus = cross(sub(thrustLocation(g,-cy,-cz), com), mul(minus, thrust));
+    const dForce = mul(sub(plus, minus), thrust/(2*DIFF_STEP));
+    const dTorque = mul(sub(torquePlus, torqueMinus), 1/(2*DIFF_STEP));
+    const col = 2*gimbalIndex + axis;
+    for(let k=0;k<3;k++){ bTorque[3*col+k]=dTorque[k]; bForce[3*col+k]=dForce[k]; }
+  }
+}
+
+function invert3x3(m){
+  const c0 = m[4]*m[8]-m[5]*m[7], c1 = m[5]*m[6]-m[3]*m[8], c2 = m[3]*m[7]-m[4]*m[6];
+  const det = m[0]*c0 + m[1]*c1 + m[2]*c2;
+  if(Math.abs(det) < 1e-30) return null;
+  const d = 1/det;
+  return [c0*d, (m[2]*m[7]-m[1]*m[8])*d, (m[1]*m[5]-m[2]*m[4])*d,
+          c1*d, (m[0]*m[8]-m[2]*m[6])*d, (m[2]*m[3]-m[0]*m[5])*d,
+          c2*d, (m[1]*m[6]-m[0]*m[7])*d, (m[0]*m[4]-m[1]*m[3])*d];
+}
+
+function axisCapability(b, cols, inv, axis){
+  const wx=inv[axis], wy=inv[3+axis], wz=inv[6+axis];
+  let peak=0, torque=0;
+  for(let c=0;c<cols;c++){ const u=b[3*c]*wx+b[3*c+1]*wy+b[3*c+2]*wz; peak=Math.max(peak,Math.abs(u)); torque+=b[3*c+axis]*u; }
+  return peak>0 ? torque/peak : 0;
+}
+
+// heldAt (page only): the pass on which each command was held at its stop.
+function redistribute(b, cols, strong, weak, lambda, commands, trackWeak, heldAt){
+  const held = new Array(cols).fill(false);
+  const size = Math.sqrt(dot(strong,strong));
+  for(let pass=0; pass<cols; pass++){
+    let free=0;
+    for(let c=0;c<cols;c++){
+      if(!held[c] && Math.abs(commands[c]) >= 1-1e-9){ held[c]=true; if(heldAt[c]<0) heldAt[c]=pass; }
+      if(!held[c]) free++;
+    }
+    if(free===0) return;
+    let got=[0,0,0];
+    for(let c=0;c<cols;c++) got=add(got, mul([b[3*c],b[3*c+1],b[3*c+2]], commands[c]));
+    const r=[weak===0 && !trackWeak ? 0 : strong[0]-got[0], weak===1 && !trackWeak ? 0 : strong[1]-got[1], weak===2 && !trackWeak ? 0 : strong[2]-got[2]];
+    if(!(Math.sqrt(dot(r,r)) > 1e-9*(size+1))) return;
+    const g=new Array(9).fill(0);
+    for(let c=0;c<cols;c++){
+      if(held[c]) continue;
+      const x=b[3*c], y=b[3*c+1], z=b[3*c+2];
+      g[0]+=x*x; g[1]+=x*y; g[2]+=x*z; g[4]+=y*y; g[5]+=y*z; g[8]+=z*z;
+    }
+    g[3]=g[1]; g[6]=g[2]; g[7]=g[5];
+    g[0]+=lambda; g[4]+=lambda; g[8]+=lambda;
+    const inv=invert3x3(g); if(!inv) return;
+    const wx=inv[0]*r[0]+inv[1]*r[1]+inv[2]*r[2], wy=inv[3]*r[0]+inv[4]*r[1]+inv[5]*r[2], wz=inv[6]*r[0]+inv[7]*r[1]+inv[8]*r[2];
+    let step=1;
+    for(let c=0;c<cols;c++){
+      if(held[c]) continue;
+      const u=b[3*c]*wx+b[3*c+1]*wy+b[3*c+2]*wz;
+      if(Math.abs(u)<1e-15) continue;
+      const room = u>0 ? (1-commands[c])/u : (-1-commands[c])/u;
+      step=Math.min(step, Math.max(room,0));
+    }
+    for(let c=0;c<cols;c++) if(!held[c]) commands[c]+=step*(b[3*c]*wx+b[3*c+1]*wy+b[3*c+2]*wz);
+    if(step>=1) return;
+  }
+}
+
+// Solve on a prebuilt B (bTorque, bForce: 3 numbers per column). Same steps and constants as KsaTvcAllocator.Solve.
+function solveB(bTorque, bForce, cols, desired, redistributeOn, coupled){
+  coupled = coupled || [0,0,0];
+  const commands = new Array(cols).fill(0), heldAt = new Array(cols).fill(-1);
+  const result = { gimbalCount: cols/2, saturationScale:1, weakAxisScale:0, demandClamped:false, weak:-1,
+                   achievedTorque:[0,0,0], achievedForce:[0,0,0], maxTorque:[0,0,0], commands, heldAt, cap:[0,0,0], lambda:0 };
+  if(cols===0) return result;
+  const g=new Array(9).fill(0);
+  for(let c=0;c<cols;c++){
+    const x=bTorque[3*c], y=bTorque[3*c+1], z=bTorque[3*c+2];
+    g[0]+=x*x; g[1]+=x*y; g[2]+=x*z; g[4]+=y*y; g[5]+=y*z; g[8]+=z*z;
+  }
+  g[3]=g[1]; g[6]=g[2]; g[7]=g[5];
+  const trace=g[0]+g[4]+g[8];
+  if(trace<=0) return result;                        // no authority at all (no thrust)
+  const lambda=RELATIVE_REGULARIZATION*trace; result.lambda=lambda;
+  g[0]+=lambda; g[4]+=lambda; g[8]+=lambda;
+  const inv=invert3x3(g); if(!inv) return result;
+
+  result.demandClamped=true;
+  const cap=[0,1,2].map(a=>Math.abs(axisCapability(bTorque,cols,inv,a))); result.cap=cap;
+  let weak=-1;
+  { const cx=cap[0], cy=cap[1], cz=cap[2], strongest=Math.max(cx,Math.max(cy,cz));
+    if(cx<WEAK_AXIS_SHARE*strongest && cx<=cy && cx<=cz) weak=0;
+    else if(cy<WEAK_AXIS_SHARE*strongest && cy<=cx && cy<=cz) weak=1;
+    else if(cz<WEAK_AXIS_SHARE*strongest && cz<=cx && cz<=cy) weak=2; }
+  result.weak=weak;
+  const coupledWeak = weak>=0 ? coupled[weak] : 0;
+  const weakDemand = weak>=0 ? clamp(desired[weak]-coupledWeak, -cap[weak], cap[weak]) : 0;
+  const strong = [weak===0?coupledWeak:desired[0], weak===1?coupledWeak:desired[1], weak===2?coupledWeak:desired[2]];
+
+  const wx=inv[0]*strong[0]+inv[1]*strong[1]+inv[2]*strong[2];
+  const wy=inv[3]*strong[0]+inv[4]*strong[1]+inv[5]*strong[2];
+  const wz=inv[6]*strong[0]+inv[7]*strong[1]+inv[8]*strong[2];
+  let peak=0;
+  for(let c=0;c<cols;c++){ const u=bTorque[3*c]*wx+bTorque[3*c+1]*wy+bTorque[3*c+2]*wz; commands[c]=u; peak=Math.max(peak,Math.abs(u)); }
+
+  if(peak>1){
+    const scale=1/peak;
+    for(let c=0;c<cols;c++) commands[c]*=scale;
+    result.saturationScale=scale;
+    if(redistributeOn){
+      redistribute(bTorque, cols, strong, weak, lambda, commands, coupledWeak!==0, heldAt);
+      let got=[0,0,0];
+      for(let c=0;c<cols;c++) got=add(got, mul([bTorque[3*c],bTorque[3*c+1],bTorque[3*c+2]], commands[c]));
+      let lat=strong.slice();
+      if(weak>=0){ got[weak]=0; lat[weak]=0; }
+      const want=dot(lat,lat);
+      result.saturationScale = want>0 ? clamp(dot(got,lat)/want,0,1) : 1;
+    }
+  }
+
+  result.weakAxisScale=1;
+  if(weak>=0 && weakDemand!==0){
+    const rX=inv[weak]*weakDemand, rY=inv[3+weak]*weakDemand, rZ=inv[6+weak]*weakDemand;
+    let share=1;
+    for(let c=0;c<cols;c++){
+      const ur=bTorque[3*c]*rX+bTorque[3*c+1]*rY+bTorque[3*c+2]*rZ;
+      if(Math.abs(ur)<1e-12) continue;
+      const room=1-commands[c]*sign(ur);
+      share=Math.min(share, Math.max(room,0)/Math.abs(ur));
+    }
+    share=clamp(share,0,1);
+    for(let c=0;c<cols;c++) commands[c]+=share*(bTorque[3*c]*rX+bTorque[3*c+1]*rY+bTorque[3*c+2]*rZ);
+    result.weakAxisScale=share;
+  }
+
+  const torque=[0,0,0], force=[0,0,0];
+  for(let c=0;c<cols;c++){ const u=commands[c]; for(let k=0;k<3;k++){ torque[k]+=bTorque[3*c+k]*u; force[k]+=bForce[3*c+k]*u; } }
+  result.achievedTorque=torque; result.achievedForce=force;
+  result.maxTorque=[0,1,2].map(a=>axisCapability(bTorque,cols,inv,a));
+  // Page only: commands at a stop that no pass recorded (the last move, or the weak step).
+  let last=-1; heldAt.forEach(h=>{ if(h>last) last=h; });
+  for(let c=0;c<cols;c++) if(heldAt[c]<0 && Math.abs(commands[c])>=1-1e-6) heldAt[c]=last+1;
+  return result;
+}
+
+function buildB(gimbals, thrusts, com){
+  const n=gimbals.length, cols=2*n, bt=new Array(3*cols).fill(0), bf=new Array(3*cols).fill(0);
+  for(let i=0;i<n;i++) fillColumns(gimbals[i], com, thrusts[i], bt, bf, i);
+  return {bt, bf, cols};
+}
+function solveGimbals(gimbals, thrusts, com, desired, opts){
+  opts=opts||{};
+  const B=buildB(gimbals, thrusts, com);
+  const r=solveB(B.bt, B.bf, B.cols, desired, opts.redistribute!==false, opts.coupled);
+  r.B=B; return r;
+}
+
+/* ---------- Rest moment, trim, coupled roll (ThrustMoment.cs, Ksa6DofSetup, Ksa6DofGuidance) ---------- */
+function restMoment(gimbals, thrusts, com){
+  let M=[0,0,0], F=[0,0,0];
+  gimbals.forEach((g,i)=>{ const T=thrusts[i]; if(!(T>0)) return;
+    const at=thrustLocation(g,0,0), d=thrustDirection(g,0,0), len=Math.sqrt(dot(d,d)); if(!(len>0)) return;
+    const f=mul(d,T/len); M=add(M,cross(sub(at,com),f)); F=add(F,f); });
+  const t=Math.sqrt(dot(F,F));
+  return {M, F, m: t>0 ? mul(M,1/t) : [0,0,0], thrust:t};
+}
+
+/* ---------- Presets ---------- */
+const R6 = 0.105;  // rad, GuidanceTvcAllocatorTest.MaxAngle
+const PRESETS = {
+  harness:{label:'Harness test', tag:'harn', L:8, nozzle:2,
+    note:'One 1 MN engine on the centre line, 0.105 rad (6.02°) of range, pivot 8 m behind the centre of mass, nozzle 2 m: AxialGimbal in GuidanceTvcAllocatorTest.',
+    engines:[{id:'E1',kind:'main',x:0,y:0,T:1e6,range:R6,lit:true}], demand:'harness'},
+  coupled:{label:'Harness: coupled roll', tag:'harn', L:8, nozzle:2,
+    note:'TheCoupledRollGoesWithTheLateralTorque: the 1 MN engine 1 m off the axis, and a gimbal with a hundredth of its thrust 1.2 m out the other way, standing for the verniers. The demand starts over-asked.',
+    engines:[{id:'E1',kind:'main',x:1,y:0,T:1e6,range:R6,lit:true},{id:'S1',kind:'vernier',x:0,y:1.2,T:1e4,range:R6,lit:true}], demand:'coupled'},
+  triple:{label:'Triple plate', tag:'ill', L:10, nozzle:1.5,
+    note:'Illustrative. Three 700 kN engines with 10° of range on a 0.8 m radius, L = 10 m, and two 7 kN verniers 1.5 m out, canted 70°. Starts on one engine of three with the verniers.',
+    engines:[
+      {id:'E1',kind:'main',x:0.8,y:0,T:7e5,range:10*DEG,lit:true},
+      {id:'E2',kind:'main',x:0.8*Math.cos(120*DEG),y:0.8*Math.sin(120*DEG),T:7e5,range:10*DEG,lit:false},
+      {id:'E3',kind:'main',x:0.8*Math.cos(240*DEG),y:0.8*Math.sin(240*DEG),T:7e5,range:10*DEG,lit:false},
+      {id:'V1',kind:'vernier',x:0,y:1.5,T:7e3,range:10*DEG,cant:70,psi:0,nozzle:0.4,lit:true},
+      {id:'V2',kind:'vernier',x:0,y:-1.5,T:7e3,range:10*DEG,cant:70,psi:180,nozzle:0.4,lit:true}], demand:'triple'}
+};
+// A vernier at azimuth phi is canted inwards: its frame turns about local x by the cant, then about z by phi - 90 deg (psi above).
+
+/* ---------- State ---------- */
+const S = { preset:'harness', engines:[], L:8, nozzle:2, dem:[0,0], roll:0, redistribute:true, coupled:true };
+const $ = s => document.querySelector(s);
+const NS='http://www.w3.org/2000/svg';
+function el(tag, attrs, parent){ const e=document.createElementNS(NS,tag); for(const k in attrs) e.setAttribute(k,attrs[k]); if(parent) parent.appendChild(e); return e; }
+const minus = s => s.replace(/^-/, '−').replace(/ -/g,' −').replace(/\(-/g,'(−').replace(/,-/g,',−');
+function fk(v){ const k=v/1000, a=Math.abs(k); if(a<5e-4) return '0'; const d=a>=1000?0:a>=100?1:a>=10?2:3; return minus(k.toFixed(d)); }
+function fv(v){ return '('+fk(v[0])+', '+fk(v[1])+', '+fk(v[2])+')'; }
+const fd = (x,d)=> minus((Math.abs(x)<0.5*Math.pow(10,-d)?0:x).toFixed(d));
+
+let model=null, curves=null, curveKey='';
+
+function computeModel(){
+  const lit=S.engines.map(e=>e.lit), anyLit=lit.some(x=>x);
+  // ApplyLsq: an unlit gimbal enters with zero thrust; with none lit every gimbal stands in at its nameplate thrust.
+  const thrusts=S.engines.map(e=>anyLit ? (e.lit?e.T:0) : e.T);
+  const gimbals=S.engines.map(e=>makeGimbal(e, S.L, S.nozzle));
+  const com=[0,0,0];
+  const B=buildB(gimbals, thrusts, com);
+  const rest=restMoment(gimbals, thrusts, com);
+  const m=rest.m, L=S.L;
+  const trimX = L>0 ? m[1]/L : 0, trimY = L>0 ? -m[0]/L : 0;       // GimbalTrimX/Y
+  const trimDeg = Math.atan(Math.hypot(trimX,trimY))/DEG;
+  const trimTorque=[-m[0]*rest.thrust, -m[1]*rest.thrust, 0];        // TrimTorquePerNewton times the thrust
+  const rollWith=(tx,ty)=> L>0 ? ((-m[0])*(-ty) + (-m[1])*tx)/L : 0;  // Ksa6DofGuidance.RollWith, GimbalRollPerTdx/Tdy = -m_x, -m_y
+  // The zonotope's shadow on the x-y plane, roll free.
+  const poly=[];
+  for(let k=0;k<720;k++){ const t=k/720*2*Math.PI, d=[Math.cos(t),Math.sin(t)]; let p=[0,0];
+    for(let c=0;c<B.cols;c++){ const s=sign(B.bt[3*c]*d[0]+B.bt[3*c+1]*d[1]); p=[p[0]+s*B.bt[3*c], p[1]+s*B.bt[3*c+1]]; }
+    const Lp=poly[poly.length-1]; if(!Lp || Math.hypot(p[0]-Lp[0],p[1]-Lp[1])>1e-6) poly.push(p); }
+  if(poly.length>1){ const a=poly[0], b=poly[poly.length-1]; if(Math.hypot(a[0]-b[0],a[1]-b[1])<1e-6) poly.pop(); }
+  let ext=0; poly.forEach(p=>{ ext=Math.max(ext,Math.abs(p[0]),Math.abs(p[1])); });
+  ext=Math.max(ext, Math.abs(trimTorque[0]), Math.abs(trimTorque[1]), 1);
+  const probe=solveB(B.bt,B.bf,B.cols,[0,0,0],true);
+  model={gimbals, thrusts, anyLit, B, rest, m, trimX, trimY, trimDeg, trimTorque, rollWith, poly, ext, cap:probe.cap, maxTorque:probe.maxTorque, weak:probe.weak, lambda:probe.lambda};
+}
+
+function demandVector(tx, ty){
+  const c = S.coupled ? model.rollWith(tx,ty) : 0;
+  return { desired:[tx, ty, S.roll + c], coupled:[0,0,c], c, cAlways:model.rollWith(tx,ty) };
+}
+
+function computeCurves(){
+  const key=JSON.stringify([S.preset, S.engines.map(e=>e.lit), S.L, S.nozzle, S.roll, S.coupled]);
+  if(key===curveKey && curves) return;
+  curveKey=key;
+  const big=50*model.ext, mn=[], rd=[];
+  for(let k=0;k<180;k++){ const t=k/180*2*Math.PI, tx=big*Math.cos(t), ty=big*Math.sin(t);
+    const d=demandVector(tx,ty);
+    const a=solveB(model.B.bt,model.B.bf,model.B.cols,d.desired,false,d.coupled);
+    const b=solveB(model.B.bt,model.B.bf,model.B.cols,d.desired,true,d.coupled);
+    mn.push([a.achievedTorque[0],a.achievedTorque[1]]); rd.push([b.achievedTorque[0],b.achievedTorque[1]]); }
+  curves={mn, rd};
+}
+
+function niceStep(ext){ const p=Math.pow(10,Math.floor(Math.log10(ext))); for(const m of [0.5,1,2,2.5,5,10]){ if(ext/(m*p)<=4) return m*p; } return 10*p; }
+
+/* ---------- Rendering ---------- */
+function render(){
+  computeCurves();
+  const d=demandVector(S.dem[0], S.dem[1]);
+  const res=solveB(model.B.bt, model.B.bf, model.B.cols, d.desired, S.redistribute, d.coupled);
+  const scaled = S.redistribute ? solveB(model.B.bt, model.B.bf, model.B.cols, d.desired, false, d.coupled) : res;
+  // Exact geometry at these commands, incremental from rest, beside the linear model's B u.
+  let exact=[0,0,0];
+  model.gimbals.forEach((g,i)=>{ const T=model.thrusts[i]; if(!(T>0)) return;
+    const u1=res.commands[2*i], u2=res.commands[2*i+1];
+    const t1=cross(thrustLocation(g,u1,u2), mul(thrustDirection(g,u1,u2),T)), t0=cross(thrustLocation(g,0,0), mul(thrustDirection(g,0,0),T));
+    exact=add(exact, sub(t1,t0)); });
+  drawPlot(d, res, scaled);
+  drawRoll(d, res);
+  drawPlate(res, scaled);
+  drawList(res);
+  drawRead(d, res, exact);
+}
+
+function drawPlot(d, res, scaled){
+  const svg=$('#plot'); while(svg.firstChild) svg.removeChild(svg.firstChild);
+  const extN=model.ext*1.12, ext=extN/1000, step=niceStep(ext);
+  const C=200, R=165, k=R/ext, X=x=>C+x/1000*k, Y=y=>C-y/1000*k;
+  const n=Math.floor(ext/step+1e-9);
+  for(let i=-n;i<=n;i++){ const vv=i*step, px=C+vv*k, py=C-vv*k;
+    el('line',{x1:px,y1:C-R,x2:px,y2:C+R,stroke:'var(--gridline)','stroke-width':1},svg);
+    el('line',{x1:C-R,y1:py,x2:C+R,y2:py,stroke:'var(--gridline)','stroke-width':1},svg);
+    if(i!==0){ const lab=minus(String(+vv.toPrecision(4)));
+      el('text',{x:px,y:C+R+14,'text-anchor':'middle','font-size':9,fill:'var(--muted)','font-family':'var(--f-mono)'},svg).textContent=lab;
+      el('text',{x:C-R-4,y:py+3,'text-anchor':'end','font-size':9,fill:'var(--muted)','font-family':'var(--f-mono)'},svg).textContent=lab; } }
+  el('line',{x1:C-R,y1:C,x2:C+R,y2:C,stroke:'var(--muted)','stroke-width':1},svg);
+  el('line',{x1:C,y1:C-R,x2:C,y2:C+R,stroke:'var(--muted)','stroke-width':1},svg);
+  el('text',{x:C+R,y:C-6,'text-anchor':'end','font-size':10,fill:'var(--muted)','font-family':'var(--f-body)'},svg).textContent='τx →';
+  el('text',{x:C+6,y:C-R+10,'font-size':10,fill:'var(--muted)','font-family':'var(--f-body)'},svg).textContent='↑ τy (kN m)';
+  const pts=a=>a.map(p=>X(p[0]).toFixed(2)+','+Y(p[1]).toFixed(2)).join(' ');
+  if(model.poly.length>=3) el('polygon',{points:pts(model.poly),fill:'var(--set-fill)',stroke:'var(--accent)','stroke-width':1.5,'stroke-linejoin':'round'},svg);
+  else if(model.poly.length===2) el('line',{x1:X(model.poly[0][0]),y1:Y(model.poly[0][1]),x2:X(model.poly[1][0]),y2:Y(model.poly[1][1]),stroke:'var(--accent)','stroke-width':3},svg);
+  el('polygon',{points:pts(curves.mn),fill:'none',stroke:'var(--minnorm)','stroke-width':1.5,'stroke-dasharray':'5 4','stroke-linejoin':'round'},svg);
+  el('polygon',{points:pts(curves.rd),fill:'none',stroke:'var(--redis)','stroke-width':1.3,'stroke-linejoin':'round','stroke-opacity':S.redistribute?1:0.35},svg);
+  // Trim
+  const tt=model.trimTorque;
+  if(Math.hypot(tt[0],tt[1])>1e-6*model.ext){ const tx=X(tt[0]), ty=Y(tt[1]);
+    el('rect',{x:tx-5,y:ty-5,width:10,height:10,fill:'var(--trim)',transform:'rotate(45 '+tx+' '+ty+')'},svg);
+    el('text',{x:tx+9,y:ty-7,'font-size':11,fill:'var(--trim)','font-family':'var(--f-body)'},svg).textContent='trim'; }
+  el('circle',{cx:C,cy:C,r:3,fill:'var(--panel)',stroke:'var(--ink)','stroke-width':1.2},svg);
+  const dx=X(d.desired[0]), dy=Y(d.desired[1]), g=res.achievedTorque, gx=X(g[0]), gy=Y(g[1]);
+  if(Math.hypot(dx-gx,dy-gy)>1.5) el('line',{x1:dx,y1:dy,x2:gx,y2:gy,stroke:'var(--demand)','stroke-dasharray':'3 3','stroke-width':1.5},svg);
+  if(S.redistribute){ const s=scaled.achievedTorque, sx=X(s[0]), sy=Y(s[1]);
+    if(Math.hypot(sx-gx,sy-gy)>2) el('circle',{cx:sx,cy:sy,r:4,fill:'var(--panel)',stroke:'var(--minnorm)','stroke-width':1.6},svg); }
+  el('circle',{cx:gx,cy:gy,r:4.5,fill:'var(--given)'},svg);
+  el('circle',{cx:dx,cy:dy,r:7,fill:'none',stroke:'var(--demand)','stroke-width':2},svg);
+  el('circle',{cx:dx,cy:dy,r:2.5,fill:'var(--demand)'},svg);
+  const ok=reachable(d,res);
+  svg.setAttribute('aria-label','Torque across the thrust axis, kilonewton metres. Demand x '+fk(d.desired[0])+', y '+fk(d.desired[1])+'; given x '+fk(g[0])+', y '+fk(g[1])+'; '+(ok?'reachable':'not reachable')+'. Arrow keys move the demand.');
+}
+
+function reachable(d,res){
+  const e=sub(d.desired,res.achievedTorque), mag=Math.sqrt(dot(d.desired,d.desired));
+  const tol=1e-3*mag + 1e-6*model.ext;
+  return Math.hypot(e[0],e[1])<=tol && Math.abs(e[2])<=tol;
+}
+
+function drawRoll(d, res){
+  const svg=$('#roll'); while(svg.firstChild) svg.removeChild(svg.firstChild);
+  const cap=model.cap[2], dz=d.desired[2], gz=res.achievedTorque[2];
+  let m=Math.max(rollMax()*1.0, Math.abs(dz), Math.abs(gz), Math.abs(S.roll), 1)*1.12;
+  const ext=m/1000, step=niceStep(ext), x0=20, x1=380, C=200, k=(x1-x0)/2/ext, X=v=>C+v/1000*k, yb=40;
+  const n=Math.floor(ext/step+1e-9);
+  for(let i=-n;i<=n;i++){ const px=C+i*step*k; el('line',{x1:px,y1:yb-10,x2:px,y2:yb+10,stroke:'var(--gridline)','stroke-width':1},svg);
+    el('text',{x:px,y:yb+24,'text-anchor':'middle','font-size':9,fill:'var(--muted)','font-family':'var(--f-mono)'},svg).textContent=minus(String(+(i*step).toPrecision(4))); }
+  if(cap>0) el('rect',{x:X(-cap),y:yb-8,width:Math.max(1,X(cap)-X(-cap)),height:16,fill:'var(--set-fill)',stroke:'var(--accent)','stroke-width':1},svg);
+  el('line',{x1:x0,y1:yb,x2:x1,y2:yb,stroke:'var(--muted)','stroke-width':1},svg);
+  el('text',{x:x0,y:12,'font-size':10,fill:'var(--muted)','font-family':'var(--f-body)'},svg).textContent='Roll τz (kN m)'+(model.weak===2?' · weak axis, capability shaded':'');
+  if(Math.abs(d.c)>0 && S.coupled){ el('line',{x1:X(S.roll),y1:yb-14,x2:X(dz),y2:yb-14,stroke:'var(--demand)','stroke-width':1.5},svg);
+    el('line',{x1:X(S.roll),y1:yb-18,x2:X(S.roll),y2:yb-10,stroke:'var(--demand)','stroke-width':1.5},svg);
+    el('text',{x:(X(S.roll)+X(dz))/2,y:yb-18,'text-anchor':'middle','font-size':9,fill:'var(--demand)','font-family':'var(--f-body)'},svg).textContent='coupled'; }
+  if(Math.abs(X(dz)-X(gz))>1.5) el('line',{x1:X(dz),y1:yb,x2:X(gz),y2:yb,stroke:'var(--demand)','stroke-dasharray':'3 3','stroke-width':1.5},svg);
+  el('circle',{cx:X(gz),cy:yb,r:4.5,fill:'var(--given)'},svg);
+  el('circle',{cx:X(dz),cy:yb,r:7,fill:'none',stroke:'var(--demand)','stroke-width':2},svg);
+  svg.setAttribute('aria-label','Roll torque: demand '+fk(dz)+' kN m, given '+fk(gz)+' kN m, roll capability '+fk(cap)+' kN m.');
+}
+
+/* Engine plate, bottom view: body x to the right, body y down the page, the thrust axis pointing away from the reader. */
+let plateEls=[];
+function buildPlate(){
+  const svg=$('#plate'); while(svg.firstChild) svg.removeChild(svg.firstChild); plateEls=[];
+  let reach=0; S.engines.forEach(e=>{ reach=Math.max(reach,Math.hypot(e.x,e.y)); });
+  const half=e=>e.kind==='main'?(reach>1.2?22:26):14;
+  const k = reach>1e-6 ? (150-46)/reach : 1, P=e=>[150+e.x*k, 150+e.y*k];
+  el('line',{x1:142,y1:150,x2:158,y2:150,stroke:'var(--muted)','stroke-width':1},svg);
+  el('line',{x1:150,y1:142,x2:150,y2:158,stroke:'var(--muted)','stroke-width':1},svg);
+  el('line',{x1:12,y1:288,x2:40,y2:288,stroke:'var(--muted)','stroke-width':1},svg);
+  el('line',{x1:12,y1:288,x2:12,y2:260,stroke:'var(--muted)','stroke-width':1},svg);
+  el('text',{x:44,y:291,'font-size':9,fill:'var(--muted)','font-family':'var(--f-mono)'},svg).textContent='x';
+  el('text',{x:9,y:256,'font-size':9,fill:'var(--muted)','font-family':'var(--f-mono)'},svg).textContent='−y';
+  el('text',{x:292,y:291,'text-anchor':'end','font-size':9,fill:'var(--muted)','font-family':'var(--f-body)'},svg).textContent='thrust +z: away from you';
+  S.engines.forEach((e,i)=>{
+    const [cx,cy]=P(e), h=half(e), psi=(e.psi||0), col=e.kind==='main'?'var(--main)':'var(--vernier)';
+    const g=el('g',{class:'eng',tabindex:0,role:'button'},svg);
+    const rot=el('g',{transform:'translate('+cx.toFixed(2)+' '+cy.toFixed(2)+') rotate('+psi+')'},g);
+    el('rect',{class:'hit',x:-h-5,y:-h-5,width:2*h+10,height:2*h+10,rx:6,fill:'transparent',stroke:'none'},rot);
+    const box=el('rect',{class:'box',x:-h,y:-h,width:2*h,height:2*h,rx:2,fill:'none',stroke:col,'stroke-width':2},rot);
+    el('line',{x1:-h,y1:0,x2:h,y2:0,stroke:'var(--gridline)','stroke-width':1},rot);
+    el('line',{x1:0,y1:-h,x2:0,y2:h,stroke:'var(--gridline)','stroke-width':1},rot);
+    const ghost=el('circle',{r:4,fill:'var(--panel)',stroke:'var(--minnorm)','stroke-width':1.5},rot);
+    const dotc=el('circle',{r:4.5,fill:'var(--given)'},rot);
+    // Labels sit outwards from the plate's centre, beside the box; the stop badge goes on the other side.
+    const rr=Math.hypot(e.x,e.y), ux= rr>1e-6 ? e.x/rr : 0, uy= rr>1e-6 ? e.y/rr : 1;
+    const off=h*Math.SQRT2+9;
+    const lab=el('text',{x:(cx+ux*off).toFixed(1),y:(cy+uy*off+3.5).toFixed(1),'text-anchor':'middle','font-size':10,'font-family':'var(--f-mono)',fill:col},g); lab.textContent=e.id;
+    const badge=el('text',{x:(cx-uy*off*1.2).toFixed(1),y:(cy+ux*off*1.2+3).toFixed(1),'text-anchor':'middle','font-size':9,'font-family':'var(--f-mono)',fill:'var(--stop)'},g);
+    const toggle=()=>{ e.lit=!e.lit; S.preset=null; onConfig(); };
+    g.addEventListener('click',toggle);
+    g.addEventListener('keydown',ev=>{ if(ev.key==='Enter'||ev.key===' '){ ev.preventDefault(); toggle(); } });
+    plateEls.push({g,box,ghost,dot:dotc,lab,badge,h,col});
+  });
+}
+function drawPlate(res, scaled){
+  const order=[...new Set(res.heldAt.filter(h=>h>=0))].sort((a,b)=>a-b);
+  S.engines.forEach((e,i)=>{
+    const p=plateEls[i]; if(!p) return;
+    const u1=res.commands[2*i], u2=res.commands[2*i+1], s1=scaled.commands[2*i], s2=scaled.commands[2*i+1];
+    // The dot shows where the thrust leans in the gimbal's own frame: +u2 along local x, +u1 along local -y.
+    p.dot.setAttribute('cx',(u2*p.h).toFixed(2)); p.dot.setAttribute('cy',(-u1*p.h).toFixed(2));
+    p.ghost.setAttribute('cx',(s2*p.h).toFixed(2)); p.ghost.setAttribute('cy',(-s1*p.h).toFixed(2));
+    const showGhost = S.redistribute && e.lit && Math.hypot(s1-u1,s2-u2)>0.01;
+    p.ghost.setAttribute('visibility', showGhost?'visible':'hidden');
+    const on = model.anyLit ? e.lit : true;
+    p.dot.setAttribute('visibility', on?'visible':'hidden');
+    p.box.setAttribute('stroke', on ? p.col : 'var(--muted)');
+    p.box.setAttribute('stroke-dasharray', e.lit ? '' : '4 3');
+    p.lab.setAttribute('fill', e.lit ? p.col : 'var(--muted)');
+    const hs=[res.heldAt[2*i],res.heldAt[2*i+1]].filter(h=>h>=0);
+    const atStop = on && (Math.abs(u1)>=1-1e-6 || Math.abs(u2)>=1-1e-6);
+    p.g.classList.toggle('stop', atStop);
+    p.badge.textContent = atStop && hs.length ? 'stop '+(order.indexOf(Math.min(...hs))+1) : '';
+    p.g.setAttribute('aria-pressed', e.lit?'true':'false');
+    p.g.setAttribute('aria-label', e.id+', '+(e.kind==='main'?'main engine':'vernier')+' '+fk(e.T)+' kN, '+(e.lit?'lit':'unlit')+(atStop?', at a stop':'')+'. Press to '+(e.lit?'unlight':'light')+'.');
+  });
+}
+
+function drawList(res){
+  const rows=S.engines.map((e,i)=>{
+    const on = model.anyLit ? e.lit : true;
+    const bt=model.B.bt, c0=[bt[6*i],bt[6*i+1],bt[6*i+2]], c1=[bt[6*i+3],bt[6*i+4],bt[6*i+5]];
+    const u1=res.commands[2*i], u2=res.commands[2*i+1];
+    const at=on && (Math.abs(u1)>=1-1e-6 || Math.abs(u2)>=1-1e-6);
+    const gain=S.L*e.T*e.range;
+    const col=e.kind==='main'?'var(--main)':'var(--vernier)';
+    return '<div class="e"><div class="h"><span class="sw" style="border:2px solid '+col+'"></span>'+e.id+
+      ' <span class="st">'+(e.kind==='main'?'main':'vernier')+' · '+fk(e.T)+' kN · '+fd(e.range/DEG,2)+'°'+(e.cant?' · canted '+e.cant+'°':'')+'</span>'+
+      ' <span class="st'+(at?' at':'')+'">'+(e.lit?(at?'at a stop':'lit'):'unlit')+'</span></div>'+
+      '<div class="m">u '+fd(u1,3)+', '+fd(u2,3)+' · '+fd(u1*e.range/DEG,2)+'°, '+fd(u2*e.range/DEG,2)+'°</div>'+
+      '<div class="m">|B| per unit '+fk(Math.sqrt(dot(c0,c0)))+' / '+fk(Math.sqrt(dot(c1,c1)))+' kN m · L·T·θmax '+fk(on?gain:0)+'</div></div>';
+  });
+  $('#englist').innerHTML = rows.join('') + (model.anyLit ? '' : '<div class="note">No engine lit: as on the pad, every gimbal stands in at its nameplate thrust (ApplyLsq).</div>');
+}
+
+function drawRead(d, res, exact){
+  const g=res.achievedTorque, e=sub(d.desired,g), ok=reachable(d,res);
+  const weakName=['x','y','z (roll)'][res.weak]||'none';
+  const m=model.m;
+  const items=[
+    ['Demand τ', fv(d.desired)+' kN m'],
+    ['Given B u', fv(g)+' kN m'],
+    ['Reachable', ok?'<span class="pill yes">yes</span>':'<span class="pill no">no</span>'],
+    ['Shortfall', 'across '+fk(Math.hypot(e[0],e[1]))+' · roll '+fk(e[2])+' kN m'],
+    ['Coupled roll', fk(d.cAlways)+' kN m'+(S.coupled?' · named':' · not named')],
+    ['Rest moment m', '('+fd(m[0],3)+', '+fd(m[1],3)+') m per N'],
+    ['Trim', fd(model.trimDeg,2)+'° = atan('+fd(Math.hypot(model.trimX,model.trimY),4)+')'],
+    ['Saturation scale', fd(res.saturationScale,3)+(res.saturationScale<1?' · scaled':'')],
+    ['Weak axis', weakName+(res.weak>=0?' · share '+fd(res.weakAxisScale,3):'')],
+    ['Capability', fv(res.maxTorque.map(Math.abs))+' kN m'],
+    ['Side force B_f u', fk(Math.hypot(res.achievedForce[0],res.achievedForce[1]))+' kN'],
+    ['Exact geometry', fv(exact)+' kN m'],
+  ];
+  $('#read').innerHTML=items.map(it=>'<div><div class="k">'+it[0]+'</div><div class="v">'+it[1]+'</div></div>').join('');
+}
+
+/* ---------- Controls ---------- */
+function rollMax(){ const cap=model.cap[2]; return Math.max(1.5*cap, 0.02*model.ext, 100); }
+function syncRoll(){
+  const rm=rollMax(); const inp=$('#rollin');
+  S.roll=clamp(S.roll,-rm,rm); inp.min=-rm; inp.max=rm; inp.step=rm/200; inp.value=S.roll;
+  $('#rollo').textContent=fk(S.roll)+' kN m';
+}
+function onConfig(){ computeModel(); curveKey=''; syncRoll(); clampDemand(); buildChips(); render(); }
+function clampDemand(){ const lim=model.ext*1.12; S.dem=[clamp(S.dem[0],-lim,lim), clamp(S.dem[1],-lim,lim)]; }
+
+function buildChips(){
+  const pr=$('#presets'); pr.innerHTML='';
+  Object.keys(PRESETS).forEach(k=>{ const p=PRESETS[k]; const b=document.createElement('button'); b.type='button';
+    b.innerHTML=p.label+(p.tag==='ill'?' <span class="tag ill" style="margin:0 0 0 4px">illustrative</span>':'');
+    if(S.preset===k) b.className='on'; b.addEventListener('click',()=>applyPreset(k)); pr.appendChild(b); });
+  $('#presetnote').innerHTML = S.preset ? '<span class="tag '+PRESETS[S.preset].tag+'">'+(PRESETS[S.preset].tag==='ill'?'Illustrative':'Harness')+'</span>'+PRESETS[S.preset].note : 'Engines changed by hand.';
+}
+function applyPreset(k){
+  const p=PRESETS[k]; S.preset=k; S.engines=p.engines.map(e=>Object.assign({},e)); S.L=p.L; S.nozzle=p.nozzle; S.roll=0;
+  $('#arm').value=S.L; $('#noz').value=S.nozzle; $('#armo').textContent=fd(S.L,1)+' m'; $('#nozo').textContent=fd(S.nozzle,1)+' m';
+  buildPlate(); computeModel();
+  const bt=model.B.bt;
+  if(p.demand==='harness') S.dem=[0.3*bt[0]+0.2*bt[3], 0.3*bt[1]+0.2*bt[4]];           // DeliveredTorqueMatchesTheDemand
+  else if(p.demand==='coupled') S.dem=[1.3*Math.hypot(bt[0],bt[1]), 0];
+  else S.dem=[model.trimTorque[0]+0.9e6, model.trimTorque[1]];
+  curveKey=''; syncRoll(); buildChips(); render();
+}
+
+$('#arm').addEventListener('input',e=>{ S.L=+e.target.value; $('#armo').textContent=fd(S.L,1)+' m'; onConfig(); });
+$('#noz').addEventListener('input',e=>{ S.nozzle=+e.target.value; $('#nozo').textContent=fd(S.nozzle,1)+' m'; onConfig(); });
+$('#rollin').addEventListener('input',e=>{ S.roll=+e.target.value; $('#rollo').textContent=fk(S.roll)+' kN m'; render(); });
+$('#redis').addEventListener('change',e=>{ S.redistribute=e.target.checked; render(); });
+$('#coupled').addEventListener('change',e=>{ S.coupled=e.target.checked; render(); });
+$('#trimbtn').addEventListener('click',()=>{ S.dem=[model.trimTorque[0], model.trimTorque[1]]; S.roll=0; syncRoll(); render(); });
+$('#zerobtn').addEventListener('click',()=>{ S.dem=[0,0]; S.roll=0; syncRoll(); render(); });
+$('#redis').checked=S.redistribute; $('#coupled').checked=S.coupled;
+
+const plot=$('#plot'); let drag=false;
+function setFromEvent(ev){ const m=plot.getScreenCTM(); if(!m) return; const pt=plot.createSVGPoint(); pt.x=ev.clientX; pt.y=ev.clientY; const p=pt.matrixTransform(m.inverse());
+  const ext=model.ext*1.12/1000, k=165/ext; S.dem=[(p.x-200)/k*1000, (200-p.y)/k*1000]; clampDemand(); render(); }
+plot.addEventListener('pointerdown',e=>{ drag=true; try{plot.setPointerCapture(e.pointerId);}catch(_){} setFromEvent(e); });
+plot.addEventListener('pointermove',e=>{ if(drag) setFromEvent(e); });
+plot.addEventListener('pointerup',()=>{ drag=false; }); plot.addEventListener('pointercancel',()=>{ drag=false; });
+plot.addEventListener('keydown',e=>{ const dd=model.ext*1.12/40*(e.shiftKey?5:1); let hit=true;
+  if(e.key==='ArrowLeft') S.dem[0]-=dd; else if(e.key==='ArrowRight') S.dem[0]+=dd; else if(e.key==='ArrowUp') S.dem[1]+=dd; else if(e.key==='ArrowDown') S.dem[1]-=dd; else hit=false;
+  if(hit){ e.preventDefault(); clampDemand(); render(); } });
+window.addEventListener('afc-theme',()=>{ if(model) render(); });
+
+// For checking the port from a console; nothing on the page uses it.
+window.gimbalMixing = { solveGimbals, solveB, buildB, makeGimbal, restMoment, state:S, model:()=>model, applyPreset, render };
+
+applyPreset('harness');
+})();
+</script>
+
+</body></html>

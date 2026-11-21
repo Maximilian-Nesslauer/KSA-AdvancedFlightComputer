@@ -5,10 +5,13 @@
 2. Turns GitHub's inline maths, $`x`$, into the $x$ that pymdownx.arithmatex reads,
    so the same Markdown renders on GitHub and on the site.
 3. Points links that leave docs/ (source files, LICENSE, ...) at the file on GitHub.
+4. Turns a line `<!-- viz: NAME HEIGHT -->` into an embedded visualiser from
+   docs/interactive/NAME/index.html. On GitHub the marker is an invisible comment.
 """
 
 from __future__ import annotations
 
+import logging
 import posixpath
 import re
 from pathlib import Path
@@ -17,6 +20,8 @@ from mkdocs.structure.files import File
 from pymdownx.slugs import slugify as _make_slugify
 
 slugify = _make_slugify(case="lower")  # the same GitHub-style ids as toc in mkdocs.yml
+
+log = logging.getLogger("mkdocs.hooks.site")
 
 ROOT = Path(__file__).resolve().parents[2]
 README = ROOT / "README.md"
@@ -52,6 +57,7 @@ FENCE = re.compile(r"^\s*(```|~~~)")
 GITHUB_MATH = re.compile(r"\$`([^`\n]+?)`\$")
 MD_LINK = re.compile(r"(!?\[[^\]]*\]\()([^)\s]+)(\))")
 HTML_SRC = re.compile(r'(<img\b[^>]*\bsrc=")([^"]+)(")')
+VIZ = re.compile(r"^<!--\s*viz:\s*([a-z0-9-]+)(?:\s+(\d+))?\s*-->\s*$", re.MULTILINE)
 
 _repo_url = ""
 _generated: dict[str, str] = {}  # page src_uri -> markdown
@@ -171,9 +177,27 @@ def on_files(files, config, **kwargs):
     return files
 
 
+def _viz(match: re.Match, page, files) -> str:
+    name, height = match.group(1), match.group(2) or "600"
+    target = f"interactive/{name}/index.html"
+    if files.get_file_from_path(target) is None:
+        # A warning fails a --strict build (CI) but still lets `mkdocs serve` show the page.
+        log.warning(f"{page.file.src_uri}: no visualiser at docs/{target}")
+        return f'<p class="afc-viz-missing">Visualiser <code>{name}</code> is not built yet.</p>'
+    depth = page.url.count("/")
+    url = "../" * depth + f"interactive/{name}/"
+    return (
+        f'<div class="afc-viz">'
+        f'<iframe src="{url}" style="height:{height}px" loading="lazy" title="{name}"></iframe>'
+        f'<a class="afc-viz-open" href="{url}" target="_blank" rel="noopener">Open full screen</a>'
+        f"</div>"
+    )
+
+
 def on_page_markdown(markdown, page, config, files, **kwargs):
     src = page.file.src_uri
     markdown = GITHUB_MATH.sub(lambda m: f"${m.group(1)}$", markdown)
+    markdown = VIZ.sub(lambda m: _viz(m, page, files), markdown)
     if src in _generated:
         depth = page.url.count("/") if config.use_directory_urls else src.count("/")
         markdown = MD_LINK.sub(

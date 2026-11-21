@@ -49,18 +49,20 @@ flowchart TD
 
 | Solver | Where it is written up |
 | --- | --- |
+| What all three SCvx planners share | [Successive convexification](../guidance/scvx/index.md) |
+| Convex ascent (SCvx) | [Convex ascent](../guidance/scvx/ascent.md) |
+| Entry guidance, 3-DOF SCvx (glide and burn) | [Entry (3-DOF)](../guidance/scvx/entry.md) |
+| Touchdown guidance, 6-DOF SCvx | [Touchdown (6-DOF)](../guidance/scvx/touchdown.md), [on the craft](../guidance/scvx-bridge.md) and the [dev notes](../guidance/scvx-bridge-devnotes.md) |
 | G-FOLD, the point-mass landing | [G-FOLD](../guidance/gfold.md) |
-| 3-DOF successive convexification (entry glide and burn) | [3-DOF entry (SCvx)](../guidance/scvx.md) |
-| 6-DOF successive convexification (touchdown) | [6-DOF touchdown](../guidance/scvx-bridge.md) and its [dev notes](../guidance/scvx-bridge-devnotes.md) |
 | Impact prediction and boostback steering | [Impact steering](../guidance/reference-material/impact-steering.md) |
+| The attitude controller and the gimbal, RCS and fin mixers | [Attitude control](../guidance/attitude/index.md) |
 
 ## Still to write
 
 These parts have no page yet. Each one will follow the same layers: what it is for, a diagram, something to try, the maths, then where the code is.
 
-- UPFG ascent and the convex ascent plan
+- UPFG and the hand-over from the convex ascent
 - Boostback and the returnable-stage reserve
-- The attitude controller and how torque is shared between gimbals, RCS and fins
 - Landing engine groups and the landing legs
 - AutoStage and the spent-stage drop
 - Multi-pass burns, flyby targeting and the mission planner

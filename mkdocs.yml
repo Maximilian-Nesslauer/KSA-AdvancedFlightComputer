@@ -87,8 +87,12 @@ markdown_extensions:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
+extra_css:
+  - stylesheets/extra.css
+
 extra_javascript:
   - javascripts/mathjax.js
+  - javascripts/viz.js
   - https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js
 
 nav:
@@ -108,10 +112,19 @@ nav:
           - guidance/README.md
           - Runtime: guidance/runtime.md
           - G-FOLD: guidance/gfold.md
-          - 3-DOF entry (SCvx): guidance/scvx.md
-          - 6-DOF touchdown: guidance/scvx-bridge.md
-          - 6-DOF dev notes: guidance/scvx-bridge-devnotes.md
           - Impact steering: guidance/reference-material/impact-steering.md
+      - Successive convexification:
+          - guidance/scvx/index.md
+          - Convex ascent: guidance/scvx/ascent.md
+          - Entry (3-DOF): guidance/scvx/entry.md
+          - Touchdown (6-DOF): guidance/scvx/touchdown.md
+          - Touchdown on the craft: guidance/scvx-bridge.md
+          - Dev notes: guidance/scvx-bridge-devnotes.md
+      - Attitude control:
+          - guidance/attitude/index.md
+          - Gimbal mixing: guidance/attitude/gimbals.md
+          - RCS mixing: guidance/attitude/rcs.md
+          - Fin mixing: guidance/attitude/fins.md
       - Build and release:
           - Native solvers: guidance/native-build.md
           - Releasing: releasing.md

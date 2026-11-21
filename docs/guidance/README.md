@@ -51,8 +51,12 @@ The console rules run with `dotnet run --project tests/AdvancedFlightComputer.Ui
 | [runtime.md](runtime.md) | How guidance hangs on AFC: entry, patch blocks, ownership, staging, layout, console. |
 | [native-build.md](native-build.md) | Building the two native solvers, the ABI check, and the package check. |
 | [gfold.md](gfold.md) | The G-FOLD planner. |
-| [scvx.md](scvx.md) | The 6-DOF successive-convexification solver, the algorithm as a specification. |
-| [scvx-bridge.md](scvx-bridge.md) | From the 6-DOF solver to vehicle commands: frames, measurement, the MPC loop, actuators. |
+| [scvx/index.md](scvx/index.md) | Successive convexification: what the ascent, entry and touchdown planners share. |
+| [scvx/ascent.md](scvx/ascent.md) | The convex ascent problem. |
+| [scvx/entry.md](scvx/entry.md) | The entry guidance problem (3-DOF glide and burn). |
+| [scvx/touchdown.md](scvx/touchdown.md) | The touchdown guidance problem (6-DOF). |
+| [scvx-bridge.md](scvx-bridge.md) | Touchdown guidance on the craft: from the 6-DOF plan to vehicle commands. |
+| [attitude/index.md](attitude/index.md) | The attitude controller and the gimbal, RCS and fin mixers. |
 | [scvx-bridge-devnotes.md](scvx-bridge-devnotes.md) | What had to be true besides the maths, learned by flying the 6-DOF path. |
 | [CHANGELOG.md](CHANGELOG.md) | The release history of the guidance feature before it joined AFC. |
 

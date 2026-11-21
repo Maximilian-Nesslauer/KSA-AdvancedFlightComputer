@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attainable torque sets</title>
+<link rel="icon" href="data:,">
+<script src="../theme.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a reading column for the maths, widening to a two-pane bench (controls | plot) for the explorer */
+:root{
+  --bg:#f2f4f3; --panel:#ffffff; --ink:#17201d; --muted:#57635e; --line:#d3dbd7; --gridline:#e5eae7; --code-bg:#e7ece9;
+  --accent:#0d6b63; --rcs:#4a52c4; --fins:#0a8573; --flaps:#bf5d17; --gimbal:#6a7872; --demand:#c0392b; --ok:#1f7a3a;
+  --set-fill:rgba(13,107,99,.13); --box:#8a9690;
+  --f-head:"Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --f-body:"Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono:"JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#111614; --panel:#192120; --ink:#e4ebe8; --muted:#9aa8a2; --line:#2d3834; --gridline:#212a27; --code-bg:#1f2826;
+  --accent:#4cc3b2; --rcs:#8f97ff; --fins:#3fcab3; --flaps:#f0954a; --gimbal:#9aaaa3; --demand:#ff7a6e; --ok:#5fd27f;
+  --set-fill:rgba(76,195,178,.14); --box:#7b8883; color-scheme:dark; } }
+:root[data-theme="dark"]{
+  --bg:#111614; --panel:#192120; --ink:#e4ebe8; --muted:#9aa8a2; --line:#2d3834; --gridline:#212a27; --code-bg:#1f2826;
+  --accent:#4cc3b2; --rcs:#8f97ff; --fins:#3fcab3; --flaps:#f0954a; --gimbal:#9aaaa3; --demand:#ff7a6e; --ok:#5fd27f;
+  --set-fill:rgba(76,195,178,.14); --box:#7b8883; color-scheme:dark; }
+:root{color-scheme:light}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.6;
+  padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:28px 64px}
+.wrap{max-width:1080px;margin:0 auto;display:flex;flex-direction:column;gap:40px}
+.col{max-width:70ch}
+h1,h2,h3{font-family:var(--f-head);text-wrap:balance;line-height:1.2;margin:0}
+h1{font-size:2rem;font-weight:700;letter-spacing:-.01em}
+h2{font-size:1.35rem;font-weight:600;margin-bottom:12px}
+h3{font-size:1rem;font-weight:600}
+p{margin:0 0 12px}
+.lede{color:var(--muted);font-size:1.05rem;margin-top:8px}
+.eyebrow{font-family:var(--f-mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+code,.mono{font-family:var(--f-mono);font-size:.88em}
+code{background:var(--code-bg);padding:1px 5px;border-radius:4px}
+.eq{font-family:var(--f-head);font-size:1.9rem;font-weight:500;padding:18px 0 6px;letter-spacing:.01em}
+.eq i{font-style:italic}
+.eq b{font-weight:700}
+.eq .side{font-size:1.1rem;color:var(--muted);margin-left:18px;white-space:nowrap}
+dl.terms{display:grid;grid-template-columns:auto 1fr;gap:10px 18px;margin:16px 0 0}
+dl.terms dt{font-family:var(--f-head);font-weight:700;font-size:1.15rem;white-space:nowrap}
+dl.terms dd{margin:0;min-width:0}
+.derive{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-top:18px;font-size:.93rem}
+.derive .mono{display:block;margin:8px 0;white-space:pre-wrap;overflow-x:auto}
+.bench{display:grid;grid-template-columns:minmax(0,330px) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:820px){.bench{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
+.ctrl{display:flex;flex-direction:column;gap:18px}
+.group{display:flex;flex-direction:column;gap:8px}
+.label{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+button,.chip{font:inherit;font-size:.85rem;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:999px;padding:5px 11px;cursor:pointer}
+button:hover,.chip:hover{border-color:var(--accent)}
+button:focus-visible,.chip:focus-within,input:focus-visible,svg:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.on{background:var(--accent);color:var(--panel);border-color:var(--accent)}
+.chip{display:inline-flex;align-items:center;gap:6px}
+.chip input{margin:0;accent-color:var(--accent)}
+.sw{width:10px;height:10px;border-radius:2px;display:inline-block;flex:none}
+.row{display:grid;grid-template-columns:7.5em minmax(0,1fr) 4.2em;align-items:center;gap:8px;font-size:.85rem}
+.row input[type=range]{width:100%;accent-color:var(--accent)}
+.row output{font-family:var(--f-mono);font-size:.8rem;text-align:right;font-variant-numeric:tabular-nums}
+.lamhead{font-size:.8rem;font-weight:600;display:flex;align-items:center;gap:6px;margin-top:6px}
+.plotwrap{display:flex;flex-direction:column;gap:12px}
+svg#plot{width:100%;max-width:560px;aspect-ratio:1;display:block;margin:0 auto;touch-action:none;cursor:crosshair;user-select:none}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.8rem;color:var(--muted);justify-content:center}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.read{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.read div{border-top:1px solid var(--line);padding-top:6px;min-width:0}
+.read .k{font-size:.72rem;color:var(--muted);font-family:var(--f-mono);letter-spacing:.05em;text-transform:uppercase}
+.read .v{font-family:var(--f-mono);font-size:.92rem;font-variant-numeric:tabular-nums}
+.pill{display:inline-block;font-family:var(--f-mono);font-size:.75rem;padding:2px 8px;border-radius:999px;border:1px solid currentColor}
+.pill.yes{color:var(--ok)} .pill.no{color:var(--demand)}
+.note{font-size:.82rem;color:var(--muted)}
+.flow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+@media (max-width:720px){.flow{grid-template-columns:minmax(0,1fr)}}
+.flow .panel h3{margin-bottom:6px}
+.flow .panel p{font-size:.9rem;margin:0}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;font-size:.88rem;min-width:520px;width:100%}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--f-mono);font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:500}
+ul{margin:0 0 12px;padding-left:20px} li{margin:4px 0}
+a{color:var(--accent)}
+.src li{margin:8px 0}
+.howafc{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--flaps);border-radius:8px;padding:14px 16px;font-size:.93rem}
+.howafc h2{font-size:1.05rem;margin-bottom:8px}
+.howafc ul{margin:0 0 8px}
+.howafc p:last-child{margin:0}
+.tag{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:0 5px;margin-right:4px;white-space:nowrap}
+.tag.meas{color:var(--ok)} .tag.ill{color:var(--flaps)}
+footer{font-size:.8rem;color:var(--muted)}
+footer p{margin:0}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<header class="col">
+  <div class="eyebrow">Touchdown guidance · issue #222 · design sketch</div>
+  <h1>Attainable torque sets</h1>
+  <p class="lede">How an RCS or aero controller can tell touchdown guidance what torque it can deliver, without guidance knowing whether the craft has thrusters, grid fins or flaps.</p>
+</header>
+
+<section class="col howafc" aria-labelledby="howafc-h">
+  <h2 id="howafc-h">This is a design sketch. AFC's allocators on main work differently.</h2>
+  <ul>
+    <li><strong>Fins:</strong> <code>AeroTorqueAllocator</code> solves a linear programme over each surface's torque curve, swept at rest and every 15° to its limits and split into straight segments. It starts from where each surface is now and goes only as far as its rate reaches by the next step. A small price per degree away from rest and per degree moved keeps idle surfaces home and stops them swapping work. Refinement passes then correct the answer where a curve bends.</li>
+    <li><strong>RCS:</strong> the thrusters are backup columns in that same programme, priced by their propellant, so the fins take every axis they can and the RCS gives the rest.</li>
+    <li><strong>Gimbals:</strong> <code>KsaTvcAllocator.Solve</code> in <code>TvcAllocator.cs</code>, its own solve. It is a regularised minimum-norm inverse, u = Bᵀ(BBᵀ + εI)⁻¹τ, on the 3 × 2N gimbal torque Jacobian. Roll, the weak axis, is allocated last in the travel the others leave, and gimbals that reach a stop are held there while the free ones carry the rest. It delivers the 6-DOF plan's gimbal torque.</li>
+    <li><strong><code>AttitudeController</code></strong> spends its torque on the fins and the RCS only. It does not use the engine.</li>
+    <li>The 6-DOF plan carries one deflection per fin, in degrees, bounded by the fin's range and rate. It has no λ.</li>
+  </ul>
+  <p>The attainable set drawn below is still the right picture of what those allocators can reach together. The <strong>Allocate</strong> button runs this page's own small least-squares solve, not AFC's.</p>
+</section>
+
+<section class="col">
+  <h2>The equation</h2>
+  <div class="eq" aria-label="tau equals c plus G lambda, each lambda i between minus one and one"><b><i>τ</i></b> = <b><i>c</i></b> + <b><i>G</i></b> <b><i>λ</i></b><span class="side">−1 ≤ <i>λ</i><sub>i</sub> ≤ 1</span></div>
+  <dl class="terms">
+    <dt><i>τ</i></dt><dd>A torque the controller can deliver, in body axes (roll, pitch, yaw). On this page it is divided by the craft's inertia, so it reads as angular acceleration in rad/s², and the air, the gimbals and the RCS compare directly.</dd>
+    <dt><i>λ</i><sub>i</sub></dt><dd>Where actuator <i>i</i> sits in its travel: −1 at one stop, +1 at the other, 0 halfway. For an RCS axis, −1 is full torque one way and +1 full torque the other. Guidance plans with λ and never sees degrees or part names.</dd>
+    <dt><i>G</i><sub>i</sub></dt><dd>Column <i>i</i> of <i>G</i>: the torque actuator <i>i</i> adds as it moves from halfway to its +1 stop. Its direction says which axes it turns and its length says how hard. A grid fin's column points partly in pitch or yaw and partly in roll.</dd>
+    <dt><i>c</i></dt><dd>The torque with every actuator at halfway. It is zero for anything that moves equally both ways (RCS, grid fins at ±20°). It is not zero for a one-sided surface: a flap travels from folded to open, so its halfway point is half open and already pushes.</dd>
+  </dl>
+  <div class="derive">
+    <strong>Where it comes from.</strong> Surface <i>i</i> moves its deflection <i>δ</i><sub>i</sub> between two stops, and the torque it adds is about <i>b</i><sub>i</sub> <i>δ</i><sub>i</sub>, where <i>b</i><sub>i</sub> = ∂<i>τ</i>/∂<i>δ</i><sub>i</sub> is measured by the aero sweep. Write each deflection as its midpoint plus a fraction of its half-range:
+    <span class="mono">δᵢ = mᵢ + hᵢ·λᵢ      mᵢ = (δmax + δmin)/2,  hᵢ = (δmax − δmin)/2
+c  = Σ bᵢ·mᵢ          Gᵢ = bᵢ·hᵢ</span>
+    Each actuator on its own reaches a line segment of torques. All of them together reach every sum of one point from each segment, which is a solid with flat faces (a <em>zonotope</em>). Three RCS axes give a box. Four grid fins give a slanted shape. The planner adds λ as a few bounded variables per node, so each subproblem stays a cone program.
+  </div>
+</section>
+
+<section>
+  <div class="col"><h2>See it</h2>
+  <p>The shaded shape is every torque the switched-on actuators can reach together, seen flat on one plane. Drag anywhere on the plot to set a demand. <strong>Allocate</strong> finds the λ that gets closest, with RCS made dearer than the fins, as a propellant cost would make it. The arrows add up <i>c</i> and each <i>G</i><sub>i</sub>λ<sub>i</sub> tip to tail.</p></div>
+  <div class="bench">
+    <div class="panel ctrl">
+      <div class="group"><div class="label">Example craft</div><div class="chips" id="presets"></div></div>
+      <div class="group"><div class="label">Actuators</div><div class="chips" id="acts"></div></div>
+      <div class="group"><div class="label">Flight state</div>
+        <div class="row"><label for="q">Dyn. pressure</label><input id="q" type="range" min="0" max="30" step="0.1"><output id="qo"></output></div>
+        <div class="row"><label for="mach">Mach</label><input id="mach" type="range" min="0" max="3" step="0.01"><output id="macho"></output></div>
+        <div class="row"><label for="alpha">Angle off air</label><input id="alpha" type="range" min="0" max="90" step="0.1"><output id="alphao"></output></div>
+        <div class="note">Angle off the air is measured from engine-first flight, as the body tables measure α.</div>
+      </div>
+      <div class="group"><div class="label">Plane</div><div class="chips" id="planes"></div></div>
+      <div class="group"><div class="label">Actuator positions λ</div><div id="lam"></div>
+        <div class="chips"><button id="alloc" type="button">Allocate λ to the demand</button><button id="hold" type="button">Demand: hold against the air</button><button id="zero" type="button">Reset λ</button></div>
+        <div class="note" id="holdnote"></div>
+      </div>
+    </div>
+    <div class="panel plotwrap">
+      <svg id="plot" viewBox="0 0 400 400" tabindex="0" role="img" aria-label="Attainable torque set and demand"></svg>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--set-fill);border:1px solid var(--accent)"></span>reachable together</span>
+        <span><span class="sw" style="border:1px dashed var(--box)"></span>per-axis maxima only</span>
+        <span><span class="sw" style="background:var(--rcs)"></span>RCS</span>
+        <span><span class="sw" style="background:var(--fins)"></span>grid fins</span>
+        <span><span class="sw" style="background:var(--flaps)"></span>flaps</span>
+        <span><span class="sw" style="background:var(--gimbal)"></span>gimbal</span>
+        <span><span class="sw" style="background:var(--demand);border-radius:50%"></span>demand</span>
+      </div>
+      <div class="read" id="read"></div>
+      <p class="note"><span class="tag meas">Measured</span> on the 18 Nov booster: RCS 0.35 rad/s² per axis, gimbal 0.15 rad/s² at about 480 kN, and the air's turn of 0.04 rad/s² per degree at 100 m/s, growing with dynamic pressure.</p>
+      <p class="note"><span class="tag ill">Illustrative</span> the grid-fin and flap shapes are made up for this sketch, not taken from a sweep. Real fins now reach AFC from KSAero through its <code>ControlSurfaces</code> interface, and AFC sweeps their torque per deflection. The plot is the 3-D set's shadow on one plane, with the third axis left free.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Mach, angle of attack and orientation</h2>
+    <p>It looks hard, but the code already does it for the air's own moment. <code>BodyAeroTable</code> stores the body-axis moment coefficients <i>C</i><sub>l</sub>, <i>C</i><sub>m</sub>, <i>C</i><sub>n</sub> over a grid of Mach, α and β, fitted with one cubic B-spline that gives the value and its gradient together. The surfaces would ride on the same grid.</p>
+    <ul>
+      <li><strong>Orientation is α and β.</strong> What matters to the air is where the flow comes from in body axes, and the table already defines that as two tilts from engine-first (missile-style, no singularity at zero). The craft is held at a fixed roll, so the body axes are known for any pointing.</li>
+      <li><strong>Dynamic pressure comes out front.</strong> The table stores coefficients (torque over <i>q S L</i>), so the torque is <i>q</i> times a table read. That is why the shapes here grow with the dynamic-pressure slider.</li>
+      <li><strong>Mach and α change the shape.</strong> Each grid node stores <i>c</i> (3 numbers) and <i>G</i> (3 × <i>k</i> numbers for <i>k</i> surfaces), next to the 3 it stores now. Grid fins lose effect around Mach 1 and at high α; flaps barely work engine-first and work best broadside. Try both on the sliders.</li>
+    </ul>
+  </div>
+  <div class="flow">
+    <div class="panel"><h3>Sweep</h3><p>At each (Mach, α, β) node, sample the craft as now, then with each surface at each stop: two more samples per surface per node. That gives <i>b</i><sub>i</sub> as a full-travel slope, so the stops are exact even if a fin is not linear in between. The sweep has to be off the main thread first (#223).</p></div>
+    <div class="panel"><h3>Plan</h3><p>Each node reads <i>c</i> and <i>G</i> at the reference trajectory's Mach, α and β, times its <i>q</i>. <i>G</i>(<i>x</i>)λ is a product of the state and λ, so SCvx linearises it about the last iterate, as it does the air's moment now. The trust region keeps that honest.</p></div>
+    <div class="panel"><h3>Fly</h3><p>The controller reads the same table at the current state, solves for the deflections, and reports the torque it actually got back to guidance. On main that solve is <code>AeroTorqueAllocator</code>'s linear programme (see the note at the top).</p></div>
+  </div>
+  <div class="col" style="margin-top:18px">
+    <h3 style="margin-bottom:8px">Where it gets genuinely hard</h3>
+    <div class="tbl"><table>
+      <thead><tr><th>Problem</th><th>Why</th><th>What to do</th></tr></thead>
+      <tbody>
+        <tr><td>Belly-flop attitudes</td><td>The body tables cover small tilts from engine-first, and touchdown fades body aero out beyond 20–28°. A belly-flopping ship hands over near 90° and flips in the burn.</td><td>Whole-sphere surface tables, plus a flip phase or a touchdown problem that allows large attitudes. Separate work.</td></tr>
+        <tr><td>Surfaces shadowing each other</td><td>Moving one fin at a time measures each alone. At high α a forward surface can blank one behind it, so the effects don't add.</td><td>Check it by sweeping pairs on a test craft; add pair terms only if it matters.</td></tr>
+        <tr><td>Surfaces push too</td><td>Fins add drag and side force. Flaps are most of a belly-flopper's drag.</td><td>Store a force column beside each torque column, so force is also linear in λ. Leave it out at first for grid fins.</td></tr>
+        <tr><td>Slew rates</td><td>Flaps move slowly. A plan that slams λ end to end can't be flown.</td><td>Bound how fast λ changes per node, as the 6-DOF plan now does for each fin's deflection and for the gimbals' slew.</td></tr>
+        <tr><td>Sweep cost</td><td>18,216 samples already take about 1 s. Four fins add 8 samples per node.</td><td>Worker thread and once per geometry (#223) first.</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</section>
+
+<section class="col">
+  <h2>Where the method comes from</h2>
+  <p>The shape on this page is the <strong>attainable moment set</strong> from aircraft control allocation. Aircraft with many control surfaces have used it since the early 1990s: the flight control law asks for a moment, and a separate allocator works out the deflections.</p>
+  <ul class="src">
+    <li>W. C. Durham, <em>Constrained Control Allocation</em>, J. Guidance, Control, and Dynamics 16(4), 1993. Defines the set of moments reachable within deflection limits as the image of the deflection box. <a href="https://ntrs.nasa.gov/citations/19920072638">NASA NTRS record</a></li>
+    <li>T. A. Johansen and T. I. Fossen, <em>Control allocation — A survey</em>, Automatica 49(5), 2013. Covers aircraft, ships and vehicles, with saturation, rate limits and secondary costs. <a href="https://core.ac.uk/download/80276006.pdf">PDF on CORE</a></li>
+    <li>Tabulating control derivatives over Mach, α and β, scaled by dynamic pressure, is how aircraft aero databases are normally built. Here it reuses the layout of AFC's own <code>BodyAeroTable</code>.</li>
+  </ul>
+  <p>Two parts are my own proposal for this problem, not taken from a paper: putting λ into the SCvx plan as bounded variables per node, and the centre-plus-columns report as the interface between guidance and the controllers. Allocation papers usually use the set inside one control step, not as something a trajectory optimiser plans against.</p>
+</section>
+
+<footer class="col">
+  <p>Part of the AFC docs. Design sketch; AFC's allocators as of main 155357c (2026-11-21).</p>
+</footer>
+</div>
+
+<script>
+(function(){
+const QREF = 6.1;         // kPa: 100 m/s near sea level, where the air's turn was measured
+const GIMBAL_R = 0.15;    // rad/s^2, gimbals at ~480 kN
+const RCS_A = 0.35;       // rad/s^2 per axis, entry log rcsAuth
+const AIR_PER_DEG = 0.04; // rad/s^2 per degree at 100 m/s
+const PLANES = { py:{hx:2, vy:1, label:'Pitch–yaw', xname:'yaw'}, pr:{hx:0, vy:1, label:'Pitch–roll', xname:'roll'} };
+const ACTS = [ {key:'rcs',label:'RCS'}, {key:'fins',label:'Grid fins'}, {key:'flaps',label:'Belly flaps'}, {key:'gimbal',label:'Gimbal'} ];
+const S = { act:{rcs:false,fins:true,flaps:false,gimbal:true}, q:6.34, mach:0.30, alpha:7.3, plane:'py',
+  lam:{rcs:[0,0,0], fins:[0,0,0,0], flaps:[0,0,0,0]}, u:[0,0], demand:[0,0.30,0], preset:'fins' };
+const PRESETS = {
+  fins:{label:'Grid-fin booster', act:{rcs:false,fins:true,flaps:false,gimbal:true}, q:6.34, mach:0.30, alpha:7.3, plane:'py', hold:true},
+  today:{label:'This booster today', act:{rcs:true,fins:false,flaps:false,gimbal:true}, q:6.34, mach:0.30, alpha:7.3, plane:'py', hold:true},
+  gimbal:{label:'Gimbal only (23:38)', act:{rcs:false,fins:false,flaps:false,gimbal:true}, q:6.34, mach:0.30, alpha:7.3, plane:'py', hold:true},
+  flop:{label:'Belly-flop ship', act:{rcs:false,fins:false,flaps:true,gimbal:false}, q:3.5, mach:0.24, alpha:80, plane:'pr', demand:[0,0.12,0]}
+};
+const $ = s => document.querySelector(s);
+const NS = 'http://www.w3.org/2000/svg';
+
+function finEff(M,a){ const eM = 1 - 0.55*Math.exp(-Math.pow((M-1.05)/0.22,2)); const eA = a<=20?1:(a>=35?0.2:1-0.8*(a-20)/15); return eM*eA; }
+function flapEff(M,a){ const s=Math.sin(a*Math.PI/180); return s*s*(1-0.15*Math.exp(-Math.pow((M-1)/0.3,2))); }
+
+function actuators(){
+  const s = S.q/QREF, out=[];
+  if(S.act.rcs) out.push({key:'rcs', names:['Roll','Pitch','Yaw'], w:0.03, c:[0,0,0], G:[[RCS_A,0,0],[0,RCS_A,0],[0,0,RCS_A]]});
+  if(S.act.fins){ const e = s*finEff(S.mach,S.alpha); const G=[45,135,225,315].map(p=>{const r=p*Math.PI/180; return [0.15*e, -0.12*e*Math.cos(r), -0.12*e*Math.sin(r)];});
+    out.push({key:'fins', names:['Fin 45°','Fin 135°','Fin 225°','Fin 315°'], w:0.002, c:[0,0,0], G}); }
+  if(S.act.flaps){ const e = s*flapEff(S.mach,S.alpha); const F=[{n:'Fwd left',x:1,y:-1},{n:'Fwd right',x:1,y:1},{n:'Aft left',x:-1,y:-1},{n:'Aft right',x:-1,y:1}];
+    const full = F.map(f=>[0.12*f.y*e, (f.x>0?0.25:-0.35)*e, 0.01*f.y*e]);
+    const c=[0,0,0]; full.forEach(v=>{for(let j=0;j<3;j++) c[j]+=v[j]/2;});
+    out.push({key:'flaps', names:F.map(f=>f.n), w:0.002, c, G:full.map(v=>v.map(x=>x/2))}); }
+  return out;
+}
+const gimR = () => S.act.gimbal ? GIMBAL_R : 0;
+function support(acts, d){
+  const p=[0,0,0];
+  acts.forEach(a=>{ for(let j=0;j<3;j++) p[j]+=a.c[j]; a.G.forEach(g=>{ const s=Math.sign(g[0]*d[0]+g[1]*d[1]+g[2]*d[2]); for(let j=0;j<3;j++) p[j]+=s*g[j]; }); });
+  const r=gimR(); if(r>0){ const n=Math.hypot(d[1],d[2]); if(n>1e-9){ p[1]+=r*d[1]/n; p[2]+=r*d[2]/n; } }
+  return p;
+}
+function gimVec(){ let a=S.u[0], b=S.u[1]; const n=Math.hypot(a,b); if(n>1){a/=n;b/=n;} const r=gimR(); return [0,r*a,r*b]; }
+function unit(i,s){ const d=[0,0,0]; d[i]=s; return d; }
+
+function polygon(acts, pl){
+  const poly=[];
+  for(let k=0;k<720;k++){ const t=k/720*2*Math.PI; const d=[0,0,0]; d[pl.hx]=Math.cos(t); d[pl.vy]=Math.sin(t);
+    const p=support(acts,d), q=[p[pl.hx],p[pl.vy]], L=poly[poly.length-1];
+    if(!L || Math.hypot(q[0]-L[0],q[1]-L[1])>1e-7) poly.push(q); }
+  if(poly.length>1){ const a=poly[0],b=poly[poly.length-1]; if(Math.hypot(a[0]-b[0],a[1]-b[1])<1e-7) poly.pop(); }
+  return poly;
+}
+function inside(poly,p){ if(poly.length<3) return Math.hypot(p[0],p[1])<1e-9; for(let i=0;i<poly.length;i++){ const a=poly[i], b=poly[(i+1)%poly.length]; if((b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0]) < -1e-9) return false; } return true; }
+function closest(poly,p){ if(!poly.length) return [0,0]; if(poly.length===1) return poly[0]; let best=poly[0], bd=Infinity; const n=poly.length;
+  for(let i=0;i<n;i++){ const a=poly[i], b=poly[(i+1)%n]; const dx=b[0]-a[0], dy=b[1]-a[1]; const L=dx*dx+dy*dy; let t=L>0?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L:0; t=Math.max(0,Math.min(1,t));
+    const q=[a[0]+t*dx,a[1]+t*dy], d=Math.hypot(q[0]-p[0],q[1]-p[1]); if(d<bd){bd=d;best=q;} }
+  return best; }
+
+function chainPoints(acts, pl){
+  const P=v=>[v[pl.hx],v[pl.vy]]; const c=[0,0,0]; acts.forEach(a=>{for(let j=0;j<3;j++)c[j]+=a.c[j];});
+  const segs=[]; let cur=P(c); const start=cur.slice();
+  acts.forEach(a=>a.G.forEach((g,i)=>{ const l=S.lam[a.key][i]; const v=P(g); const nx=[cur[0]+v[0]*l, cur[1]+v[1]*l]; segs.push({key:a.key,a:cur,b:nx}); cur=nx; }));
+  if(gimR()>0){ const v=P(gimVec()); const nx=[cur[0]+v[0],cur[1]+v[1]]; segs.push({key:'gimbal',a:cur,b:nx}); cur=nx; }
+  return {start, segs, end:cur};
+}
+
+function allocate(){
+  const acts=actuators(), pl=PLANES[S.plane]; const P=v=>[v[pl.hx],v[pl.vy]];
+  const gens=[]; acts.forEach(a=>a.G.forEach((g,i)=>gens.push({key:a.key,i,pg:P(g),w:a.w})));
+  const c=[0,0,0]; acts.forEach(a=>{for(let j=0;j<3;j++)c[j]+=a.c[j];}); const pc=P(c);
+  const r=gimR(), pe1=P([0,1,0]), pe2=P([0,0,1]), wg=0.001;
+  const dem=[S.demand[pl.hx],S.demand[pl.vy]];
+  const lam=gens.map(()=>0); let u=[0,0];
+  const L=2*(gens.reduce((s,o)=>s+o.pg[0]*o.pg[0]+o.pg[1]*o.pg[1],0)+2*r*r)+0.1; const st=1/L;
+  for(let it=0; it<4000; it++){
+    const res=[pc[0]-dem[0], pc[1]-dem[1]];
+    gens.forEach((o,k)=>{res[0]+=o.pg[0]*lam[k]; res[1]+=o.pg[1]*lam[k];});
+    res[0]+=r*(u[0]*pe1[0]+u[1]*pe2[0]); res[1]+=r*(u[0]*pe1[1]+u[1]*pe2[1]);
+    gens.forEach((o,k)=>{ const g=2*(o.pg[0]*res[0]+o.pg[1]*res[1])+2*o.w*lam[k]; lam[k]=Math.max(-1,Math.min(1,lam[k]-st*g)); });
+    if(r>0){ const g0=2*r*(pe1[0]*res[0]+pe1[1]*res[1])+2*wg*u[0], g1=2*r*(pe2[0]*res[0]+pe2[1]*res[1])+2*wg*u[1];
+      u=[u[0]-st*g0,u[1]-st*g1]; const n=Math.hypot(u[0],u[1]); if(n>1) u=[u[0]/n,u[1]/n]; }
+  }
+  gens.forEach((o,k)=>{ S.lam[o.key][o.i]=lam[k]; }); if(r>0) S.u=u;
+  buildLam(); render();
+}
+function holdDemand(){
+  const note=$('#holdnote');
+  if(S.alpha>20){ note.textContent='The measured air turn (0.04 rad/s² per degree) holds near engine-first only, so this button works up to 20°.'; return; }
+  note.textContent='';
+  S.demand=[0, AIR_PER_DEG*S.alpha*S.q/QREF, 0]; render();
+}
+
+function niceExt(m){ const steps=[0.02,0.05,0.1,0.2,0.25,0.5,1,2,2.5,5,10]; for(const s of steps){ if(m/s<=4) return {step:s, ext:Math.max(s,Math.ceil(m/s-1e-9)*s)}; } return {step:20, ext:Math.ceil(m/20)*20}; }
+function el(tag, attrs, parent){ const e=document.createElementNS(NS,tag); for(const k in attrs) e.setAttribute(k,attrs[k]); if(parent) parent.appendChild(e); return e; }
+const fmt = x => (Math.abs(x)<0.005?0:x).toFixed(2);
+const view={ext:1};
+
+function render(){
+  const acts=actuators(), pl=PLANES[S.plane];
+  const poly=polygon(acts,pl), ch=chainPoints(acts,pl);
+  const dem=[S.demand[pl.hx],S.demand[pl.vy]];
+  const box=[ support(acts,unit(pl.hx,-1))[pl.hx], support(acts,unit(pl.hx,1))[pl.hx], support(acts,unit(pl.vy,-1))[pl.vy], support(acts,unit(pl.vy,1))[pl.vy] ];
+  let m=0.05; poly.forEach(p=>{m=Math.max(m,Math.abs(p[0]),Math.abs(p[1]));}); m=Math.max(m,Math.abs(dem[0]),Math.abs(dem[1]),Math.abs(ch.end[0]),Math.abs(ch.end[1]));
+  const ne=niceExt(m*1.08), step=ne.step, ext=ne.ext; view.ext=ext;
+  const svg=$('#plot'); while(svg.firstChild) svg.removeChild(svg.firstChild);
+  const C=200, R=162, k=R/ext, X=x=>C+x*k, Y=y=>C-y*k;
+  const n=Math.round(ext/step);
+  for(let i=-n;i<=n;i++){ const vv=i*step;
+    el('line',{x1:X(vv),y1:C-R,x2:X(vv),y2:C+R,stroke:'var(--gridline)','stroke-width':1},svg);
+    el('line',{x1:C-R,y1:Y(vv),x2:C+R,y2:Y(vv),stroke:'var(--gridline)','stroke-width':1},svg);
+    if(i!==0){ const t1=el('text',{x:X(vv),y:C+R+14,'text-anchor':'middle','font-size':9,fill:'var(--muted)','font-family':'var(--f-mono)'},svg); t1.textContent=+vv.toFixed(2);
+      const t2=el('text',{x:C-R-4,y:Y(vv)+3,'text-anchor':'end','font-size':9,fill:'var(--muted)','font-family':'var(--f-mono)'},svg); t2.textContent=+vv.toFixed(2); } }
+  el('line',{x1:C-R,y1:C,x2:C+R,y2:C,stroke:'var(--muted)','stroke-width':1},svg);
+  el('line',{x1:C,y1:C-R,x2:C,y2:C+R,stroke:'var(--muted)','stroke-width':1},svg);
+  const xl=el('text',{x:C+R,y:C-6,'text-anchor':'end','font-size':10,fill:'var(--muted)','font-family':'var(--f-body)'},svg); xl.textContent=pl.xname+' →';
+  const yl=el('text',{x:C+6,y:C-R+10,'font-size':10,fill:'var(--muted)','font-family':'var(--f-body)'},svg); yl.textContent='↑ pitch (rad/s²)';
+  if(poly.length>=3){
+    el('rect',{x:X(box[0]),y:Y(box[3]),width:Math.max(0,(box[1]-box[0])*k),height:Math.max(0,(box[3]-box[2])*k),fill:'none',stroke:'var(--box)','stroke-dasharray':'4 4','stroke-width':1},svg);
+    el('polygon',{points:poly.map(p=>X(p[0])+','+Y(p[1])).join(' '),fill:'var(--set-fill)',stroke:'var(--accent)','stroke-width':1.5,'stroke-linejoin':'round'},svg);
+  } else if(poly.length===2){ el('line',{x1:X(poly[0][0]),y1:Y(poly[0][1]),x2:X(poly[1][0]),y2:Y(poly[1][1]),stroke:'var(--accent)','stroke-width':3},svg); }
+  el('circle',{cx:X(ch.start[0]),cy:Y(ch.start[1]),r:3.5,fill:'var(--panel)',stroke:'var(--ink)','stroke-width':1.5},svg);
+  const ct=el('text',{x:X(ch.start[0])+6,y:Y(ch.start[1])+13,'font-size':12,'font-style':'italic','font-weight':700,fill:'var(--ink)','font-family':'var(--f-head)'},svg); ct.textContent='c';
+  ch.segs.forEach(s=>{ const x1=X(s.a[0]),y1=Y(s.a[1]),x2=X(s.b[0]),y2=Y(s.b[1]); const L=Math.hypot(x2-x1,y2-y1); if(L<1) return;
+    const col='var(--'+s.key+')'; el('line',{x1,y1,x2,y2,stroke:col,'stroke-width':2},svg);
+    const ux=(x2-x1)/L, uy=(y2-y1)/L, h=Math.min(7,L*0.6);
+    el('polygon',{points:[x2,y2, x2-h*ux-h*0.45*uy, y2-h*uy+h*0.45*ux, x2-h*ux+h*0.45*uy, y2-h*uy-h*0.45*ux].join(','),fill:col},svg); });
+  el('circle',{cx:X(ch.end[0]),cy:Y(ch.end[1]),r:4,fill:'var(--ink)'},svg);
+  const ins=inside(poly,dem);
+  const near = ins ? dem : closest(poly,dem);
+  if(!ins){ el('line',{x1:X(dem[0]),y1:Y(dem[1]),x2:X(near[0]),y2:Y(near[1]),stroke:'var(--demand)','stroke-dasharray':'3 3','stroke-width':1.5},svg);
+    el('circle',{cx:X(near[0]),cy:Y(near[1]),r:3,fill:'none',stroke:'var(--demand)','stroke-width':1.5},svg); }
+  el('circle',{cx:X(dem[0]),cy:Y(dem[1]),r:7,fill:'none',stroke:'var(--demand)','stroke-width':2},svg);
+  el('circle',{cx:X(dem[0]),cy:Y(dem[1]),r:2.5,fill:'var(--demand)'},svg);
+  const short = Math.hypot(dem[0]-near[0],dem[1]-near[1]);
+  const air = S.alpha<=20 ? fmt(AIR_PER_DEG*S.alpha*S.q/QREF)+' pitch' : 'not measured past 20°';
+  $('#read').innerHTML =
+    '<div><div class="k">Demand</div><div class="v">'+pl.xname+' '+fmt(dem[0])+' · pitch '+fmt(dem[1])+'</div></div>'+
+    '<div><div class="k">Reachable</div><div class="v">'+(ins?'<span class="pill yes">yes</span>':'<span class="pill no">no · short '+fmt(short)+'</span>')+'</div></div>'+
+    '<div><div class="k">c + Gλ + gimbal</div><div class="v">'+pl.xname+' '+fmt(ch.end[0])+' · pitch '+fmt(ch.end[1])+'</div></div>'+
+    '<div><div class="k">Air\'s turn here</div><div class="v">'+air+'</div></div>';
+  $('#qo').textContent=S.q.toFixed(1)+' kPa'; $('#macho').textContent=S.mach.toFixed(2); $('#alphao').textContent=S.alpha.toFixed(1)+'°';
+  svg.setAttribute('aria-label', pl.label+' plane. Demand '+pl.xname+' '+fmt(dem[0])+', pitch '+fmt(dem[1])+' rad/s², '+(ins?'reachable':'not reachable')+'.');
+}
+
+function buildLam(){
+  const box=$('#lam'); box.innerHTML='';
+  const acts=actuators();
+  const add=(key,title)=>{ const h=document.createElement('div'); h.className='lamhead'; h.innerHTML='<span class="sw" style="background:var(--'+key+')"></span>'+title; box.appendChild(h); };
+  const row=(id,label,val,on)=>{ const r=document.createElement('div'); r.className='row';
+    r.innerHTML='<label for="'+id+'">'+label+'</label><input id="'+id+'" type="range" min="-1" max="1" step="0.01" value="'+val+'"><output>'+(+val).toFixed(2)+'</output>';
+    const inp=r.querySelector('input'), o=r.querySelector('output'); inp.addEventListener('input',()=>{ on(+inp.value); o.textContent=(+inp.value).toFixed(2); render(); }); box.appendChild(r); };
+  acts.forEach(a=>{ add(a.key, ACTS.find(x=>x.key===a.key).label); a.names.forEach((nm,i)=>row('lam-'+a.key+'-'+i, nm, S.lam[a.key][i], v=>{S.lam[a.key][i]=v;})); });
+  if(S.act.gimbal){ add('gimbal','Gimbal (a disc, not a λ box)'); row('gim-0','Pitch',S.u[0],v=>{S.u[0]=v;}); row('gim-1','Yaw',S.u[1],v=>{S.u[1]=v;}); }
+  if(!acts.length && !S.act.gimbal){ const p=document.createElement('div'); p.className='note'; p.textContent='Switch on an actuator to see its λ.'; box.appendChild(p); }
+}
+function buildChips(){
+  const pr=$('#presets'); pr.innerHTML='';
+  Object.keys(PRESETS).forEach(k=>{ const p=PRESETS[k]; const b=document.createElement('button'); b.type='button'; b.textContent=p.label; if(S.preset===k) b.className='on'; b.addEventListener('click',()=>applyPreset(k)); pr.appendChild(b); });
+  const ac=$('#acts'); ac.innerHTML='';
+  ACTS.forEach(a=>{ const l=document.createElement('label'); l.className='chip'; l.innerHTML='<input type="checkbox" id="act-'+a.key+'" '+(S.act[a.key]?'checked':'')+'><span class="sw" style="background:var(--'+a.key+')"></span>'+a.label;
+    l.querySelector('input').addEventListener('change',e=>{ S.act[a.key]=e.target.checked; S.preset=null; buildChips(); buildLam(); render(); }); ac.appendChild(l); });
+  const pl=$('#planes'); pl.innerHTML='';
+  Object.keys(PLANES).forEach(k=>{ const p=PLANES[k]; const b=document.createElement('button'); b.type='button'; b.textContent=p.label; if(S.plane===k) b.className='on'; b.addEventListener('click',()=>{S.plane=k; buildChips(); render();}); pl.appendChild(b); });
+}
+function syncSliders(){ $('#q').value=S.q; $('#mach').value=S.mach; $('#alpha').value=S.alpha; }
+function applyPreset(k){ const p=PRESETS[k]; S.preset=k; S.act=Object.assign({},p.act); S.q=p.q; S.mach=p.mach; S.alpha=p.alpha; S.plane=p.plane;
+  S.lam={rcs:[0,0,0],fins:[0,0,0,0],flaps:[0,0,0,0]}; S.u=[0,0];
+  S.demand = p.hold ? [0,AIR_PER_DEG*S.alpha*S.q/QREF,0] : p.demand.slice();
+  $('#holdnote').textContent=''; syncSliders(); buildChips(); buildLam(); render(); }
+
+['q','mach','alpha'].forEach(id=>$('#'+id).addEventListener('input',e=>{ S[id]=+e.target.value; S.preset=null; buildChips(); buildLam(); render(); }));
+$('#alloc').addEventListener('click',allocate);
+$('#hold').addEventListener('click',holdDemand);
+$('#zero').addEventListener('click',()=>{ S.lam={rcs:[0,0,0],fins:[0,0,0,0],flaps:[0,0,0,0]}; S.u=[0,0]; buildLam(); render(); });
+
+const svg=$('#plot'); let drag=false;
+function setFromEvent(ev){ const m=svg.getScreenCTM(); if(!m) return; const pt=svg.createSVGPoint(); pt.x=ev.clientX; pt.y=ev.clientY; const p=pt.matrixTransform(m.inverse());
+  const k=162/view.ext, pl=PLANES[S.plane]; S.demand[pl.hx]=(p.x-200)/k; S.demand[pl.vy]=(200-p.y)/k; render(); }
+svg.addEventListener('pointerdown',e=>{ drag=true; try{svg.setPointerCapture(e.pointerId);}catch(_){} setFromEvent(e); });
+svg.addEventListener('pointermove',e=>{ if(drag) setFromEvent(e); });
+svg.addEventListener('pointerup',()=>{ drag=false; }); svg.addEventListener('pointercancel',()=>{ drag=false; });
+svg.addEventListener('keydown',e=>{ const pl=PLANES[S.plane], d=view.ext/40; let hit=true;
+  if(e.key==='ArrowLeft') S.demand[pl.hx]-=d; else if(e.key==='ArrowRight') S.demand[pl.hx]+=d; else if(e.key==='ArrowUp') S.demand[pl.vy]+=d; else if(e.key==='ArrowDown') S.demand[pl.vy]-=d; else hit=false;
+  if(hit){ e.preventDefault(); render(); } });
+
+applyPreset('fins');
+})();
+</script>
+
+</body></html>

@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attitude controller</title>
+<link rel="icon" href="data:,">
+<script src="../theme.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a reading column for the law, widening to a two-pane bench (controls | plots) for the simulation */
+:root{
+  --bg:#f2f4f3; --panel:#ffffff; --ink:#17201d; --muted:#57635e; --line:#d3dbd7; --gridline:#e5eae7; --code-bg:#e7ece9;
+  --accent:#0d6b63; --ok:#1f7a3a; --limit:#c0392b; --illus:#bf5d17;
+  --point:#3550c8; --roll:#bf5d17;
+  --tp:#1a9c6e; --td:#6250d6; --ti:#b88000; --tg:#2a8fc0; --ta:#d0457f;
+  --f-head:"Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --f-body:"Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono:"JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#111614; --panel:#192120; --ink:#e4ebe8; --muted:#9aa8a2; --line:#2d3834; --gridline:#212a27; --code-bg:#1f2826;
+  --accent:#4cc3b2; --ok:#5fd27f; --limit:#ff7a6e; --illus:#f0954a;
+  --point:#7480f0; --roll:#d9762a;
+  --tp:#199e70; --td:#9085e9; --ti:#c08200; --tg:#3a9ad0; --ta:#d55181;
+  color-scheme:dark; } }
+:root[data-theme="dark"]{
+  --bg:#111614; --panel:#192120; --ink:#e4ebe8; --muted:#9aa8a2; --line:#2d3834; --gridline:#212a27; --code-bg:#1f2826;
+  --accent:#4cc3b2; --ok:#5fd27f; --limit:#ff7a6e; --illus:#f0954a;
+  --point:#7480f0; --roll:#d9762a;
+  --tp:#199e70; --td:#9085e9; --ti:#c08200; --tg:#3a9ad0; --ta:#d55181;
+  color-scheme:dark; }
+:root{color-scheme:light}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.6;
+  padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:28px 40px}
+.wrap{max-width:1080px;margin:0 auto;display:flex;flex-direction:column;gap:36px}
+.col{max-width:70ch}
+h1,h2,h3{font-family:var(--f-head);text-wrap:balance;line-height:1.2;margin:0}
+h1{font-size:2rem;font-weight:700;letter-spacing:-.01em}
+h2{font-size:1.35rem;font-weight:600;margin-bottom:12px}
+h3{font-size:1rem;font-weight:600}
+p{margin:0 0 12px}
+.lede{color:var(--muted);font-size:1.05rem;margin-top:8px}
+.eyebrow{font-family:var(--f-mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+code,.mono{font-family:var(--f-mono);font-size:.88em}
+code{background:var(--code-bg);padding:1px 5px;border-radius:4px}
+.eq{font-family:var(--f-head);font-size:1.45rem;font-weight:500;padding:18px 0 6px;letter-spacing:.01em;line-height:2}
+.eq i{font-style:italic}
+.eq b{font-weight:700}
+.eq .t{border-bottom:3px solid var(--c);padding-bottom:1px;white-space:nowrap}
+.eq .side{display:block;font-size:1rem;color:var(--muted);line-height:1.5}
+dl.terms{display:grid;grid-template-columns:auto 1fr;gap:10px 18px;margin:16px 0 0}
+dl.terms dt{font-family:var(--f-head);font-weight:700;font-size:1.05rem;white-space:nowrap;display:flex;align-items:baseline;gap:8px}
+dl.terms dd{margin:0;min-width:0}
+@media (max-width:520px){dl.terms{grid-template-columns:minmax(0,1fr)} dl.terms dd{margin-bottom:6px}}
+.derive{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-top:18px;font-size:.93rem}
+.derive .mono{display:block;margin:8px 0;white-space:pre-wrap;overflow-x:auto}
+.bench{display:grid;grid-template-columns:minmax(0,300px) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:820px){.bench{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
+.ctrl{display:flex;flex-direction:column;gap:18px}
+.group{display:flex;flex-direction:column;gap:8px}
+.label{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+button,.chip{font:inherit;font-size:.85rem;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:999px;padding:5px 11px;cursor:pointer}
+button:hover,.chip:hover{border-color:var(--accent)}
+button:focus-visible,.chip:focus-within,input:focus-visible,svg:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.on{background:var(--accent);color:var(--panel);border-color:var(--accent)}
+button.go{font-weight:600}
+.chip{display:inline-flex;align-items:center;gap:6px}
+.chip input{margin:0;accent-color:var(--accent)}
+.sw{width:10px;height:10px;border-radius:2px;display:inline-block;flex:none}
+.sw.ln{height:3px;width:16px;border-radius:2px}
+.sw.dash{height:0;width:16px;border-top:2px dashed var(--c);background:none!important}
+.row{display:grid;grid-template-columns:7.6em minmax(0,1fr) 5.8em;align-items:center;gap:8px;font-size:.85rem}
+.row input[type=range]{width:100%;accent-color:var(--accent)}
+.row output{font-family:var(--f-mono);font-size:.8rem;text-align:right;font-variant-numeric:tabular-nums}
+.status{font-family:var(--f-mono);font-size:.8rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.plots{display:flex;flex-direction:column;gap:14px}
+.top{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start}
+.top svg{flex:none;width:200px;height:200px}
+.top .read{flex:1 1 220px}
+.plot svg{display:block;width:100%;touch-action:pan-y;user-select:none}
+.phead{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 12px;margin-bottom:4px}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.78rem;color:var(--muted)}
+.legend > span{display:inline-flex;align-items:center;gap:6px}
+.read{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:8px 10px;align-content:start}
+.read div{border-top:1px solid var(--line);padding-top:5px;min-width:0}
+.read .k{font-size:.68rem;color:var(--muted);font-family:var(--f-mono);letter-spacing:.05em;text-transform:uppercase}
+.read .v{font-family:var(--f-mono);font-size:.9rem;font-variant-numeric:tabular-nums}
+.hover{font-family:var(--f-mono);font-size:.75rem;color:var(--muted);min-height:2.6em;font-variant-numeric:tabular-nums}
+.note{font-size:.82rem;color:var(--muted)}
+ul{margin:0 0 12px;padding-left:20px} li{margin:4px 0}
+a{color:var(--accent)}
+.tag{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:0 5px;margin-right:4px;white-space:nowrap}
+.tag.meas{color:var(--ok)} .tag.ill{color:var(--illus)}
+footer{font-size:.8rem;color:var(--muted)}
+footer p{margin:0}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<header class="col">
+  <div class="eyebrow">Guidance · attitude control · interactive</div>
+  <h1>Attitude controller</h1>
+  <p class="lede">The torque law AFC's own attitude controller flies in the glides, run on a simulated booster. Start it 73° off in roll and 5° off in pointing, and watch each term of the torque demand.</p>
+</header>
+
+<section class="col">
+  <h2>The law</h2>
+  <div class="eq" aria-label="tau equals I k d omega c, plus I k d times the filtered rate error, plus I k i omega n squared times the integral of theta, plus omega cross I omega, minus M air. k p equals omega n squared, k d equals 2 zeta omega n.">
+    <b><i>τ</i></b> = <span class="t" style="--c:var(--tp)"><i>I k</i><sub>d</sub> <b><i>ω</i></b><sub>c</sub></span> + <span class="t" style="--c:var(--td)"><i>I k</i><sub>d</sub> Δ<b><i>ω̃</i></b></span> + <span class="t" style="--c:var(--ti)"><i>I k</i><sub>i</sub> <i>ω</i><sub>n</sub>² ∫<b><i>θ</i></b> d<i>t</i></span> + <span class="t" style="--c:var(--tg)"><b><i>ω</i></b> × <i>I</i><b><i>ω</i></b></span> − <span class="t" style="--c:var(--ta)"><b><i>M</i></b><sub>air</sub></span>
+    <span class="side"><i>k</i><sub>p</sub> = <i>ω</i><sub>n</sub>²,&ensp; <i>k</i><sub>d</sub> = 2<i>ζω</i><sub>n</sub>,&ensp; in the model body axes: <i>x</i> pitch, <i>y</i> yaw, <i>z</i> roll</span>
+  </div>
+  <dl class="terms">
+    <dt><span class="sw" style="background:var(--tp)"></span>P</dt><dd>The proportional part, written as a rate. <b><i>ω</i></b><sub>c</sub> = (<i>k</i><sub>p</sub>/<i>k</i><sub>d</sub>) <b><i>θ</i></b> is the rate the error would close at, capped at <i>ω</i><sub>max</sub> = 5 deg/s (<code>CaptureRateDegS</code>), pointing and roll each on its own. Unsaturated it is the PD's <i>I k</i><sub>p</sub><b><i>θ</i></b>.</dd>
+    <dt><span class="sw" style="background:var(--td)"></span>D</dt><dd>Damping on the rate error Δ<b><i>ω</i></b> = <b><i>ω</i></b><sub>target</sub> − <b><i>ω</i></b>, passed through a first-order lag of <i>T</i><sub>f</sub> (<code>RateFilterS</code>, 0.2 s), so the wobble in the measured rate doesn't jitter the demand. The target holds still here, so <b><i>ω</i></b><sub>target</sub> = 0.</dd>
+    <dt><span class="sw" style="background:var(--ti)"></span>Integral</dt><dd>The error integrated while it is within 3° (<code>IntegralWithinDeg</code>, pointing and roll each on its own), capped at 8 deg s, at <i>k</i><sub>i</sub> = 0.1 /s. It learns what the feed-forward misses. It keeps acting in the deadband.</dd>
+    <dt><span class="sw" style="background:var(--tg)"></span>Gyroscopic</dt><dd><b><i>ω</i></b> × <i>I</i><b><i>ω</i></b> cancels the coupling between axes in Euler's equation. It matters here because the booster rolls fast about an axis with 40 times less inertia.</dd>
+    <dt><span class="sw" style="background:var(--ta)"></span>Air feed-forward</dt><dd>The air's moment read from the aero tables at the Mach number, <i>α</i> and <i>β</i> flown, cancelled before any error builds. On this page the tables know a share of the true moment, and the rest is <i>M</i><sub>miss</sub>.</dd>
+    <dt><b><i>θ</i></b></dt><dd>The attitude error, ½ Σ <b>e</b><sub>i</sub> × <b>t</b><sub>i</sub> = sin <i>φ</i> <b>n</b>: the rotation onto the target, from the target's axes <b>t</b><sub>i</sub> seen in the body. It is split into <b><i>θ</i></b><sub>roll</sub> along <i>z</i> and <b><i>θ</i></b><sub>point</sub> across it.</dd>
+  </dl>
+  <div class="derive">
+    <strong>Why the cap is split.</strong> With one cap on the whole vector, a large roll error takes the whole capture rate:
+    <span class="mono">ω_c = sat(k_p/k_d · θ)          one cap: pointing gets ω_max · |θ_point| / |θ|
+ω_c = sat(k_p/k_d · θ_point) + sat(k_p/k_d · θ_roll)          split: each gets up to ω_max</span>
+    At 73° off in roll and 5° off in pointing, |<b><i>θ</i></b>| ≈ 0.96 and |<b><i>θ</i></b><sub>point</sub>| ≈ 0.07, so one cap leaves the pointing 5 × 0.07 / 0.96 ≈ 0.37 deg/s while the roll takes the other 5.
+    <br><br><strong>The standing error.</strong> Without the integral, the feedback <i>I k</i><sub>p</sub><b><i>θ</i></b> has to hold the part of the air's moment the feed-forward doesn't know, so the error stands at <i>M</i><sub>miss</sub> / (<i>I ω</i><sub>n</sub>²): 0.17 × 40 kN m / (1.14 × 10⁶ kg m² × 1 s⁻²) ≈ 0.34°.
+  </div>
+</section>
+
+<section>
+  <div class="col"><h2>Fly it</h2>
+  <p>A rigid booster under this law, stepped every 0.05 s. The torque it asks for is clamped per axis, in place of the fins and RCS. Changes take effect at the next step while a run is under way. After a run has finished they re-fly the whole 60 s at once. Hover a plot to read any instant.</p></div>
+  <div class="bench">
+    <div class="panel ctrl">
+      <div class="group">
+        <div class="chips"><button id="run" class="go" type="button">Run</button><button id="pause" type="button">Pause</button><button id="reset" type="button">Reset</button></div>
+        <div class="row" style="grid-template-columns:auto 1fr"><span class="label">Speed</span><div class="chips" id="speeds"></div></div>
+        <div class="status" id="status" aria-live="polite"></div>
+      </div>
+      <div class="group"><div class="label">Cases</div><div class="chips" id="cases"></div></div>
+      <div class="group"><div class="label">Loop</div>
+        <div class="row"><label for="wn">ω<sub>n</sub></label><input id="wn" type="range" min="0.2" max="3" step="0.05"><output id="wn-o"></output></div>
+        <div class="row"><label for="zeta">ζ</label><input id="zeta" type="range" min="0.3" max="1.5" step="0.05"><output id="zeta-o"></output></div>
+        <div class="row"><label for="tf">Rate filter <i>T</i><sub>f</sub></label><input id="tf" type="range" min="0" max="1" step="0.05"><output id="tf-o"></output></div>
+        <div class="row"><label for="db">Deadband</label><input id="db" type="range" min="0" max="2" step="0.1"><output id="db-o"></output></div>
+      </div>
+      <div class="group"><div class="label">Capture cap</div>
+        <div class="chips" id="caps"></div>
+        <label class="chip" style="align-self:flex-start"><input type="checkbox" id="integ">Integral on</label>
+      </div>
+      <div class="group"><div class="label">Air and sensing</div>
+        <div class="row"><label for="air">Air moment, pitch</label><input id="air" type="range" min="0" max="150" step="5"><output id="air-o"></output></div>
+        <div class="row"><label for="share">Known share</label><input id="share" type="range" min="0" max="120" step="1"><output id="share-o"></output></div>
+        <div class="row"><label for="noise">Rate noise</label><input id="noise" type="range" min="0" max="2" step="0.05"><output id="noise-o"></output></div>
+        <div class="note">The noise is on the measured body rate the controller reads, the same for every run, so a reset flies the same run again.</div>
+      </div>
+    </div>
+
+    <div class="panel plots" id="plots">
+      <div class="top">
+        <svg id="sketch" viewBox="0 0 200 200" role="img" aria-label="Attitude sketch"></svg>
+        <div class="read" id="read"></div>
+      </div>
+      <div class="plot">
+        <div class="phead"><span class="label">Roll off target, deg</span><div class="legend"><span><span class="sw ln" style="background:var(--roll)"></span>roll</span></div></div>
+        <svg id="p-roll" role="img" aria-label="Roll error against time"></svg>
+      </div>
+      <div class="plot">
+        <div class="phead"><span class="label">Pointing off target, deg</span><div class="legend"><span><span class="sw ln" style="background:var(--point)"></span>pointing</span><span><span class="sw dash" style="--c:var(--muted)"></span><span><i>M</i><sub>miss</sub>/(<i>Iω</i><sub>n</sub>²)</span></span></div></div>
+        <svg id="p-point" role="img" aria-label="Pointing error against time"></svg>
+      </div>
+      <div class="plot">
+        <div class="phead"><span class="label">Body rates, deg/s</span><div class="legend"><span><span class="sw ln" style="background:var(--point)"></span>pitch</span><span><span class="sw dash" style="--c:var(--point)"></span>yaw</span><span><span class="sw ln" style="background:var(--roll)"></span>roll</span></div></div>
+        <svg id="p-rate" role="img" aria-label="Body rates against time"></svg>
+      </div>
+      <div class="plot">
+        <div class="phead"><span class="label">Torque terms, kN m</span><div class="chips" id="axes"></div></div>
+        <div class="chips" id="zoom" style="margin-bottom:4px"></div>
+        <svg id="p-tq" role="img" aria-label="Torque terms against time"></svg>
+        <div class="legend" style="margin-top:4px">
+          <span><span class="sw" style="background:var(--tp)"></span>P</span>
+          <span><span class="sw" style="background:var(--td)"></span>D</span>
+          <span><span class="sw" style="background:var(--ti)"></span>integral</span>
+          <span><span class="sw" style="background:var(--tg)"></span>gyroscopic</span>
+          <span><span class="sw" style="background:var(--ta)"></span>air feed-forward</span>
+          <span><span class="sw ln" style="background:var(--ink)"></span>demand (sum)</span>
+          <span><span class="sw dash" style="--c:var(--limit)"></span>clamp</span>
+        </div>
+      </div>
+      <div class="hover" id="hover">Hover or touch a plot to read the values at one instant.</div>
+      <p class="note" style="margin:0"><span class="tag meas">Measured</span> on the 2026-11-20 glide and in the harness: the 73° roll at the glide's first step, the 0.5 deg/s of wobble on the rate error, the tables missing 17 % of the air's moment (83 % known), and one cap's 0.3 deg/s pointing with an 18 s roll.</p>
+      <p class="note" style="margin:0"><span class="tag ill">Illustrative</span> the booster-sized inertia (1.14 × 10⁶, 1.14 × 10⁶, 2.7 × 10⁴ kg m²), the 40 kN m air moment held fixed in body pitch, the white noise, and the ±400 kN m pitch and yaw, ±50 kN m roll clamp standing in for the fins and RCS mixers.</p>
+    </div>
+  </div>
+</section>
+
+<section class="col">
+  <h2>What to look for</h2>
+  <ul>
+    <li><strong>Split cap</strong> (main): the roll closes at about 5 deg/s and the pointing closes at the same time, inside a few seconds.</li>
+    <li><strong>One cap on the whole vector</strong>: the pointing crawls at about 0.3 deg/s while the roll is far off, and the roll takes about 18 s.</li>
+    <li><strong>No integral</strong>: the pointing settles on the dashed line, <i>M</i><sub>miss</sub>/(<i>I ω</i><sub>n</sub>²). Turn the integral back on and it learns the missing moment over about 20 s. Drop the known share to 0 % and the integral reaches its 8 deg s cap, so some error stands even with it.</li>
+    <li><strong>Deadband</strong>: give it 1° and the feedback stands down near the target, the missing moment tips the craft out, and the feedback kicks back in. That kick is why it is off by default.</li>
+    <li><strong>Rate filter</strong>: set <i>T</i><sub>f</sub> to 0 and the D term jitters by about ±15 kN m on the noise alone.</li>
+  </ul>
+</section>
+
+<footer class="col">
+  <p>Part of the AFC docs. JavaScript port of AttitudeController.Step as of main 155357c (2026-11-21).</p>
+</footer>
+</div>
+
+<script>
+(function(){
+"use strict";
+const D2R = Math.PI/180, R2D = 180/Math.PI;
+const NS = 'http://www.w3.org/2000/svg';
+const $ = s => document.querySelector(s);
+
+// ---- The booster and the run ----
+const INERTIA = [1.14e6, 1.14e6, 2.7e4];  // kg m^2: pitch (x), yaw (y), roll (z)
+const LIM = [400e3, 400e3, 50e3];          // N m: the clamp standing in for the mixers
+const DT = 0.05, T_END = 60, N = Math.round(T_END/DT), SUB = 5;
+const START_ROLL = 73, START_POINT = 5;    // deg
+const SEED = 20261120;
+
+const DEFAULTS = { wn:1.0, zeta:0.8, tf:0.2, db:0, split:true, integ:true, air:40, share:83, noise:0.5 };
+const S = Object.assign({}, DEFAULTS, { speed:4, axis:0, zoom:false });
+
+// ---- Vectors and quaternions ([w, x, y, z], body to world) ----
+const add = (a,b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+const sub = (a,b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+const scl = (k,a) => [k*a[0], k*a[1], k*a[2]];
+const dot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const len = a => Math.hypot(a[0], a[1], a[2]);
+const qmul = (p,q) => [p[0]*q[0]-p[1]*q[1]-p[2]*q[2]-p[3]*q[3], p[0]*q[1]+p[1]*q[0]+p[2]*q[3]-p[3]*q[2],
+                       p[0]*q[2]-p[1]*q[3]+p[2]*q[0]+p[3]*q[1], p[0]*q[3]+p[1]*q[2]-p[2]*q[1]+p[3]*q[0]];
+const qinv = q => [q[0], -q[1], -q[2], -q[3]];
+const qrot = (q,v) => qmul(qmul(q, [0, v[0], v[1], v[2]]), qinv(q)).slice(1);
+const qaxis = (ax,ang) => { const s = Math.sin(ang/2); return [Math.cos(ang/2), ax[0]*s, ax[1]*s, ax[2]*s]; };
+const qnorm = q => { const n = Math.hypot(q[0], q[1], q[2], q[3]); return q.map(x => x/n); };
+const clamp = (x,lo,hi) => Math.min(Math.max(x, lo), hi);
+
+// ---- The port: AttitudeController.Step (main 155357c) ----
+// The model axes (mx, my, mz) are the body axes here, so Inertia() and Model() are the diagonal and the identity.
+// splitCap = false flies the old single cap on the whole error vector, for comparison; main always splits.
+function newSlot(){ return { Feedback:false, LastT:NaN, RateKnown:false, RateErrorFiltered:[0,0,0], Integral:[0,0,0] }; }
+function Capped(v, max){ const l = len(v); return max > 0 && l > max ? scl(max/l, v) : v; }
+function Inertia(v, I){ return [I[0]*v[0], I[1]*v[1], I[2]*v[2]]; }
+
+function Step(slot, now, body2Cci, targetBody2Cci, targetRateCci, w, I, air, st, splitCap){
+  const dt = Number.isFinite(slot.LastT) ? clamp(now - slot.LastT, 0.0, 0.2) : 0.0;
+  slot.LastT = now;
+  const mz = [0,0,1];
+  const cci2Body = qinv(body2Cci);
+
+  // The rotation onto the target, in body axes: half the sum of e_i x t_i.
+  let theta = [0,0,0];
+  for (const e of [[1,0,0],[0,1,0],[0,0,1]])
+    theta = add(theta, scl(0.5, cross(e, qrot(cci2Body, qrot(targetBody2Cci, e)))));
+  const rawRateError = sub(qrot(cci2Body, targetRateCci), w);
+  if (!slot.RateKnown || !(st.RateFilterS > 0.0)) slot.RateErrorFiltered = rawRateError;
+  else if (dt > 0.0) slot.RateErrorFiltered = add(slot.RateErrorFiltered, scl(dt/(st.RateFilterS + dt), sub(rawRateError, slot.RateErrorFiltered)));
+  slot.RateKnown = true;
+  const rateError = slot.RateErrorFiltered;
+  const errorDeg = Math.asin(Math.min(len(theta), 1.0)) * 180.0/Math.PI;
+
+  // Pointing and roll apart (mz is the roll axis).
+  const thetaRoll = scl(dot(theta, mz), mz), thetaPoint = sub(theta, thetaRoll);
+  const withinRad = st.IntegralWithinDeg * Math.PI/180.0;
+
+  // The integral, near the target only, each part on its own error, and capped.
+  if (dt > 0.0){
+    if (len(thetaPoint) < withinRad) slot.Integral = add(slot.Integral, scl(dt, thetaPoint));
+    if (len(thetaRoll) < withinRad) slot.Integral = add(slot.Integral, scl(dt, thetaRoll));
+    const cap = st.IntegralMaxDegS * Math.PI/180.0;
+    if (len(slot.Integral) > cap) slot.Integral = scl(cap/len(slot.Integral), slot.Integral);
+  }
+  const rateErrorDegS = len(rateError) * 180.0/Math.PI;
+
+  // The deadband, with hysteresis: out past it, back under half of it.
+  if (slot.Feedback) slot.Feedback = !(errorDeg < 0.5*st.DeadbandDeg && rateErrorDegS < st.RateDeadbandDegS);
+  else slot.Feedback = errorDeg > st.DeadbandDeg || rateErrorDegS > 2.0*st.RateDeadbandDegS;
+
+  const kp = st.BandwidthRadS*st.BandwidthRadS, kd = 2.0*st.Damping*st.BandwidthRadS;
+  const captureMax = st.CaptureRateDegS * Math.PI/180.0;
+  const capture = splitCap
+    ? add(Capped(kd > 0.0 ? scl(kp/kd, thetaPoint) : [0,0,0], captureMax), Capped(kd > 0.0 ? scl(kp/kd, thetaRoll) : [0,0,0], captureMax))
+    : Capped(kd > 0.0 ? scl(kp/kd, theta) : [0,0,0], captureMax);
+  // feedback = I kd (capture + rateError), shown as its two parts.
+  const P = slot.Feedback ? Inertia(scl(kd, capture), I) : [0,0,0];
+  const D = slot.Feedback ? Inertia(scl(kd, rateError), I) : [0,0,0];
+  const integral = Inertia(scl(st.IntegralPerS*kp, slot.Integral), I);
+  const gyro = cross(w, Inertia(w, I));
+  const airff = scl(-1, air);
+  const demand = add(add(add(P, D), add(integral, gyro)), airff);
+  return { errorDeg, rateErrorDegS, InDeadband: !slot.Feedback, demand, P, D, integral, gyro, airff,
+           integralAtCap: len(slot.Integral) >= st.IntegralMaxDegS*D2R*0.999 };
+}
+
+function ctrlSettings(){
+  return { BandwidthRadS:S.wn, Damping:S.zeta, DeadbandDeg:S.db, RateDeadbandDegS:0.5,
+           IntegralPerS: S.integ ? 0.1 : 0.0, CaptureRateDegS:5.0, RateFilterS:S.tf, IntegralWithinDeg:3.0, IntegralMaxDegS:8.0 };
+}
+
+// ---- The simulated craft ----
+function rng(seed){ let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+const Q_TARGET = [1,0,0,0];
+let sim;
+const TERMS = ['P','D','integral','gyro','airff'];
+const TERM_COL = { P:'--tp', D:'--td', integral:'--ti', gyro:'--tg', airff:'--ta' };
+const TERM_NAME = { P:'P', D:'D', integral:'integral', gyro:'gyro', airff:'air ff' };
+
+function reset(){
+  const r = rng(SEED);
+  let spare = null;
+  const gauss = () => { if (spare !== null){ const s = spare; spare = null; return s; }
+    let u = 0; while (u === 0) u = r(); const v = r(); const m = Math.sqrt(-2*Math.log(u)); spare = m*Math.sin(2*Math.PI*v); return m*Math.cos(2*Math.PI*v); };
+  sim = { k:0, q: qmul(qaxis([0,0,1], START_ROLL*D2R), qaxis([1,0,0], START_POINT*D2R)), w:[0,0,0], slot:newSlot(), gauss,
+          rec:{ roll:[], point:[], tilt:[], w:[[],[],[]], terms:{P:[[],[],[]],D:[[],[],[]],integral:[[],[],[]],gyro:[[],[],[]],airff:[[],[],[]]},
+                demand:[[],[],[]], given:[[],[],[]], fb:[], cap:[] } };
+}
+
+// Pointing: angle between the body's and the target's roll axes. Roll: the twist about z left once the axes are aligned.
+function geom(q){
+  const zb = qrot(qmul(qinv(Q_TARGET), q), [0,0,1]);
+  const point = Math.acos(clamp(zb[2], -1, 1))*R2D;
+  const qb = qmul(qinv(Q_TARGET), q);
+  let roll = 2*Math.atan2(qb[3], qb[0])*R2D;
+  roll = ((roll + 180) % 360 + 360) % 360 - 180;
+  const h = Math.hypot(zb[0], zb[1]);
+  return { point, roll, tilt: h > 1e-12 ? [zb[0]/h*point, zb[1]/h*point] : [0,0] };
+}
+
+function deriv(q, w, tau){
+  const dq = qmul(q, [0, w[0], w[1], w[2]]).map(x => 0.5*x);
+  const Iw = Inertia(w, INERTIA), g = cross(w, Iw);
+  return { dq, dw: [(tau[0]-g[0])/INERTIA[0], (tau[1]-g[1])/INERTIA[1], (tau[2]-g[2])/INERTIA[2]] };
+}
+function integrate(tau){
+  const h = DT/SUB;
+  for (let i = 0; i < SUB; i++){
+    const q = sim.q, w = sim.w;
+    const k1 = deriv(q, w, tau);
+    const k2 = deriv(q.map((x,j)=>x+0.5*h*k1.dq[j]), add(w, scl(0.5*h, k1.dw)), tau);
+    const k3 = deriv(q.map((x,j)=>x+0.5*h*k2.dq[j]), add(w, scl(0.5*h, k2.dw)), tau);
+    const k4 = deriv(q.map((x,j)=>x+h*k3.dq[j]), add(w, scl(h, k3.dw)), tau);
+    sim.q = qnorm(q.map((x,j)=>x + h/6*(k1.dq[j]+2*k2.dq[j]+2*k3.dq[j]+k4.dq[j])));
+    sim.w = w.map((x,j)=>x + h/6*(k1.dw[j]+2*k2.dw[j]+2*k3.dw[j]+k4.dw[j]));
+  }
+}
+
+function stepSim(){
+  if (sim.k >= N) return;
+  const t = sim.k*DT;
+  const sigma = S.noise*D2R;
+  const wMeas = sim.w.map(x => x + sigma*sim.gauss());
+  const airTrue = [S.air*1e3, 0, 0];
+  const airKnown = scl(S.share/100, airTrue);
+  const r = Step(sim.slot, t, sim.q, Q_TARGET, [0,0,0], wMeas, INERTIA, airKnown, ctrlSettings(), S.split);
+  const given = r.demand.map((v,i) => clamp(v, -LIM[i], LIM[i]));
+  const g = geom(sim.q), R = sim.rec;
+  R.roll.push(g.roll); R.point.push(g.point); R.tilt.push(g.tilt);
+  for (let i = 0; i < 3; i++){
+    R.w[i].push(sim.w[i]*R2D);
+    for (const k of TERMS) R.terms[k][i].push(r[k][i]/1e3);
+    R.demand[i].push(r.demand[i]/1e3); R.given[i].push(given[i]/1e3);
+  }
+  R.fb.push(!r.InDeadband); R.cap.push(r.integralAtCap);
+  integrate(add(given, airTrue));
+  sim.k++;
+}
+
+// ---- Run control ----
+let running = false, raf = 0, lastFrame = 0, acc = 0;
+const reduced = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches:false };
+function flyAll(){ reset(); while (sim.k < N) stepSim(); }
+function frame(ts){
+  if (!running) return;
+  const dtReal = lastFrame ? Math.min((ts - lastFrame)/1000, 0.1) : 0;
+  lastFrame = ts; acc += dtReal*S.speed;
+  while (acc >= DT && sim.k < N){ stepSim(); acc -= DT; }
+  if (sim.k >= N) running = false;
+  renderAll();
+  if (running) raf = requestAnimationFrame(frame);
+}
+function run(){
+  if (sim.k >= N) reset();
+  if (reduced.matches){ while (sim.k < N) stepSim(); running = false; renderAll(); return; }
+  running = true; lastFrame = 0; acc = 0; cancelAnimationFrame(raf); raf = requestAnimationFrame(frame); renderAll();
+}
+function pause(){ running = false; cancelAnimationFrame(raf); renderAll(); }
+function settingChanged(){
+  if (sim.k >= N && !running) flyAll();
+  renderAll();
+}
+
+// ---- Drawing ----
+function el(tag, attrs, parent, text){
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function niceStep(range, target){
+  const raw = range/Math.max(1, target), p = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m*p >= raw) return m*p;
+  return 10*p;
+}
+function fmt(x, d){ if (!Number.isFinite(x)) return '–'; const s = x.toFixed(d); return /^-0(\.0+)?$/.test(s) ? s.slice(1) : s; }
+let hoverIdx = null;
+
+// One time plot: lines, stacked bands and reference lines on a shared 0-60 s axis.
+function timePlot(svg, cfg){
+  const W = Math.max(240, Math.round(svg.clientWidth || svg.parentNode.clientWidth || 480)), H = cfg.h;
+  svg.setAttribute('viewBox', '0 0 '+W+' '+H); svg.setAttribute('height', H);
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const L = 40, Rm = 8, T = 6, B = 20, pw = W - L - Rm, ph = H - T - B;
+  let lo = cfg.lo, hi = cfg.hi; if (!(hi > lo)) { hi = lo + 1; }
+  const step = niceStep(hi - lo, cfg.ticks || 4);
+  lo = Math.floor(lo/step + 1e-9)*step; hi = Math.ceil(hi/step - 1e-9)*step;
+  const X = t => L + t/T_END*pw, Y = v => T + (hi - v)/(hi - lo)*ph;
+  const id = svg.id + '-clip';
+  const defs = el('defs', {}, svg); const cp = el('clipPath', {id}, defs); el('rect', {x:L, y:T, width:pw, height:ph}, cp);
+  for (let v = lo; v <= hi + 1e-9; v += step){
+    el('line', {x1:L, x2:L+pw, y1:Y(v), y2:Y(v), style:'stroke:var(--gridline)', 'stroke-width':1}, svg);
+    el('text', {x:L-5, y:Y(v)+3, 'text-anchor':'end', 'font-size':9, style:'fill:var(--muted);font-family:var(--f-mono)'}, svg, +v.toFixed(3));
+  }
+  for (let t = 0; t <= T_END; t += 10){
+    el('line', {x1:X(t), x2:X(t), y1:T, y2:T+ph, style:'stroke:var(--gridline)', 'stroke-width':1}, svg);
+    el('text', {x:X(t), y:H-6, 'text-anchor':t === T_END ? 'end' : 'middle', 'font-size':9, style:'fill:var(--muted);font-family:var(--f-mono)'}, svg, t + (t === T_END ? ' s' : ''));
+  }
+  if (lo < 0 && hi > 0) el('line', {x1:L, x2:L+pw, y1:Y(0), y2:Y(0), style:'stroke:var(--muted)', 'stroke-width':1}, svg);
+  const g = el('g', {'clip-path':'url(#'+id+')'}, svg);
+  const n = cfg.n;
+  (cfg.bands || []).forEach(b => {
+    if (n < 2) return;
+    let d = 'M' + X(0).toFixed(1) + ' ' + Y(b.hi[0]).toFixed(1);
+    for (let i = 1; i < n; i++) d += 'L' + X(i*DT).toFixed(1) + ' ' + Y(b.hi[i]).toFixed(1);
+    for (let i = n - 1; i >= 0; i--) d += 'L' + X(i*DT).toFixed(1) + ' ' + Y(b.lo[i]).toFixed(1);
+    el('path', {d: d + 'Z', style:'fill:var('+b.color+');opacity:.85'}, g);
+  });
+  (cfg.hlines || []).forEach(h => {
+    el('line', {x1:L, x2:L+pw, y1:Y(h.v), y2:Y(h.v), style:'stroke:var('+h.color+')', 'stroke-width':1.5, 'stroke-dasharray':'5 4'}, g);
+    if (h.label) el('text', {x:L+pw-4, y:Y(h.v)+(h.below ? 11 : -4), 'text-anchor':'end', 'font-size':9.5, style:'fill:var(--muted);font-family:var(--f-mono)'}, g, h.label);
+  });
+  (cfg.lines || []).forEach(s => {
+    if (n < 1) return;
+    let d = '';
+    for (let i = 0; i < n; i++) d += (i ? 'L' : 'M') + X(i*DT).toFixed(1) + ' ' + Y(s.data[i]).toFixed(1);
+    const a = {d, fill:'none', style:'stroke:var('+s.color+')', 'stroke-width':s.width || 2, 'stroke-linejoin':'round'};
+    if (s.dash) a['stroke-dasharray'] = s.dash;
+    el('path', a, g);
+  });
+  if (cfg.note) el('text', {x:L+pw-4, y:T+11, 'text-anchor':'end', 'font-size':9.5, style:'fill:var(--limit);font-family:var(--f-mono)'}, svg, cfg.note);
+  if (hoverIdx !== null && hoverIdx < n) el('line', {x1:X(hoverIdx*DT), x2:X(hoverIdx*DT), y1:T, y2:T+ph, style:'stroke:var(--ink)', 'stroke-width':1, opacity:.5}, svg);
+  el('rect', {x:L, y:T, width:pw, height:ph, fill:'transparent', 'data-hit':'1'}, svg);
+  svg._map = { L, pw };
+}
+
+function extent(arrs, n, pad){
+  let lo = Infinity, hi = -Infinity;
+  arrs.forEach(a => { for (let i = 0; i < n; i++){ if (a[i] < lo) lo = a[i]; if (a[i] > hi) hi = a[i]; } });
+  if (!Number.isFinite(lo)) { lo = 0; hi = 1; }
+  return [lo, hi];
+}
+function idxAt(t){ return Math.round(t/DT); }
+function lastOutside(arr, n, lim){ for (let i = n - 1; i >= 0; i--) if (Math.abs(arr[i]) >= lim) return i; return -1; }
+
+function sketch(){
+  const svg = $('#sketch'); while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const R = sim.rec, n = sim.k, C = 100, RP = 66, RR = 84, MAXP = 6;
+  const show = hoverIdx !== null && hoverIdx < n ? hoverIdx : n - 1;
+  const g0 = geom(sim.q);
+  const cur = show >= 0 ? { tilt:R.tilt[show], roll:R.roll[show], point:R.point[show] } : g0;
+  const P = v => { const r = Math.hypot(v[0], v[1]); const k = r > MAXP ? MAXP/r : 1; return [C + v[0]*k/MAXP*RP, C - v[1]*k/MAXP*RP]; };
+  [2, 4, 6].forEach(d => {
+    el('circle', {cx:C, cy:C, r:d/MAXP*RP, fill:'none', style:'stroke:var(--gridline)', 'stroke-width':1}, svg);
+    el('text', {x:C + d/MAXP*RP*0.71 + 2, y:C + d/MAXP*RP*0.71 + 8, 'font-size':8, style:'fill:var(--muted);font-family:var(--f-mono)'}, svg, d + '°');
+  });
+  el('circle', {cx:C, cy:C, r:RR, fill:'none', style:'stroke:var(--line)', 'stroke-width':6}, svg);
+  el('line', {x1:C-6, x2:C+6, y1:C, y2:C, style:'stroke:var(--ink)', 'stroke-width':1.5}, svg);
+  el('line', {x1:C, x2:C, y1:C-6, y2:C+6, style:'stroke:var(--ink)', 'stroke-width':1.5}, svg);
+  el('line', {x1:C, x2:C, y1:C-RR-6, y2:C-RR+6, style:'stroke:var(--ink)', 'stroke-width':2}, svg);
+  // Roll: arc from the target's mark to the body's, clockwise for a positive roll as seen from above.
+  const a = clamp(cur.roll, -179.9, 179.9)*D2R;
+  if (Math.abs(cur.roll) > 0.2){
+    const x1 = C, y1 = C - RR, x2 = C + RR*Math.sin(a), y2 = C - RR*Math.cos(a);
+    el('path', {d:'M'+x1+' '+y1+' A'+RR+' '+RR+' 0 '+(Math.abs(a) > Math.PI ? 1 : 0)+' '+(a > 0 ? 1 : 0)+' '+x2.toFixed(1)+' '+y2.toFixed(1), fill:'none', style:'stroke:var(--roll)', 'stroke-width':6, opacity:.45}, svg);
+  }
+  el('circle', {cx:C + RR*Math.sin(a), cy:C - RR*Math.cos(a), r:5, style:'fill:var(--roll);stroke:var(--panel)', 'stroke-width':2}, svg);
+  // The body's roll axis tip, seen down the target's.
+  if (show >= 1){
+    let d = ''; for (let i = 0; i <= show; i++){ const p = P(R.tilt[i]); d += (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1); }
+    el('path', {d, fill:'none', style:'stroke:var(--point)', 'stroke-width':1.5, opacity:.6}, svg);
+  }
+  const p = P(cur.tilt);
+  el('circle', {cx:p[0], cy:p[1], r:5, style:'fill:var(--point);stroke:var(--panel)', 'stroke-width':2}, svg);
+  el('text', {x:C, y:C - RR - 10 < 6 ? 8 : 9, 'text-anchor':'middle', 'font-size':8.5, style:'fill:var(--muted);font-family:var(--f-mono)'}, svg, 'target');
+  el('text', {x:4, y:196, 'font-size':9, style:'fill:var(--muted);font-family:var(--f-mono)'}, svg, 'pointing ' + fmt(cur.point, 2) + '°');
+  el('text', {x:196, y:196, 'text-anchor':'end', 'font-size':9, style:'fill:var(--muted);font-family:var(--f-mono)'}, svg, 'roll ' + fmt(cur.roll, 1) + '°');
+  svg.setAttribute('aria-label', 'Attitude sketch, looking down the target roll axis: the body axis is ' + fmt(cur.point, 2) + ' degrees off and the roll ' + fmt(cur.roll, 1) + ' degrees off.');
+}
+
+function readouts(){
+  const R = sim.rec, n = sim.k, ax = S.axis;
+  const rate = (arr, t) => { const a = idxAt(t - 0.5), b = idxAt(t + 0.5); return b < n ? (Math.abs(arr[a]) - Math.abs(arr[b])) : NaN; };
+  const within = arr => { if (n === 0) return '–'; const i = lastOutside(arr, n, 1.0); return i < 0 ? '0.0 s' : (i === n - 1 ? (n >= N ? 'not in 60 s' : '…') : fmt((i + 1)*DT, 1) + ' s'); };
+  const mMiss = S.air*1e3*(1 - S.share/100);
+  const pred = Math.abs(mMiss)/(INERTIA[0]*S.wn*S.wn)*R2D;
+  let endMean = NaN;
+  if (n >= N){ let s = 0, c = 0; for (let i = n - idxAt(10); i < n; i++){ s += R.point[i]; c++; } endMean = s/c; }
+  let atClamp = 0; for (let i = 0; i < n; i++) for (let j = 0; j < 3; j++) if (Math.abs(R.demand[j][i]) > LIM[j]/1e3 + 1e-9){ atClamp++; break; }
+  const capNow = n > 0 && R.cap[n - 1];
+  const cells = [
+    ['Roll closing at 3 s', fmt(rate(R.roll, 3), 2) + ' deg/s'],
+    ['Pointing closing at 3 s', fmt(rate(R.point, 3), 2) + ' deg/s'],
+    ['Roll within 1° from', within(R.roll)],
+    ['Pointing within 1° from', within(R.point)],
+    ['Pointing, last 10 s', n >= N ? fmt(endMean, 2) + '°' : '–'],
+    ['Predicted, no integral', fmt(pred, 2) + '°'],
+    ['Steps at the clamp', n ? fmt(100*atClamp/n, 0) + ' %' : '–'],
+    ['Integral', S.integ ? (capNow ? 'at its cap' : 'learning') : 'off']
+  ];
+  $('#read').innerHTML = cells.map(c => '<div><div class="k">' + c[0] + '</div><div class="v">' + c[1] + '</div></div>').join('');
+}
+
+function hoverText(){
+  const R = sim.rec, n = sim.k, i = hoverIdx;
+  const box = $('#hover');
+  if (i === null || i >= n){ box.textContent = 'Hover or touch a plot to read the values at one instant.'; return; }
+  const ax = S.axis, an = ['pitch','yaw','roll'][ax];
+  box.textContent = 't ' + fmt(i*DT, 2) + ' s · roll ' + fmt(R.roll[i], 2) + '° · pointing ' + fmt(R.point[i], 2) + '° · rates ' +
+    [0,1,2].map(j => fmt(R.w[j][i], 2)).join(' / ') + ' deg/s · ' + an + ' kN m: ' +
+    TERMS.map(k => TERM_NAME[k] + ' ' + fmt(R.terms[k][ax][i], 1)).join(', ') + ', demand ' + fmt(R.demand[ax][i], 1) +
+    (R.fb[i] ? '' : ' · feedback stood down');
+}
+
+function renderAll(){
+  const R = sim.rec, n = sim.k;
+  // Roll
+  let [lo, hi] = extent([R.roll], n);
+  timePlot($('#p-roll'), { h:130, n, lo:lo < -2 ? lo : 0, hi:Math.max(hi, START_ROLL, 5), lines:[{data:R.roll, color:'--roll'}] });
+  // Pointing, with the standing error the feedback alone would hold
+  const mMiss = S.air*1e3*(1 - S.share/100), pred = Math.abs(mMiss)/(INERTIA[0]*S.wn*S.wn)*R2D;
+  [lo, hi] = extent([R.point], n);
+  timePlot($('#p-point'), { h:130, n, lo:0, hi:Math.max(hi, START_POINT, pred*1.2),
+    hlines: pred > 0 ? [{v:pred, color:'--muted', label:'M_miss/(I ωn²) = ' + fmt(pred, 2) + '°'}] : [],
+    lines:[{data:R.point, color:'--point'}] });
+  // Rates
+  [lo, hi] = extent(R.w, n); const m = Math.max(1, Math.abs(lo), Math.abs(hi));
+  timePlot($('#p-rate'), { h:130, n, lo:-m, hi:m, lines:[{data:R.w[0], color:'--point'}, {data:R.w[1], color:'--point', dash:'5 3'}, {data:R.w[2], color:'--roll'}] });
+  // Torque terms stacked on the chosen axis, against the clamp
+  const ax = S.axis, lim = LIM[ax]/1e3, bands = [];
+  const pos = new Float64Array(n), neg = new Float64Array(n);
+  let top = lim, bot = -lim;
+  for (const k of TERMS){
+    const v = R.terms[k][ax], blo = new Float64Array(n), bhi = new Float64Array(n);
+    for (let i = 0; i < n; i++){
+      if (v[i] >= 0){ blo[i] = pos[i]; pos[i] += v[i]; bhi[i] = pos[i]; }
+      else { bhi[i] = neg[i]; neg[i] += v[i]; blo[i] = neg[i]; }
+    }
+    bands.push({lo:blo, hi:bhi, color:TERM_COL[k]});
+  }
+  for (let i = 0; i < n; i++){ if (pos[i] > top) top = pos[i]; if (neg[i] < bot) bot = neg[i]; }
+  if (S.zoom){ top = 0; bot = 0; for (let i = 0; i < n; i++){ top = Math.max(top, pos[i], R.demand[ax][i]); bot = Math.min(bot, neg[i], R.demand[ax][i]); }
+    const m = Math.max(top, -bot, 1); top = Math.max(top*1.1, 0.15*m); bot = Math.min(bot*1.1, -0.15*m); }
+  else { top = Math.min(top*1.08, 3*lim); bot = Math.max(bot*1.08, -3*lim); }
+  timePlot($('#p-tq'), { h:190, n, lo:bot, hi:top, ticks:5, bands, note: S.zoom && (lim > top || -lim < bot) ? 'clamp ±' + lim + ' kN m, off this scale' : '',
+    hlines:[{v:lim, color:'--limit', label:'clamp +' + lim + ' kN m'}, {v:-lim, color:'--limit', label:'clamp −' + lim + ' kN m', below:true}],
+    lines:[{data:R.demand[ax], color:'--ink', width:1.5}] });
+  sketch(); readouts(); hoverText();
+  const i = n - 1;
+  $('#p-roll').setAttribute('aria-label', 'Roll off target against time, 0 to 60 s' + (i >= 0 ? '; ' + fmt(R.roll[i], 1) + ' degrees at ' + fmt(i*DT, 1) + ' s.' : '.'));
+  $('#p-point').setAttribute('aria-label', 'Pointing off target against time' + (i >= 0 ? '; ' + fmt(R.point[i], 2) + ' degrees at ' + fmt(i*DT, 1) + ' s' : '') + '. The feedback alone would stand at ' + fmt(pred, 2) + ' degrees.');
+  $('#p-rate').setAttribute('aria-label', 'Body rates in pitch, yaw and roll against time, deg/s.');
+  $('#p-tq').setAttribute('aria-label', ['Pitch','Yaw','Roll'][ax] + ' torque terms stacked, P, D, integral, gyroscopic and air feed-forward, with their sum against the clamp of plus or minus ' + lim + ' kN m.');
+  const t = sim.k*DT;
+  $('#status').textContent = 't = ' + fmt(t, 1) + ' s · ' + (running ? 'running' : sim.k >= N ? 'finished' : sim.k === 0 ? 'reset' : 'paused');
+  $('#run').textContent = sim.k > 0 && sim.k < N && !running ? 'Resume' : 'Run';
+}
+
+// ---- Controls ----
+const SLIDERS = {
+  wn:   v => fmt(v, 2) + ' rad/s',
+  zeta: v => fmt(v, 2),
+  tf:   v => v > 0 ? fmt(v, 2) + ' s' : 'off',
+  db:   v => v > 0 ? fmt(v, 1) + '°' : 'off',
+  air:  v => fmt(v, 0) + ' kN m',
+  share:v => fmt(v, 0) + ' %',
+  noise:v => fmt(v, 2) + ' °/s'
+};
+function syncControls(){
+  for (const k in SLIDERS){ $('#'+k).value = S[k]; $('#'+k+'-o').textContent = SLIDERS[k](S[k]); }
+  $('#integ').checked = S.integ;
+  chipRow('#caps', [['split','Split: pointing and roll'], ['one','One cap on the whole vector']], S.split ? 'split' : 'one', v => { S.split = v === 'split'; settingChanged(); syncControls(); });
+  chipRow('#speeds', [[1,'1×'], [4,'4×'], [16,'16×']], S.speed, v => { S.speed = v; syncControls(); });
+  chipRow('#axes', [[0,'Pitch'], [1,'Yaw'], [2,'Roll']], S.axis, v => { S.axis = v; syncControls(); renderAll(); });
+  chipRow('#zoom', [[false,'Scale to the clamp'], [true,'Zoom to the terms']], S.zoom, v => { S.zoom = v; syncControls(); renderAll(); });
+}
+function chipRow(sel, items, cur, on){
+  const box = $(sel); box.innerHTML = '';
+  items.forEach(([v, label]) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+    if (v === cur) { b.className = 'on'; b.setAttribute('aria-pressed', 'true'); } else b.setAttribute('aria-pressed', 'false');
+    b.addEventListener('click', () => on(v)); box.appendChild(b); });
+}
+for (const k in SLIDERS) $('#'+k).addEventListener('input', e => { S[k] = +e.target.value; $('#'+k+'-o').textContent = SLIDERS[k](S[k]); settingChanged(); });
+$('#integ').addEventListener('change', e => { S.integ = e.target.checked; settingChanged(); });
+$('#run').addEventListener('click', run);
+$('#pause').addEventListener('click', pause);
+$('#reset').addEventListener('click', () => { pause(); reset(); renderAll(); });
+
+const CASES = [
+  ['Split cap (main)', {}],
+  ['One cap', {split:false}],
+  ['No integral', {integ:false}],
+  ['Deadband 1°', {db:1}]
+];
+(function(){
+  const box = $('#cases');
+  CASES.forEach(([label, o]) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+    b.addEventListener('click', () => { pause(); Object.assign(S, DEFAULTS, o); syncControls(); flyAll(); renderAll(); }); box.appendChild(b); });
+})();
+
+// Hover: one instant across every time plot.
+['#p-roll','#p-point','#p-rate','#p-tq'].forEach(id => {
+  const svg = $(id);
+  const at = e => { const m = svg.getScreenCTM(); if (!m || !svg._map) return; const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+    const p = pt.matrixTransform(m.inverse()); const t = (p.x - svg._map.L)/svg._map.pw*T_END;
+    hoverIdx = t < 0 || t > T_END ? null : clamp(idxAt(t), 0, N - 1); if (!running) renderAll(); };
+  svg.addEventListener('pointermove', at); svg.addEventListener('pointerdown', at);
+  svg.addEventListener('pointerleave', () => { hoverIdx = null; if (!running) renderAll(); });
+});
+
+window.addEventListener('afc-theme', () => { if (sim) renderAll(); });
+let rz = 0;
+if (window.ResizeObserver) new ResizeObserver(() => { cancelAnimationFrame(rz); rz = requestAnimationFrame(() => { if (sim && !running) renderAll(); }); }).observe($('#plots'));
+else window.addEventListener('resize', () => { if (sim) renderAll(); });
+
+syncControls();
+flyAll();
+renderAll();
+// Exposed for checking the port from the console.
+window.afcAttitude = { S, DEFAULTS, flyAll, get rec(){ return sim.rec; }, get k(){ return sim.k; }, renderAll, syncControls };
+})();
+</script>
+
+</body></html>
