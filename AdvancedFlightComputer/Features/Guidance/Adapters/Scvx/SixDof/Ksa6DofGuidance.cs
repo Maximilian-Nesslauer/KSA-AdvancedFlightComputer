@@ -1654,7 +1654,7 @@ public sealed class Ksa6DofGuidance
                 }
             }
             AttitudeFeedback6Dof.Result fb = attitude.Correct(plan, k, f, x, _dyn.Ixx, _dyn.Iyy, _dyn.Izz,
-                                                              torqueModel, RcsTorqueModel, lateralNm, rollNm, rcsPos, rcsNeg);
+                                                              torqueModel, RcsTorqueModel, lateralNm, rollNm, rcsPos, rcsNeg, simNow);
             torqueModel += fb.Gimbal;
             if (_dyn.Rcs != null)
                 RcsTorqueModel += fb.Rcs;

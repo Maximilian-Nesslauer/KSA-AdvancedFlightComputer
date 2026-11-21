@@ -60,6 +60,11 @@ public static class Dynamics6Dof
         public double LArm = 25.0;                       // CoM -> gimbal pivot offset
         public double Ixx = 1.0e8, Iyy = 1.0e8, Izz = 2.5e6;
 
+        /// <summary>
+        /// The engines' own moment about the centre of mass per newton of axial thrust, with the gimbals at rest, model body axes, N m per N: an off-centre engine choice, or a centre of mass off the thrust line. It joins Euler's equation as T times this, so the throttle and the moment are coupled, and the plan holds the gimbal deflection that cancels it from its first node. Zero for a balanced cluster, which is what the model had before.
+        /// </summary>
+        public double ThrustMomentX, ThrustMomentY, ThrustMomentZ;
+
         /// <summary>Mass flow per newton of axial thrust.</summary>
         public double Alpha => 1.0 / (Isp * G0);
 
@@ -204,10 +209,10 @@ public static class Dynamics6Dof
         xdot[IQ + 2] = 0.5 * (qw * wy - qx * wz + qz * wx);
         xdot[IQ + 3] = 0.5 * (qw * wz + qx * wy - qy * wx);
 
-        // wdot = I^-1 ( tau - w x (I w) ),  tau = [L*tdy, -L*tdx, tau_roll] plus the air's
-        Dual taux = p.LArm * tdy + aeroTx + rcsTx;
-        Dual tauy = -(p.LArm * tdx) + aeroTy + rcsTy;
-        tauRoll += aeroTz + rcsTz;
+        // wdot = I^-1 ( tau - w x (I w) ),  tau = [L*tdy, -L*tdx, tau_roll] + T * m_thrust, plus the air's
+        Dual taux = p.LArm * tdy + p.ThrustMomentX * T + aeroTx + rcsTx;
+        Dual tauy = -(p.LArm * tdx) + p.ThrustMomentY * T + aeroTy + rcsTy;
+        tauRoll += p.ThrustMomentZ * T + aeroTz + rcsTz;
         Dual iwx = p.Ixx * wx, iwy = p.Iyy * wy, iwz = p.Izz * wz;
         Dual gyrox = wy * iwz - wz * iwy;
         Dual gyroy = wz * iwx - wx * iwz;

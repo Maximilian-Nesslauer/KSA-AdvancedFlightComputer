@@ -140,6 +140,29 @@ public static class Ksa6DofSetup
     }
 
     /// <summary>
+    /// The moment the engines the plan runs make about the centre of mass with the gimbals at rest, per newton of their thrust, MODEL body axes (KsaFrameBridge.BodyAxes), N m per N: Dynamics6Dof.Params.ThrustMoment*. The engines are the activated ones, or every one when none is, as KsaGimbalControl.CountsForPlanning counts the gimbals.
+    ///  WHY. A landing on part of a stage's engines (LandingEngineSelection) can put the thrust off the centre of mass: one engine of a ring 0.8 m out on a 10 m arm needs about 4.6 deg of a 6 deg gimbal just to hold it. Without this the plan took the whole cone as free and the gimbals had nothing left for its turns. The flight side needs no change: the allocator works from rest, so the torque it is asked for adds to this moment as the model has it.
+    /// </summary>
+    public static double3 ThrustMomentPerNewton(Vehicle vehicle)
+    {
+        Span<EngineController> all = vehicle.Parts.Modules.Get<EngineController>();
+        bool anyActive = false;
+        foreach (EngineController engine in all)
+            anyActive |= engine.IsActive;
+        var engines = new List<EngineController>();
+        foreach (EngineController engine in all)
+            if (!anyActive || engine.IsActive)
+                engines.Add(engine);
+        (double3 moment, double3 force) = KsaThrustMoment.Rest(vehicle, engines);
+        double thrust = force.Length();
+        if (!(thrust > 0.0))
+            return double3.Zero;
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        var perNewton = new double3(double3.Dot(moment, mx), double3.Dot(moment, my), double3.Dot(moment, mz)) / thrust;
+        return double.IsFinite(perNewton.X) && double.IsFinite(perNewton.Y) && double.IsFinite(perNewton.Z) ? perNewton : double3.Zero;
+    }
+
+    /// <summary>
     /// The thrust the capability figures below are evaluated at: every planning gimbal at its Data.MaximumThrust. KSA computes that at a throttle of 2 and in vacuum (GimbalController.RecomputeStaticData), far beyond what the engines deliver, so a capability is only meaningful per newton of this - the gimbals deliver torque in proportion to the thrust actually through them.
     /// </summary>
     public static double PlanningThrust(Vehicle vehicle)
@@ -601,6 +624,14 @@ public static class Ksa6DofSetup
             // RCS torque and the side force and propellant that come with it (RcsModel), or none.
             Rcs = rcs,
         };
+        // THE ENGINES' OWN MOMENT per newton (ThrustMomentPerNewton), on a gimballed craft: from the centre of mass now, so each re-solve has it as the propellant burns down.
+        if (!noGimbal)
+        {
+            double3 thrustMoment = ThrustMomentPerNewton(vehicle);
+            dyn.ThrustMomentX = thrustMoment.X;
+            dyn.ThrustMomentY = thrustMoment.Y;
+            dyn.ThrustMomentZ = thrustMoment.Z;
+        }
 
         // NON-DIMENSIONALISE AGAINST THIS PROBLEM, not against the Python test case.
         //  This is the difference between converging and "cold solve failed". The solver works on x~ = x/scale, and THE TRUST REGION IS IN THOSE UNITS, capped at TrustRegionMax = 0.1. So the movement permitted per iteration is 0.1*scale in physical terms. With the scale hard-coded to the reference case's 300 m altitude, that is ~30 m per iteration REGARDLESS of the actual descent: engage from 3 km and the problem is ten times larger while the step stays the same, so the iteration budget can no longer traverse it. The problem is perfectly feasible; the solver simply cannot walk there. It also explains why relaxing constraints does not help - this was never a constraint failure.

@@ -1903,7 +1903,11 @@ public static partial class GuidanceWindow
 
     /// <summary>The feedback that holds the plan's attitude from the torque margin (AttitudeFeedback6Dof), or null to fly the plan's torques open loop.</summary>
     private static AttitudeFeedback6Dof SixDofAttitude() => _s.SixDofAttitudeFeedback
-        ? new AttitudeFeedback6Dof { BandwidthRadS = Math.Max(_s.SixDofAttitudeBandwidth, 0.0) }
+        ? new AttitudeFeedback6Dof
+        {
+            BandwidthRadS = Math.Max(_s.SixDofAttitudeBandwidth, 0.0),
+            Integral = _s.SixDofAttitudeIntegralOn ? _s.SixDofAttitudeIntegral : null,
+        }
         : null;
 
     /// <summary>The share of the gimbals' and RCS's torque the plans leave for the attitude feedback; none without it.</summary>

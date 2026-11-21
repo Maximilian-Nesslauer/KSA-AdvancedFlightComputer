@@ -64,6 +64,7 @@ public static class ColdSeed6Dof
             xSeed[o + Dynamics6Dof.IM] = mass;
             double force = Math.Clamp(thrust * mass, cfg.Tmin, cfg.Tmax);
             uSeed[k * NU + Dynamics6Dof.IT] = force;
+            Trim(uSeed, k * NU, dyn);
             previousThrust = force;
 
             // The attitude follows the thrust direction by the shortest turn from the node before, which keeps the measured roll about the thrust axis, and blends to the target attitude over the last part of the burn.
@@ -228,6 +229,7 @@ public static class ColdSeed6Dof
             double magnitude = burn ? Math.Sqrt(force[0] * force[0] + force[1] * force[1] + force[2] * force[2]) : 0.0;
 
             uSeed[k * NU + Dynamics6Dof.IT] = burn ? Math.Clamp(magnitude, cfg.Tmin, cfg.Tmax) : 0.0;
+            Trim(uSeed, k * NU, dyn);
 
             // Body z on the path's axis (the thrust's, with the end's correction, in the burn), the shortest turn from the node before.
             double norm = 0.0;
@@ -323,6 +325,16 @@ public static class ColdSeed6Dof
             (double pos, double neg) = cfg.RcsBounds(a);
             u[Dynamics6Dof.IRCS + a] = Math.Clamp(-inertia * x[Dynamics6Dof.IW + a] / Tau, -neg, pos);
         }
+    }
+
+    /// <summary>The gimbal deflection that holds the engines' own moment (Dynamics6Dof.Params.ThrustMoment*) at the node's thrust: L tdy + m_x T = 0 and -L tdx + m_y T = 0. Nothing for a balanced cluster or a craft with no gimbal arm.</summary>
+    private static void Trim(double[] u, int at, Dynamics6Dof.Params dyn)
+    {
+        double thrust = u[at + Dynamics6Dof.IT];
+        if (!(dyn.LArm > 0.0) || thrust == 0.0)
+            return;
+        u[at + Dynamics6Dof.ITDX] = dyn.ThrustMomentY * thrust / dyn.LArm;
+        u[at + Dynamics6Dof.ITDY] = -dyn.ThrustMomentX * thrust / dyn.LArm;
     }
 
     private static void Rk4(double[] x, double[] u, Dynamics6Dof.Params p, double h)

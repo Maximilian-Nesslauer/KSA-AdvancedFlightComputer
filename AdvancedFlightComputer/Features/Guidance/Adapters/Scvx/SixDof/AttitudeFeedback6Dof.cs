@@ -21,8 +21,35 @@ public sealed record AttitudeFeedback6Dof
     public double BandwidthRadS { get; init; } = 1.5;
     public double Damping { get; init; } = 0.8;
 
-    /// <summary>The last correction: attitude and rate error against the plan (deg, deg/s), the torque the law wanted, what went to the gimbals and to the RCS (N m, model body axes), and what did not fit (N m).</summary>
-    public readonly record struct Result(double AttitudeErrorDeg, double RateErrorDegS, double3 Wanted, double3 Gimbal, double3 Rcs, double ShortNm);
+    /// <summary>
+    /// THE INTEGRAL, or null for none: the attitude error against the plan, integrated over the burn, per body axis, rad s. The PD alone holds a steady moment the plan does not know - what is left of an off-centre engine choice's after the plan's own trim (Dynamics6Dof.Params.ThrustMoment*), the air's misfit - with a standing error of M / (I wn^2), and each re-solve starts on that error. The integral takes it out and, unlike the error, is not reset by a re-solve: the moment it found is still there.
+    ///  Its gain is <see cref="IntegralGain"/> wn^3 (s^3 + kd s^2 + kp s + ki stays stable while ki is under kd kp = 2 zeta wn^3), and its torque is capped at <see cref="IntegralCapRad"/> of attitude error's worth of the proportional term. It integrates only while the engine burns, and not on a step whose correction was cut to fit, so it cannot wind up against a saturated actuator.
+    /// </summary>
+    public Integrator Integral { get; init; }
+    public double IntegralGain { get; init; } = 0.25;
+    public double IntegralCapRad { get; init; } = 0.1;
+
+    /// <summary>The integral's state, kept for the life of one touchdown engagement (VehicleAutopilotState.SixDofAttitudeIntegral).</summary>
+    public sealed class Integrator
+    {
+        public double3 AngleRadS;
+        public double LastTime = double.NaN;
+        public bool LastCut;
+
+        public void Reset()
+        {
+            AngleRadS = default;
+            LastTime = double.NaN;
+            LastCut = false;
+        }
+    }
+
+    /// <summary>A gap in the commands longer than this restarts the integral: a new engagement, or a step the feedback did not run.</summary>
+    private const double IntegralGapS = 1.0;
+
+    /// <summary>The last correction: attitude and rate error against the plan (deg, deg/s), the torque the law wanted, what went to the gimbals and to the RCS (N m, model body axes), what did not fit (N m), and the integral's part of what the law wanted (N m).</summary>
+    public readonly record struct Result(double AttitudeErrorDeg, double RateErrorDegS, double3 Wanted, double3 Gimbal, double3 Rcs, double ShortNm,
+                                         double3 IntegralNm = default);
 
     private const int NX = Dynamics6Dof.NX;
 
@@ -35,9 +62,10 @@ public sealed record AttitudeFeedback6Dof
     /// <param name="gimbalRollNm">The gimbals' whole roll torque at the thrust now, N m.</param>
     /// <param name="rcsPos">The RCS's whole torque per axis, positive direction, N m; null for no RCS.</param>
     /// <param name="rcsNeg">The same, negative direction, as a magnitude.</param>
+    /// <param name="now">Simulation time, s, for the integral; NaN leaves it out.</param>
     public Result Correct(Ksa6DofPlan plan, int k, double f, double[] x, double ixx, double iyy, double izz,
                           double3 gimbalPlan, double3 rcsPlan, double gimbalLateralNm, double gimbalRollNm,
-                          double[] rcsPos, double[] rcsNeg)
+                          double[] rcsPos, double[] rcsNeg, double now = double.NaN)
     {
         int k1 = Math.Min(k + 1, plan.Nodes - 1);
         double L(int i) => plan.X[k * NX + i] * (1.0 - f) + plan.X[k1 * NX + i] * f;
@@ -70,6 +98,33 @@ public sealed record AttitudeFeedback6Dof
         var rateError = new double3(x[w] - L(w), x[w + 1] - L(w + 1), x[w + 2] - L(w + 2));
         double kp = BandwidthRadS * BandwidthRadS, kd = 2.0 * Damping * BandwidthRadS;
         double3 law = theta * kp + rateError * kd;
+
+        // THE INTEGRAL (see Integral): while the engine burns, from the last step's time, held where it is on a step after a cut.
+        double3 integralLaw = default;
+        bool burning = gimbalLateralNm > 0.0;
+        if (Integral != null && double.IsFinite(now) && BandwidthRadS > 0.0 && IntegralGain > 0.0)
+        {
+            double dt = now - Integral.LastTime;
+            if (!(dt >= 0.0 && dt <= IntegralGapS))
+            {
+                Integral.Reset();
+                dt = 0.0;
+            }
+            Integral.LastTime = now;
+            double ki = IntegralGain * BandwidthRadS * BandwidthRadS * BandwidthRadS;
+            if (burning)
+            {
+                if (!Integral.LastCut)
+                {
+                    double cap = kp * Math.Max(IntegralCapRad, 0.0) / ki;
+                    double3 a = Integral.AngleRadS + theta * dt;
+                    Integral.AngleRadS = new double3(Math.Clamp(a.X, -cap, cap), Math.Clamp(a.Y, -cap, cap), Math.Clamp(a.Z, -cap, cap));
+                }
+                integralLaw = Integral.AngleRadS * ki;
+                law += integralLaw;
+            }
+        }
+
         var wanted = new double3(-ixx * law.X, -iyy * law.Y, -izz * law.Z);
         if (!double.IsFinite(wanted.X) || !double.IsFinite(wanted.Y) || !double.IsFinite(wanted.Z))
             return default;
@@ -107,8 +162,11 @@ public sealed record AttitudeFeedback6Dof
             shortNm += cut;
         }
 
+        if (Integral != null)
+            Integral.LastCut = shortNm > 1e-3 * (Math.Sqrt(double3.Dot(wanted, wanted)) + 1.0);
         double rad = 180.0 / Math.PI;
-        return new Result(angle * rad, Math.Sqrt(double3.Dot(rateError, rateError)) * rad, wanted, gimbal, rcs, shortNm);
+        return new Result(angle * rad, Math.Sqrt(double3.Dot(rateError, rateError)) * rad, wanted, gimbal, rcs, shortNm,
+                          new double3(-ixx * integralLaw.X, -iyy * integralLaw.Y, -izz * integralLaw.Z));
     }
 
     /// <summary>The correction shared in proportion to each actuator's room, cut to the room there is.</summary>

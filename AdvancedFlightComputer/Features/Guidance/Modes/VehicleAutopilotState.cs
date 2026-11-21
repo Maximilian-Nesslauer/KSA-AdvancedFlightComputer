@@ -929,6 +929,10 @@ public sealed class VehicleAutopilotState
     public bool SixDofAttitudeFeedback = true;
     public double SixDofAttitudeBandwidth = 1.5;
 
+    /// <summary>The attitude feedback's integral (AttitudeFeedback6Dof.Integral), which takes out a steady moment the plan does not know, and its state for the current touchdown engagement.</summary>
+    internal bool SixDofAttitudeIntegralOn = true;
+    internal readonly AttitudeFeedback6Dof.Integrator SixDofAttitudeIntegral = new();
+
     /// <summary>
     /// The share of the gimbals' torque, their roll and the RCS's the touchdown plans keep back for the attitude feedback (Scvx6DofConfig.PlanTorqueShare), as LandingPlanFloorMargin keeps throttle back for the thrust tracker. Only with the feedback on.
     /// </summary>
