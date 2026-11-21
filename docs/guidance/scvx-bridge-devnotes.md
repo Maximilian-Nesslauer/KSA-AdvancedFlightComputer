@@ -22,7 +22,7 @@ This directory is the **bridge** between a successive-convexification solver and
 
 - [1. What the solver actually solves](#1-what-the-solver-actually-solves)
 - [2. Scaling is load-bearing](#2-scaling-is-load-bearing)
-- [3. Node 0 is the vehicle - a whole family of bugs](#3-node-0-is-the-vehicle--a-whole-family-of-bugs)
+- [3. Node 0 is the vehicle - a whole family of bugs](#3-node-0-is-the-vehicle---a-whole-family-of-bugs)
 - [4. Reading the answer back out](#4-reading-the-answer-back-out)
 - [5. The actuator boundary](#5-the-actuator-boundary)
 - [6. Making it real-time](#6-making-it-real-time)

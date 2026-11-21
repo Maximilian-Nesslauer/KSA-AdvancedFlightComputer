@@ -408,8 +408,8 @@ For **P3** instead: add a 56th column for `t`, change the objective to `c[55] = 
 
 ### References
 
-- Acikmese & Ploen, *Convex Programming Approach to Powered Descent Guidance for Mars Landing*, JGCD, 2007 ([README.md](../README.md); docs/reference/_Convexprogramming_pdgforMarslanding.pdf) - log-mass change of variables, discretization, and the Taylor-linearized throttle bounds (eqs. 34-36).
-- Acikmese, Carson & Blackmore, *Lossless Convexification of Nonconvex Control Bound and Pointing Constraints of the Soft Landing Optimal Control Problem*, IEEE TCST, 2013 (`docs/reference/gfold.pdf`) - the lossless-convexification proof for the thrust bounds and pointing constraint.
+- Acikmese & Ploen, *Convex Programming Approach to Powered Descent Guidance for Mars Landing*, JGCD, 2007 ([PDF](reference-material/reference/_Convexprogramming_pdgforMarslanding.pdf)) - log-mass change of variables, discretization, and the Taylor-linearized throttle bounds (eqs. 34-36).
+- Acikmese, Carson & Blackmore, *Lossless Convexification of Nonconvex Control Bound and Pointing Constraints of the Soft Landing Optimal Control Problem*, IEEE TCST, 2013 ([PDF](reference-material/reference/gfold.pdf)) - the lossless-convexification proof for the thrust bounds and pointing constraint.
 
 ## Layout
 

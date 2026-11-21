@@ -94,3 +94,4 @@ third_party/**/.github/workflows/
 
 # The independent local harness is never part of this public repository.
 AdvancedFlightComputer.Harness/
+site/
