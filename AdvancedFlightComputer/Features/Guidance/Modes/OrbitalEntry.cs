@@ -176,6 +176,10 @@ public static partial class GuidanceWindow
                 GuidanceLog.Info(vehicle, "Orbital entry: the belly-first table sweep gave nothing (" + sweptError + ").");
         }
 
+        // Once the flaps' belly-first tables are in, the schedule is redone with their reach.
+        if (st.TablesReady && !st.FlapTrimDone && st.Aero.Surfaces is { Length: > 0 })
+            RetrimWithFlaps(vehicle, st);
+
         // ---- where the craft is ----
         double3 r = orbit.StateVectors.PositionCci;
         double3 vRel = orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r);
@@ -397,7 +401,8 @@ public static partial class GuidanceWindow
         double R0 = model.BodyRadius;
         double e0;
         double[] x0;
-        if (drag >= cfg.StartDrag)
+        // Latched with the tracker's: once in the air, plan from the state as it is, whatever the drag does next.
+        if (drag >= cfg.StartDrag || (st.Tracker?.InAir ?? false))
         {
             e0 = e;
             x0 = [rMag / R0, gamma, rangeRad];
@@ -459,7 +464,75 @@ public static partial class GuidanceWindow
         st.Trim = trim;
         st.BellyIndex = index;
         st.BellyAxisName = st.Aero.Belly[index].AxisName;
+        st.TrimRows = st.Aero.Belly[index];
         return true;
+    }
+
+    /// <summary>
+    /// THE SCHEDULE WITH THE FLAPS. At rest the flaps may leave no angle trimmed (2026-11-21: C_m -1.4 at every angle, so the least moment sat at the band's edge). With the belly-first body and surface tables in, each Mach row takes the angle where the body's pitch moment lies inside what the flaps can add to it either way. The angle with the most margin each side wins, nearest ENTRY AoA on a tie, and the least shortfall where none is inside. Drag and L/D stay the at-rest rows'.
+    /// </summary>
+    private static void RetrimWithFlaps(Vehicle vehicle, OrbitalEntryState st)
+    {
+        st.FlapTrimDone = true;
+        KsaAeroSweep.Result aero = st.Aero;
+        var rows = st.TrimRows;
+        if (aero.BellyBodyMoment == null || rows == null || st.BellyIndex < 0)
+            return;
+        foreach (var t in aero.Surfaces)
+            if (t.BellyMoment.Length != t.DeflectionDeg.Length)
+                return;
+        double3 b = KsaAeroSweep.BellyAxes[st.BellyIndex];
+        double3 a = double3.Cross(b, new double3(1, 0, 0));
+        var table = aero.BellyBodyMoment;
+        double lo = Math.Max(_s.OrbitalEntryAoaMinDeg, 90.0 - KsaAeroSweep.BellyAlphaTableMaxDeg);
+        double hi = Math.Min(_s.OrbitalEntryAoaMaxDeg, 90.0 - KsaAeroSweep.BellyAlphaTableMinDeg);
+        if (!(hi > lo))
+            return;
+        int nm = rows.MachGrid.Length;
+        var angles = new double[nm];
+        var trimmed = new bool[nm];
+        var residual = new double[nm];
+        var text = new System.Text.StringBuilder();
+        for (int i = 0; i < nm; i++)
+        {
+            double mach = Math.Clamp(rows.MachGrid[i], table.MachMin, table.MachMax);
+            double bestScore = double.PositiveInfinity, bestA = lo, bestRes = 0, bestBody = 0, bestLo = 0, bestHi = 0;
+            for (double ae = lo; ae <= hi + 1e-9; ae += 1.0)
+            {
+                double at = (90.0 - ae) * Math.PI / 180.0;
+                table.Coefficients(mach, at, 0.0, out double cl, out double cm, out double cn);
+                double body = cl * a.X + cm * a.Y + cn * a.Z;
+                double down = 0, up = 0;
+                foreach (var t in aero.Surfaces)
+                {
+                    double tMin = 0, tMax = 0;
+                    foreach (var m in t.BellyMoment)
+                    {
+                        m.Coefficients(mach, at, 0.0, out double sl, out double sm, out double sn);
+                        double d = sl * a.X + sm * a.Y + sn * a.Z;
+                        tMin = Math.Min(tMin, d);
+                        tMax = Math.Max(tMax, d);
+                    }
+                    down += tMin;
+                    up += tMax;
+                }
+                double reachLo = body + down, reachHi = body + up;
+                double res = reachLo > 0 ? reachLo : reachHi < 0 ? reachHi : 0.0;
+                double width = Math.Max(reachHi - reachLo, 1e-9);
+                double offCentre = Math.Abs(0.5 * (reachLo + reachHi)) / width;
+                double score = Math.Abs(res) * 1e3 + offCentre + 1e-4 * Math.Abs(ae - _s.OrbitalEntryAoaDeg);
+                if (score < bestScore)
+                {
+                    bestScore = score; bestA = ae; bestRes = res; bestBody = body; bestLo = down; bestHi = up;
+                }
+            }
+            angles[i] = bestA;
+            trimmed[i] = bestRes == 0.0;
+            residual[i] = bestRes;
+            text.Append(FormattableString.Invariant($" M{rows.MachGrid[i]:0.#}: {bestA:F0}{(trimmed[i] ? "" : "*")} body {bestBody:F3} flaps {bestLo:F3}..+{bestHi:F3};"));
+        }
+        st.Trim = EntryTrim.AtAngles(rows.MachGrid, rows.AlphaDeg, rows.Cd, rows.Cl, rows.Cm, angles, trimmed, residual);
+        GuidanceLog.Info(vehicle, "Orbital entry schedule with the flaps (alpha deg from nose-first; * the flaps cannot hold it there; C_m about the pitch axis):" + text);
     }
 
     /// <summary>The trim schedule of a belly-first sweep, and the belly side it flies (KsaAeroSweep.BellyAxes index).</summary>
@@ -478,7 +551,9 @@ public static partial class GuidanceWindow
         double bestScore = double.NegativeInfinity;
         for (int i = 0; i < sweeps.Length; i++)
         {
-            if (choice >= 1 && choice <= 4 && i != choice - 1)
+            // 0 is the craft's own belly, -Z: the navball's down at roll 0. 1 to 4 name a side; 5 lets the sweep choose.
+            int wanted = choice is >= 1 and <= 4 ? choice - 1 : choice == 5 ? -1 : 0;
+            if (wanted >= 0 && i != wanted)
                 continue;
             EntryTrim t = Make(sweeps[i]);
             double meanLd = 0;

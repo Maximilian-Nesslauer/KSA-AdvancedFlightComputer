@@ -37,7 +37,7 @@ internal static class OrbitalEntryCheck
 
     public static int Run(bool verbose)
     {
-        int fails = TrimCheck() + FrameCheck();
+        int fails = TrimCheck() + FrameCheck() + LatchCheck();
         foreach (var v in Vehicles)
         {
             fails += CorridorCheck(v);
@@ -127,6 +127,24 @@ internal static class OrbitalEntryCheck
         string lo = Try(0.1, out _), hi = Try(0.9, out _);
         Console.WriteLine($"  {(midOk ? "ok  " : "FAIL")} {v.Name} corridor {shortM / 1000:F0}-{longM / 1000:F0} km: middle {mid}; at 0.1 {lo}, at 0.9 {hi}");
         return midOk ? 0 : 1;
+    }
+
+    /// <summary>The start-drag guard latches: a pull-up back into thin air after the first touch keeps the tracker on the plan.</summary>
+    static int LatchCheck()
+    {
+        var cfg = new EntryConfig();
+        var model = Model(Vehicles[1]);
+        var start = EntryPlanner.PredictStart(model, cfg, R0 + 121_000, 7_600, -1.3 * Math.PI / 180, 2_200_000 / R0);
+        var plan = start == null ? null : new EntryPlanner().Solve(model, cfg, start.Value.E, start.Value.X, null).Plan;
+        if (plan == null) { Console.WriteLine("  FAIL start-drag latch: no plan"); return 1; }
+        var tr = new EntryTracker(cfg);
+        double e = plan.E0, vN = plan.SpeedMs[0] / model.SpeedUnit;
+        var before = tr.Update(new EntryTracker.Input(0.5, e, 0.1, 0, 0.3, 7200, 0, vN, plan));
+        var touch = tr.Update(new EntryTracker.Input(0.5, e, 0.3, 0, 0.3, 7200, 0, vN, plan));
+        var after = tr.Update(new EntryTracker.Input(0.5, e, 0.05, 0, 0.3, 7200, 0, vN, plan));
+        bool ok = before.Phase == EntryTracker.Phase.PreEntry && touch.Phase == EntryTracker.Phase.Tracking && after.Phase == EntryTracker.Phase.Tracking && cfg.StartDrag == 0.2;
+        Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} start-drag latch at {cfg.StartDrag} m/s2: {before.Phase} -> {touch.Phase} -> {after.Phase} after the drag fell back");
+        return ok ? 0 : 1;
     }
 
     static EntryConfig Config(Vehicle v) => new() { HeatingRateMax = 0, DynamicPressureMax = 16_000, LoadFactorMax = v.GMax };

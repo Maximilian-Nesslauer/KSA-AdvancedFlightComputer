@@ -25,6 +25,10 @@ public sealed class OrbitalEntryState
     /// <summary>The second sweep: the belly-first body and surface tables on the side the trim chose (KsaAeroSweep.TryStart's bellySide). Until it lands the attitude flies on the first sweep's tables, with no surfaces belly first.</summary>
     public KsaAeroSweep.Job TablesJob;
     public bool TablesReady;
+    /// <summary>The first sweep's belly-first rows on the side flown: the drag, lift and moment the schedule reads, kept when the belly tables replace that sweep.</summary>
+    public KsaAeroSweep.BellySweep TrimRows;
+    /// <summary>The schedule has been redone with the flaps' reach (RetrimWithFlaps).</summary>
+    public bool FlapTrimDone;
     public KsaAeroSweep.Result Aero;
     public EntryTrim Trim;
     public string BellyAxisName = "";
@@ -96,6 +100,8 @@ public sealed class OrbitalEntryState
         AeroJob = null;
         TablesJob = null;
         TablesReady = false;
+        TrimRows = null;
+        FlapTrimDone = false;
         Aero = null;
         BellyAxisName = "";
         BellyIndex = -1;

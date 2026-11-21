@@ -66,6 +66,26 @@ public sealed class EntryTrim
         return best;
     }
 
+    /// <summary>
+    /// The schedule at given angles, one per Mach row (degrees from nose-first), with drag and lift over drag read from the same sweep: the flap-aware trim (GuidanceWindow.RetrimWithFlaps) picks the angles, this reads the rest. <paramref name="trimmed"/> marks the rows whose controls can hold the moment there.
+    /// </summary>
+    public static EntryTrim AtAngles(double[] machGrid, double[] alphaDeg, double[] cd, double[] cl, double[] cm, double[] anglesDeg, bool[] trimmed, double[] residualCm)
+    {
+        int nm = machGrid.Length, na = alphaDeg.Length;
+        var cdOut = new double[nm];
+        var ldOut = new double[nm];
+        for (int i = 0; i < nm; i++)
+        {
+            cdOut[i] = Math.Max(Row(alphaDeg, cd, i, na, anglesDeg[i]), 1e-4);
+            ldOut[i] = Row(alphaDeg, cl, i, na, anglesDeg[i]) / cdOut[i];
+        }
+        return new EntryTrim
+        {
+            Mach = (double[])machGrid.Clone(), AlphaDeg = (double[])anglesDeg.Clone(), Cd = cdOut, LiftToDrag = ldOut,
+            Trimmed = (bool[])trimmed.Clone(), ResidualCm = (double[])residualCm.Clone(),
+        };
+    }
+
     /// <summary>A fixed angle of attack at every Mach, from the same sweep.</summary>
     public static EntryTrim Fixed(double[] machGrid, double[] alphaDeg, double[] cd, double[] cl, double fixedDeg)
     {

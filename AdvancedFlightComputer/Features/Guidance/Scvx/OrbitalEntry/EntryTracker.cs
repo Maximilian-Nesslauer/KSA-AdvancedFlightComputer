@@ -46,11 +46,15 @@ public sealed class EntryTracker
     int _side;               // 0 until the first roll
     double _overbankS;
     bool _reversing;
+    bool _inAir;
 
     public EntryTracker(EntryConfig cfg) => _cfg = cfg;
 
     public double BankDeg => _bank;
     public int Side => _side;
+
+    /// <summary>The drag has reached the start value once: from then on the tracker flies the plan, whatever the drag does next. A lifting craft pulled up out of the thin air at its first touch (2026-11-21) and, unlatched, went back to lift-up and floated on.</summary>
+    public bool InAir => _inAir;
 
     public void Reset()
     {
@@ -58,6 +62,7 @@ public sealed class EntryTracker
         _side = 0;
         _overbankS = 0;
         _reversing = false;
+        _inAir = false;
     }
 
     public Output Update(in Input inp)
@@ -71,7 +76,9 @@ public sealed class EntryTracker
         if (inp.E >= inp.Plan.EF)
             return Hold(inp, Phase.HandOver, db, "HAND-OVER ENERGY REACHED");
 
-        if (inp.DragMs2 < cfg.StartDrag)
+        if (inp.DragMs2 >= cfg.StartDrag)
+            _inAir = true;
+        if (!_inAir)
         {
             Slew(0.0, inp.Dt);
             return new Output(Phase.PreEntry, _bank, 0, 0, 0, 0, 0, db, _side, false, false, false, false,

@@ -221,12 +221,14 @@ public static partial class GuidanceWindow
             SiteGeometry(parent, s.PositionCci, s.VelocityCci, arrival + coastS, out double down, out double cross, out _);
             crossM = cross * R0;
             f = down * R0 - coastRangeM - target;
-            return down > 0.0 && down < Math.PI / 2;
+            return down > 0.0;
         }
 
         double horizon = Math.Max(_s.OrbitalEntryAimHorizonH, 0.1) * 3600.0;
         double step = Math.Clamp(period / 180.0, 10.0, 60.0);
         double bestCross = double.PositiveInfinity;
+        // Over the passes close enough to the track: the most and least range ahead the site ever sat at the start of the air, to say why none lined up.
+        double aheadMax = double.NegativeInfinity, aheadMin = double.PositiveInfinity;
         bool havePrev = false;
         double tPrev = 0, fPrev = 0;
         for (double t = t0; t <= t0 + horizon; t += step)
@@ -238,6 +240,8 @@ public static partial class GuidanceWindow
                 havePrev = false;
                 continue;
             }
+            aheadMax = Math.Max(aheadMax, f + target);
+            aheadMin = Math.Min(aheadMin, f + target);
             if (havePrev && fPrev > 0 && f <= 0)
             {
                 double lo = tPrev, hi = t;
@@ -267,9 +271,15 @@ public static partial class GuidanceWindow
             tPrev = t;
             fPrev = f;
         }
-        refusal = double.IsFinite(bestCross)
-            ? FormattableString.Invariant($"AIMED ENTRY: NO PASS IN {_s.OrbitalEntryAimHorizonH:F0} H COMES WITHIN {maxCross / 1000:F0} KM OF THE SITE (CLOSEST {Math.Abs(bestCross) / 1000:F0} KM).")
-            : "AIMED ENTRY: NO BURN IN THE HORIZON MEETS THE AIR.";
+        if (!double.IsFinite(bestCross))
+            refusal = "AIMED ENTRY: NO BURN IN THE HORIZON MEETS THE AIR.";
+        else if (Math.Abs(bestCross) > maxCross)
+            refusal = FormattableString.Invariant($"AIMED ENTRY: NO PASS IN {_s.OrbitalEntryAimHorizonH:F0} H COMES WITHIN {maxCross / 1000:F0} KM OF THE SITE (CLOSEST {Math.Abs(bestCross) / 1000:F0} KM).");
+        else
+            refusal = FormattableString.Invariant(
+                $"AIMED ENTRY: PASSES COME WITHIN {maxCross / 1000:F0} KM, BUT ON THEM THE SITE IS {aheadMin / 1000:F0}-{aheadMax / 1000:F0} KM AHEAD AT THE AIR, NEVER THE AIMED {target / 1000:F0} KM (CORRIDOR {shortM / 1000:F0}-{longM / 1000:F0}, COAST {coastRangeM / 1000:F0} KM).");
+        GuidanceLog.Info(vehicle, FormattableString.Invariant(
+            $"Aimed entry search failed: corridor {shortM / 1000:F0}-{longM / 1000:F0} km, aimed {target / 1000:F0} km, coast {coastS:F0} s and {coastRangeM / 1000:F0} km, closest crossrange {Math.Abs(bestCross) / 1000:F1} km, site ahead {aheadMin / 1000:F0}-{aheadMax / 1000:F0} km on passes within {maxCross / 1000:F0} km."));
         return false;
     }
 }

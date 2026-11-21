@@ -43,8 +43,8 @@ public sealed class EntryConfig
 
     // ---- Start and end ----
 
-    /// <summary>Drag at which entry guidance takes hold, m/s^2. Above it the vehicle coasts lift-up.</summary>
-    public double StartDrag { get; set; } = 0.5;
+    /// <summary>Drag at which entry guidance takes hold, m/s^2, latched once reached (EntryTracker.InAir). Before it the vehicle coasts lift-up.</summary>
+    public double StartDrag { get; set; } = 0.2;
 
     /// <summary>Hand-over altitude, m.</summary>
     public double HandoverAltitude { get; set; } = 25_000.0;

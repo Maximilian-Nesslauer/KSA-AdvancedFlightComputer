@@ -1794,14 +1794,14 @@ public sealed class VehicleAutopilotState
     public double OrbitalEntryHandoverAltKm = 25.0;
     public double OrbitalEntryHandoverMach = 2.0;
     /// <summary>Drag at which the tracker takes hold, m/s^2. Above it the craft holds its entry attitude lift-up.</summary>
-    public double OrbitalEntryStartDragMs2 = 0.5;
+    public double OrbitalEntryStartDragMs2 = 0.2;
     /// <summary>Fly the pitch-trim angle of attack at each Mach (from the belly-first sweep); off flies OrbitalEntryAoaDeg throughout.</summary>
     public bool OrbitalEntryTrimAoa = true;
     /// <summary>Preferred (and fallback) angle of attack from nose-first, deg, and the band a trim must lie in.</summary>
     public double OrbitalEntryAoaDeg = 60.0;
-    public double OrbitalEntryAoaMinDeg = 30.0;
+    public double OrbitalEntryAoaMinDeg = 40.0;
     public double OrbitalEntryAoaMaxDeg = 90.0;
-    /// <summary>Which body axis is the belly: 0 the best of the four by the sweep, then -Z, +Z, -Y, +Y.</summary>
+    /// <summary>Which body axis is the belly: 0 the craft's own (-Z, the navball's down at roll 0), then -Z, +Z, -Y, +Y, and 5 the best of the four by the sweep.</summary>
     public double OrbitalEntryBellyAxis = 0.0;
     /// <summary>Seconds between re-solves.</summary>
     public double OrbitalEntryResolveS = 2.0;

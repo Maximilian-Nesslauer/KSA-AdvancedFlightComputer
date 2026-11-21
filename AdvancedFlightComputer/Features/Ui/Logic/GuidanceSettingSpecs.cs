@@ -289,16 +289,16 @@ internal static class GuidanceSettingSpecs
         "Where orbital entry guidance ends, with HAND-OVER MACH: the craft holds its entry attitude from there.");
     public static readonly SettingSpec OrbitalEntryHandoverMach = new("OrbitalEntryHandoverMach", "HAND-OVER MACH", "", P, 2.0, 0.2, 20.0, "%.2f",
         "Airspeed over the sea-level speed of sound at the hand-over, as the aero tables measure Mach.");
-    public static readonly SettingSpec OrbitalEntryStartDragMs2 = new("OrbitalEntryStartDragMs2", "START DRAG", "m/s^2", P, 0.5, 0.01, 20.0, "%.2f",
-        "Drag at which the tracker takes hold. Above the air the craft holds its entry attitude lift-up.");
+    public static readonly SettingSpec OrbitalEntryStartDragMs2 = new("OrbitalEntryStartDragMs2", "START DRAG", "m/s^2", P, 0.2, 0.01, 20.0, "%.2f",
+        "Drag at which the tracker takes hold, latched once reached. Above the air the craft holds its entry attitude lift-up.");
     public static readonly SettingSpec OrbitalEntryAoaDeg = new("OrbitalEntryAoaDeg", "ENTRY AoA", "deg", P, 60.0, 0.0, 180.0, "%.0f",
         "Angle of attack from nose-first: the trim angle nearest this where a Mach row has several, and the angle flown where it has none.");
-    public static readonly SettingSpec OrbitalEntryAoaMinDeg = new("OrbitalEntryAoaMinDeg", "TRIM AoA MIN", "deg", P, 30.0, 0.0, 180.0, "%.0f",
+    public static readonly SettingSpec OrbitalEntryAoaMinDeg = new("OrbitalEntryAoaMinDeg", "TRIM AoA MIN", "deg", P, 40.0, 0.0, 180.0, "%.0f",
         "Lowest pitch-trim angle of attack the schedule accepts.");
     public static readonly SettingSpec OrbitalEntryAoaMaxDeg = new("OrbitalEntryAoaMaxDeg", "TRIM AoA MAX", "deg", P, 90.0, 0.0, 180.0, "%.0f",
         "Highest pitch-trim angle of attack the schedule accepts.");
-    public static readonly SettingSpec OrbitalEntryBellyAxis = new("OrbitalEntryBellyAxis", "BELLY AXIS", "", P, 0.0, 0.0, 4.0, "%.0f",
-        "Which body axis faces the air belly first: 0 picks the best of the four by the sweep, 1 -Z, 2 +Z, 3 -Y, 4 +Y.");
+    public static readonly SettingSpec OrbitalEntryBellyAxis = new("OrbitalEntryBellyAxis", "BELLY AXIS", "", P, 0.0, 0.0, 5.0, "%.0f",
+        "Which body axis faces the air belly first: 0 the craft's own belly (-Z, down on the navball at roll 0), 1 -Z, 2 +Z, 3 -Y, 4 +Y, 5 the best of the four by the sweep.");
     public static readonly SettingSpec OrbitalEntryResolveS = new("OrbitalEntryResolveS", "RE-SOLVE EVERY", "s", P, 2.0, 0.25, 60.0, "%.2f",
         "Seconds between orbital entry re-solves, each warm from the plan before.");
     public static readonly BoolSpec OrbitalEntryTrimAoa = new("OrbitalEntryTrimAoa", "TRIM AoA", P, true,
