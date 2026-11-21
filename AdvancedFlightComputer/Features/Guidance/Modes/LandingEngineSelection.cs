@@ -149,7 +149,8 @@ public static partial class GuidanceWindow
         {
             if (now < activation.Deadline)
                 return LandingEnginePreparation.Waiting;
-            reason = activation.Refusal = $"LANDING GROUP '{group.Name}' ACTIVATION, SUPPLY OR GIMBALS COULD NOT BE CONFIRMED.";
+            reason = activation.Refusal = $"LANDING GROUP '{group.Name}' ACTIVATION, SUPPLY OR GIMBALS COULD NOT BE CONFIRMED ({LandingGroupMismatch(vehicle, activation)}).";
+            GuidanceLog.Info(vehicle, reason);
             return LandingEnginePreparation.Refused;
         }
 
@@ -222,6 +223,32 @@ public static partial class GuidanceWindow
                 return false;
         }
         return count == activation.Engines.Length;
+    }
+
+    /// <summary>The first reason the group does not match yet, for the refusal text: a switch still pending, a wrong engine on or off, missing propellant, or the flight computer's gimbal list.</summary>
+    private static string LandingGroupMismatch(Vehicle vehicle, LandingEngineActivation activation)
+    {
+        PartTree tree = vehicle.Parts;
+        if (tree == null || !ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
+                .TryGetFrom(tree.States, out var controllers))
+            return "NO ENGINE STATE";
+        ReadOnlySpan<RocketState> states = RocketStates.Of(tree);
+        foreach (var current in controllers.ModulesAndStates)
+        {
+            EngineController engine = current.Module;
+            bool wanted = Array.IndexOf(activation.Engines, engine) >= 0;
+            if (current.State.WasActive != engine.IsActive)
+                return $"SWITCH OF {engine.TemplateId} STILL PENDING";
+            if (engine.IsActive != wanted)
+                return $"{engine.TemplateId} IS {(engine.IsActive ? "ON" : "OFF")}";
+            if (!wanted)
+                continue;
+            foreach (Rocket rocket in engine.Rockets)
+                if ((uint)rocket.StatesIdx < (uint)states.Length && activation.SuppliedRockets.Contains(rocket)
+                    && !states[rocket.StatesIdx].IsPropellantAvailable)
+                    return $"NO PROPELLANT AT {engine.TemplateId}";
+        }
+        return LandingGimbalsRefreshed(vehicle) ? "UNKNOWN" : "GIMBAL LIST NOT REFRESHED";
     }
 
     /// <summary>True when the flight computer's gimbal list (FlightComputer.ReadUpdatedVehicleConfiguration) already holds exactly the gimbals of the active engines.</summary>
