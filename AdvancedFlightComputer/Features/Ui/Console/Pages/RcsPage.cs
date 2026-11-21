@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.AutoRemove;
+using AdvancedFlightComputer.Features.Burns;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.Features.RcsTranslation;
@@ -428,10 +429,11 @@ internal static class RcsPage
         if (refusal.Length == 0)
             refusal = BurnModeInput.FlyRefusal(craft);
         bool pass = passes != null && ReferenceEquals(node, passes.CurrentBurn);
+        PointingCheck pointing = rcs ? PointingCheck.None : BurnPointing.CheckNextNode(craft);
         return new CommitSpec(pass ? PlanVerbs.FlyPass(passes!.PassIndex + 1) : PlanVerbs.FlyBurn, rcs ? FlownBy.Afc : FlownBy.StockAuto, refusal, deleteLine, false,
-            rcs ? PageText.FlyRcsTip : PageText.FlyStockTip,
+            PageKit.WithPointing(rcs ? PageText.FlyRcsTip : PageText.FlyStockTip, in pointing),
             Act: () => BurnModeInput.FlyWithAuto(craft), Owner: rcs ? Owner.Afc : Owner.Stock,
-            Secondary: delete, Quiet: pass, Caution: fuelFact);
+            Secondary: delete, Quiet: pass, Caution: fuelFact.Length > 0 ? fuelFact : pointing.Caution);
     }
 
     private static void DrawPicture(in Picked p)

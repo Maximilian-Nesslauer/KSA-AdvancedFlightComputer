@@ -156,6 +156,14 @@ The console writes two guidance switches by itself, from the draw: when the mode
 
 The three per-craft switches are the GNC SWITCHES in the head drawer: AFC MAY STEER (`Engage`), AFC MAY STAGE AND THROTTLE (`AutoStage` on the guidance state) and AUTOSTAGE (`StagingDetector.Arm`, the same call the AUTOSTAGE gauge button and the AUTOSTAGE THIS CRAFT switch on STAGING make). While AFC MAY STEER or AFC MAY STAGE AND THROTTLE is off, a warning row in the head says so and opens the drawer. Neither switch locks while a mode flies. AFC MAY STEER off while a mode holds the craft is a hand-back (`ApplyAutopilot` calls `HandBackVehicle`): every mode ends and the engine is cut, also in the air. AFC MAY STAGE AND THROTTLE off gates only the engine and staging commands, so AFC keeps steering, except that a landing with a deorbit request or in its landing burn ends through `AbortLanding`. Touchdown guidance reads neither switch. While guidance armed AutoStage for the flight that runs, the AUTOSTAGE switches say so in their tooltip and still disarm it; guidance keeps that disarm for the rest of the flight.
 
+## Warp to the turn
+
+| State or action | Writer | Release behavior |
+| --- | --- | --- |
+| `Universe` time warp | `TurnWarp.Start` and `TurnWarp.Cancel` (`Features/Burns`), from WARP TO TURN and STOP WARP in the console footer | Only while stock AUTO flies the loaded node of the controlled craft, the burn has not started, no warp or speed input is queued and the alignment start (`BurnTarget.AlignmentStartTime`) is more than 90 s away: `Universe.AutoWarpTo` to 30 s before that alignment start, uncapped as the stock warp to the burn. The burn mode is not written, so stock AUTO stays armed. The warp is AFC's only while `Universe.AutoWarpTime` equals that end; any other warp replaces it, and AFC then leaves the warp alone. While the warp is AFC's, `TurnWarp.Guard` runs after every `Universe.ApplyVehicleSolvers` and stops it when the craft no longer has that burn target loaded, the burn started, stock AUTO was switched off, or the alignment start moved to less than 15 s after the end. STOP WARP shows on the footer of the craft the warp was started for and calls `Universe.AutoWarpStop` only while the warp is still AFC's. A save load or the end of the mod forgets the warp without a stop. |
+
+The footer that flies the next node with stock AUTO also shows a pointing check as a caution, not a refusal (`BurnPointing`): no RCS on pitch or yaw, an RCS pulse so strong that a craft at rest inside the stock turnaround band does not turn, or a burn shorter than the engine needs to settle its aim. It only reads `FlightComputer` fields.
+
 ## Identity and persistence
 
 RCS and MultiPass registries use save and vehicle IDs.
