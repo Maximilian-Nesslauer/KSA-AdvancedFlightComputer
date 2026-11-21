@@ -84,7 +84,7 @@ The game-free G-FOLD executable accepts `--terminal-braking` for vertical contro
 
 ### Burns that stock AUTO flies
 
-- `afc-burn-turn-warp` arms stock AUTO on a node of a light probe and checks the warp to the turn: it is offered only with AUTO on and ends 30 s before `BurnTarget.AlignmentStartTime`, it leaves AUTO armed, a warp to the ignition replaces it and a cancel then leaves that warp running, and with `Universe.ProcessAutoWarp` called after each step it ends about 30 s before the turn with the burn not started.
+- `afc-burn-turn-warp` arms stock AUTO on a node of a light probe and checks the warp to the turn: it is offered only with AUTO on and ends 30 s before `BurnTarget.AlignmentStartTime`, it leaves AUTO armed, a warp to the ignition replaces it and a cancel then leaves that warp running, removing the node stops it at the next step, and with `Universe.ProcessAutoWarp` called after each step it ends about 30 s before the turn with the burn not started.
 - `afc-burn-pointing-check` reads the pointing check of the next node on a light probe: full-size RCS blocks are warned about as too strong to aim, blocks at 0.15 scale and a 30 m/s burn give no warning, RCS switched off is named, and a 0.05 m/s burn at a planned full throttle is shorter than the engine needs to settle its aim.
 
 ### Flyby targeting

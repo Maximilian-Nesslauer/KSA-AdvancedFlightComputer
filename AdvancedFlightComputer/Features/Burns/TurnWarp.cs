@@ -16,19 +16,28 @@ namespace AdvancedFlightComputer.Features.Burns;
 /// </remarks>
 internal static class TurnWarp
 {
-    private static UniverseTime? _ownedEnd;
+    private sealed record Owned(UniverseTime End, Vehicle Craft, BurnTarget Target);
+
+    private static Owned? _owned;
+
+    // The alignment start may move a little while the craft coasts. A turn that moves this close to the end of the warp
+    // stops it, so the craft still turns at 1x.
+    private const double TurnMovedSeconds = 0.5 * BurnTurnRules.WarpLeadSeconds;
 
     /// <summary>Whether the warp that runs now is the one <see cref="Start"/> began.</summary>
     public static bool Running
     {
         get
         {
-            if (_ownedEnd is UniverseTime end && Universe.IsAutoWarpActive && Universe.AutoWarpTime == end)
+            if (_owned is { } owned && Universe.IsAutoWarpActive && Universe.AutoWarpTime == owned.End)
                 return true;
-            _ownedEnd = null;
+            _owned = null;
             return false;
         }
     }
+
+    /// <summary>Whether AFC's warp to the turn runs now for <paramref name="craft"/>.</summary>
+    public static bool RunningFor(Vehicle craft) => Running && ReferenceEquals(_owned!.Craft, craft);
 
     /// <summary>
     /// The end of a warp to the turn of the node that stock AUTO flies on the controlled <paramref name="craft"/>, or null.
@@ -50,11 +59,12 @@ internal static class TurnWarp
     /// <summary>Starts the warp to the turn of <paramref name="craft"/>. Returns false when none is offered now.</summary>
     public static bool Start(Vehicle craft)
     {
-        if (OfferedEnd(craft) is not UniverseTime end)
+        if (OfferedEnd(craft) is not UniverseTime end || craft.FlightComputer.Burn is not BurnTarget target)
             return false;
-        Universe.AutoWarpTo(end);
-        _ownedEnd = Universe.IsAutoWarpActive && Universe.AutoWarpTime == end ? end : null;
-        return _ownedEnd != null;
+        // Uncapped as FlightComputerAction.WarpToNextBurn, so a long coast warps as fast as the stock warp to the burn.
+        Universe.AutoWarpTo(end, 0.0, isUncapped: true);
+        _owned = Universe.IsAutoWarpActive && Universe.AutoWarpTime == end ? new Owned(end, craft, target) : null;
+        return _owned != null;
     }
 
     /// <summary>Stops the warp to the turn while it is still AFC's. Any other warp runs on.</summary>
@@ -62,8 +72,24 @@ internal static class TurnWarp
     {
         if (Running)
             Universe.AutoWarpStop(resetSimulationSpeed: true);
-        _ownedEnd = null;
+        _owned = null;
     }
 
-    public static void Reset() => _ownedEnd = null;
+    /// <summary>
+    /// Stops AFC's warp once it no longer ends before the turn it was started for: the node was removed or replaced, the
+    /// burn started, or the alignment start moved close to the end of the warp. Called once per frame.
+    /// </summary>
+    public static void Guard()
+    {
+        if (!Running || _owned is not { } owned)
+            return;
+        Vehicle craft = owned.Craft;
+        bool stillAhead = !craft.IsDisposed && ReferenceEquals(craft.FlightComputer.Burn, owned.Target)
+            && !owned.Target.StartedAt.HasValue
+            && (owned.Target.AlignmentStartTime - owned.End).Seconds() >= TurnMovedSeconds;
+        if (!stillAhead)
+            Cancel();
+    }
+
+    public static void Reset() => _owned = null;
 }

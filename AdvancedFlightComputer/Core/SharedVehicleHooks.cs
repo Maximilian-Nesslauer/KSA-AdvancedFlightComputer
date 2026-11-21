@@ -55,6 +55,9 @@ internal static class SharedVehicleHooks
                 RcsDriverPatch.TickVehicle(vehicle);
             FlybyCourse.TickVehicle(vehicle);
         }
+
+        // After the solvers applied, so the guard reads the alignment start of this step.
+        Features.Burns.TurnWarp.Guard();
     }
 
     // The end of a burn, after FlightComputer.RaisePendingAlerts has acted on it, which removes the burn only while another burn follows and the stop is not a stage-ran-dry stop. The worker raises the flags for an engine Auto burn and the RCS executor raises them for an RCS burn, so both arrive here.

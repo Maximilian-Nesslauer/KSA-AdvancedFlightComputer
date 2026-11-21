@@ -99,6 +99,19 @@ public sealed class BurnTurnWarpTest : AfcTest
             t.Check("over the other warp the warp to the turn is offered again", TurnWarp.OfferedEnd(probe) == expected);
             Universe.AutoWarpStop(resetSimulationSpeed: true);
 
+            TurnWarp.Start(probe);
+            driver.Step(BurnTurnSupport.StepDt);
+            t.Check("a step with the node in place keeps the warp", TurnWarp.Running && TurnWarp.RunningFor(probe));
+            fc.RemoveBurn(fc.BurnPlan.FindFirstExecutableBurn()!);
+            driver.Step(BurnTurnSupport.StepDt);
+            t.Check("removing the node stops the warp at the next step", !Universe.IsAutoWarpActive && !TurnWarp.Running);
+
+            BurnTurnSupport.AddNode(probe, NodeLead, 20.0);
+            driver.Step(BurnTurnSupport.StepDt, 2);
+            fc.BurnMode = FlightComputerBurnMode.Auto;
+            driver.Step(BurnTurnSupport.StepDt, 2);
+            target = fc.Burn!;
+            expected = target.AlignmentStartTime - new UniverseTime(BurnTurnRules.WarpLeadSeconds);
             t.Check("the warp starts again", TurnWarp.Start(probe));
             // Universe.ProcessAutoWarp ends the warp at its end; the driver does not run it, so the test calls it.
             double toEnd = (expected - Universe.GetElapsedTime()).Seconds();

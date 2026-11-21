@@ -94,7 +94,7 @@ internal static class PageKit
     /// </summary>
     public static CommitAction? TurnWarpOr(Vehicle craft, CommitAction? fallback)
     {
-        if (TurnWarp.Running)
+        if (TurnWarp.RunningFor(craft))
             return new CommitAction(BurnTurnRules.StopWarpVerb, "", BurnTurnRules.StopWarpTip, TurnWarp.Cancel, Danger: false);
         return TurnWarp.OfferedEnd(craft) != null
             ? new CommitAction(BurnTurnRules.WarpVerb, "", BurnTurnRules.WarpTip, () => TurnWarp.Start(craft), Danger: false)

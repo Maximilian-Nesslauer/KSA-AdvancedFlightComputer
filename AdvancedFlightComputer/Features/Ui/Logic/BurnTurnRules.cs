@@ -33,7 +33,8 @@ internal readonly record struct PointingCheck(PointingWarning Warning, double St
 /// there never starts to turn, while FlightComputer.ComputeControl holds the ignition of an Auto burn until the pitch
 /// and yaw errors are inside AngleDeadband. A burn attitude is inertially fixed, so the rate deadband equals RateBit,
 /// and FlightComputer.UpdateRcsParams makes AngleTurnaround the larger of RateBit^2 / RcsTorqueAuthority and
-/// 10 * RateBit.
+/// 10 * RateBit. Without an RCS pulse on an axis, UpdateRcsParams makes RateBit infinite, and ComputeControl then
+/// lights the engine on time without the hold, pointed wherever the craft points.
 /// </remarks>
 internal static class BurnTurnRules
 {
@@ -69,25 +70,30 @@ internal static class BurnTurnRules
     }
 
     /// <summary>
-    /// The shortest burn that FlightComputer.ComputeMinimumDurationThrottleCap leaves at full throttle: the slew through
-    /// <paramref name="pointingError"/> at half the gimbal authority, and twice the time the gimbal loop needs to settle.
+    /// The shortest burn at <paramref name="throttle"/> that FlightComputer.ComputeMinimumDurationThrottleCap accepts:
+    /// twice the time the gimbal loop needs to settle, and the slew through <paramref name="pointingError"/> at half the
+    /// gimbal authority, which scales with the throttle. Its cap is the throttle at which the burn is exactly this long.
     /// </summary>
-    public static double MinimumBurnSeconds(double gimbalAuthority, double pointingError, double settleSeconds)
+    public static double MinimumBurnSeconds(double gimbalAuthority, double pointingError, double settleSeconds, double throttle = 1.0)
     {
-        double slew = gimbalAuthority > 0 && pointingError > 0 ? 2.0 * Math.Sqrt(pointingError / (0.5 * gimbalAuthority)) : 0.0;
+        double slew = gimbalAuthority > 0 && pointingError > 0 && throttle > 0
+            ? 2.0 * Math.Sqrt(pointingError / (0.5 * gimbalAuthority * throttle)) : 0.0;
         return slew + settleSeconds / 0.5;
     }
 
     /// <summary>
-    /// The burn length at the lowest throttle stock flies the node with: its planned throttle, or else the least throttle
-    /// of the engines, because FlightComputer.SolveBurnThrottle lowers the throttle of an unplanned burn down to that.
-    /// The mass flow is taken as linear in the throttle.
+    /// The lowest throttle stock flies the node with: its planned throttle, or else the least throttle of the engines,
+    /// because FlightComputer.SolveBurnThrottle lowers the throttle of an unplanned burn down to that.
     /// </summary>
-    public static double FlownSeconds(double fullThrottleSeconds, float? plannedThrottle, float minThrottle)
+    public static double LowestThrottle(float? plannedThrottle, float minThrottle)
     {
-        double lowest = Math.Clamp(plannedThrottle ?? minThrottle, Math.Clamp(minThrottle, 0f, 1f), 1f);
-        return lowest > 0 ? fullThrottleSeconds / lowest : double.PositiveInfinity;
+        float least = Math.Clamp(minThrottle, 0f, 1f);
+        return Math.Clamp(plannedThrottle ?? least, least, 1f);
     }
+
+    /// <summary>The burn length at <paramref name="throttle"/>, with the mass flow taken as linear in the throttle.</summary>
+    public static double FlownSeconds(double fullThrottleSeconds, double throttle)
+        => throttle > 0 ? fullThrottleSeconds / throttle : double.PositiveInfinity;
 
     /// <summary>
     /// The first problem of a node that stock AUTO will fly. The RCS checks apply only while RCS holds pitch and yaw,
@@ -122,8 +128,8 @@ internal static class BurnTurnRules
 
     public static string Card(in PointingCheck c) => c.Warning switch
     {
-        PointingWarning.RcsOff => "STOCK AUTO turns the craft to the burn with RCS before the engine lights. With RCS off the craft does not turn, and the burn does not start. Turn RCS on.",
-        PointingWarning.NoRcs => "STOCK AUTO turns the craft to the burn with RCS before the engine lights. No thruster with propellant turns this craft in pitch and yaw, so the burn does not start.",
+        PointingWarning.RcsOff => "STOCK AUTO turns the craft to the burn with RCS before the engine lights. With RCS off the craft does not turn, and the engine lights on time pointed wherever the craft points. Turn RCS on.",
+        PointingWarning.NoRcs => "STOCK AUTO turns the craft to the burn with RCS before the engine lights. No thruster with propellant turns this craft in pitch and yaw, so the engine lights pointed wherever the craft points, or the burn waits.",
         PointingWarning.CannotTurn => "One RCS pulse turns this light craft so fast that STOCK AUTO does not start the turn from rest, and the burn waits. Smaller thrusters or more mass fix it.",
         PointingWarning.StallBand => string.Create(Fmt.Inv, $"From rest less than {Degrees(c.StallEdgeRadians):F0} deg off the burn attitude, STOCK AUTO does not fire the RCS of this craft, and the burn waits until the craft drifts out. Point the craft farther away before the turn starts."),
         PointingWarning.ShortBurn => string.Create(Fmt.Inv, $"The engine needs about {c.MinimumSeconds:F1} s to settle its aim, and STOCK AUTO cannot stretch this burn further. The burn ends with an error in direction, so check the orbit after it."),

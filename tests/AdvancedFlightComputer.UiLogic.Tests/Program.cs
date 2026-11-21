@@ -59,6 +59,7 @@ internal static class Program
         SentenceAndVerbRules();
         LandingLegRules();
         SiteSlopeRules();
+        BurnTurnChecks();
 
         Console.WriteLine(_failures == 0
             ? $"PASS {_checks} checks"
@@ -713,8 +714,8 @@ internal static class Program
         Check("a warp to the turn needs more than the lead and the shortest warp", !BurnTurnRules.WarpWorthIt(90.0) && BurnTurnRules.WarpWorthIt(90.5));
         double deadband = Math.PI / 180.0;
         Check("an axis without RCS authority has no finite stall edge", double.IsPositiveInfinity(BurnTurnRules.StallEdge(deadband, 0.01, 0.0)));
-        double coarse = BurnTurnRules.StallEdge(deadband, 0.3, 0.5);
-        Check("a pulse of 0.3 rad/s leaves a light craft unturned at every attitude", coarse >= Math.PI, coarse.ToString("F3", Fmt.Inv));
+        double coarse = BurnTurnRules.StallEdge(deadband, 0.35, 0.5);
+        Check("a pulse of 0.35 rad/s leaves a light craft unturned at every attitude", coarse >= Math.PI, coarse.ToString("F3", Fmt.Inv));
         double heavy = BurnTurnRules.StallEdge(deadband, 0.0015, 0.05);
         Check("the stall edge of a heavy craft is half the deadband and ten rate bits", Math.Abs(heavy - (0.5 * deadband + 0.015)) < 1e-12);
         Check("no RCS on pitch and yaw warns, and names RCS off when it is off",
@@ -729,11 +730,18 @@ internal static class Program
         PointingCheck brief = BurnTurnRules.Classify(false, true, false, deadband, heavy, 0.4, 1.2);
         Check("a burn shorter than the aim needs warns with both lengths", brief.Warning == PointingWarning.ShortBurn && brief.Caution == "BURN 0.4 s, AIM NEEDS 1.2 s", brief.Caution);
         Check("a node without thrust has no burn warning", BurnTurnRules.Classify(false, true, false, deadband, heavy, 0.0, 1.2).Warning == PointingWarning.None);
-        Check("an unplanned burn on a deep throttle is stretched", double.IsPositiveInfinity(BurnTurnRules.FlownSeconds(0.5, null, 0f))
-            && Math.Abs(BurnTurnRules.FlownSeconds(0.5, null, 0.5f) - 1.0) < 1e-9);
-        Check("a planned throttle under the least throttle flies at the least throttle", Math.Abs(BurnTurnRules.FlownSeconds(1.0, 0.25f, 0.5f) - 2.0) < 1e-9);
+        Check("an unplanned burn may fly down to the least throttle", BurnTurnRules.LowestThrottle(null, 0.1f) == 0.1f
+            && double.IsPositiveInfinity(BurnTurnRules.FlownSeconds(0.5, BurnTurnRules.LowestThrottle(null, 0f))));
+        Check("a planned throttle under the least throttle flies at the least throttle", Math.Abs(BurnTurnRules.LowestThrottle(0.25f, 0.5f) - 0.5) < 1e-9
+            && Math.Abs(BurnTurnRules.FlownSeconds(1.0, 0.5) - 2.0) < 1e-9);
         Check("the shortest burn is the slew plus twice the settle", Math.Abs(BurnTurnRules.MinimumBurnSeconds(2.0, 0.01, 0.3) - (2.0 * Math.Sqrt(0.01) + 0.6)) < 1e-12
             && BurnTurnRules.MinimumBurnSeconds(0.0, 0.01, 0.3) == 0.6);
+        Check("at a quarter throttle the slew takes twice as long", Math.Abs(BurnTurnRules.MinimumBurnSeconds(2.0, 0.01, 0.3, 0.25) - (4.0 * Math.Sqrt(0.01) + 0.6)) < 1e-12);
+        // FlightComputer.ComputeMinimumDurationThrottleCap gives the throttle whose burn is exactly the shortest one.
+        double full = 0.05, slew = 2.0 * Math.Sqrt(0.01), settle = 0.6;
+        double root = 2.0 * full / (slew + Math.Sqrt(slew * slew + 4.0 * settle * full));
+        double cap = root * root;
+        Check("at the stock cap the burn is exactly the shortest one", Math.Abs(BurnTurnRules.FlownSeconds(full, cap) - BurnTurnRules.MinimumBurnSeconds(2.0, 0.01, 0.3, cap)) < 1e-9);
         Check("every warning has a caution and a card", Enum.GetValues<PointingWarning>().All(w => w == PointingWarning.None
             || (new PointingCheck(w, 0.2, 1, 2).Caution.Length > 0 && new PointingCheck(w, 0.2, 1, 2).Card.Length > 0)));
     }

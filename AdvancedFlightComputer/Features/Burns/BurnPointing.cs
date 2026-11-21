@@ -25,11 +25,11 @@ internal static class BurnPointing
         BurnTarget? loaded = StockBurnIdentity.IsLoaded(computer.Burn, node) ? computer.Burn : null;
         double deltaV = loaded != null ? loaded.DeltaVTargetCci.Length() : node.DeltaVVlf.Length();
         float? planned = loaded != null ? loaded.PlannedThrottle : node.PlannedThrottle;
-        double burnSeconds = BurnTurnRules.FlownSeconds(FullThrottleSeconds(computer, deltaV), planned, computer.ActiveEnginePerformanceMax.MinThrottle);
-        return Check(computer, burnSeconds);
+        double throttle = BurnTurnRules.LowestThrottle(planned, computer.ActiveEnginePerformanceMax.MinThrottle);
+        return Check(computer, BurnTurnRules.FlownSeconds(FullThrottleSeconds(computer, deltaV), throttle), throttle);
     }
 
-    public static PointingCheck Check(FlightComputer computer, double burnSeconds)
+    public static PointingCheck Check(FlightComputer computer, double burnSeconds, double throttle)
     {
         // Before ignition FlightComputer.UpdateTvcParams gives an unlit engine no torque, so
         // FlightComputer.UpdateActiveControlSystems leaves pitch and yaw to RCS or to nothing.
@@ -38,7 +38,7 @@ internal static class BurnPointing
         bool gimbalSteers = pitch == AttitudeControlSystem.Tvc || yaw == AttitudeControlSystem.Tvc;
         bool rcs = pitch == AttitudeControlSystem.Rcs && yaw == AttitudeControlSystem.Rcs;
         return BurnTurnRules.Classify(gimbalSteers, rcs, computer.RCSMode != FlightComputerRCSMode.Enabled, computer.AngleDeadband,
-            RestingStallEdge(computer), burnSeconds, MinimumBurnSeconds(computer));
+            RestingStallEdge(computer), burnSeconds, MinimumBurnSeconds(computer, throttle));
     }
 
     /// <summary>The largest pitch or yaw error, in radians, at which stock leaves a craft at rest unturned toward a burn attitude.</summary>
@@ -47,17 +47,27 @@ internal static class BurnPointing
             BurnTurnRules.StallEdge(computer.AngleDeadband, computer.RateBit.Z, computer.RcsTorqueAuthority.Z));
 
     /// <summary>
-    /// The full-throttle burn length below which FlightComputer.SolveMinimumDurationThrottleCap lowers the throttle so that
-    /// the engine can steer out the pointing error before cutoff. TvcTorqueAuthorityMax is set from the maximum thrust of
-    /// the gimbals, so it holds before ignition too (FlightComputer.UpdateTvcParams).
+    /// The burn length at <paramref name="throttle"/> below which FlightComputer.SolveMinimumDurationThrottleCap lowers the
+    /// throttle so that the engine can steer out the pointing error before cutoff. TvcTorqueAuthorityMax is set from the
+    /// maximum thrust of the gimbals, so it holds before ignition too (FlightComputer.UpdateTvcParams).
     /// </summary>
-    public static double MinimumBurnSeconds(FlightComputer computer)
+    public static double MinimumBurnSeconds(FlightComputer computer, double throttle = 1.0)
     {
         float authority = MathF.Min(computer.TvcTorqueAuthorityMax.Y, computer.TvcTorqueAuthorityMax.Z);
         float frequency = MathF.Min(computer.TvcNaturalFrequency.Y, computer.TvcNaturalFrequency.Z);
-        double pointingError = MathF.Sqrt(2f) * computer.AngleDeadband;
-        double settle = FlightComputer.ComputeTvcTrackSettleDuration(GimbalControlPeriod, authority, frequency, pointingError, GimbalSettleTolerance);
-        return BurnTurnRules.MinimumBurnSeconds(authority, pointingError, settle);
+        float pointingError = MathF.Sqrt(2f) * computer.AngleDeadband;
+        return BurnTurnRules.MinimumBurnSeconds(authority, pointingError, SettleSeconds(authority, frequency, pointingError), throttle);
+    }
+
+    // FlightComputer.ComputeTvcTrackSettleDuration solves a Riccati equation, and the footer asks every frame.
+    private static (float Authority, float Frequency, float Error, double Seconds) _settle = (float.NaN, float.NaN, float.NaN, 0.0);
+
+    private static double SettleSeconds(float authority, float frequency, float pointingError)
+    {
+        if (_settle.Authority != authority || _settle.Frequency != frequency || _settle.Error != pointingError)
+            _settle = (authority, frequency, pointingError,
+                FlightComputer.ComputeTvcTrackSettleDuration(GimbalControlPeriod, authority, frequency, pointingError, GimbalSettleTolerance));
+        return _settle.Seconds;
     }
 
     // The same rocket equation as FlightComputer.ComputeBurnDuration, which is internal.
