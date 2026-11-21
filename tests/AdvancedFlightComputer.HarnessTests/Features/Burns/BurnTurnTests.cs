@@ -1,8 +1,11 @@
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Burns;
+using AdvancedFlightComputer.Features.Ui;
 using AdvancedFlightComputer.Features.Ui.Logic;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
+using HarmonyLib;
 using HeadlessHarness.Harness;
 using KSA;
 
@@ -58,8 +61,11 @@ public sealed class BurnTurnWarpTest : AfcTest
         Vehicle? prior = Program.ControlledVehicle;
         Vehicle probe = BurnTurnSupport.Spawn(t, home, LightProbeFixture.FineRcs, "HarnessTurnWarpProbe");
         SimDriver driver = t.Session.CreateDriver();
+        // The harness never runs Mod.OnFullyLoaded, so the test applies the solver postfix that runs TurnWarp.Guard itself.
+        Harmony harmony = new("com.maxi.afc.harnesstests.turn-warp");
         try
         {
+            SharedVehicleHooks.ApplyPatches(harmony);
             Universe.AutoWarpStop(resetSimulationSpeed: true);
             TurnWarp.Reset();
             Program.ControlledVehicle = probe;
@@ -102,9 +108,11 @@ public sealed class BurnTurnWarpTest : AfcTest
             TurnWarp.Start(probe);
             driver.Step(BurnTurnSupport.StepDt);
             t.Check("a step with the node in place keeps the warp", TurnWarp.Running && TurnWarp.RunningFor(probe));
-            fc.RemoveBurn(fc.BurnPlan.FindFirstExecutableBurn()!);
+            // The deletion of the head drawer and the footer, drained by InputEvents.ApplyInputEvents at the next step.
+            BurnModeInput.DeleteNode(probe, fc.BurnPlan.FindFirstExecutableBurn()!);
             driver.Step(BurnTurnSupport.StepDt);
-            t.Check("removing the node stops the warp at the next step", !Universe.IsAutoWarpActive && !TurnWarp.Running);
+            t.Check("removing the node stops the warp at the next step", !Universe.IsAutoWarpActive && !TurnWarp.Running,
+                $"warp {Universe.AutoWarpTime?.Seconds():F1}, owned {TurnWarp.Running}, burn loaded {fc.Burn != null}, nodes {fc.BurnPlan.BurnCount}");
 
             BurnTurnSupport.AddNode(probe, NodeLead, 20.0);
             driver.Step(BurnTurnSupport.StepDt, 2);
@@ -138,6 +146,7 @@ public sealed class BurnTurnWarpTest : AfcTest
         }
         finally
         {
+            harmony.UnpatchAll(harmony.Id);
             TurnWarp.Cancel();
             if (Universe.IsAutoWarpActive)
                 Universe.AutoWarpStop(resetSimulationSpeed: true);
