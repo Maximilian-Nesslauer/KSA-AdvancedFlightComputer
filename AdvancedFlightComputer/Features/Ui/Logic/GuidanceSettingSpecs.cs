@@ -295,8 +295,8 @@ internal static class GuidanceSettingSpecs
         "Angle of attack from nose-first: the trim angle nearest this where a Mach row has several, and the angle flown where it has none.");
     public static readonly SettingSpec OrbitalEntryAoaMinDeg = new("OrbitalEntryAoaMinDeg", "TRIM AoA MIN", "deg", P, 40.0, 0.0, 180.0, "%.0f",
         "Lowest pitch-trim angle of attack the schedule accepts.");
-    public static readonly SettingSpec OrbitalEntryAoaMaxDeg = new("OrbitalEntryAoaMaxDeg", "TRIM AoA MAX", "deg", P, 90.0, 0.0, 180.0, "%.0f",
-        "Highest pitch-trim angle of attack the schedule accepts.");
+    public static readonly SettingSpec OrbitalEntryAoaMaxDeg = new("OrbitalEntryAoaMaxDeg", "TRIM AoA MAX", "deg", P, 70.0, 0.0, 180.0, "%.0f",
+        "Highest angle of attack the schedule flies: towards 90 deg a belly-flop has almost no lift left, and so no crossrange.");
     public static readonly SettingSpec OrbitalEntryBellyAxis = new("OrbitalEntryBellyAxis", "BELLY AXIS", "", P, 0.0, 0.0, 5.0, "%.0f",
         "Which body axis faces the air belly first: 0 the craft's own belly (-Z, down on the navball at roll 0), 1 -Z, 2 +Z, 3 -Y, 4 +Y, 5 the best of the four by the sweep.");
     public static readonly SettingSpec OrbitalEntryResolveS = new("OrbitalEntryResolveS", "RE-SOLVE EVERY", "s", P, 2.0, 0.25, 60.0, "%.2f",

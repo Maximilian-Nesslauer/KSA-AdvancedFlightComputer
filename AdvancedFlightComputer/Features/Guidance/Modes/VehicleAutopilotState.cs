@@ -1800,7 +1800,7 @@ public sealed class VehicleAutopilotState
     /// <summary>Preferred (and fallback) angle of attack from nose-first, deg, and the band a trim must lie in.</summary>
     public double OrbitalEntryAoaDeg = 60.0;
     public double OrbitalEntryAoaMinDeg = 40.0;
-    public double OrbitalEntryAoaMaxDeg = 90.0;
+    public double OrbitalEntryAoaMaxDeg = 70.0;
     /// <summary>Which body axis is the belly: 0 the craft's own (-Z, the navball's down at roll 0), then -Z, +Z, -Y, +Y, and 5 the best of the four by the sweep.</summary>
     public double OrbitalEntryBellyAxis = 0.0;
     /// <summary>Seconds between re-solves.</summary>

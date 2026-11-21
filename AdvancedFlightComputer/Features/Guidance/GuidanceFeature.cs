@@ -58,6 +58,8 @@ internal static class GuidanceFeature
         harmony.Patch(AccessTools.Method(typeof(Vehicle), nameof(Vehicle.UpdateAfterPartTreeModification), Type.EmptyTypes),
             postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnPartTreeModified)));
         GuidanceWindow.ApplyProbePowerWarpPatch(harmony);
+        // The editor's belly-flop balance window draws from the vehicle editor's own UI pass.
+        harmony.CreateClassProcessor(typeof(EditorBalanceWindow)).Patch();
 
         SaveLoadObserver.SaveLoaded += OnSaveLoaded;
         SaveLoadObserver.SaveWritten += CraftSettings.OnSaveWritten;
