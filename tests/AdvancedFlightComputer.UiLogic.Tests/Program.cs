@@ -708,6 +708,36 @@ internal static class Program
         Check("the note names the time", PageText.LegsStowedAuto(6.0) == "LEGS STOWED. THE LANDING DEPLOYS THEM AT 6.0 s TO GO.");
     }
 
+    private static void BurnTurnChecks()
+    {
+        Check("a warp to the turn needs more than the lead and the shortest warp", !BurnTurnRules.WarpWorthIt(90.0) && BurnTurnRules.WarpWorthIt(90.5));
+        double deadband = Math.PI / 180.0;
+        Check("an axis without RCS authority has no finite stall edge", double.IsPositiveInfinity(BurnTurnRules.StallEdge(deadband, 0.01, 0.0)));
+        double coarse = BurnTurnRules.StallEdge(deadband, 0.3, 0.5);
+        Check("a pulse of 0.3 rad/s leaves a light craft unturned at every attitude", coarse >= Math.PI, coarse.ToString("F3", Fmt.Inv));
+        double heavy = BurnTurnRules.StallEdge(deadband, 0.0015, 0.05);
+        Check("the stall edge of a heavy craft is half the deadband and ten rate bits", Math.Abs(heavy - (0.5 * deadband + 0.015)) < 1e-12);
+        Check("no RCS on pitch and yaw warns, and names RCS off when it is off",
+            BurnTurnRules.Classify(false, false, true, deadband, 0.0, 10.0, 1.0).Warning == PointingWarning.RcsOff
+            && BurnTurnRules.Classify(false, false, false, deadband, 0.0, 10.0, 1.0).Warning == PointingWarning.NoRcs);
+        Check("a lit engine steers with its gimbal, so the RCS checks are left out",
+            BurnTurnRules.Classify(true, false, false, deadband, double.PositiveInfinity, 10.0, 1.0).Warning == PointingWarning.None);
+        Check("a stall edge of half a turn cannot turn", BurnTurnRules.Classify(false, true, false, deadband, Math.PI, 10.0, 1.0).Warning == PointingWarning.CannotTurn);
+        Check("a narrow stall band is left out", BurnTurnRules.Classify(false, true, false, deadband, heavy, 10.0, 1.0).Warning == PointingWarning.None);
+        PointingCheck band = BurnTurnRules.Classify(false, true, false, deadband, 0.3, 10.0, 1.0);
+        Check("a wide stall band warns with its size", band.Warning == PointingWarning.StallBand && band.Caution.Contains("17 DEG"), band.Caution);
+        PointingCheck brief = BurnTurnRules.Classify(false, true, false, deadband, heavy, 0.4, 1.2);
+        Check("a burn shorter than the aim needs warns with both lengths", brief.Warning == PointingWarning.ShortBurn && brief.Caution == "BURN 0.4 s, AIM NEEDS 1.2 s", brief.Caution);
+        Check("a node without thrust has no burn warning", BurnTurnRules.Classify(false, true, false, deadband, heavy, 0.0, 1.2).Warning == PointingWarning.None);
+        Check("an unplanned burn on a deep throttle is stretched", double.IsPositiveInfinity(BurnTurnRules.FlownSeconds(0.5, null, 0f))
+            && Math.Abs(BurnTurnRules.FlownSeconds(0.5, null, 0.5f) - 1.0) < 1e-9);
+        Check("a planned throttle under the least throttle flies at the least throttle", Math.Abs(BurnTurnRules.FlownSeconds(1.0, 0.25f, 0.5f) - 2.0) < 1e-9);
+        Check("the shortest burn is the slew plus twice the settle", Math.Abs(BurnTurnRules.MinimumBurnSeconds(2.0, 0.01, 0.3) - (2.0 * Math.Sqrt(0.01) + 0.6)) < 1e-12
+            && BurnTurnRules.MinimumBurnSeconds(0.0, 0.01, 0.3) == 0.6);
+        Check("every warning has a caution and a card", Enum.GetValues<PointingWarning>().All(w => w == PointingWarning.None
+            || (new PointingCheck(w, 0.2, 1, 2).Caution.Length > 0 && new PointingCheck(w, 0.2, 1, 2).Card.Length > 0)));
+    }
+
     private static void SiteSlopeRules()
     {
         Check("a slope under the tip-over limit fits", SiteSlopeText.Verdict(4.0, 9.0, 30.0) == SlopeVerdict.Fits);
