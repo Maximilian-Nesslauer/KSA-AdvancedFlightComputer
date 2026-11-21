@@ -212,6 +212,12 @@ public sealed class VehicleAutopilotState
     public double AscentAttitudeDamping = 1.0;
     public double AscentRateFilterS = 0.05;
 
+    /// <summary>The fastest the ascent's controller turns the roll onto its target, deg/s (AttitudeController.Settings.RollCaptureRateDegS): the roll program's heads-down roll, up to 180 deg, inside its 10 s. The glide's 5 deg/s took 23 s for 111 deg (harness, 2026-11-21).</summary>
+    public double AscentRollRateDegS = 30.0;
+
+    /// <summary>The ascent's roll gain, rad/s (AttitudeController.Settings.RollBandwidthRadS): softer than its pointing's, since the roll is the axis the gimbals give least of and slew to give.</summary>
+    public double AscentRollBandwidthRadS = 1.0;
+
     /// <summary>The craft's nose-first aero sweep the ascent's controller reads its feedforward from (KsaAeroSweep.Result.NoseBodyMoment): the plan's, then one swept again whenever the craft's aero mesh changes (staging), on its own thread (AscentFlightAeroJob). Used only while its mesh hash is the craft's.</summary>
     internal KsaAeroSweep.Result AscentFlightAero;
     internal KsaAeroSweep.Job AscentFlightAeroJob;

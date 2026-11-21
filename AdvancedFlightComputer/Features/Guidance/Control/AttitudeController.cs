@@ -16,7 +16,9 @@ using AdvancedFlightComputer.Guidance.Numerics.Flight;
 ///
 /// THE LAW, in KSA body axes:
 ///     tau = I kd (w_capture + (w_target - w)_filtered)  +  I ki wn^2 integral(theta)  +  w x I w  -  M_air,   kd = 2 zeta wn
-///  - w_capture = (wn / 2 zeta) theta, capped at CaptureRateDegS: unsaturated it is the PD's kp theta; a large error (the glide's first step, 73 deg off in roll on 2026-11-20) is closed at a set rate rather than at the RCS's full thrust.
+///  - w_capture = (wn / 2 zeta) theta, capped at CaptureRateDegS: unsaturated it is the PD's kp theta; a large error (the glide's first step, 73 deg off in roll on 2026-11-20) is closed at a set rate rather than at the RCS's full thrust. The roll has its own cap where RollCaptureRateDegS is set: an ascent's roll program turns up to 180 deg while it climbs straight up, and at 5 deg/s it was still 62 deg off when the roll program gave up after 10 s, and only finished 13 s into the pitch-over (harness, 2026-11-21; the stock hold rolled at 17-34 deg/s).
+///    That cap is also held to what the craft can stop in the roll left, sqrt(2 a theta) at half the roll acceleration its lit gimbals and RCS can give (RollAuthority), and the roll may have its own, softer gain (RollBandwidthRadS): at 30 deg/s with neither, the solids stack rolled through its target and never settled.
+///  - theta's roll part is the true roll angle about the roll axis, to 180 deg either way: the sum below gives the sine of the angle, which falls back to nothing as a roll error nears 180 deg, the heads-down roll from a pad facing the other way.
 ///  - (w_target - w)_filtered: the rate error through a first-order lag of RateFilterS. On the flown booster the rate error read 0.5 deg/s of wobble, about 10 kN m of demand jittering every step through its inertia, which the fins chased (2026-11-20).
 ///  - integral(theta): the error integrated while within IntegralWithinDeg, capped at IntegralMaxDegS, at ki = IntegralPerS: it learns what the feedforward from the tables misses (17 % of the air's moment on that flight), so the error settles inside the deadband instead of standing at a degree. It keeps acting in the deadband.
 ///  - theta: the small rotation that takes the body onto the target, from their axes; w and w_target the body's rate and the target's turning rate.
@@ -38,7 +40,8 @@ internal static class AttitudeController
     internal readonly record struct Settings(double BandwidthRadS, double Damping, double DeadbandDeg, double RateDeadbandDegS,
                                              double IntegralPerS = 0.1, double CaptureRateDegS = 5.0, double RateFilterS = 0.2,
                                              double IntegralWithinDeg = 3.0, double IntegralMaxDegS = 8.0,
-                                             bool UseSurfaces = true, bool UseGimbals = false, bool RollFree = false)
+                                             bool UseSurfaces = true, bool UseGimbals = false, bool RollFree = false,
+                                             double RollCaptureRateDegS = double.NaN, double RollBandwidthRadS = double.NaN)
     {
         public static readonly Settings Default = new(1.0, 0.8, 0.0, 0.5);
     }
@@ -61,6 +64,9 @@ internal static class AttitudeController
         public double3 Integral;
         /// <summary>The gimbals were given a torque (KsaGimbalControl.SetLsq), so they are handed back when the controller lets go or stops using them.</summary>
         public bool GimbalsOwned;
+        /// <summary>The roll acceleration the lit gimbals and the RCS can give, rad/s^2 (RollAuthority), and when it was measured.</summary>
+        public double RollAccel = double.NaN;
+        public double RollAccelAt = double.NaN;
     }
 
     private static readonly ConditionalWeakTable<Vehicle, Slot> Slots = new();
@@ -101,7 +107,8 @@ internal static class AttitudeController
         double errorDeg = Math.Asin(Math.Min(theta.Length(), 1.0)) * 180.0 / Math.PI;
 
         // Pointing and roll apart (model z, mz, is the roll axis): a craft that starts 90 deg off in roll must not have its pointing starved by it. On the harness booster (2026-11-20) one cap on the whole error vector let a 5 deg pointing error close at 0.3 deg/s while the roll took 18 s.
-        double3 thetaRoll = double3.Dot(theta, mz) * mz, thetaPoint = theta - thetaRoll;
+        double3 thetaPoint = theta - double3.Dot(theta, mz) * mz;
+        double3 thetaRoll = settings.RollFree ? default : RollAngle(targetBody2Cci, cci2Body, mz) * mz;
         double withinRad = settings.IntegralWithinDeg * Math.PI / 180.0;
 
         // The integral, near the target only, each part on its own error, and capped.
@@ -124,12 +131,27 @@ internal static class AttitudeController
             slot.Feedback = errorDeg > settings.DeadbandDeg || rateErrorDegS > 2.0 * settings.RateDeadbandDegS;
 
         double kp = settings.BandwidthRadS * settings.BandwidthRadS, kd = 2.0 * settings.Damping * settings.BandwidthRadS;
+        // The roll's own gains where RollBandwidthRadS is set (an ascent: see Settings).
+        double rollBandwidth = double.IsFinite(settings.RollBandwidthRadS) ? settings.RollBandwidthRadS : settings.BandwidthRadS;
+        double kpRoll = rollBandwidth * rollBandwidth, kdRoll = 2.0 * settings.Damping * rollBandwidth;
         // The capture rate: kp/kd theta, which is the PD's own, capped - pointing and roll each on its own.
         double captureMax = settings.CaptureRateDegS * Math.PI / 180.0;
-        double3 capture = Capped(kd > 0.0 ? kp / kd * thetaPoint : default, captureMax)
-                        + Capped(kd > 0.0 ? kp / kd * thetaRoll : default, captureMax);
-        double3 feedback = slot.Feedback ? Inertia(kd * (capture + rateError), mx, my, mz, ixx, iyy, izz) : default;
-        double3 integral = Inertia(settings.IntegralPerS * kp * slot.Integral, mx, my, mz, ixx, iyy, izz);
+        double rollCaptureMax = captureMax;
+        if (double.IsFinite(settings.RollCaptureRateDegS))
+        {
+            // A fast roll is one the craft can stop: no faster than half its roll acceleration brings to rest in the roll left (RollAuthority). At 30 deg/s with nothing braking it, the solids stack rolled through its target and swung 30-128 deg either side of it for the rest of the solid burn (harness, 2026-11-21).
+            rollCaptureMax = settings.RollCaptureRateDegS * Math.PI / 180.0;
+            double accel = RollAuthority(vehicle, slot, now, mx, my, mz, izz);
+            if (double.IsFinite(accel))
+                rollCaptureMax = Math.Min(rollCaptureMax, Math.Max(Math.Sqrt(2.0 * RollBrakingShare * accel * thetaRoll.Length()), captureMax));
+        }
+        double3 rateRoll = double3.Dot(rateError, mz) * mz, ratePoint = rateError - rateRoll;
+        double3 integralRoll = double3.Dot(slot.Integral, mz) * mz, integralPoint = slot.Integral - integralRoll;
+        double3 capturePoint = Capped(kd > 0.0 ? kp / kd * thetaPoint : default, captureMax);
+        double3 captureRoll = Capped(kdRoll > 0.0 ? kpRoll / kdRoll * thetaRoll : default, rollCaptureMax);
+        double3 capture = capturePoint + captureRoll;
+        double3 feedback = slot.Feedback ? Inertia(kd * (capturePoint + ratePoint) + kdRoll * (captureRoll + rateRoll), mx, my, mz, ixx, iyy, izz) : default;
+        double3 integral = Inertia(settings.IntegralPerS * (kp * integralPoint + kpRoll * integralRoll), mx, my, mz, ixx, iyy, izz);
         double3 gyro = double3.Cross(w, Inertia(w, mx, my, mz, ixx, iyy, izz));
         bool airKnown = TryAirMoment(vehicle, aero, momentLimiterPerPa, out double3 air);
         double3 demand = feedback + integral + gyro - air;
@@ -228,6 +250,45 @@ internal static class AttitudeController
 
     private static double3 Capped(double3 v, double max)
         => max > 0.0 && v.Length() > max ? v * (max / v.Length()) : v;
+
+    /// <summary>The share of the measured roll acceleration a fast roll counts on to stop (RollAuthority): the gimbals slew, and they also hold the pointing.</summary>
+    private const double RollBrakingShare = 0.5;
+
+    /// <summary>How often the roll authority is measured again, s.</summary>
+    private const double RollAuthorityEveryS = 0.5;
+
+    /// <summary>
+    /// The roll acceleration the craft can give now, rad/s^2: the roll torque the lit engines' gimbals deliver asked for far more than they have (KsaGimbalControl.PredictLsq), and the RCS's smaller way round (RcsTorqueAllocator.Characterise), over the inertia about the roll axis. Measured every RollAuthorityEveryS. NaN where there is no inertia.
+    /// </summary>
+    private static double RollAuthority(Vehicle vehicle, Slot slot, double now, double3 mx, double3 my, double3 mz, double izz)
+    {
+        if (double.IsFinite(slot.RollAccelAt) && now - slot.RollAccelAt < RollAuthorityEveryS && now >= slot.RollAccelAt)
+            return slot.RollAccel;
+        slot.RollAccelAt = now;
+        double torque = 0.0;
+        double3 ask = mz * Math.Max(vehicle.TotalMass * 9.81 * 1000.0, 1.0);
+        torque += Math.Max(Math.Min(double3.Dot(KsaGimbalControl.PredictLsq(vehicle, ask, out _), mz),
+                                    -double3.Dot(KsaGimbalControl.PredictLsq(vehicle, -ask, out _), mz)), 0.0);
+        RcsTorqueAllocator rcs = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out _);
+        if (rcs != null)
+            torque += Math.Max(Math.Min(rcs.Characterise(2, 1).MaxTorqueNm, rcs.Characterise(2, -1).MaxTorqueNm), 0.0);
+        slot.RollAccel = izz > 0.0 && double.IsFinite(torque) ? torque / izz : double.NaN;
+        return slot.RollAccel;
+    }
+
+    /// <summary>
+    /// The roll onto the target about the roll axis <paramref name="mz"/> (body coordinates), radians, -pi to pi, signed as theta is: a direction square to the axis against the target's same direction, both taken square to it. Exact where the pointing is on; the sum in Step gives only its sine.
+    /// </summary>
+    private static double RollAngle(doubleQuat targetBody2Cci, doubleQuat cci2Body, double3 mz)
+    {
+        double3 a = Math.Abs(mz.X) < 0.6 ? new double3(1, 0, 0) : new double3(0, 1, 0);
+        double3 p = double3.Normalize(double3.Cross(mz, a));
+        double3 t = p.Transform(targetBody2Cci).Transform(cci2Body);
+        t -= double3.Dot(t, mz) * mz;
+        if (!(t.Length() > 1e-9))
+            return 0.0;
+        return Math.Atan2(double3.Dot(double3.Cross(p, t), mz), double3.Dot(p, t));
+    }
 
     /// <summary>Roll steps searched round the axis, degrees.</summary>
     private const double RollSearchStepDeg = 5.0;

@@ -2110,7 +2110,7 @@ public static partial class GuidanceWindow
             RollFree = ascent && !AscentHoldsRoll(vehicle, parent),
         };
         if (ascent)
-            settings = settings with { RateFilterS = _s.AscentRateFilterS };
+            settings = settings with { RateFilterS = _s.AscentRateFilterS, RollCaptureRateDegS = _s.AscentRollRateDegS, RollBandwidthRadS = _s.AscentRollBandwidthRadS };
         KsaAeroSweep.Result aero = _s.Aero;
         if (ascent)
         {
