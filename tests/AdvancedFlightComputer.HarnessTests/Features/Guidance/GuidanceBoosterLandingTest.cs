@@ -128,7 +128,8 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
             Vehicle stack;
             try
             {
-                stack = Spawn(saveId, t.System, home, "HarnessBoosterLanding", orbit, body2Cce, saveId != Save);
+                // A craft design (a save with parts only, such as an editor build) needs its tanks assigned and filled on spawn. AFC_LANDING_FRESH_DESIGN=1 asks for that; the default save and AFC_LANDING_SAVE keep their saved tanks.
+                stack = Spawn(saveId, t.System, home, "HarnessBoosterLanding", orbit, body2Cce, Env("AFC_LANDING_FRESH_DESIGN", 0.0) > 0.0);
             }
             catch (InvalidOperationException e)
             {
