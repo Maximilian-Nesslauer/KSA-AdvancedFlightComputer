@@ -20,6 +20,9 @@ public sealed class OrbitalEntryState
     /// <summary>The roll reference the attitude command flies with: body +y in CCI, from the bank and the belly axis.</summary>
     public double3 RollRefCci;
 
+    /// <summary>Last step's attitude target (nose, roll reference) and the target's turning rate, CCI rad/s, filtered: the attitude controller's rate feedforward.</summary>
+    public double3 PrevNoseCci, PrevRollRefCci, TargetRateCci;
+
     // ---- aero ----
     public KsaAeroSweep.Job AeroJob;
     /// <summary>The second sweep: the belly-first body and surface tables on the side the trim chose (KsaAeroSweep.TryStart's bellySide). Until it lands the attitude flies on the first sweep's tables, with no surfaces belly first.</summary>
@@ -129,5 +132,6 @@ public sealed class OrbitalEntryState
         RollRefCci = default;
         NextTraceAt = double.NegativeInfinity;
         TrajLayout = null;
+        PrevNoseCci = PrevRollRefCci = TargetRateCci = default;
     }
 }

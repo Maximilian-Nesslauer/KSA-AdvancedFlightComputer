@@ -2209,6 +2209,12 @@ public static partial class GuidanceWindow
         };
         if (ascent)
             settings = settings with { RateFilterS = _s.AscentRateFilterS, RollCaptureRateDegS = _s.AscentRollRateDegS, RollBandwidthRadS = _s.AscentRollBandwidthRadS };
+        // ORBITAL ENTRY catches up at 10 deg/s or its tracker's roll rate, pointing and roll alike: a reversal's slew is fed forward as the target's rate, and the glide's 5 deg/s capture left no margin to catch up once it fell behind. The bank turns about the airflow, not the nose: at 60 deg AoA most of it is the body's yaw, so the pointing cap counts as much as the roll's.
+        else if (OrbitalEntryLive)
+        {
+            double entryCapture = Math.Max(10.0, _s.OrbitalEntryRollRateDegS);
+            settings = settings with { CaptureRateDegS = entryCapture, RollCaptureRateDegS = entryCapture };
+        }
         KsaAeroSweep.Result aero = OrbitalEntryLive ? _s.OrbitalEntry.Aero : _s.Aero;
         if (ascent)
         {

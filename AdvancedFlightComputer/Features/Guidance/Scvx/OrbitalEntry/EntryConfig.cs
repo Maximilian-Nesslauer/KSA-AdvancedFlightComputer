@@ -33,7 +33,7 @@ public sealed class EntryConfig
     public double OverbankDeg { get; set; } = 120.0;
 
     /// <summary>Roll rate the vehicle can sustain, deg/s. Sets the plan's rate limit and the tracker's slew.</summary>
-    public double RollRateDegS { get; set; } = 5.0;
+    public double RollRateDegS { get; set; } = 10.0;
 
     /// <summary>Share of the roll rate the plan may use, so reversals still fit.</summary>
     public double PlanRollRateShare { get; set; } = 0.5;

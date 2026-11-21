@@ -113,9 +113,7 @@ public static partial class GuidanceWindow
             float plotsH = plotsBottom - plotsTop;
             if (plotsH >= 140f * s)
             {
-                float trajH = (plotsH - pad) * 0.55f;
-                DrawTrajPlot(dl, st, plan, new float2(min.X, plotsTop), new float2(max.X, plotsTop + trajH), s);
-                DrawDragPlot(dl, st, plan, new float2(min.X, plotsTop + trajH + pad), new float2(max.X, plotsBottom), s);
+                DrawTrajPlot(dl, st, plan, new float2(min.X, plotsTop), new float2(max.X, plotsBottom), s);
             }
             else
             {
@@ -241,7 +239,6 @@ public static partial class GuidanceWindow
         public readonly double[] Edges = new double[TrajPages + 1];   // the pages' speed bands, fast to slow
         public readonly double[] Top = new double[TrajPages], Bottom = new double[TrajPages];
         public readonly double[] XMin = new double[TrajPages], XMax = new double[TrajPages];
-        public double DragTop, DragFast, DragSlow;
 
         public int PageAt(double speedMs)
         {
@@ -298,15 +295,6 @@ public static partial class GuidanceWindow
             L.XMax[page] = xMax;
         }
 
-        double dMax = 5.0;
-        for (int k = 0; k < plan.Count; k++)
-        {
-            dMax = Math.Max(dMax, Finite(plan.DragMs2[k], 0));
-            dMax = Math.Max(dMax, Math.Min(Finite(plan.DragMaxMs2[k], 0), 2.0 * Math.Max(Finite(plan.DragMs2[k], 0), 5.0)));
-        }
-        L.DragTop = NiceCeiling(dMax * 1.25);
-        L.DragFast = L.Top[0];
-        L.DragSlow = L.Bottom[TrajPages - 1];
         return L;
     }
 
@@ -341,7 +329,7 @@ public static partial class GuidanceWindow
     {
         float left = 50f * s, bottom = 16f * s, top = ImGui.GetFontSize() + 4f * s;
         float2 p0 = new float2(a.X + left, a.Y + top), p1 = new float2(b.X - 4f * s, b.Y - bottom);
-        dl.AddText(new float2(a.X + left, a.Y), Palette.Dim.Solid, "RANGE TO GO (km) vs SPEED (km/s)");
+        dl.AddText(new float2(a.X + left, a.Y), Palette.Dim.Solid, "RANGE TO GO (km) vs SPEED (km/s)  ·  BOX: DRAG ERROR");
         if (p1.Y - p0.Y < 30f * s)
             return;
         Frame(dl, p0, p1);
@@ -398,51 +386,35 @@ public static partial class GuidanceWindow
                 Bug(dl, at, 4f * s, Palette.Flown.Solid, filled: false);
         }
         if (st.SpeedMs > 0 && area.Map(st.RangeM, st.SpeedMs, out float2 now))
+        {
+            DragErrorBox(dl, st, now, p0, p1, s);
             Bug(dl, now, 6f * s, Palette.Target.Solid, filled: true);
+        }
     }
 
-    // ---------------------------------------------------------------- drag against speed
+    /// <summary>A tenth of the drag off its reference moves the guidance box a tenth of the plot's width.</summary>
+    private const float DragBoxWidthPerError = 1.0f;
 
-    private static void DrawDragPlot(ImDrawListPtr dl, OrbitalEntryState st, EntryPlan plan, float2 a, float2 b, float s)
+    /// <summary>
+    /// The Shuttle's guidance box: a square at the bug's height, set off sideways by the drag error, so the bug sits in it when the drag is on its reference. Drag above the reference is the high-energy (short) side, left on this page, so the bug then sits left of the box; below it, right. The offset is the error as a share of the reference drag (floored at 1 m/s²), a tenth of the width per tenth of the drag, pegged at the frame.
+    /// </summary>
+    private static void DragErrorBox(ImDrawListPtr dl, OrbitalEntryState st, float2 bug, float2 p0, float2 p1, float s)
     {
-        float left = 50f * s, bottom = 16f * s, top = ImGui.GetFontSize() + 4f * s, scaleW = 14f * s;
-        float2 p0 = new float2(a.X + left, a.Y + top), p1 = new float2(b.X - scaleW, b.Y - bottom);
-        dl.AddText(new float2(a.X + left, a.Y), Palette.Dim.Solid, "DRAG (m/s²) vs SPEED (km/s): REF, ACTUAL, CORRIDOR");
-        if (p1.Y - p0.Y < 30f * s)
+        double dRef = st.Last.DragRefMs2, d = st.DragMs2;
+        if (!(dRef > 0) || !double.IsFinite(d) || st.Last.Phase != EntryTracker.Phase.Tracking)
             return;
-        Frame(dl, p0, p1);
-
-        // The whole entry on the fixed axes the range plot's pages are cut from; the drag and the bug peg at the top if they pass it.
-        TrajLayout L = LayoutFor(st, plan);
-        double vMax, vMin, dMax;
-        if (L != null) { vMax = L.DragFast; vMin = L.DragSlow; dMax = L.DragTop; }
-        else { vMax = Math.Max(Finite(st.SpeedMs, 0), 1000.0) * 1.02; vMin = 0; dMax = NiceCeiling(Math.Max(Finite(st.DragMs2, 0), 5.0) * 1.25); }
-        // Speed falls to the right, as the craft flies: the x axis runs from vMax at the left to vMin at the right.
-        var area = new PlotArea(p0, p1, vMax, vMin, 0, dMax);
-        AxisLabels(dl, p0, p1, s, $"{vMin / 1000:F1}", $"{vMax / 1000:F1}", $"{dMax:F0}", "0");
-
-        if (plan != null)
-        {
-            for (int k = 0; k < plan.Count - 1; k++)
-            {
-                area.ClippedLine(dl, plan.SpeedMs[k], plan.DragMaxMs2[k], plan.SpeedMs[k + 1], plan.DragMaxMs2[k + 1], Palette.Bad.Solid, 1.5f * s);
-                area.ClippedLine(dl, plan.SpeedMs[k], plan.DragMinMs2[k], plan.SpeedMs[k + 1], plan.DragMinMs2[k + 1], Palette.Text.Solid, 1.5f * s);
-                area.ClippedLine(dl, plan.SpeedMs[k], plan.DragMs2[k], plan.SpeedMs[k + 1], plan.DragMs2[k + 1], Palette.Plan.Solid, 2.5f * s);
-            }
-        }
-        var tr = st.Trace;
-        for (int i = 1; i < tr.Count; i++)
-            area.Line(dl, tr[i - 1].SpeedMs, tr[i - 1].DragMs2, tr[i].SpeedMs, tr[i].DragMs2, Palette.Flown.Solid, 2f * s);
-
-        // The drag scale, as on the Shuttle's page: the arrow at the right edge is the reference drag, the triangle the drag now.
-        if (st.Last.DragRefMs2 > 0 && area.Map(vMin, st.Last.DragRefMs2, out float2 refAt))
-        {
-            float sx = p1.X + 2f * s;
-            dl.AddLine(new float2(sx, refAt.Y), new float2(sx + 8f * s, refAt.Y - 4f * s), Palette.Plan.Solid, 2f * s);
-            dl.AddLine(new float2(sx, refAt.Y), new float2(sx + 8f * s, refAt.Y + 4f * s), Palette.Plan.Solid, 2f * s);
-        }
-        if (st.SpeedMs > 0 && area.Map(st.SpeedMs, st.DragMs2, out float2 now))
-            Bug(dl, now, 5f * s, Palette.Target.Solid, filled: true);
+        double share = (d - dRef) / Math.Max(dRef, 1.0);
+        float half = 7f * s;
+        float x = bug.X + (float)(share * DragBoxWidthPerError * (p1.X - p0.X));
+        x = Math.Clamp(x, p0.X + half, p1.X - half);
+        var c = Palette.Plan.Solid;
+        dl.AddRect(new float2(x - half, bug.Y - half), new float2(x + half, bug.Y + half), c, 0f, ImDrawFlags.None, 1.5f * s);
+        if (Math.Abs(x - bug.X) > half)
+            dl.AddLine(new float2(bug.X, bug.Y), new float2(x + (x > bug.X ? -half : half), bug.Y), c, 1f * s);
+        string label = FormattableString.Invariant($"{d - dRef:+0.0;-0.0}");
+        float tw = ImGui.CalcTextSize(label).X;
+        float lx = x > bug.X ? Math.Min(x + half + 3f * s, p1.X - tw) : Math.Max(x - half - 3f * s - tw, p0.X);
+        dl.AddText(new float2(lx, bug.Y - ImGui.GetFontSize() * 0.5f), c, label);
     }
 
     // ---------------------------------------------------------------- numbers
@@ -452,7 +424,7 @@ public static partial class GuidanceWindow
         var o = st.Last;
         return new[]
         {
-            FormattableString.Invariant($"DRAG {st.DragMs2:F1}  REF {o.DragRefMs2:F1} m/s²"),
+            FormattableString.Invariant($"DRAG {st.DragMs2:F1}  REF {o.DragRefMs2:F1}  ERR {st.DragMs2 - o.DragRefMs2:+0.0;-0.0} m/s²"),
             FormattableString.Invariant($"HDOT {st.HdotMs:F0}  REF {o.HdotRefMs:F0} m/s"),
             FormattableString.Invariant($"BANK {(o.BankDeg >= 0 ? "R" : "L")}{Math.Abs(o.BankDeg):F0}  PLAN {o.BankRefDeg:F0}°{(o.Overbanked ? "  OVERBANK" : "")}"),
             FormattableString.Invariant($"AoA {st.AlphaFlownDeg:F0}° (ASKED {st.AlphaDeg:F0})  MACH {st.Mach:F1}"),

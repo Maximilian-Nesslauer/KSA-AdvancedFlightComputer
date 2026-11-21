@@ -361,7 +361,9 @@ public static partial class GuidanceWindow
             _ => belly,                           // +Y
         };
         _s.CommandDir = nose;
-        _s.CommandRate = double3.Zero;
+        // The target's own turning rate, fed forward: the bank slews at the roll rate, the AoA follows its Mach schedule and the airflow turns with the path, and with no rate the controller only learns of each after the error has built (a reversal lagged at a zero rate target until 2026-11-21).
+        st.TargetRateCci = TargetRate(st, nose, st.RollRefCci, dt);
+        _s.CommandRate = st.TargetRateCci;
         _s.HasCommand = true;
 
         // ---- what the craft flies, off its own body axes ----
@@ -469,6 +471,35 @@ public static partial class GuidanceWindow
     {
         var (omega, latitude, heading) = RotationAt(parent, r, vRel);
         return model.WithRotation(omega, latitude, heading);
+    }
+
+    /// <summary>The time over which the target's turning rate is smoothed, s: a step's jitter in the measured path should not reach the fins.</summary>
+    private const double TargetRateSmoothS = 0.3;
+
+    /// <summary>
+    /// The attitude target's angular velocity, CCI rad/s, from this step's target frame against the last one's: for an orthonormal frame e_i turned by R, sum e_i x R e_i = 2 sin(theta) k. Smoothed over TargetRateSmoothS. Zero on the first step and after a jump of more than 10 deg in a step (a re-engage or a change of belly).
+    /// </summary>
+    private static double3 TargetRate(OrbitalEntryState st, double3 nose, double3 rollRef, double dt)
+    {
+        if (!(dt > 1e-6))
+            return st.TargetRateCci;   // no time has passed: the same rate, and the same frame to difference from
+        double3 x1 = nose.NormalizeOrZero();
+        double3 y1 = (rollRef - double3.Dot(rollRef, x1) * x1).NormalizeOrZero();
+        double3 x0 = st.PrevNoseCci, r0 = st.PrevRollRefCci;
+        st.PrevNoseCci = x1;
+        st.PrevRollRefCci = y1;
+        if (x0.Length() < 0.5 || r0.Length() < 0.5 || x1.Length() < 0.5 || y1.Length() < 0.5)
+            return st.TargetRateCci = default;
+        double3 y0 = (r0 - double3.Dot(r0, x0) * x0).NormalizeOrZero();
+        double3 z0 = double3.Cross(x0, y0), z1 = double3.Cross(x1, y1);
+        double3 v = double3.Cross(x0, x1) + double3.Cross(y0, y1) + double3.Cross(z0, z1);
+        double sinTheta = Math.Clamp(0.5 * v.Length(), 0.0, 1.0);
+        double theta = Math.Asin(sinTheta);
+        if (theta > 10.0 * Math.PI / 180.0)
+            return st.TargetRateCci = default;
+        double3 raw = sinTheta > 1e-12 ? double3.Normalize(v) * (theta / dt) : default;
+        double k = Math.Clamp(dt / TargetRateSmoothS, 0.0, 1.0);
+        return st.TargetRateCci + k * (raw - st.TargetRateCci);
     }
 
     /// <summary>The body's rotation, and the latitude and heading of a state (position, CCI; velocity over the ground, CCI), rad.</summary>
