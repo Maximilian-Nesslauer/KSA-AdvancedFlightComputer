@@ -1695,6 +1695,11 @@ public sealed class VehicleAutopilotState
     public double3 ThreeDofCommandLocal;
     public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Plan3Dof ThreeDofPlan;
 
+    /// <summary>
+    /// The glide plan of a guidance entry guidance dropped (GuidanceWindow.Drop3Dof), flown open loop while the cold solve that replaces it runs, until this sim time: its ignition lock, which a plan from a dropped guidance must not reach. NaN while ThreeDofPlan is the live guidance's own.
+    /// </summary>
+    internal double ThreeDofKeptPlanUntil = double.NaN;
+
     /// <summary>The same command in CCI, before the attitude trim: what the low-pass and the slew guard step from. CommandDir is this plus the trim, which is what the flight computer points. Zero until entry guidance has sent one.</summary>
     public double3 ThreeDofPlanCommandCci;
 

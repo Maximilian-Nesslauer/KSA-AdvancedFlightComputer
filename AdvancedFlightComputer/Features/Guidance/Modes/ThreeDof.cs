@@ -45,8 +45,8 @@ public static partial class GuidanceWindow
     /// <summary>Fastest the command may turn, as a guard over the plan's own rate limit, rad/s.</summary>
     private const double ThreeDofSlewMax = 30.0 * Math.PI / 180.0;
 
-    /// <summary>Consecutive refusals before restarting the glide or requesting a touchdown handover during the burn.</summary>
-    private const int ThreeDofGlideRefusalLimit = 20;
+    /// <summary>Consecutive refusals before restarting the glide or requesting a touchdown handover during the burn. The glide's was 20 until 2026-11-21; with the last plan flown through the restart (Drop3Dof) a restart costs little, and 20 refusals left the craft on an ageing open-loop plan for two seconds or more.</summary>
+    private const int ThreeDofGlideRefusalLimit = 10;
     private const int ThreeDofBurnRefusalLimit = 10;
 
     /// <summary>Wait between cold-solve attempts after one fails, s.</summary>
@@ -186,6 +186,7 @@ public static partial class GuidanceWindow
         _s.ThreeDofAccelTime = _s.ThreeDofLogTime = double.NaN;
         _s.ThreeDofLastUpdate = _s.ThreeDofColdTime = double.NegativeInfinity;
         _s.ThreeDofPlan = null;
+        _s.ThreeDofKeptPlanUntil = double.NaN;
         _s.ThreeDofCommandLocal = default;
         _s.ThreeDofPlanCommandCci = default;
         _s.ThreeDofTrimCci = default;
@@ -707,7 +708,10 @@ public static partial class GuidanceWindow
         {
             if (!burning && now - _s.ThreeDofColdTime >= ThreeDofColdRetryS)
                 StartThreeDofCold(vehicle, x, now);
-            return false;
+            // A dropped guidance's plan carries on through the wait for the cold solve (Drop3Dof).
+            if (KeptPlan(now) == null)
+                return false;
+            g = _s.ThreeDofGuidance;
         }
 
         // The command a new plan should open on: the one last sent, or the vehicle's own attitude before the first.
@@ -747,7 +751,8 @@ public static partial class GuidanceWindow
             }
         }
 
-        Plan3Dof plan = g?.Published ?? (burning ? _s.ThreeDofPlan : null);
+        Plan3Dof kept = burning ? null : KeptPlan(now);
+        Plan3Dof plan = g?.Published ?? (burning ? _s.ThreeDofPlan : kept);
         if (plan == null)
         {
             _s.DiagEntry("PID glide while the entry guidance cold solve runs.");
@@ -757,7 +762,10 @@ public static partial class GuidanceWindow
         {
             if (_s.ThreeDofPlan == null)
                 GuidanceLog.Info(vehicle, $"Entry guidance first plan at {x[2] / 1000:F1} km: ignition in {plan.IgnitionTime - now:F1} s, burn {plan.SigmaBurn:F1} s.");
+            else if (double.IsFinite(_s.ThreeDofKeptPlanUntil))
+                GuidanceLog.Info(vehicle, $"Entry guidance new plan at {x[2] / 1000:F1} km (the last one flown meanwhile): ignition in {plan.IgnitionTime - now:F1} s, burn {plan.SigmaBurn:F1} s.");
             _s.ThreeDofPlan = plan;
+            _s.ThreeDofKeptPlanUntil = double.NaN;
             _s.ThreeDofBurnSolveFault = false;
             if (_s.ThreeDofTouchdownHandoff.Warning)
                 _s.ThreeDofTouchdownHandoff = default;
@@ -838,7 +846,7 @@ public static partial class GuidanceWindow
         }
 
         // Qualitative only; the figures are the page's own rows, so this line keeps its length frame to frame.
-        _s.DiagEntry(burning ? "Burning on the plan." : "Gliding on the plan.");
+        _s.DiagEntry(burning ? "Burning on the plan." : ReferenceEquals(plan, kept) ? "Gliding on the last plan while the cold solve runs." : "Gliding on the plan.");
         return true;
     }
 
@@ -987,18 +995,47 @@ public static partial class GuidanceWindow
         _s.ThreeDofAccelVelocity = v;
     }
 
-    /// <summary>Back to the PID glide, and a fresh cold solve after the retry wait.</summary>
+    /// <summary>
+    /// A fresh cold solve after the retry wait, with the last plan flown open loop until it lands (KeptPlan); the PID glide only where there is no plan to keep.
+    ///  WHY. The guidance and its plan were dropped together, and the PID glide flew the 2-10 s until the cold solve published: on 2026-11-21 three flights dropped two or three times each, on refusals of the defect gate, and each new plan began from wherever the PID glide had taken the craft. Touchdown guidance keeps flying its last plan through a restart (FlyLastPlanWhileConverging); entry guidance now does the same.
+    /// </summary>
     private static void Drop3Dof(Vehicle vehicle, string why, double now)
     {
-        GuidanceLog.Info(vehicle, why);
-        _s.DiagEntry(why);
+        Guidance3Dof dropped = _s.ThreeDofGuidance;
         _s.ThreeDofColdTime = now;
         if (!ThreeDofBusy)
         {
             _s.CancelEntrySolve();
             _s.ThreeDofGuidance = null;
-            _s.ThreeDofPlan = null;
+            // The last plan flies on to its ignition lock at the latest: a dropped guidance cannot lock it or light the engine on it.
+            Plan3Dof last = _s.ThreeDofPlan;
+            double lockLead = dropped?.IgnitionLockLeadS ?? 0.0;
+            if (last != null && _s.ThreeDofPhase == ThreeDofPhase.Glide && now < last.IgnitionTime - lockLead)
+            {
+                if (!double.IsFinite(_s.ThreeDofKeptPlanUntil))
+                    _s.ThreeDofKeptPlanUntil = last.IgnitionTime - lockLead;
+                why = why.Replace("PID GLIDE, COLD RETRY.", "LAST PLAN FLOWN, COLD RETRY.");
+            }
+            else
+            {
+                _s.ThreeDofPlan = null;
+                _s.ThreeDofKeptPlanUntil = double.NaN;
+            }
         }
+        GuidanceLog.Info(vehicle, why);
+        _s.DiagEntry(why);
+    }
+
+    /// <summary>The plan a dropped guidance left (Drop3Dof), while it may still be flown; null when there is none, or it has reached the ignition lock it was kept until, which drops it for the PID glide.</summary>
+    private static Plan3Dof KeptPlan(double now)
+    {
+        if (!double.IsFinite(_s.ThreeDofKeptPlanUntil) || _s.ThreeDofPlan == null)
+            return null;
+        if (now < _s.ThreeDofKeptPlanUntil)
+            return _s.ThreeDofPlan;
+        _s.ThreeDofPlan = null;
+        _s.ThreeDofKeptPlanUntil = double.NaN;
+        return null;
     }
 
     /// <summary>
