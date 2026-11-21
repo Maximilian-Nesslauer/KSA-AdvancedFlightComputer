@@ -107,6 +107,9 @@ public static partial class GuidanceWindow
     /// </summary>
     private const double StagingMassDropFraction = 0.05;
 
+    /// <summary>How long before the plan's ignition the gimbals are put on the trim deflection of an off-centre engine choice (Ksa6DofGuidance.TrimTorquePerNewton), s: a 10 deg trim at the stock engines' 4 deg/s with room to spare.</summary>
+    private const double TrimPrepositionLeadS = 3.0;
+
     /// <summary>Point the ambient state at this vehicle for the work that follows.</summary>
     private static VehicleAutopilotState Use(Vehicle vehicle)
     {
@@ -1962,6 +1965,11 @@ public static partial class GuidanceWindow
         // Model body axes -> KSA body axes.
         // The allocator works in KSA's frame; a missed conversion here would put roll torque on the pitch axis.
         KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        // THE TRIM BEFORE IGNITION: an off-centre engine choice needs its trim deflection (Ksa6DofGuidance.TrimTorquePerNewton) from the first instant it burns, and the gimbal takes its time to slew there (a 5 deg trim at 4 deg/s is over a second of an unheld moment). With no engine lit the allocator previews on every gimbal's Data.MaximumThrust, so the trim torque at that thrust puts the nozzles where the burn starts. The engine is off, so it costs nothing.
+        double toIgnition = coasting ? _s.Guidance.TimeToIgnition(now) : double.NaN;
+        double3 trimPerN = _s.Guidance.TrimTorquePerNewton;
+        if (toIgnition <= TrimPrepositionLeadS && (trimPerN.X != 0.0 || trimPerN.Y != 0.0))
+            torqueModel += trimPerN * Ksa6DofSetup.PlanningThrust(vehicle);
         double3 torqueKsa = torqueModel.X * mx + torqueModel.Y * my + torqueModel.Z * mz;
 
         // Published for THIS vehicle.

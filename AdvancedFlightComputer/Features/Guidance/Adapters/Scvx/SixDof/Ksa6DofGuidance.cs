@@ -239,6 +239,13 @@ public sealed class Ksa6DofGuidance
     /// <summary>Lateral (pitch/yaw) torque the model allows per newton of axial thrust, N m/N: the gimbal arm times the cone's tangent.</summary>
     public double LateralTorquePerNewton => _dyn.LArm * _cfg.TanGimbal;
 
+    /// <summary>The gimbal torque per newton of thrust of the deflection that holds the engines' own moment, model body axes, N m/N: the centre of the plan's cone (Scvx6DofConfig.GimbalTrimX/Y), (L y, -L x, 0). Zero for a balanced cluster.</summary>
+    public double3 TrimTorquePerNewton => new(_dyn.LArm * _cfg.GimbalTrimY, -_dyn.LArm * _cfg.GimbalTrimX, 0.0);
+
+    /// <summary>Seconds until the published plan's ignition, from <paramref name="simNow"/>; NaN without a plan or a coast, or once it has lit.</summary>
+    public double TimeToIgnition(double simNow)
+        => _published is { } plan && plan.HasCoast && simNow - plan.SolveTime < plan.Coast ? plan.Coast - (simNow - plan.SolveTime) : double.NaN;
+
     /// <summary>Whether the model carries aerodynamics.</summary>
     public bool HasAero => _dyn.Aero != null || _dyn.BodyAero != null;
 
@@ -1653,8 +1660,11 @@ public sealed class Ksa6DofGuidance
                     rcsNeg[a] = neg / share;
                 }
             }
+            // The gimbals' cone is centred where the plan's is (Scvx6DofConfig.GimbalTrimX/Y): the torque of the deflection that holds the engines' own moment, (L y T, -L x T).
+            var gimbalCentre = InCoast ? default
+                : new double3(_dyn.LArm * _cfg.GimbalTrimY * axial, -_dyn.LArm * _cfg.GimbalTrimX * axial, 0.0);
             AttitudeFeedback6Dof.Result fb = attitude.Correct(plan, k, f, x, _dyn.Ixx, _dyn.Iyy, _dyn.Izz,
-                                                              torqueModel, RcsTorqueModel, lateralNm, rollNm, rcsPos, rcsNeg, simNow);
+                                                              torqueModel, RcsTorqueModel, lateralNm, rollNm, rcsPos, rcsNeg, simNow, gimbalCentre);
             torqueModel += fb.Gimbal;
             if (_dyn.Rcs != null)
                 RcsTorqueModel += fb.Rcs;

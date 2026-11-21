@@ -140,13 +140,38 @@ internal static class SixDofThrustMomentCheck
         bool blindWorse = blindMiss > 5.0 * Math.Max(miss, 1.0);
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"  off centre, not modelled (the balanced plan flown open loop): ends {blindMiss:F0} m from its aim at {Speed(blind):F0} m/s, well beyond the modelled plan {(blindWorse ? "ok" : "FAIL")}"));
-        return trims && lands && blindWorse;
+        if (!(trims && lands && blindWorse))
+            return false;
+
+        // 3. THE TRIM BEYOND THE CONE: the gimbals' weakest direction gives a cone narrower than the trim (one engine of a triple plate in flight: 324 %), while the direction that holds the moment has room. Centred on zero the plan is asked for a deflection outside its own cone; centred on the trim it plans and lands.
+        const double narrowDeg = 1.5;
+        double narrowShare = Math.Sqrt(OffsetX * OffsetX + OffsetY * OffsetY) / Arm / Math.Tan(narrowDeg * Math.PI / 180.0);
+        Console.WriteLine();
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"3. the same landing with a {narrowDeg:F1} deg cone, which the trim alone takes {narrowShare:P0} of"));
+        bool zeroOk = Plan(offCentre, x0, xf, verbose, out Scvx6DofSolver zs, out int zi, narrowDeg, centred: false);
+        double zeroMiss = zeroOk ? Miss(Fly(zs, offCentre, x0), xf) : double.PositiveInfinity;
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"  cone centred on zero: {(zeroOk ? $"plan in {zi} iterations, flown open loop ends {zeroMiss:F0} m from its aim" : $"NO PLAN after {zi} iterations")} (what touchdown guidance had)"));
+        bool centredOk = Plan(offCentre, x0, xf, verbose, out Scvx6DofSolver cs, out int ci, narrowDeg, centred: true);
+        if (!centredOk)
+        {
+            Console.WriteLine($"  cone centred on the trim: NO PLAN after {ci} iterations  FAIL");
+            return false;
+        }
+        double[] cEnd = Fly(cs, offCentre, x0);
+        double cMiss = Miss(cEnd, xf), cSpeed = Speed(cEnd);
+        bool cLands = cMiss <= 2.0 * bMiss + 5.0 && cSpeed <= 2.0 * bSpeed + 2.0;
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"  cone centred on the trim: plan in {ci} iterations, {cs.Sigma:F1} s; flown open loop ends {cMiss:F1} m from its aim at {cSpeed:F1} m/s, as the balanced craft {(cLands ? "ok" : "FAIL")}"));
+        return cLands;
     }
 
     private static double Miss(double[] end, double[] xf) => Math.Sqrt(end[0] * end[0] + end[1] * end[1] + (end[2] - xf[2]) * (end[2] - xf[2]));
     private static double Speed(double[] end) => Math.Sqrt(end[3] * end[3] + end[4] * end[4] + end[5] * end[5]);
 
-    private static bool Plan(Dynamics6Dof.Params dyn, double[] x0, double[] xf, bool verbose, out Scvx6DofSolver solver, out int iterations)
+    private static bool Plan(Dynamics6Dof.Params dyn, double[] x0, double[] xf, bool verbose, out Scvx6DofSolver solver, out int iterations,
+                             double gimbalDeg = GimbalDeg, bool centred = false)
     {
         const int n = 40;
         const double sigma = 9.0;
@@ -159,7 +184,9 @@ internal static class SixDofThrustMomentCheck
             Nodes = n,
             Tmax = Tmax,
             ThrottleFloor = Floor,
-            GimbalMaxDeg = GimbalDeg,
+            GimbalMaxDeg = gimbalDeg,
+            GimbalTrimX = centred ? dyn.ThrustMomentY / Arm : 0.0,
+            GimbalTrimY = centred ? -dyn.ThrustMomentX / Arm : 0.0,
             TauRollMax = 5e4,
             TerminalRollFree = true,
             TiltMaxDeg = 60.0,

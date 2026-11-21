@@ -20,6 +20,14 @@ public sealed class Scvx6DofConfig
     public double GimbalMaxDeg { get; init; } = 10.0;
 
     /// <summary>
+    /// Where the gimbal cone is centred, as lateral thrust per newton of axial thrust (tdx / T, tdy / T): the deflection that holds the engines' own moment (Dynamics6Dof.Params.ThrustMoment*, tdx = m_y T / L, tdy = -m_x T / L). The cone, ||(tdx, tdy) - T (x, y)|| &lt;= T tan(gimbal), is the authority the gimbals have AROUND that deflection.
+    ///  WHY. The cone's width is the gimbals' capability in their weakest direction. For one engine off the stack's axis that is the direction that drags roll in, which only the verniers can take out; the direction that holds its own moment needs none and has several times as much. Centred on zero, the trim of one 10 deg engine of a triple plate needed 324 % of the cone: every plan was asked for a deflection it could not have, the standby could not publish, and touchdown guidance took over at 38 m (2026-11-21). Zero for a balanced cluster, which is the cone it had.
+    /// </summary>
+    public double GimbalTrimX { get; init; }
+    public double GimbalTrimY { get; init; }
+    public double GimbalTrim => Math.Sqrt(GimbalTrimX * GimbalTrimX + GimbalTrimY * GimbalTrimY);
+
+    /// <summary>
     /// How fast the gimbal can move, as full deflections (GimbalMaxDeg) per second; 0 for no limit. KSA 5901's gimbals slew at Gimbal's rate cap, NaturalFrequency / (5 e) of their range a second - 2 a second for the stock engines, zero to full deflection in half a second - where the plan took the lateral thrust as free to jump between nodes: at 50 nodes it could swing ten times faster than the gimbal follows. The lateral thrust may change between neighbouring nodes by no more than this rate times the interval times the cone's width at the thrust there.
     /// </summary>
     public double GimbalSlewPerS { get; init; }
@@ -387,7 +395,8 @@ public sealed class Scvx6DofConfig
         get
         {
             // A craft with no gimbal has a zero cone, which pins its gimbal controls; their scale still has to be positive, so they take a hundredth of the thrust.
-            double gimbalScale = Tmax * TanGimbal > 0.0 ? Tmax * TanGimbal : 0.01 * Tmax;
+            // The lateral thrust reaches the cone's centre plus its width (GimbalTrimX/Y), so the scale takes both.
+            double gimbalScale = Tmax * TanGimbal > 0.0 ? Tmax * (TanGimbal + GimbalTrim) : 0.01 * Tmax;
             double[] head = UScale ?? [gimbalScale, gimbalScale, Tmax, TauRollMax];
             if (head.Length >= NU)
                 return head;

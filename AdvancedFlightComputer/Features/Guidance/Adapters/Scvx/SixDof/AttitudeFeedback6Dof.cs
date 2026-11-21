@@ -63,9 +63,10 @@ public sealed record AttitudeFeedback6Dof
     /// <param name="rcsPos">The RCS's whole torque per axis, positive direction, N m; null for no RCS.</param>
     /// <param name="rcsNeg">The same, negative direction, as a magnitude.</param>
     /// <param name="now">Simulation time, s, for the integral; NaN leaves it out.</param>
+    /// <param name="gimbalCentre">The centre of the gimbals' cone in torque, model body axes, N m: the deflection that holds the engines' own moment (Scvx6DofConfig.GimbalTrimX/Y); zero for a balanced cluster.</param>
     public Result Correct(Ksa6DofPlan plan, int k, double f, double[] x, double ixx, double iyy, double izz,
                           double3 gimbalPlan, double3 rcsPlan, double gimbalLateralNm, double gimbalRollNm,
-                          double[] rcsPos, double[] rcsNeg, double now = double.NaN)
+                          double[] rcsPos, double[] rcsNeg, double now = double.NaN, double3 gimbalCentre = default)
     {
         int k1 = Math.Min(k + 1, plan.Nodes - 1);
         double L(int i) => plan.X[k * NX + i] * (1.0 - f) + plan.X[k1 * NX + i] * f;
@@ -136,7 +137,7 @@ public sealed record AttitudeFeedback6Dof
         if (mag > 1e-6)
         {
             double ux = wanted.X / mag, uy = wanted.Y / mag;
-            double gRoom = ConeRoom(gimbalPlan.X, gimbalPlan.Y, ux, uy, gimbalLateralNm);
+            double gRoom = ConeRoom(gimbalPlan.X - gimbalCentre.X, gimbalPlan.Y - gimbalCentre.Y, ux, uy, gimbalLateralNm);
             double rRoom = double.PositiveInfinity;
             if (rcsPos != null && rcsNeg != null)
             {

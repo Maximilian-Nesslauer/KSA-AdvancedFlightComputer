@@ -673,6 +673,9 @@ public static class Ksa6DofSetup
             Tmax = thrust,
             ThrottleFloor = throttleFloor,
             GimbalMaxDeg = gimbalDeg,
+            // The cone centred on the deflection that holds the engines' own moment (Scvx6DofConfig.GimbalTrimX/Y): L tdy + m_x T = 0, -L tdx + m_y T = 0.
+            GimbalTrimX = !noGimbal && arm > 0.0 ? dyn.ThrustMomentY / arm : 0.0,
+            GimbalTrimY = !noGimbal && arm > 0.0 ? -dyn.ThrustMomentX / arm : 0.0,
             // The RCS controls are scaled on each axis's whole control torque (Scvx6DofConfig.ResolvedUScale).
             GimbalArm = arm,
             GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) / torqueShare : 0.0,
