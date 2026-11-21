@@ -333,18 +333,38 @@ public sealed class Scvx6DofSubproblemScs
     public double SolutionCoastSigma => _iSigC >= 0 ? Solution[_iSigC] : 0.0;
     private double[] Slice(int offset, int count) => Solution[offset..(offset + count)];
 
-    internal double AccelerationSlackCost
+    internal double AccelerationSlackCost => SlackCost(_oAc, _nAc);
+
+    /// <summary>The turn-rate slacks' cost in the last solution, as the objective pays it (Scvx6DofConfig.RateWeight).</summary>
+    internal double RateSlackCost => SlackCost(_oRr, _nRr);
+
+    /// <summary>The glideslope, climb-rate and terminal-miss slacks' cost in the last solution, as the objective pays it.</summary>
+    internal double PathSlackCost => SlackCost(_oGs, _nGs) + SlackCost(_oVz, _nVz) + SlackCost(_oTm, _nTm);
+
+    private double SlackCost(int offset, int count)
     {
-        get
-        {
-            double cost = 0.0;
-            for (int k = 0; k < _nAc; k++)
-            {
-                int column = _oAc + k;
-                cost += _c[column] * _ws.X[column];
-            }
-            return cost;
-        }
+        double cost = 0.0;
+        for (int k = 0; k < count; k++)
+            cost += _c[offset + k] * _ws.X[offset + k];
+        return cost;
+    }
+
+    /// <summary>How far outside the glideslope a craft handed over outside it starts, m: entry_0 (AssembleCone's glideslope block).</summary>
+    internal static double GlideSlopeEntryAllowance(Scvx6DofConfig cfg, ReadOnlySpan<double> x0, ReadOnlySpan<double> xf)
+    {
+        double entryX = x0[Dynamics6Dof.IR] - xf[Dynamics6Dof.IR];
+        double entryY = x0[Dynamics6Dof.IR + 1] - xf[Dynamics6Dof.IR + 1];
+        double entryHeight = x0[Dynamics6Dof.IR + 2] - xf[Dynamics6Dof.IR + 2];
+        return Math.Max(0.0, Math.Sqrt(entryX * entryX + entryY * entryY) - cfg.CotGlideSlope * entryHeight);
+    }
+
+    /// <summary>The glideslope's widening at trajectory node <paramref name="node"/> of <paramref name="n"/>, m: entry_0 ((1-s)^2 + s (1-s)^4), s the node's fraction of the horizon.</summary>
+    internal static double GlideSlopeAllowanceAt(double entryAllowance, int node, int n)
+    {
+        double progress = (double)node / (n - 1);
+        double remaining = 1.0 - progress;
+        double remainingSquared = remaining * remaining;
+        return entryAllowance * (remainingSquared + progress * remainingSquared * remainingSquared);
     }
 
     // ---------------------------------------------------------------- objective
@@ -781,21 +801,13 @@ public sealed class Scvx6DofSubproblemScs
         double cot = _cfg.CotGlideSlope;
         // ENTRY ALLOWANCE. A vehicle handed over outside the cone starts entry_0 metres outside it, measured from x0 on every solve.
         // entry_k = entry_0 * ((1-s)^2 + s*(1-s)^4) with s the node's fraction of the horizon: the full violation at the entry, zero at the target, and a quartic term that only widens the early nodes, so the corridor closes on the target without asking the first interval to jump inside.
-        double entryX = x0[Dynamics6Dof.IR] - xf[Dynamics6Dof.IR];
-        double entryY = x0[Dynamics6Dof.IR + 1] - xf[Dynamics6Dof.IR + 1];
-        double entryHeight = x0[Dynamics6Dof.IR + 2] - xf[Dynamics6Dof.IR + 2];
-        double entryAllowance = Math.Max(0.0,
-            Math.Sqrt(entryX * entryX + entryY * entryY) - cot * entryHeight);
+        double entryAllowance = GlideSlopeEntryAllowance(_cfg, x0, xf);
         for (int k = 0; k < _nGs; k++)
         {
             int node = k + 1;
             AddA(row, IX(node, Dynamics6Dof.IR + 2), -cot);
             AddA(row, IGs(k), -1.0);
-            double progress = (double)node / (_n - 1);
-            double remaining = 1.0 - progress;
-            double remainingSquared = remaining * remaining;
-            double allowance = entryAllowance *
-                (remainingSquared + progress * remainingSquared * remainingSquared);
+            double allowance = GlideSlopeAllowanceAt(entryAllowance, node, _n);
             _b[row++] = -cot * xf[Dynamics6Dof.IR + 2] + allowance;
 
             AddA(row, IX(node, Dynamics6Dof.IR + 0), -1.0);

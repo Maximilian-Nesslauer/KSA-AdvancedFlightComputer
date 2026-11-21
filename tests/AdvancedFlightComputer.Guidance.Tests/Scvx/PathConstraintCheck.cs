@@ -177,8 +177,11 @@ internal static class PathConstraintCheck
             double defects = virtualControl.Select((v, i) =>
                 Math.Pow(v / cfg.VirtualControlScaleOf(i % NX), 2)).Sum();
             double oldPrediction = before - (fuel + smoothing + cfg.RhoVc * defects);
-            double predicted = oldPrediction - cfg.AccelWeight * slack / cfg.ResolvedUScale[Dynamics6Dof.IT];
-            double actual = before - solver.TrueCost(x, u, subproblem.SolutionSigma).Cost;
+            double slackCost = cfg.AccelWeight * slack / cfg.ResolvedUScale[Dynamics6Dof.IT];
+            double predicted = oldPrediction - slackCost;
+            // Both merits price the soft limits at the subproblem's slacks (Scvx6DofSolver.Iterate): the actual one is the true cost with its own soft-limit price swapped for them.
+            double softLimits = (double)type.GetMethod("SoftLimitCost", members)!.Invoke(solver, [x, u])!;
+            double actual = before - (solver.TrueCost(x, u, subproblem.SolutionSigma).Cost - softLimits + slackCost);
             double expected = actual / predicted;
             bool pass = slack > 0.0 && double.IsFinite(expected)
                 && Math.Abs(actual / oldPrediction - expected) > 1e-6

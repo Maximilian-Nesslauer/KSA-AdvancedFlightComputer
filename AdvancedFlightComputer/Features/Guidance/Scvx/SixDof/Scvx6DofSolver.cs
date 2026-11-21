@@ -499,10 +499,15 @@ public sealed class Scvx6DofSolver
             coastSigma = Math.Clamp(coastSigma, coastLo, coastHi);
 
         // 3. Ratio test. Predicted reduction uses the subproblem's own defect proxy (the virtual control); actual reduction uses the true nonlinear defect at the new point.
-        double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * SumSquaresScaled(wv, _vcs)
-            + _sub.AccelerationSlackCost;
+        //  THE SOFT LIMITS ARE PRICED THE SAME WAY IN BOTH (2026-11-21, #247): the acceleration, turn-rate, glideslope, climb-rate and terminal-miss slacks, each at what the subproblem's solution pays for it.
+        //  Those rows are exact in the state, so they carry no model error, and only the dynamics should move rho. Until then the turn rate was in the actual merit only and the glideslope, climb-rate and terminal slacks in neither:
+        //  offline the ratio test then accepted steps that raised the whole merit (444 of 1134 on the roll-free landing) on a predicted reduction that was often negative.
+        //  NOT THE TRUE VIOLATIONS. SCS meets those rows only to its tolerance: a terminal slack priced 0.11 sat beside a true miss of 0.7 m priced 293, and with that in the actual merit the ratio test refused most steps and the trust region shrank on nearly every one.
+        double convexSlack = _sub.AccelerationSlackCost + _sub.RateSlackCost + _sub.PathSlackCost;
+        double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * SumSquaresScaled(wv, _vcs) + convexSlack;
         (double jTrue, double defectNorm) = TrueCost(x, u, sigma, coastSigma,
                                                      out int defectChannel, out int defectNode);
+        jTrue += convexSlack - SoftLimitCost(x, u);
 
         double predicted = _jRef - jLin;
         double actual = _jRef - jTrue;
@@ -598,7 +603,44 @@ public sealed class Scvx6DofSolver
             fk1.CopyTo(fk);
         }
 
-        return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq + AccelerationViolationCost(x, u) + RateViolationCost(x), worst);
+        return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq + SoftLimitCost(x, u), worst);
+    }
+
+    /// <summary>
+    /// Every soft limit's price on a trajectory: acceleration, turn rate, glideslope, climb rate and terminal miss, each as its L1 slack would pay it. A seed's reference is priced with this (Initialize, Reseed); a solved step's slacks are taken from the subproblem instead (Iterate).
+    /// </summary>
+    private double SoftLimitCost(double[] x, double[] u)
+        => AccelerationViolationCost(x, u) + RateViolationCost(x) + PathViolationCost(x);
+
+    /// <summary>The glideslope, climb-rate and terminal-miss limits' price on the trajectory, as the subproblem's slacks pay it at the optimum: each L1 slack is the violation itself, because those rows are exact in the state (AssembleCone, AssembleOrthants, AssembleEqualities).</summary>
+    private double PathViolationCost(double[] x)
+    {
+        double gs = 0.0, vz = 0.0, tmPos = 0.0, tmVel = 0.0;
+        if (_cfg.GlideSlopeEnabled)
+        {
+            double cot = _cfg.CotGlideSlope;
+            double entry = Scvx6DofSubproblemScs.GlideSlopeEntryAllowance(_cfg, _x0, _xf);
+            for (int node = 1; node < _n; node++)
+            {
+                double dx = x[node * NX + Dynamics6Dof.IR] - _xf[Dynamics6Dof.IR];
+                double dy = x[node * NX + Dynamics6Dof.IR + 1] - _xf[Dynamics6Dof.IR + 1];
+                double height = x[node * NX + Dynamics6Dof.IR + 2] - _xf[Dynamics6Dof.IR + 2];
+                double over = Math.Sqrt(dx * dx + dy * dy) - (cot * height + Scvx6DofSubproblemScs.GlideSlopeAllowanceAt(entry, node, _n));
+                gs += _cfg.GlideSlopeWeight * Math.Max(0.0, over) / _xs[Dynamics6Dof.IR];
+            }
+        }
+        if (_cfg.VzLimitEnabled)
+            for (int node = 1; node < _n; node++)
+                vz += _cfg.VzWeight * Math.Max(0.0, x[node * NX + Dynamics6Dof.IV + 2] - _cfg.VzMax) / _xs[Dynamics6Dof.IV];
+        int last = (_n - 1) * NX;
+        for (int a = 0; a < 3; a++)
+        {
+            if (_cfg.TerminalMissWeight > 0.0)
+                tmPos += _cfg.TerminalMissWeight * Math.Abs(x[last + Dynamics6Dof.IR + a] - _xf[Dynamics6Dof.IR + a]) / _cfg.TerminalMissPriceScale;
+            if (_cfg.TerminalSpeedWeight > 0.0)
+                tmVel += _cfg.TerminalSpeedWeight * Math.Abs(x[last + Dynamics6Dof.IV + a] - _xf[Dynamics6Dof.IV + a]) / _cfg.TerminalSpeedPriceScale;
+        }
+        return gs + vz + tmPos + tmVel;
     }
 
     /// <summary>A coast duration for the reference: none without a coast, the pinned one when locked (Scvx6DofConfig.CoastSigmaFixed), otherwise the seed inside the bounds.</summary>
