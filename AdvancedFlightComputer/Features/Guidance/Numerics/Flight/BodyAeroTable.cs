@@ -10,6 +10,8 @@ namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 ///   beta  = atan2(u_y, -u_x)   the tilt in the body x-y plane (yaw)
 /// Both are zero flying engine first, and neither has a singularity there, unlike a total angle and the direction of its tilt.
 ///
+/// A NOSE-FIRST TABLE (<see cref="NoseFirst"/>, the convex ascent's, #216) takes its angles about the other end: with the nose leading (u_x &gt; 0), alpha = atan2(u_z, u_x) and beta = atan2(u_y, u_x), both zero flying nose first. The same mirror image, so the code that reads one reads the other through <see cref="Lead"/>.
+///
 /// The same class holds the moment table (KsaAeroSweep.Result.BodyMoment): three body-axis values per node again, there C_l, C_m, C_n = torque / (q S L) about the centre of mass the sweep saw.
 ///
 /// One cubic B-spline fits all three coefficients over (Mach, alpha, beta), so the value and its exact gradient come in one pass; <see cref="Coefficients(Dual, Dual, Dual, out Dual, out Dual, out Dual)"/> feeds them to the AD sweep by the chain rule, as AeroTable does.
@@ -29,8 +31,18 @@ public sealed class BodyAeroTable
     public double MachMin => MachGrid[0];
     public double MachMax => MachGrid[^1];
 
+    /// <summary>The angles are taken about the nose (+x leading) rather than the engine end; see the type summary.</summary>
+    public bool NoseFirst { get; }
+
+    /// <summary>The leading end's sign along body x: +1 nose first, -1 engine first.</summary>
+    public double Lead => NoseFirst ? 1.0 : -1.0;
+
+    /// <summary>The coefficients as given, row-major over (Mach, alpha, beta): for a problem file to write out.</summary>
+    public double[] Values { get; }
+
     /// <param name="coefficients">Row-major over (Mach, alpha, beta), Mach slowest, three values per node: C_x, C_y, C_z.</param>
-    public BodyAeroTable(double[] machGrid, double[] alphaGridDeg, double[] betaGridDeg, double[] coefficients)
+    /// <param name="noseFirst">The angles are taken about the nose; see the type summary.</param>
+    public BodyAeroTable(double[] machGrid, double[] alphaGridDeg, double[] betaGridDeg, double[] coefficients, bool noseFirst = false)
     {
         if (machGrid is null || alphaGridDeg is null || betaGridDeg is null || coefficients is null)
             throw new ArgumentNullException(nameof(coefficients));
@@ -41,6 +53,8 @@ public sealed class BodyAeroTable
             if (!double.IsFinite(coefficients[i]))
                 throw new ArgumentException($"Coefficient {i} is not finite ({coefficients[i]}).", nameof(coefficients));
 
+        NoseFirst = noseFirst;
+        Values = (double[])coefficients.Clone();
         MachGrid = (double[])machGrid.Clone();
         AlphaGridDeg = (double[])alphaGridDeg.Clone();
         BetaGridDeg = (double[])betaGridDeg.Clone();
@@ -49,6 +63,14 @@ public sealed class BodyAeroTable
         AlphaMaxRad = Math.Max(Math.Abs(alphaRad[0]), Math.Abs(alphaRad[^1]));
         BetaMaxRad = Math.Max(Math.Abs(betaRad[0]), Math.Abs(betaRad[^1]));
         _c = CubicBSplineNd.Fit(new[] { MachGrid, alphaRad, betaRad }, (double[])coefficients.Clone(), 3, EdgeMode.Linear);
+    }
+
+    /// <summary>The table's alpha and beta (radians) of an air direction in body axes (the craft's velocity through the air, any length).</summary>
+    public void Angles(double ux, double uy, double uz, out double alphaRad, out double betaRad)
+    {
+        double lead = Lead * ux;
+        alphaRad = Math.Atan2(uz, lead);
+        betaRad = Math.Atan2(uy, lead);
     }
 
     /// <summary>The three coefficients at a Mach number, alpha and beta (radians).</summary>
@@ -97,7 +119,7 @@ public sealed class BodyAeroTable
             return false;
         Dual xx = bx / bn, xy = by / bn, xz = bz / bn;
         Dual ux = hx * xx + hy * xy + hz * xz;
-        if (!(-ux.V > Math.Cos(maxTiltRad)))
+        if (!(Lead * ux.V > Math.Cos(maxTiltRad)))
             return false;
         // y: w less its part along x. Not x x w, whose direction flips as x passes w or -w: with w 45 deg below the horizon towards the site, an engine-first glide at 45 deg had no roll reference, and opposite ones either side (2026-11-20).
         Dual along = xx * wx + xy * wy + xz * wz;
@@ -111,8 +133,8 @@ public sealed class BodyAeroTable
         Dual zx = xy * yz - xz * yy, zy = xz * yx - xx * yz, zz = xx * yy - xy * yx;
         Dual uy = hx * yx + hy * yy + hz * yz;
         Dual uz = hx * zx + hy * zy + hz * zz;
-        Dual alpha = Dual.Atan2(uz, -ux);
-        Dual beta = Dual.Atan2(uy, -ux);
+        Dual alpha = Dual.Atan2(uz, Lead * ux);
+        Dual beta = Dual.Atan2(uy, Lead * ux);
         if (mach.V < MachMin) mach = new Dual(MachMin);
         else if (mach.V > MachMax) mach = new Dual(MachMax);
         Coefficients(mach, alpha, beta, out Dual c0, out Dual c1, out Dual c2);
@@ -122,10 +144,10 @@ public sealed class BodyAeroTable
         return true;
     }
 
-    /// <summary>The body-axis air velocity direction, unit, for an alpha and beta: the inverse of the definition in the type summary.</summary>
-    public static (double ux, double uy, double uz) AirDirection(double alphaRad, double betaRad)
+    /// <summary>The body-axis air velocity direction, unit, for an alpha and beta: the inverse of the definition in the type summary, about the nose for a nose-first table.</summary>
+    public static (double ux, double uy, double uz) AirDirection(double alphaRad, double betaRad, bool noseFirst = false)
     {
-        double x = -1.0, y = Math.Tan(betaRad), z = Math.Tan(alphaRad);
+        double x = noseFirst ? 1.0 : -1.0, y = Math.Tan(betaRad), z = Math.Tan(alphaRad);
         double n = Math.Sqrt(x * x + y * y + z * z);
         return (x / n, y / n, z / n);
     }

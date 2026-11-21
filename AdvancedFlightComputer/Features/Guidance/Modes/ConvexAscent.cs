@@ -106,12 +106,13 @@ public static partial class GuidanceWindow
                 string relaxed = plan.QRelaxed
                     ? FormattableString.Invariant($" FIRST SOLVE DID NOT CONVERGE: MAX Q {plan.QMaxRequestedKpa:F0} kPa OUT OF REACH. RETRIED WITH LOOSER LIMITS, MAX Q {plan.QMaxKpa:F0} kPa.")
                     : "";
+                string dragOnly = plan.Usable && plan.LiftLeftOut ? " DRAG ONLY: NO LIFT IN THE PLAN." : "";
                 string throttledKept = plan.Usable && plan.ThrottledStages.Length > 0 ? " " + PageText.ThrottledKept(plan.ThrottledStages, plan.HeldTryMassKg) : "";
                 string refused = sol.Usable && plan.OverQCeiling
                     ? FormattableString.Invariant($"PEAK Q {plan.PeakQKpa:F1} kPa, LIMIT {plan.QCeilingKpa:F0} kPa (BREAKUP {BreakupQ / 1000.0:F0} kPa). LOWER MAX Q.")
                     : "";
                 _s.AscentPlanStatus = plan.Usable
-                    ? FormattableString.Invariant($"PLAN READY: {sol.FinalMass / 1000.0:F2} t TO ORBIT IN THE PLAN, {plan.StagesPlanned} OF {plan.StagesAvailable} STAGES, {plan.WallSeconds:F1} s.{throttledKept}{timing}{booster}{relaxed}")
+                    ? FormattableString.Invariant($"PLAN READY: {sol.FinalMass / 1000.0:F2} t TO ORBIT IN THE PLAN, {plan.StagesPlanned} OF {plan.StagesAvailable} STAGES, {plan.WallSeconds:F1} s.{throttledKept}{timing}{booster}{relaxed}{dragOnly}")
                     : refused.Length > 0 ? "PLAN NOT FLOWN: " + refused
                     : $"NO SOLUTION: {sol.Message}.{relaxed}{hint}";
                 // More than one solve means a looser retry also failed. Notes are not counted, because one can say that no retry was possible.
@@ -233,7 +234,8 @@ public static partial class GuidanceWindow
         /// <summary>The sweeps started for this craft now, or null with the reason the stack's could not start.</summary>
         public static AscentAeroSweeps Start(Vehicle vehicle, IParentBody parent, out string error)
         {
-            if (!KsaAeroSweep.TryStart(vehicle, parent, SimNow(), out KsaAeroSweep.Job stack, out error))
+            // Nose first too: the plan flies the stack's whole aero force from its nose-first body-axis table (#216).
+            if (!KsaAeroSweep.TryStart(vehicle, parent, SimNow(), out KsaAeroSweep.Job stack, out error, noseFirst: true))
                 return null;
             var sweeps = new AscentAeroSweeps { _stackJob = stack };
             foreach (ReturnableStage booster in _s.ReturnableStages)
@@ -449,10 +451,16 @@ public static partial class GuidanceWindow
             error = "NO DRAG MODEL (" + sweeps.StackError + ")";
             return false;
         }
+        // The ascent's attitude controller reads the air's moment off the same sweep, nose first, while the craft is the one it swept (AscentControllerAero).
+        _s.AscentFlightAero = aero;
         AtmosphereModel atmosphere = aero.Atmosphere;
+        // THE WHOLE FORCE, lift and side force too, from the nose-first body-axis table (#216); drag alone only where the sweep has none, which the status says.
         AscentAtmosphere air = atmosphere != null
-            ? new KsaAscentAtmosphere(atmosphere, aero.Table)
+            ? new KsaAscentAtmosphere(atmosphere, aero.Table, bodyForce: aero.NoseBodyAero)
             : VacuumAscentAtmosphere.Instance;
+        bool dragOnly = atmosphere != null && aero.NoseBodyAero == null;
+        if (dragOnly)
+            GuidanceLog.Info(vehicle, "convex ascent: no nose-first aero table, so the plan models drag alone, no lift.");
 
         double[] grid = null;
         if (atmosphere != null)
@@ -593,6 +601,8 @@ public static partial class GuidanceWindow
         double qAlphaMax = ConvexQAlphaMaxUsed();
         double throttleRequestedPct = _s.ConvexThrottleMinPct;
         double[] r0 = [r.X, r.Y, r.Z], v0 = [v.X, v.Y, v.Z], n0 = [normal.X, normal.Y, normal.Z];
+        // The roll the flight will hold about the thrust axis (AscentRollRef), which the body-axis force is read at.
+        double rollAngle = AscentRollAngle(vehicle, normal);
 
         // THE BOOSTERS THE PLAN BRINGS HOME: every stage that can fly home and has a landing target (ReturnableStage.HasTarget). The plan sizes each one's reserve from nothing, for the boostback to its target and the landing, in the stage whose end drops it (BoosterPlanStage) - a core under strap-ons included, which is why a reserve need not be armed yet: it arms when that booster is next to separate. Each site has turned with the body to the launch, like the pad.
         // THE STAGE THAT DROPS EACH BOOSTER, not the first liquid load whatever is targeted: on a heavy the first load ends with the side boosters, and a core-only target was sized there, with the side boosters' dry mass and the core's site (#130).
@@ -746,6 +756,7 @@ public static partial class GuidanceWindow
                 QMax = qLimit,
                 QAlphaMax = qAlphaMax,
                 PadRoll = plansPadRoll ? new AscentProblem.RollProgram(PadClearM, RollProgramMaxS, MaxSlewDegS) : null,
+                RollAngleRad = rollAngle,
                 PlaneTurnMin = turnMin,
                 PlaneTurnMax = turnMax,
                 // Only while a booster's stage is a lower stage: a stack planned on fewer stages carries it to the end. Sorted by stage, so what is kept is a head of the list.
@@ -850,6 +861,7 @@ public static partial class GuidanceWindow
             Notes = notes,
             WallSeconds = wall,
             ThrottledStages = kept?.Stages ?? "",
+            LiftLeftOut = winningProblem.Atmosphere is KsaAscentAtmosphere && winningProblem.Atmosphere.BodyForce == null,
             HeldTryMassKg = kept?.TryMassKg ?? double.NaN,
             };
         }

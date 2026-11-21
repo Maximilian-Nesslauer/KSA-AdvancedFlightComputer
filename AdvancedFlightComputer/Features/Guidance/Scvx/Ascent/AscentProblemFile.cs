@@ -57,6 +57,12 @@ public static class AscentProblemFile
         // The whole table, attitude and all, when the problem has one: angles retrograde-first as AeroTable holds them, values row-major Mach by angle. Cd above is its nose-first column, which a file without the table falls back to.
         public double[]? CdAlphaDeg { get; set; }
         public double[]? CdTable { get; set; }
+        // The nose-first body-axis force (#216), as BodyAeroTable holds it: Mach rows, alpha and beta about the nose in degrees, and C_x, C_y, C_z row-major over them. Null for drag alone, as in a file from before it.
+        public double[]? BodyMach { get; set; }
+        public double[]? BodyAlphaDeg { get; set; }
+        public double[]? BodyBetaDeg { get; set; }
+        public double[]? BodyCoefficients { get; set; }
+        public double RollAngleRad { get; set; }
         public double GroundRadius { get; set; }
         public double TargetRadius { get; set; }
         public double TargetSpeed { get; set; }
@@ -138,7 +144,15 @@ public static class AscentProblemFile
             PlaneTurnMin = p.PlaneTurnMin != 0.0 ? p.PlaneTurnMin : null,
             PlaneTurnMax = p.PlaneTurnMax != 0.0 ? p.PlaneTurnMax : null,
             PadRoll = p.PadRoll,
+            RollAngleRad = p.RollAngleRad,
         };
+        if (p.Atmosphere.BodyForce is { } body)
+        {
+            dto.BodyMach = body.MachGrid;
+            dto.BodyAlphaDeg = body.AlphaGridDeg;
+            dto.BodyBetaDeg = body.BetaGridDeg;
+            dto.BodyCoefficients = body.Values;
+        }
         if (p.Atmosphere is KsaAscentAtmosphere ksa)
         {
             switch (ksa.Atmosphere)
@@ -223,7 +237,12 @@ public static class AscentProblemFile
                     values[i * 2] = values[i * 2 + 1] = cd[i];
                 table = new AeroTable(mach, alpha, values);
             }
-            air = new KsaAscentAtmosphere(atm, table);
+            BodyAeroTable? body = dto.BodyMach is { Length: >= 2 } bm && dto.BodyAlphaDeg is { Length: >= 2 } ba
+                                  && dto.BodyBetaDeg is { Length: >= 2 } bb && dto.BodyCoefficients is { } bc
+                                  && bc.Length == 3 * bm.Length * ba.Length * bb.Length
+                ? new BodyAeroTable(bm, ba, bb, bc, noseFirst: true)
+                : null;
+            air = new KsaAscentAtmosphere(atm, table, bodyForce: body);
         }
         var recoveries = new List<AscentRecovery>();
         if (air is KsaAscentAtmosphere ka && ka.Table is { } drag)
@@ -280,6 +299,7 @@ public static class AscentProblemFile
             PlaneTurnMin = dto.PlaneTurnMin ?? 0.0,
             PlaneTurnMax = dto.PlaneTurnMax ?? 0.0,
             PadRoll = dto.PadRoll,
+            RollAngleRad = dto.RollAngleRad,
             Recoveries = recoveries,
         };
     }
