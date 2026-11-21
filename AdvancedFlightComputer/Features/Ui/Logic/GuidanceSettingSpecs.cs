@@ -281,7 +281,7 @@ internal static class GuidanceSettingSpecs
         "The largest bank the plan uses.");
     public static readonly SettingSpec OrbitalEntryOverbankDeg = new("OrbitalEntryOverbankDeg", "TRACKER MAX BANK", "deg", P, 120.0, 1.0, 180.0, "%.0f",
         "The largest bank the tracker may command: further than PLAN MAX BANK, so it has room to absorb a spike in lift or a climb the plan did not foresee.");
-    public static readonly SettingSpec OrbitalEntryRollRateDegS = new("OrbitalEntryRollRateDegS", "ROLL RATE", "deg/s", P, 10.0, 0.5, 90.0, "%.1f",
+    public static readonly SettingSpec OrbitalEntryRollRateDegS = new("OrbitalEntryRollRateDegS", "ROLL RATE", "deg/s", P, 5.0, 0.5, 90.0, "%.1f",
         "The roll rate of a reversal, and the fastest the attitude controller closes a roll error at during entry (never under 10 deg/s); the plan uses half of it. Tracking slews at TRACKING ROLL RATE.");
     public static readonly SettingSpec OrbitalEntryTrackRollRateDegS = new("OrbitalEntryTrackRollRateDegS", "TRACKING ROLL RATE", "deg/s", P, 5.0, 0.5, 90.0, "%.1f",
         "The roll rate the tracker slews the bank at while it tracks the drag; reversals use ROLL RATE.");

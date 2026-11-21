@@ -32,8 +32,8 @@ public sealed class EntryConfig
     /// <summary>Largest bank the tracker may command, deg: further than the plan's, so it can absorb what the plan did not foresee.</summary>
     public double OverbankDeg { get; set; } = 120.0;
 
-    /// <summary>Roll rate the vehicle can sustain, deg/s. Sets the plan's rate limit and the tracker's slew.</summary>
-    public double RollRateDegS { get; set; } = 10.0;
+    /// <summary>Roll rate of a reversal, deg/s; the plan uses PlanRollRateShare of it. 10 flew too fast a reversal (2026-11-21), and with the tracking retuned 5 is enough.</summary>
+    public double RollRateDegS { get; set; } = 5.0;
 
     /// <summary>Share of the roll rate the plan may use, so reversals still fit.</summary>
     public double PlanRollRateShare { get; set; } = 0.5;

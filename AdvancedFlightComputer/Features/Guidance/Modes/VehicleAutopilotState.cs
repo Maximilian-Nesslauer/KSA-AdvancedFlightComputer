@@ -1788,7 +1788,7 @@ public sealed class VehicleAutopilotState
     /// <summary>Largest bank the tracker may command, deg: further than the plan's, with nothing else of its own.</summary>
     public double OrbitalEntryOverbankDeg = 120.0;
     /// <summary>Roll rate the tracker slews at and the plan leaves room for, deg/s.</summary>
-    public double OrbitalEntryRollRateDegS = 10.0;
+    public double OrbitalEntryRollRateDegS = 5.0;
     /// <summary>Hand-over altitude, km, and Mach (airspeed over the sea-level speed of sound, as the aero tables use).</summary>
     public double OrbitalEntryHandoverAltKm = 25.0;
     public double OrbitalEntryHandoverMach = 2.0;
