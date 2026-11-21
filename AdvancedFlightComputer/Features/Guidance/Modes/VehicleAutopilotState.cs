@@ -1804,7 +1804,7 @@ public sealed class VehicleAutopilotState
     public double OrbitalEntryAoaDeg = 60.0;
     public double OrbitalEntryAoaMinDeg = 40.0;
     public double OrbitalEntryAoaMaxDeg = 70.0;
-    /// <summary>Which body axis is the belly: 0 the craft's own (-Z, the navball's down at roll 0), then -Z, +Z, -Y, +Y, and 5 the best of the four by the sweep.</summary>
+    /// <summary>Which body axis is the belly: 0 the craft's own (+Z), then -Z, +Z, -Y, +Y, and 5 the best of the four by the sweep.</summary>
     public double OrbitalEntryBellyAxis = 0.0;
     /// <summary>Seconds between re-solves.</summary>
     public double OrbitalEntryResolveS = 2.0;

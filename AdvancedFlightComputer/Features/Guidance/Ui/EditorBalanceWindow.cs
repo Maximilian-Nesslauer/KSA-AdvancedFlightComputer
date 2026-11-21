@@ -26,7 +26,7 @@ internal static class EditorBalanceWindow
 
     private static bool _open = true;
     private static VehicleEditor? _editor;
-    private static int _side;          // 0 -Z, 1 +Z, 2 -Y, 3 +Y
+    private static int _side = 1;      // 0 -Z, 1 +Z (the craft's belly), 2 -Y, 3 +Y
     private static int _machRow;
     private static Aerodynamics? _computedFor;
     private static double _computedMass = double.NaN, _computedAt = double.NegativeInfinity;
@@ -38,7 +38,7 @@ internal static class EditorBalanceWindow
     private readonly record struct Row(double AlphaDeg, double Cm, double CpFromComM, double CdS, double LiftToDrag);
 
     private static readonly SysVector3[] Sides = { new(0, 0, -1), new(0, 0, 1), new(0, -1, 0), new(0, 1, 0) };
-    private static readonly string[] SideNames = { "-Z (craft belly)", "+Z", "-Y", "+Y" };
+    private static readonly string[] SideNames = { "-Z", "+Z (craft belly)", "-Y", "+Y" };
 
     static void Postfix(VehicleEditor __instance)
     {

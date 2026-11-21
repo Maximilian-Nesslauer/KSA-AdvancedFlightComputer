@@ -633,8 +633,8 @@ public static partial class GuidanceWindow
         double bestScore = double.NegativeInfinity;
         for (int i = 0; i < sweeps.Length; i++)
         {
-            // 0 is the craft's own belly, -Z: the navball's down at roll 0. 1 to 4 name a side; 5 lets the sweep choose.
-            int wanted = choice is >= 1 and <= 4 ? choice - 1 : choice == 5 ? -1 : 0;
+            // 0 is the craft's own belly, +Z (BellyAxes index 1): -Z had it upside down, and every flight set 2 by hand (2026-11-21). 1 to 4 name a side; 5 lets the sweep choose.
+            int wanted = choice is >= 1 and <= 4 ? choice - 1 : choice == 5 ? -1 : 1;
             if (wanted >= 0 && i != wanted)
                 continue;
             EntryTrim t = Make(sweeps[i]);
