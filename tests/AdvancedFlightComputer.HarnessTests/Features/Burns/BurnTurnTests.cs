@@ -96,6 +96,7 @@ public sealed class BurnTurnWarpTest : AfcTest
             t.Check("a warp to the ignition replaces the warp to the turn", !TurnWarp.Running && Universe.AutoWarpTime == other);
             TurnWarp.Cancel();
             t.Check("a cancel then leaves the other warp running", Universe.IsAutoWarpActive && Universe.AutoWarpTime == other);
+            t.Check("over the other warp the warp to the turn is offered again", TurnWarp.OfferedEnd(probe) == expected);
             Universe.AutoWarpStop(resetSimulationSpeed: true);
 
             t.Check("the warp starts again", TurnWarp.Start(probe));

@@ -33,11 +33,11 @@ internal static class TurnWarp
     /// <summary>
     /// The end of a warp to the turn of the node that stock AUTO flies on the controlled <paramref name="craft"/>, or null.
     /// Before AUTO, FlightComputer.UpdateBurnTarget times the burn with the manual throttle, so the alignment start is the
-    /// one stock flies only once AUTO is on.
+    /// one stock flies only once AUTO is on. A warp that another source started may be replaced by this one.
     /// </summary>
     public static UniverseTime? OfferedEnd(Vehicle craft)
     {
-        if (!BurnModeInput.WarpOffered(craft) || !BurnModeInput.StockAutoOnNode(craft)
+        if (Running || !BurnModeInput.WarpOffered(craft) || !BurnModeInput.StockAutoOnNode(craft)
             || craft.FlightComputer.Burn is not BurnTarget target || target.StartedAt.HasValue || target.AlignmentStartTime.IsEndOfTime()
             || InputEvents.AutoWarpBuffer.Count > 0 || InputEvents.SimSpeedBuffer.Count > 0)
             return null;
