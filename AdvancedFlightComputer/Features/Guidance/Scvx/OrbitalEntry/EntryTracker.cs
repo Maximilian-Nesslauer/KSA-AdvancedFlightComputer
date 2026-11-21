@@ -91,6 +91,16 @@ public sealed class EntryTracker
                 cfg.EngageInAtmosphere ? "PRE-ENTRY: LIFT-UP UNTIL THE AIR" : $"PRE-ENTRY: LIFT-UP UNTIL DRAG {cfg.StartDrag:F2} m/s²");
         }
 
+        // In the air but short of the plan's start: the bank the coast to it was predicted with, on the side towards the site. The plan's first reference is for a state not reached yet, and tracking it would ask the near-vacuum for drag it does not have (2026-11-21: 112 deg overbank for 20 minutes at 190 to 105 km).
+        if (inp.E < inp.Plan.E0)
+        {
+            if (_side == 0) _side = inp.CrossrangeRad > 0 ? -1 : 1;
+            double coastBank = _side * cfg.PreStartBankDeg;
+            Slew(coastBank, inp.Dt);
+            return new Output(Phase.PreEntry, _bank, coastBank, 0, 0, 0, cfg.PreStartBankDeg, db, _side, false, false, false, false,
+                $"COASTING TO THE AIR AT {cfg.PreStartBankDeg:F0}° BANK UNTIL THE PLAN TAKES HOLD");
+        }
+
         var p = inp.Plan.At(inp.E);
         // The measured drag and sink rate, lightly low-passed: the flaps and the bank stir them faster than the drag loop should answer.
         double km = cfg.MeasureSmoothS > 0 ? Math.Clamp(inp.Dt / cfg.MeasureSmoothS, 0.0, 1.0) : 1.0;

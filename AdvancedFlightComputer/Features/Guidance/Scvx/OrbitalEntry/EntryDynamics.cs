@@ -64,8 +64,10 @@ public sealed class EntryDynamics
         double v2 = v * v;
         double d = Math.Max(Drag(e, r), DragFloor);
         double cg = Math.Cos(g);
+        Model.RotationTerms(r, v, g, out _, out double vGammaRot);
         dx[IR] = Math.Sin(g) / d;
-        dx[IG] = u / v2 + (v2 - 1.0 / r) * cg / (r * d * v2);
+        // gamma' = gamma-dot / (D V); the body's rotation adds its V gamma-dot term over V.
+        dx[IG] = u / v2 + (v2 - 1.0 / r) * cg / (r * d * v2) + vGammaRot / (d * v2);
         dx[IS] = -cg / (r * d);
     }
 

@@ -37,7 +37,7 @@ internal static class OrbitalEntryCheck
 
     public static int Run(bool verbose)
     {
-        int fails = TrimCheck() + FrameCheck() + LatchCheck();
+        int fails = TrimCheck() + FrameCheck() + LatchCheck() + RotationCheck();
         foreach (var v in Vehicles)
         {
             fails += CorridorCheck(v);
@@ -144,6 +144,27 @@ internal static class OrbitalEntryCheck
         var after = tr.Update(new EntryTracker.Input(0.5, e, 0.0, 0, 0.3, 7200, 0, vN, plan, InAtmosphere: false));
         bool ok = before.Phase == EntryTracker.Phase.PreEntry && touch.Phase == EntryTracker.Phase.Tracking && after.Phase == EntryTracker.Phase.Tracking;
         Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} start-drag latch at {cfg.StartDrag} m/s2: {before.Phase} -> {touch.Phase} -> {after.Phase} after the drag fell back");
+        return ok ? 0 : 1;
+    }
+
+    /// <summary>
+    /// The body's rotation in the coast: eastward at the equator it holds the craft up (Coriolis and centrifugal), so it meets the air later and further on than on a still body; westward the opposite. A shallow coast from 120 km, as the 2026-11-21 flights flew.
+    /// </summary>
+    static int RotationCheck()
+    {
+        var cfg = new EntryConfig();
+        var still = Model(Vehicles[1]);
+        double omega = 7.2921159e-5;
+        var east = still.WithRotation(omega, 0.0, Math.PI / 2);
+        var west = still.WithRotation(omega, 0.0, -Math.PI / 2);
+        double g = -0.5 * Math.PI / 180;
+        var s0 = EntryPlanner.PredictStart(still, cfg, R0 + 121_000, 7_300, g, 0);
+        var sE = EntryPlanner.PredictStart(east, cfg, R0 + 121_000, 7_300, g, 0);
+        var sW = EntryPlanner.PredictStart(west, cfg, R0 + 121_000, 7_300, g, 0);
+        if (s0 == null || sE == null || sW == null) { Console.WriteLine("  FAIL rotation: a coast never met the air"); return 1; }
+        double r0 = -s0.Value.X[2] * R0 / 1000, rE = -sE.Value.X[2] * R0 / 1000, rW = -sW.Value.X[2] * R0 / 1000;
+        bool ok = rE > r0 && r0 > rW;
+        Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} rotation in the coast from 121 km at -0.5 deg: {rW:F0} km westward, {r0:F0} still, {rE:F0} eastward ({sE.Value.SecondsAhead:F0} s)");
         return ok ? 0 : 1;
     }
 

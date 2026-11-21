@@ -49,6 +49,9 @@ public sealed class EntryConfig
     /// <summary>Drag the plan starts from, m/s^2: before it the planner predicts the coast down to it. Kept apart from <see cref="StartDrag"/>: in air this thin the energy hardly changes while the altitude falls tens of km, and a plan started there does not converge.</summary>
     public double PlanStartDrag { get; set; } = 0.5;
 
+    /// <summary>The bank flown from the first touch of the air until the plan takes hold, deg, and the one the coast down to the plan's start is predicted with: the same, so the prediction is of the flight. Past 90 it digs in, a little lift down, rather than floating on.</summary>
+    public double PreStartBankDeg { get; set; } = 100.0;
+
     /// <summary>Take hold as soon as the craft is below the top of the air, whatever the drag: a shallow entry spends a long time in air too thin to reach any start drag.</summary>
     public bool EngageInAtmosphere { get; set; } = true;
 

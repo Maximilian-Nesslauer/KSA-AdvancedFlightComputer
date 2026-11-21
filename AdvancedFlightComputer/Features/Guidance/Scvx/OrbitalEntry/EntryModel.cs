@@ -44,6 +44,13 @@ public sealed class EntryModel
     public double DensityScale { get; init; } = 1.0;
     public double LiftToDragScale { get; init; } = 1.0;
 
+    /// <summary>
+    /// The body's rotation, rad/s, and the latitude and heading (from north, clockwise) the plan takes as fixed, rad. With them the flight-path equation carries the Coriolis and centrifugal terms of Lu's equations of motion; the speed is the speed over the ground. On a shallow coast they are not small: an eastward pass at 7.3 km/s feels a lift from them of about 70 % of the net pull of gravity at that speed, and without them (2026-11-21) the predicted coast came down too soon, the plan waited at 0.5 m/s^2 for air that was not there, and the craft reached it high.
+    /// </summary>
+    public double Omega { get; init; }
+    public double Latitude { get; init; }
+    public double Heading { get; init; }
+
     /// <summary>Gravity at the body radius, m/s^2: the planner's unit of acceleration.</summary>
     public double G0 => Mu / (BodyRadius * BodyRadius);
 
@@ -97,6 +104,17 @@ public sealed class EntryModel
         AtmosphereTop = AtmosphereTop, DragCoefficient = DragCoefficient, LiftToDrag = LiftToDrag,
         Mass = Mass, ReferenceArea = ReferenceArea, NoseRadius = NoseRadius, SuttonGraves = SuttonGraves,
         DensityScale = densityScale, LiftToDragScale = liftToDragScale,
+        Omega = Omega, Latitude = Latitude, Heading = Heading,
+    };
+
+    /// <summary>A copy at another latitude and heading.</summary>
+    public EntryModel WithRotation(double omega, double latitude, double heading) => new()
+    {
+        BodyRadius = BodyRadius, Mu = Mu, Density = Density, SpeedOfSound = SpeedOfSound,
+        AtmosphereTop = AtmosphereTop, DragCoefficient = DragCoefficient, LiftToDrag = LiftToDrag,
+        Mass = Mass, ReferenceArea = ReferenceArea, NoseRadius = NoseRadius, SuttonGraves = SuttonGraves,
+        DensityScale = DensityScale, LiftToDragScale = LiftToDragScale,
+        Omega = omega, Latitude = latitude, Heading = heading,
     };
 
     /// <summary>A copy at another mass.</summary>
@@ -106,5 +124,22 @@ public sealed class EntryModel
         AtmosphereTop = AtmosphereTop, DragCoefficient = DragCoefficient, LiftToDrag = LiftToDrag,
         Mass = massKg, ReferenceArea = ReferenceArea, NoseRadius = NoseRadius, SuttonGraves = SuttonGraves,
         DensityScale = DensityScale, LiftToDragScale = LiftToDragScale,
+        Omega = Omega, Latitude = Latitude, Heading = Heading,
     };
+
+    /// <summary>
+    /// The rotating body's terms in the rates of speed and flight-path angle, normalised (Lu 2008, Eqs. 4 and 5): what V-dot gains and what V gamma-dot gains, at radius r, speed v and flight-path angle g.
+    /// </summary>
+    public void RotationTerms(double r, double v, double g, out double vDot, out double vGammaDot)
+    {
+        vDot = vGammaDot = 0.0;
+        if (Omega == 0.0)
+            return;
+        double om = Omega * TimeUnit;
+        double cphi = Math.Cos(Latitude), sphi = Math.Sin(Latitude);
+        double cpsi = Math.Cos(Heading), spsi = Math.Sin(Heading);
+        double cg = Math.Cos(g), sg = Math.Sin(g);
+        vDot = om * om * r * cphi * (sg * cphi - cg * sphi * cpsi);
+        vGammaDot = 2.0 * om * v * cphi * spsi + om * om * r * cphi * (cg * cphi + sg * cpsi * sphi);
+    }
 }

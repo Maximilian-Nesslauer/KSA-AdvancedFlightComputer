@@ -804,11 +804,12 @@ public sealed class EntryPlanner
         {
             double h = (rr - 1) * r0;
             double d = model.DragAccel(h, vv * model.SpeedUnit) / g0;
-            double ld = model.Ld(model.Mach(h, vv * model.SpeedUnit));
+            double ld = model.Ld(model.Mach(h, vv * model.SpeedUnit)) * Math.Cos(cfg.PreStartBankDeg * Math.PI / 180.0);
             double vSafe = Math.Max(vv, 1e-4);
+            model.RotationTerms(rr, vv, gg, out double vRot, out double vgRot);
             dr = vv * Math.Sin(gg);
-            dv = -d - Math.Sin(gg) / (rr * rr);
-            dg = (ld * d + (vv * vv - 1.0 / rr) * Math.Cos(gg) / rr) / vSafe;
+            dv = -d - Math.Sin(gg) / (rr * rr) + vRot;
+            dg = (ld * d + (vv * vv - 1.0 / rr) * Math.Cos(gg) / rr + vgRot) / vSafe;
             ds = -vv * Math.Cos(gg) / rr;
         }
 

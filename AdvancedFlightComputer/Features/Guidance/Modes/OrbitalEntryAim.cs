@@ -202,6 +202,9 @@ public static partial class GuidanceWindow
             return false;
         }
         SiteGeometry(parent, refState.PositionCci, refState.VelocityCci, refArrival, out _, out _, out double3 refRel);
+        // The coast from the interface turns with the body: its latitude and heading there.
+        model = model.WithRotationAt(parent, refState.PositionCci, refRel);
+        st.AimModel = model;
         double refGamma = Math.Asin(Math.Clamp(double3.Dot(refRel.NormalizeOrZero(), double3.Normalize(refState.PositionCci)), -1.0, 1.0));
         var coast = EntryPlanner.PredictStart(model, cfg, refState.PositionCci.Length(), refRel.Length(), refGamma, 0.0);
         if (coast == null)
@@ -261,6 +264,8 @@ public static partial class GuidanceWindow
                 if (!EntryDeorbitPlanner.TryArrival(request, td, out double arrival, out StateVectors s))
                     break;
                 SiteGeometry(parent, s.PositionCci, s.VelocityCci, arrival, out double down, out double cross, out double3 rel);
+                model = model.WithRotationAt(parent, s.PositionCci, rel);
+                st.AimModel = model;
                 double gamma = Math.Asin(Math.Clamp(double3.Dot(rel.NormalizeOrZero(), double3.Normalize(s.PositionCci)), -1.0, 1.0));
                 var start = EntryPlanner.PredictStart(model, cfg, s.PositionCci.Length(), rel.Length(), gamma, down);
                 if (start == null)

@@ -222,7 +222,7 @@ public static partial class GuidanceWindow
         }
         st.DragMs2 = drag; st.LiftToDrag = ld;
 
-        EntryModel nominal = OrbitalEntryModel(vehicle, parent, st, 1.0, 1.0);
+        EntryModel nominal = OrbitalEntryModel(vehicle, parent, st, 1.0, 1.0).WithRotationAt(parent, r, vRel);
         double modelDrag = nominal.DragAccel(alt, vMag);
         if (drag > 0.3 && modelDrag > 0.1)
         {
@@ -235,6 +235,9 @@ public static partial class GuidanceWindow
 
         EntryConfig cfg = OrbitalEntryConfig();
         double e = EntryDynamics.Energy(rMag / R0, vMag / nominal.SpeedUnit);
+        // The coast's own clock: the seconds to the plan's start, counted down between the predictions.
+        if (!double.IsNaN(st.PredictedStartS))
+            st.PredictedStartS = Math.Max(0, st.PredictedStartS - dt);
         st.Energy = e;
         double ef = EntryPlanner.FinalEnergy(nominal, cfg);
 
@@ -298,7 +301,19 @@ public static partial class GuidanceWindow
             string status = outp.Status;
             // Where the site sits against the corridor at this energy: the TRAJ display's two lines.
             int reach = 0;
-            if (st.Plan != null)
+            bool coasting = st.Plan != null && e < st.Plan.E0;
+            if (coasting)
+            {
+                // Before the plan's start the site's place in the corridor is the plan's own there: where the coast will deliver the craft, against the corridor at that energy.
+                var p0 = st.Plan;
+                double aheadAtStart = p0.S[0] * p0.BodyRadius;
+                st.RangeShortM = p0.RangeShortM[0];
+                st.RangeLongM = p0.RangeLongM[0];
+                reach = aheadAtStart < p0.RangeShortM[0] ? 1 : aheadAtStart > p0.RangeLongM[0] ? -1 : 0;
+                status = FormattableString.Invariant(
+                    $"COASTING TO THE AIR: THE PLAN TAKES HOLD IN {(double.IsNaN(st.PredictedStartS) ? 0 : st.PredictedStartS):F0} s, THE SITE {aheadAtStart / 1000:F0} KM AHEAD THERE (CORRIDOR {p0.RangeShortM[0] / 1000:F0}-{p0.RangeLongM[0] / 1000:F0}).");
+            }
+            else if (st.Plan != null)
             {
                 var ps = st.Plan.At(e);
                 st.RangeShortM = ps.RangeShortM;
@@ -443,6 +458,29 @@ public static partial class GuidanceWindow
     /// </summary>
     private static EntryModel OrbitalEntryModel(Vehicle vehicle, IParentBody parent, OrbitalEntryState st, double densityScale, double ldScale)
         => OrbitalEntryModel(parent, st.Aero, st.Trim, vehicle.TotalMass, densityScale, ldScale);
+
+    /// <summary>The model with the body's rotation and the latitude and heading of a state (EntryModel.Omega).</summary>
+    internal static EntryModel WithRotationAt(this EntryModel model, IParentBody parent, double3 r, double3 vRel)
+    {
+        var (omega, latitude, heading) = RotationAt(parent, r, vRel);
+        return model.WithRotation(omega, latitude, heading);
+    }
+
+    /// <summary>The body's rotation, and the latitude and heading of a state (position, CCI; velocity over the ground, CCI), rad.</summary>
+    internal static (double Omega, double Latitude, double Heading) RotationAt(IParentBody parent, double3 r, double3 vRel)
+    {
+        double3 spin = parent.GetAngularVelocityCci();
+        double omega = spin.Length();
+        if (!(omega > 0.0))
+            return (0.0, 0.0, 0.0);
+        double3 pole = spin / omega;
+        double3 up = double3.Normalize(r);
+        double latitude = Math.Asin(Math.Clamp(double3.Dot(up, pole), -1.0, 1.0));
+        double3 east = double3.Cross(pole, up).NormalizeOrZero();
+        double3 north = double3.Cross(up, east);
+        double heading = Math.Atan2(double3.Dot(vRel, east), double3.Dot(vRel, north));
+        return (omega, latitude, heading);
+    }
 
     private static EntryModel OrbitalEntryModel(IParentBody parent, KsaAeroSweep.Result aero, EntryTrim trim, double massKg, double densityScale, double ldScale)
     {
