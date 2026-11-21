@@ -29,6 +29,7 @@ public static partial class GuidanceWindow
             DropVehicle(entry.Key, release: !entry.Key.IsDisposed);
         ClearLifecycleRequests();
         RealSpeedHold.Clear();
+        _stageEngineCarries.Clear();
         _s = new VehicleAutopilotState();
     }
 
@@ -73,6 +74,7 @@ public static partial class GuidanceWindow
         }
         _s.Worker = null;
         _s.Guidance = null;
+        _s.SixDofAttitudeIntegral.Reset();
         _s.SixDofStandby = false;
         _s.CancelGfoldSolve();
         _s.CancelEntrySolve();

@@ -132,6 +132,10 @@ public static partial class GuidanceWindow
                 SixDofLog.PlanSnapshot(_s, now, guidance.WorkingPlan(now), "seed");
         }
         GuidanceLog.Info(vehicle, $"Touchdown guidance standby at {x[2]:F0} m: cold solve on its own thread, {what}.");
+        // The engines' own moment (Dynamics6Dof.Params.ThrustMoment*), the trim deflection the plan's gimbal cone is centred on (Scvx6DofConfig.GimbalTrimX/Y), and the cone's width around it, in degrees.
+        double rad = 180.0 / Math.PI;
+        GuidanceLog.Info(vehicle, FormattableString.Invariant(
+            $"Touchdown guidance thrust moment {dyn.ThrustMomentX:F3} {dyn.ThrustMomentY:F3} {dyn.ThrustMomentZ:F3} m (N m per N): gimbal cone centred on a {Math.Atan(cfg.GimbalTrim) * rad:F2} deg trim, {cfg.GimbalMaxDeg:F2} deg around it."));
         GuidanceLog.Debug(vehicle, FormattableString.Invariant($"Touchdown guidance model: air moment limiter {_s.MomentLimiterPerPa * 1e3:F3} per kPa (divides by {_s.MomentLimiterDivisor:F2} now), Tmax {cfg.Tmax:F0} N, floor {cfg.ThrottleFloor:F3}, gimbal {cfg.GimbalMaxDeg:F2} deg, roll torque {cfg.TauRollMax:F0} N m{(cfg.TerminalRollFree ? " (roll left free)" : "")}, engine arm {dyn.LArm:F2} m, inertia {dyn.Ixx:F0} {dyn.Iyy:F0} {dyn.Izz:F0} kg m2, Isp {dyn.Isp:F0} s, tilt limit {cfg.TiltMaxDeg:F0} deg, scales {cfg.XScale[0]:F0} m {cfg.XScale[3]:F0} m/s, plan ends {_s.SixDofTargetComAltM:F2} m over the site of which {_s.SiteEarlyContactM:F2} m for the ground under the footprint, which rises {(_s.SiteGround?.Within(_s.SiteGround.ReachM) ?? 0.0):F2} m within {(_s.SiteGround?.ReachM ?? 0.0):F0} m of the site."));
         return true;
     }
@@ -372,6 +376,7 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void PromoteSixDofStandby(Vehicle vehicle, double now, double[] x)
     {
+        LogLandingEngineState(vehicle, now, "touchdown handover");
         bool converging = _s.Converging;
         Ksa6DofPlan plan = _s.Guidance.Published;
         _s.SixDofStandby = false;

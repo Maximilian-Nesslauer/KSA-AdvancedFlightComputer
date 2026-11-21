@@ -33,7 +33,8 @@ public static class KsaGimbalControl
     public sealed record Command(
         GimbalOverrideMode Mode,
         float CommandY, float CommandZ,                         // Direct
-        double TorqueXNm, double TorqueYNm, double TorqueZNm)   // Lsq (N.m)
+        double TorqueXNm, double TorqueYNm, double TorqueZNm,   // Lsq (N.m)
+        double CoupledXNm = 0, double CoupledYNm = 0, double CoupledZNm = 0)   // Lsq: the part of the torque that comes with the strong axes' (KsaTvcAllocator.Solve)
     {
         public static readonly Command Off =
             new(GimbalOverrideMode.Off, 0, 0, 0, 0, 0);
@@ -97,13 +98,13 @@ public static class KsaGimbalControl
         return cfg != null && Slots.TryGetValue(cfg, out Slot s) ? s : null;
     }
 
-    /// <summary>Command a body torque in N.m, allocated across this vehicle's gimbals.</summary>
-    public static void SetLsq(Vehicle vehicle, double3 torqueNm)
+    /// <summary>Command a body torque in N.m, allocated across this vehicle's gimbals. <paramref name="coupledNm"/> is the part of it that comes with the pitch and yaw torque on its own (KsaTvcAllocator.Solve): the roll an off-centre engine's deflection brings.</summary>
+    public static void SetLsq(Vehicle vehicle, double3 torqueNm, double3 coupledNm = default)
     {
         Slot s = SlotFor(vehicle);
         if (s != null)
             s.Cmd = new Command(GimbalOverrideMode.Lsq, 0, 0,
-                                torqueNm.X, torqueNm.Y, torqueNm.Z);
+                                torqueNm.X, torqueNm.Y, torqueNm.Z, coupledNm.X, coupledNm.Y, coupledNm.Z);
     }
 
     /// <summary>Command raw deflections on every gimbal. A plumbing check, used by the harness.</summary>
@@ -301,7 +302,8 @@ public static class KsaGimbalControl
 
         st.LastAllocation = KsaTvcAllocator.Solve(
             st.Gimbals.AsSpan(0, n), st.Thrusts.AsSpan(0, n), com,
-            new double3(cmd.TorqueXNm, cmd.TorqueYNm, cmd.TorqueZNm), st.Commands);
+            new double3(cmd.TorqueXNm, cmd.TorqueYNm, cmd.TorqueZNm), st.Commands,
+            coupled: new double3(cmd.CoupledXNm, cmd.CoupledYNm, cmd.CoupledZNm));
 
         // The log's gimbal: the one with the most thrust through it.
         int lead = 0;

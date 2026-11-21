@@ -240,6 +240,8 @@ public static partial class GuidanceWindow
 
         // An optimal return: flies no boostback, only the glide onto its drone ship's point.
         internal bool GlideOnly;
+        internal LandingEngineGroups EngineGroups = LandingEngineGroups.Empty;
+        internal Dictionary<string, EngineController> LandingEngineBindings;
 
         // The stack the booster is being dropped from, which it must clear before it lights, see TryAdoptBooster.
         internal Vehicle From;
@@ -279,11 +281,14 @@ public static partial class GuidanceWindow
                 GuidanceLog.Info(vehicle, $"'{root.DisplayName}' is set to optimal return but no plan found its landing point: not handed over.");
             return;
         }
-        if (StageControl.Evaluate(vehicle, PartsLeavingOnActivation(vehicle, root, decoupler)) != VehicleControl.Controllable)
+        HashSet<Part> leaving = PartsLeavingOnActivation(vehicle, root, decoupler);
+        if (StageControl.Evaluate(vehicle, leaving) != VehicleControl.Controllable)
         {
             GuidanceLog.Info(vehicle, $"'{root.DisplayName}' has no usable control after separation. Booster hand-over skipped.");
             return;
         }
+        string engineScope = LandingEngineGroups.PartAddress(root, vehicle.Parts.Root);
+        LandingEngineGroups groups = engineScope == null ? LandingEngineGroups.Empty : s.GetEngineGroups(engineScope);
         _handovers.Add(new BoosterHandover
         {
             AttachmentRoot = root,
@@ -294,9 +299,11 @@ public static partial class GuidanceWindow
             ExpiresAt = now + HandoverWindowS,
             From = vehicle,
             GlideOnly = glideOnly,
+            EngineGroups = groups,
+            LandingEngineBindings = groups.Groups.Length == 0 ? null : LandingEngineGroups.Controllers(vehicle, root, leaving),
         });
         GuidanceLog.Info(vehicle, FormattableString.Invariant(
-            $"booster hand-over armed for '{root.DisplayName}' on sequence {decoupler.Sequence}, site lat {site.X:F3} lon {site.Y:F3}."));
+            $"booster hand-over armed for '{root.DisplayName}' on sequence {decoupler.Sequence}, site lat {site.X:F3} lon {site.Y:F3}, landing engines {(groups.Chosen is { } chosen ? $"'{chosen.Name}' ({chosen.Engines.Length})" : "as staged")}."));
     }
 
     // The player's staging key and AutoStage can both announce one row, so a root already recorded from this stack is not recorded twice.
@@ -368,6 +375,8 @@ public static partial class GuidanceWindow
         _s.SiteLatDeg = mine.SiteLatDeg;
         _s.SiteLonDeg = mine.SiteLonDeg;
         _s.BoostbackGlideOnly = mine.GlideOnly;
+        if (mine.EngineGroups.Groups.Length > 0)
+            _s.EngineGroups[LandingEngineGroups.CraftScope] = mine.EngineGroups.Rebase(mine.LandingEngineBindings, tree);
         GuidanceLog.Info(vehicle, $"adopted as a separated booster, boostback engages within {HandoverWindowS:F0} s.");
 
         if (mine.From is { IsDisposed: false } stage)
@@ -508,6 +517,7 @@ public static partial class GuidanceWindow
 
             // The returnable stage list and the reserve ride the same tick: their inputs - the stage model and the part tree the separation walks read - only change when staging does, and StageModelDirty is already set exactly then. The list goes first, because the reserve arms on its booster's target.
             RefreshReturnableStages(vehicle);
+            RememberStageEngineChoices(vehicle);
             RefreshReserve(vehicle);
             _s.StageModelFailures = 0;
         }
@@ -785,9 +795,18 @@ public static partial class GuidanceWindow
         var keys = new List<string>();
         foreach (ReturnableStage stage in _s.ReturnableStages)
             if (stage.ComesHome)
-                keys.Add(RecoverySiteKey(stage));
+            {
+                string key = RecoverySiteKey(stage);
+                if (stage.EngineGroupScope.Length > 0 && _s.GetEngineGroups(stage.EngineGroupScope).Chosen is { } group)
+                    key += ":engines:" + Uri.EscapeDataString(group.Name) + ":" + string.Join(",", group.Engines);
+                keys.Add(key);
+            }
         return string.Join(";", keys);
     }
+
+    private static bool HasExplicitBoosterEngines()
+        => _s.ReturnableStages.Any(stage => stage.ComesHome && stage.EngineGroupScope.Length > 0
+            && _s.GetEngineGroups(stage.EngineGroupScope).Chosen != null);
 
     /// <summary>The plan's entry for a booster: a usable convex plan for this vehicle, for the targets the boosters have now, that brings the booster rooted at <paramref name="rootId"/> home. False when there is none, or the gravity turn flies instead.</summary>
     internal static bool PlannedRecovery(Vehicle vehicle, uint rootId, out AscentRecoveryResult result)
@@ -1098,14 +1117,21 @@ public static partial class GuidanceWindow
 
         // Use creates state, so reserve it for the focused vehicle and reuse existing state elsewhere.
         bool focused = ReferenceEquals(vehicle, Program.ControlledVehicle);
+        // A craft just split off a stack takes its stage's landing choice on its first step; one without state gets state for it.
         if (focused)
+        {
             Use(vehicle);
+            TakeStageEngineChoice(vehicle, createState: false);
+        }
         else if (VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState state))
         {
             _s = state;
             BodySettings.Follow(_s, vehicle);
+            TakeStageEngineChoice(vehicle, createState: false);
         }
-        else if (!TryAdoptBooster(vehicle))
+        else if (TryAdoptBooster(vehicle))
+            TakeStageEngineChoice(vehicle, createState: false);
+        else if (!TakeStageEngineChoice(vehicle, createState: true))
             return;
 
         LogModeChanges(vehicle);
@@ -1137,7 +1163,15 @@ public static partial class GuidanceWindow
         // LaunchArmed counts as flying because a vehicle waiting for its launch window must update the window and fire the commit. A booster adopted at separation also counts as flying until boostback engages.
         bool handingOver = _s.HandoverPendingUntil > SimNow();
         bool flying = sixDof || _s.Running || landingActive || BoostbackLive || ThreeDofLive || _s.ThreeDofEngagePending || _s.BoostbackEngagePending
-                   || _s.WasEngaged || _s.LandingCutPending || _s.LaunchArmed || handingOver || _s.MoonChain != MoonChainStage.Idle;
+                   || _s.WasEngaged || _s.LandingCutPending || _s.LaunchArmed || handingOver || _s.MoonChain != MoonChainStage.Idle
+                   || _s.LandingEngineCommitPending.HasValue;
+
+        if (_s.ManualEngineChange is { } change)
+        {
+            _s.ManualEngineChange = null;
+            if (focused && !flying && CanSwitchEnginesManually(vehicle))
+                ApplyManualEngineChange(vehicle, change);
+        }
 
         // Check ownership per actuator before mode steps can overwrite a changed command. The attitude is compared by value. The engine belongs to whoever arms stock Auto, because Vehicle.PrepareWorker then clears EngineOn on every step after this prefix and stock's own burn logic never writes Auto by itself. Keep cleanup ahead of the idle return so unfocused vehicles can release control too.
         bool attitudeTaken = _s.ControlAcquired
@@ -1216,12 +1250,19 @@ public static partial class GuidanceWindow
 
         // Planning waits without control, and the stock node takes its claim before Auto is armed.
         // A direct braking coast enters Prep before the manual control claim below.
+        if (!LandingGroupStillValid(vehicle))
+            return;
+        StepLandingEngineCommit(vehicle, SimNow());
         StepDeorbitPlanning(vehicle, orbit, parent);
         // An entry guidance request engages HERE, ahead of the claim below, so its first step is claimed like any other mode's - consumed in Step3Dof it wrote engine and attitude before the claim, and while touchdown guidance flew, the exclusive branch returned before it was consumed at all. Engage3Dof's ClaimVehicle disengages touchdown guidance.
         if (_s.ThreeDofEngagePending)
         {
             _s.ThreeDofEngagePending = false;
-            Engage3Dof(vehicle, SimNow());
+            bool engaged = Engage3Dof(vehicle, SimNow());
+            if (_s.LandingGroupWaiting)
+                _s.ThreeDofEngagePending = true;
+            else
+                FinishLandingGroupReplan(vehicle, engaged);
         }
 
         // Check the takeover while stock still owns the burn, because its step returns while it is active.
@@ -1680,7 +1721,7 @@ public static partial class GuidanceWindow
         => s.ControlAcquired || s.DeorbitNodeClaimed || s.FcResetPending || s.Worker != null
             || s.Active || s.EngagePending || s.Converging || s.Running
             || s.LaunchArmed || s.ConvexLaunchPending || s.LandingCutPending
-            || s.ThreeDofEngagePending || s.BoostbackEngagePending
+            || s.ThreeDofEngagePending || s.BoostbackEngagePending || s.LandingEngineCommitPending.HasValue
             || s.HasCommand || s.Guidance != null
             || s.HandoverPendingUntil != double.NegativeInfinity
             || ReferenceEquals(SixDofLog.Owner, s)
@@ -1696,6 +1737,7 @@ public static partial class GuidanceWindow
     {
         // Clear the wait even when no guidance resources need release.
         ResetLandingEngineWait();
+        ResetLandingEngineSelection();
         DisarmStaging(vehicle);
         if (!HoldsReleasableState(_s))
         {

@@ -355,6 +355,15 @@ public static partial class GuidanceWindow
         }
 
         bool flySolvedClimb = _s.FlyConvexAscent && !_s.BackupAscent && ConvexPlanFlyable(vehicle, orbit, parent, SimNow(), out _);
+        if (!flySolvedClimb && HasExplicitBoosterEngines())
+        {
+            const string reason = "THE SELECTED BOOSTER LANDING ENGINES NEED A CALCULATED CLIMB WITH A RETURN RESERVE.";
+            if (_s.LaunchArmed)
+                ReleaseAscent(reason, vehicle, warn: true);
+            else
+                _s.WarnStatus(reason);
+            return;
+        }
         if (!flySolvedClimb && !SetGravityTurnPlane(vehicle, orbit, parent, out string planeRefusal))
         {
             if (_s.LaunchArmed)

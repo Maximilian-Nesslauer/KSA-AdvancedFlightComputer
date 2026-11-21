@@ -631,9 +631,9 @@ public static partial class GuidanceWindow
                 && TryChaseOrbit(vehicle, orbit, parent, parent.MeanRadius, out _) == ChaseStatus.Ok;
             plansFirst = mode == GuidanceModeId.AscentUpfg && LaunchPlanWhy(vehicle, orbit, parent).Length > 0;
             // Only with a lit engine, because the TWR counts active engines and TerminalHoverAvailable also accepts a craft whose engine the next staging lights.
-            if (hoverPage && KsaEnginePerf.SupportsThrottleControl(vehicle))
+            if (hoverPage && SelectedLandingEngines == null && KsaEnginePerf.SupportsThrottleControl(vehicle))
                 twrLow = TerminalTwr(vehicle, orbit, parent.Mu) < 1.0;
-            if (hoverPage)
+            if (hoverPage && SelectedLandingEngines == null)
                 hoverProblem = TerminalHoverProblem(vehicle);
         }
         GuidanceModeDescriptor gravityTurn = GuidanceModes.Of(GuidanceModeId.AscentGravityTurn);
@@ -699,7 +699,7 @@ public static partial class GuidanceWindow
     }
 
     // One guidance entry point per built-in mode. A mode that registered later commits through its hooks (RegisterMode). The gravity turn has neither yet: its descriptor is unavailable, so its commit stays disabled, and a mode that becomes available without an entry point is refused with a note.
-    private static void RunCommit(Vehicle vehicle, GuidanceModeId mode)
+    private static void RunCommit(Vehicle vehicle, GuidanceModeId mode, bool enginesPrepared = false)
     {
         Orbit orbit = vehicle.Orbit;
         IParentBody parent = orbit?.Parent;
@@ -707,6 +707,34 @@ public static partial class GuidanceWindow
             return;
 
         _s.ClearStatusLines();
+
+        if (!enginesPrepared && SelectedLandingEngines != null)
+        {
+            if (mode == GuidanceModeId.DeorbitLand)
+            {
+                _s.WarnLanding("LANDING GROUPS NEED A SEPARATE COAST BEFORE THE APPROACH BURN. USE LAND NOW.");
+                NoteRefusal(vehicle, mode);
+                return;
+            }
+            if (mode is GuidanceModeId.GfoldHere or GuidanceModeId.SixDofHere or GuidanceModeId.Hover)
+            {
+                if (LandFlies || _s.Running || _s.LaunchArmed)
+                {
+                    if (!CanReuseLandingEngineGroup(vehicle))
+                    {
+                        _s.WarnLanding("STOP THE ACTIVE GUIDANCE BEFORE SWITCHING TO THE LANDING GROUP.");
+                        NoteRefusal(vehicle, mode);
+                        return;
+                    }
+                }
+                else
+                {
+                    ResetLandingEngineSelection();
+                    _s.LandingEngineCommitPending = mode;
+                    return;
+                }
+            }
+        }
 
         bool engage = _s.Engage;
         bool autoStage = _s.AutoStage;
@@ -858,6 +886,7 @@ public static partial class GuidanceWindow
         // An entry guidance or boostback request waits for the next step, which the release would not stop.
         _s.ThreeDofEngagePending = false;
         _s.BoostbackEngagePending = false;
+        ResetLandingEngineSelection();
         ResetFlightComputer();
     }
 

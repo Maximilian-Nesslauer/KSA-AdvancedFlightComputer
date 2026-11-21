@@ -479,7 +479,7 @@ public static partial class GuidanceWindow
     /// The separating parts must keep usable stock control. Stages that separate after ascent are outside boostback range.
     ///  A SITE ON A STAGE ASKS FOR ITS RESERVE: the calculated climb sizes what that booster keeps for the boostback and the landing, which the RESERVE row shows.
     /// </summary>
-    private static void DrawReturnableStageRows()
+    private static void DrawReturnableStageRows(Vehicle vehicle)
     {
         var list = _s.ReturnableStages;
         if (list.Count == 0)
@@ -532,7 +532,10 @@ public static partial class GuidanceWindow
             GaugeRowText(pending ? "PLAN NEEDED" : home ? "REUSED" : "EXPENDED", site,
                 home && !pending ? Palette.Good.F4 : ConsoleUi.WarnInk);
             if (home)
+            {
                 DrawStageReserve(stage);
+                DrawBoosterEngineGroups(vehicle, stage);
+            }
         }
     }
 

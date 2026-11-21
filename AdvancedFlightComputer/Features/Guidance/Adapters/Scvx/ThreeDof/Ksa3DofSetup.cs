@@ -143,11 +143,12 @@ public static class Ksa3DofSetup
     /// <param name="comFloorM">The CoM's height over the site with the legs on the ground - the vehicle height - which is where the ground is for a plan that flies the CoM.</param>
     /// <param name="accelMaxMs2">Largest thrust acceleration the burn may plan, m/s^2, or 0 for none; see Scvx3DofConfig.AccelMax.</param>
     /// <param name="turnAccelRadS2">Largest turn acceleration the plan may use, rad/s^2, or 0 for none; see Scvx3DofConfig.AttitudeAccelMax and TurnAccelLimit.</param>
-    /// <param name="floorMargin">Throttle the plan keeps in hand above the engines' minimum, for the burn tracker; see VehicleAutopilotState.LandingPlanFloorMargin.</param>
+    /// <param name="floorMargin">The share of the thrust range the plan keeps in hand above the engines' minimum, for the burn tracker; see VehicleAutopilotState.LandingPlanFloorMargin.</param>
+    /// <param name="sitePressurePa">Ambient pressure at the landing site, Pa, the thrust range is read at; NaN for the body's surface.</param>
     public static Scvx3DofConfig Config(Vehicle vehicle, int nodes, int glideIntervals, double alphaMaxDeg,
                                         double comFloorM = 0.0, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
                                         double turnAccelRadS2 = 0.0, bool fixedGlideAttitude = false,
-                                        double burnTiltPerSDeg = 0.0)
+                                        double burnTiltPerSDeg = 0.0, double sitePressurePa = double.NaN)
     {
         var min = new double[PointMass3Dof.NX];
         var max = new double[PointMass3Dof.NX];
@@ -156,7 +157,16 @@ public static class Ksa3DofSetup
         min[PointMass3Dof.IR + 2] = Math.Max(comFloorM, 0.0);
         min[PointMass3Dof.IM] = Math.Max(vehicle.TotalMass - vehicle.PropellantMass, 1.0);
         double minimum = Math.Clamp(vehicle.GetMinThrottle(), 0.01, 0.95);
-        double floor = Math.Clamp(minimum + Math.Max(floorMargin, 0.0), minimum, Math.Max(minimum, 0.8));
+        // The margin as a share of the thrust range at the site, held under the hover line when the engines can go under the craft's weight (KsaEnginePerf.LandingPlanFloorThrottle): in throttle points it made the stock booster's planned minimum 1.24 of its weight against the engines' 0.85. The weight is the craft's now, at the glide, which the burn only lightens: the line it sets stays under the weight at the end of a burn that takes off up to a tenth of it.
+        double floor = minimum;
+        if (floorMargin > 0.0)
+        {
+            IParentBody body = vehicle.Orbit?.Parent;
+            double pressure = double.IsFinite(sitePressurePa) ? sitePressurePa
+                : body != null ? KsaEnginePerf.AmbientPressureAt(body, 0.0) : 0.0;
+            double gravity = body != null ? body.Mu / (body.MeanRadius * body.MeanRadius) : 9.81;
+            floor = KsaEnginePerf.LandingPlanFloorThrottle(vehicle, minimum, floorMargin, pressure, vehicle.TotalMass * gravity);
+        }
         // Never under what the minimum throttle already gives at this mass: a limit below it could only ever be met through its slack.
         double minimumAccel = floor * KsaEnginePerf.UncappedAtPressure(vehicle, 0.0).thrust / Math.Max(vehicle.TotalMass, 1.0);
         return new Scvx3DofConfig

@@ -34,6 +34,10 @@
       <HintPath>$(KsaDir)\Brutal.ImGui.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="Brutal.Core">
+      <HintPath>$(KsaDir)\Brutal.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Brutal.Strings">
       <HintPath>$(KsaDir)\Brutal.Strings.dll</HintPath>
       <Private>false</Private>
@@ -85,6 +89,24 @@
        guards. The @(ModPayloadFile) items declared above are picked up automatically. -->
   <Import Project="..\build\ModDeploy.targets" />
   <Import Project="..\build\GuidancePayload.targets" />
+
+  <!-- LOCAL TEST PARTS (Content\Testing): a Debug build that deploys copies them in and adds them to the
+       deployed mod.toml's assets. Release packages carry only Content\*.xml and the repo's mod.toml, so
+       players never get them. -->
+  <Target Name="DeployTestParts" AfterTargets="CopyToMods"
+          Condition="'$(DeployToMods)' == 'true' AND '$(Configuration)' == 'Debug'">
+    <ItemGroup>
+      <_TestPart Include="Content\Testing\*.xml" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_TestPart)" DestinationFolder="$(ModDeployDir)Content\" />
+    <PropertyGroup>
+      <_TestPartAssets>@(_TestPart->'"Content/%(Filename)%(Extension)", ', '')</_TestPartAssets>
+      <_DeployedModToml>$([System.IO.File]::ReadAllText('$(ModDeployDir)mod.toml'))</_DeployedModToml>
+      <_DeployedModToml>$(_DeployedModToml.Replace('assets = [ ', 'assets = [ $(_TestPartAssets)'))</_DeployedModToml>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(ModDeployDir)mod.toml" Lines="$(_DeployedModToml.TrimEnd())" Overwrite="true" />
+    <Message Importance="high" Text="$(MSBuildProjectName): Debug deploy, local test parts added: @(_TestPart->'%(Filename)', ', ')." />
+  </Target>
 
   <Target Name="PackageRelease" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>

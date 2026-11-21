@@ -140,6 +140,29 @@ public static class Ksa6DofSetup
     }
 
     /// <summary>
+    /// The moment the engines the plan runs make about the centre of mass with the gimbals at rest, per newton of their thrust, MODEL body axes (KsaFrameBridge.BodyAxes), N m per N: Dynamics6Dof.Params.ThrustMoment*. The engines are the activated ones, or every one when none is, as KsaGimbalControl.CountsForPlanning counts the gimbals.
+    ///  WHY. A landing on part of a stage's engines (LandingEngineSelection) can put the thrust off the centre of mass: one engine of a ring 0.8 m out on a 10 m arm needs about 4.6 deg of a 6 deg gimbal just to hold it. Without this the plan took the whole cone as free and the gimbals had nothing left for its turns. The flight side needs no change: the allocator works from rest, so the torque it is asked for adds to this moment as the model has it.
+    /// </summary>
+    public static double3 ThrustMomentPerNewton(Vehicle vehicle)
+    {
+        Span<EngineController> all = vehicle.Parts.Modules.Get<EngineController>();
+        bool anyActive = false;
+        foreach (EngineController engine in all)
+            anyActive |= engine.IsActive;
+        var engines = new List<EngineController>();
+        foreach (EngineController engine in all)
+            if (!anyActive || engine.IsActive)
+                engines.Add(engine);
+        (double3 moment, double3 force) = KsaThrustMoment.Rest(vehicle, engines);
+        double thrust = force.Length();
+        if (!(thrust > 0.0))
+            return double3.Zero;
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        var perNewton = new double3(double3.Dot(moment, mx), double3.Dot(moment, my), double3.Dot(moment, mz)) / thrust;
+        return double.IsFinite(perNewton.X) && double.IsFinite(perNewton.Y) && double.IsFinite(perNewton.Z) ? perNewton : double3.Zero;
+    }
+
+    /// <summary>
     /// The thrust the capability figures below are evaluated at: every planning gimbal at its Data.MaximumThrust. KSA computes that at a throttle of 2 and in vacuum (GimbalController.RecomputeStaticData), far beyond what the engines deliver, so a capability is only meaningful per newton of this - the gimbals deliver torque in proportion to the thrust actually through them.
     /// </summary>
     public static double PlanningThrust(Vehicle vehicle)
@@ -272,6 +295,9 @@ public static class Ksa6DofSetup
     /// Peak LATERAL (pitch/yaw) torque the vehicle can actually produce, N*m, at PlanningThrust: the smaller of the two model lateral axes. See TorqueAlong.
     ///  This matters more than it looks. The model bounds lateral torque as LArm * T * tan(gimbal), and if that overstates the truth the solver plans a trajectory needing torque the allocator cannot deliver, the allocator saturates, and the vehicle does not fly its own plan - with nothing in the numbers to say why.
     /// </summary>
+    /// <summary>A trim under this tangent (0.06 deg) is a balanced cluster: its cone keeps the zero-roll width.</summary>
+    private const double OffAxisTrimTan = 1e-3;
+
     public static double LateralTorqueLimit(Vehicle vehicle)
     {
         KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out _);
@@ -282,7 +308,23 @@ public static class Ksa6DofSetup
     /// The torque the allocator actually delivers along one model axis (KSA body coordinates), N*m, with every planning gimbal at its MaximumThrust: it is asked for far more than it has, and what it hands back along that axis is the capability.
     ///  THAT, AND NOT TvcAllocationResult.MaxTorque. MaxTorque is a per-KSA-axis figure that every gimbal could reach on its own, and it came out twice what the allocator delivers in any one direction: an over-asked allocator keeps the demand's direction and scales it down until the first gimbal saturates, so the deliverable torque is where that happens. Planned against MaxTorque, the 2026-10-08 booster's torques were scaled to about half by the allocator at every step and it never flew the attitude its plan turned on (measured live: 0.135 m of pitch torque per newton of thrust against MaxTorque's 0.268, 0.041 of roll against 0.088). The shared deflection is not the binding thing: 70 % of the pitch capability with 70 % of the roll fits.
     /// </summary>
-    public static double TorqueAlong(Vehicle vehicle, double3 axis)
+    /// <summary>
+    /// The lateral torque the allocator delivers along each model axis, N*m, the smaller of the two, when the roll a deflection of thrust acting off the axis brings is asked for with it (Dynamics6Dof.Params.GimbalRollPerTdx/Tdy, from <paramref name="thrustMomentPerN"/>): the authority the plan has once its dynamics carry that roll. For one engine off the stack's axis it is the main gimbal's; at zero roll (LateralTorqueLimit) it is what the verniers can take out.
+    /// </summary>
+    public static double CoupledLateralTorqueLimit(Vehicle vehicle, double3 thrustMomentPerN, double arm)
+    {
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        if (!(arm > 0.0))
+            return LateralTorqueLimit(vehicle);
+        // A unit lateral torque about x is tdy = 1/L, about y tdx = -1/L; the roll is e_x tdy - e_y tdx with e = (-m_y, m_x).
+        double rollPerX = -thrustMomentPerN.Y / arm, rollPerY = thrustMomentPerN.X / arm;
+        return Math.Min(TorqueAlong(vehicle, mx, rollPerX, mz), TorqueAlong(vehicle, my, rollPerY, mz));
+    }
+
+    public static double TorqueAlong(Vehicle vehicle, double3 axis) => TorqueAlong(vehicle, axis, 0.0, default);
+
+    /// <param name="rollPerUnit">The roll, about <paramref name="rollAxis"/>, that comes with each newton metre along <paramref name="axis"/>; asked for with it as the allocator's coupled torque, and allocated with redistribution, since nothing it brings is unmodelled. Zero for the zero-roll figure.</param>
+    public static double TorqueAlong(Vehicle vehicle, double3 axis, double rollPerUnit, double3 rollAxis)
     {
         GimbalController[] gimbals = KsaGimbalControl.PlanningGimbals(vehicle);
         double length = axis.Length();
@@ -301,8 +343,12 @@ public static class Ksa6DofSetup
         double3 unit = axis / length;
         var commands = new double[2 * gimbals.Length];
         // Far beyond anything the gimbals can give - thrust times a kilometre - so the result is the saturation point.
+        //  WITHOUT REDISTRIBUTION: the min-norm solution scaled to its first gimbal at a stop, which keeps the roll at zero. Past that point the free gimbals can bring roll with them (KsaTvcAllocator.Redistribute), which the plan's lateral cone does not model; the flight's allocation has that margin on top, for the attitude feedback.
+        double size = Math.Max(total, 1.0) * 1000.0;
+        bool coupled = rollPerUnit != 0.0;
+        double3 roll = coupled ? rollAxis * (rollPerUnit * size) : default;
         TvcAllocationResult a = KsaTvcAllocator.Solve(gimbals, thrusts, vehicle.CenterOfMassAsmbF,
-                                                      unit * (Math.Max(total, 1.0) * 1000.0), commands);
+                                                      unit * size + roll, commands, redistribute: coupled, coupled: roll);
         return Math.Max(double3.Dot(a.AchievedTorque, unit), 0.0);
     }
 
@@ -469,9 +515,14 @@ public static class Ksa6DofSetup
 
         // THE FLOOR AS THE THRUST IT GIVES, not as a fraction of Tmax. The nozzle's back-pressure loss is the same newtons at any throttle, so the minimum throttle gives less than that fraction of full thrust. On the 2026-10-08 boosters, floor x Tmax took 13.3 % throttle to deliver against a real 10 % floor, putting the model's minimum thrust above the weight of a booster that could in fact hover - and its plans climbed off the pad. The model's floor is the real thrust at the minimum throttle over Tmax, both at the same pressure.
         (double floorThrust, double floorFlow) = KsaEnginePerf.AtThrottle(vehicle, throttleFloor, LastAmbientPressurePa);
-        // THE PLAN'S FLOOR sits above the engines' by floorMargin, so the tracker has thrust to take off; the real floor stays what the flow is fitted through and what the over-powered check falls back to.
+        // THE PLAN'S FLOOR sits above the engines' by floorMargin of the thrust range, so the tracker has thrust to take off, and under the hover line when the engines can go under it (KsaEnginePerf.LandingPlanFloorThrottle); the real floor stays what the flow is fitted through and what the over-powered check falls back to.
+        //  The weight is the one at the end of the burn, where hovering matters: no lighter than dry, and no heavier than now less the burn's seed time at the floor's flow.
+        double siteGravity = parent.Mu / siteCci.LengthSquared();
+        double endMass = Math.Max(vehicle.TotalMass - vehicle.PropellantMass, vehicle.TotalMass - Math.Max(sigmaSeed, 0.0) * Math.Max(floorFlow, 0.0));
         double planFloorThrust = floorMargin > 0.0
-            ? KsaEnginePerf.ThrustAtThrottle(vehicle, Math.Min(throttleFloor + floorMargin, 0.8), LastAmbientPressurePa)
+            ? KsaEnginePerf.ThrustAtThrottle(vehicle,
+                KsaEnginePerf.LandingPlanFloorThrottle(vehicle, throttleFloor, floorMargin, LastAmbientPressurePa, endMass * siteGravity),
+                LastAmbientPressurePa)
             : floorThrust;
         double realFloorFraction = floorThrust > 0.0 && floorThrust < thrust ? floorThrust / thrust : throttleFloor;
         if (planFloorThrust > 0.0 && planFloorThrust < thrust)
@@ -524,7 +575,19 @@ public static class Ksa6DofSetup
         double latCapability = LateralTorqueLimit(vehicle);
         if (latCapability > 0.0)
         {
-            double effectiveTan = latCapability / (arm * (planningThrust > 0.0 ? planningThrust : thrust));
+            double perN = arm * (planningThrust > 0.0 ? planningThrust : thrust);
+            double effectiveTan = latCapability / perN;
+            // THRUST OFF THE AXIS (an off-centre engine choice): the plan's dynamics carry the roll a deflection brings (Dynamics6Dof.Params.GimbalRollPerTdx/Tdy) and its cone is centred on the trim (GimbalTrimX/Y), so its width is the authority with that roll AROUND the trim: the coupled capability less the trim, never under the zero-roll width and never past the hardware's travel beyond the trim. On one 10 deg engine of the triple plate the zero-roll width was 1.54 deg, the verniers' roll authority, and every plan sat at its edge (2026-11-21 10:58). A balanced cluster keeps the zero-roll width it had.
+            double3 thrustMoment = noGimbal ? double3.Zero : ThrustMomentPerNewton(vehicle);
+            double trimTan = Math.Sqrt(thrustMoment.X * thrustMoment.X + thrustMoment.Y * thrustMoment.Y) / arm;
+            if (trimTan > OffAxisTrimTan)
+            {
+                double coupledTan = CoupledLateralTorqueLimit(vehicle, thrustMoment, arm) / perN;
+                double hardwareTan = Math.Tan(gimbalDeg * Math.PI / 180.0);
+                double aroundTrim = Math.Min(coupledTan, hardwareTan) - trimTan;
+                if (aroundTrim > effectiveTan)
+                    effectiveTan = aroundTrim;
+            }
             double effectiveDeg = Math.Atan(effectiveTan) * 180.0 / Math.PI;
             gimbalDeg = Math.Clamp(effectiveDeg, 0.1, gimbalDeg);
         }
@@ -601,6 +664,14 @@ public static class Ksa6DofSetup
             // RCS torque and the side force and propellant that come with it (RcsModel), or none.
             Rcs = rcs,
         };
+        // THE ENGINES' OWN MOMENT per newton (ThrustMomentPerNewton), on a gimballed craft: from the centre of mass now, so each re-solve has it as the propellant burns down.
+        if (!noGimbal)
+        {
+            double3 thrustMoment = ThrustMomentPerNewton(vehicle);
+            dyn.ThrustMomentX = thrustMoment.X;
+            dyn.ThrustMomentY = thrustMoment.Y;
+            dyn.ThrustMomentZ = thrustMoment.Z;
+        }
 
         // NON-DIMENSIONALISE AGAINST THIS PROBLEM, not against the Python test case.
         //  This is the difference between converging and "cold solve failed". The solver works on x~ = x/scale, and THE TRUST REGION IS IN THOSE UNITS, capped at TrustRegionMax = 0.1. So the movement permitted per iteration is 0.1*scale in physical terms. With the scale hard-coded to the reference case's 300 m altitude, that is ~30 m per iteration REGARDLESS of the actual descent: engage from 3 km and the problem is ten times larger while the step stays the same, so the iteration budget can no longer traverse it. The problem is perfectly feasible; the solver simply cannot walk there. It also explains why relaxing constraints does not help - this was never a constraint failure.
@@ -642,6 +713,9 @@ public static class Ksa6DofSetup
             Tmax = thrust,
             ThrottleFloor = throttleFloor,
             GimbalMaxDeg = gimbalDeg,
+            // The cone centred on the deflection that holds the engines' own moment (Scvx6DofConfig.GimbalTrimX/Y): L tdy + m_x T = 0, -L tdx + m_y T = 0.
+            GimbalTrimX = !noGimbal && arm > 0.0 ? dyn.ThrustMomentY / arm : 0.0,
+            GimbalTrimY = !noGimbal && arm > 0.0 ? -dyn.ThrustMomentX / arm : 0.0,
             // The RCS controls are scaled on each axis's whole control torque (Scvx6DofConfig.ResolvedUScale).
             GimbalArm = arm,
             GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) / torqueShare : 0.0,

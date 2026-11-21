@@ -74,6 +74,8 @@ if (args.Contains("--aero-alloc"))
 
 if (args.Contains("--6dof-fins"))
     return SixDofFinCheck.Run(verbose);
+if (args.Contains("--6dof-thrust-moment"))
+    return SixDofThrustMomentCheck.Run(verbose);
 if (args.Contains("--6dof-aero"))
     return SixDofAeroCheck.Run(verbose);
 

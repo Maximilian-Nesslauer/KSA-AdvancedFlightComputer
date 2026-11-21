@@ -26,7 +26,7 @@ public static partial class GuidanceWindow
             && (!double.IsFinite(now) || LandingEngineWaitExpired(now)))
             return RefuseLandingEngines(vehicle, NoLandingEngine, "ENGINE WAIT TIMED OUT: NO USABLE THRUST");
 
-        if (_s.Engage && _s.AutoStage)
+        if (_s.Engage && _s.AutoStage && SelectedLandingEngines == null)
             AutoSequence(vehicle);
 
         KsaEnginePerf.ThrustStatus status = KsaEnginePerf.GetThrottleControlStatus(vehicle);
@@ -39,6 +39,8 @@ public static partial class GuidanceWindow
             ResetLandingEngineWait();
             return true;
         }
+        if (SelectedLandingEngines != null)
+            return RefuseLandingEngines(vehicle, NoLandingEngine, "SELECTED LANDING GROUP HAS NO USABLE THRUST");
 
         ClearLandingEngineCommand();
         Sequence next = null;
