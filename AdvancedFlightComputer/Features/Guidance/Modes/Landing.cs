@@ -8,6 +8,7 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Features.LandingSites;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 public static partial class GuidanceWindow
@@ -476,14 +477,19 @@ public static partial class GuidanceWindow
         if (_s.SiteLatDeg != _s.SiteTerrainCacheLat || _s.SiteLonDeg != _s.SiteTerrainCacheLon
             || !ReferenceEquals(parent, _s.SiteTerrainCacheBody))
         {
-            // The sea where it covers the ground, so a site at sea is on the water and not the seabed (KsaSurfaceHeight).
-            _s.SiteTerrainHeightM = KsaSurfaceHeight.At(parent, SiteDirCcf());
+            _s.SiteTerrainHeightM = SiteSurfaceHeight(parent, _s.SiteLatDeg, _s.SiteLonDeg);
             _s.SiteTerrainCacheLat = _s.SiteLatDeg;
             _s.SiteTerrainCacheLon = _s.SiteLonDeg;
             _s.SiteTerrainCacheBody = parent;
         }
         return _s.SiteTerrainHeightM;
     }
+
+    /// <summary>
+    /// The height above the mean radius that a landing at this site comes down on: the deck of a fixed named site (LandingSiteRegistry.TryFixedHeight), else the surface, which is the sea where it covers the ground, so a site at sea is on the water and not the seabed (KsaSurfaceHeight).
+    /// </summary>
+    internal static double SiteSurfaceHeight(IParentBody parent, double latDeg, double lonDeg)
+        => LandingSiteRegistry.TryFixedHeight(parent, latDeg, lonDeg, out double deckM) ? deckM : KsaSurfaceHeight.At(parent, SiteDirCcf(latDeg, lonDeg));
 
     private const double SiteGroundRingStepM = 0.5;
     private const int SiteGroundRingPoints = 16;

@@ -62,6 +62,8 @@ internal static partial class Program
         IdleEngineParkingRules();
         BurnTurnChecks();
         PrintfTexts();
+        LandingSiteParseRules();
+        LandingSiteListRules();
 
         Console.WriteLine(_failures == 0
             ? $"PASS {_checks} checks"

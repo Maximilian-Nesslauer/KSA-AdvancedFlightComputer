@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Features.LandingSites;
 using Brutal.Numerics;
 using KSA;
 
@@ -185,7 +186,7 @@ internal sealed class DeorbitRequest
         StructuralGLimit = structuralGLimit > 0 ? structuralGLimit : double.PositiveInfinity;
         StockPreparation = double.IsFinite(stockPreparation) ? Math.Max(stockPreparation, DeorbitPlanner.PrepSeconds) : DeorbitPlanner.PrepSeconds;
         SiteCcf = GuidanceWindow.SiteDirCcf(settings.Latitude, settings.Longitude);
-        SiteHeight = Terrain(SiteCcf);
+        SiteHeight = LandingSiteRegistry.TryFixedHeight(Parent, settings.Latitude, settings.Longitude, out double deckM) ? deckM : Terrain(SiteCcf);
     }
 
     internal double3 SiteAt(double time) => SiteCcf.Transform(Parent.GetCcf2Cci(new UniverseTime(time)));

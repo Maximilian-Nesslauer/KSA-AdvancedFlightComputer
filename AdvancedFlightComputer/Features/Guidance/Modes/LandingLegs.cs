@@ -8,6 +8,7 @@ using AdvancedFlightComputer.Features.Ui.Logic;
 using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Features.LandingSites;
 
 // The legs of a landing: a landing that guidance flies deploys every landing leg of the craft once, when its time to the touchdown comes down to the deploy time of the legs plus LegsDeployBufferS (LegsRules.Decide). The time to the touchdown is the one of the plan that flies the landing (LegsToGo).
 // The plans need nothing from this: the vehicle height every landing plans with is measured with the legs deployed (KsaVehicleHeight), so the plan end and the contact point stay where they are when the legs come down.
@@ -138,7 +139,7 @@ public static partial class GuidanceWindow
             return double.NaN;
         double3 r = orbit.StateVectors.PositionCci;
         double3 dirCcf = double3.Normalize(r).Transform(parent.GetCci2Ccf());
-        double terrain = KsaSurfaceHeight.At(parent, dirCcf);
+        double terrain = LandingSiteRegistry.TryFixedHeight(parent, dirCcf, out double deckM) ? deckM : KsaSurfaceHeight.At(parent, dirCcf);
         return r.Length() - (parent.MeanRadius + terrain) - s.VehicleHeightM;
     }
 }
