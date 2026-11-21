@@ -1,7 +1,7 @@
 using AdvancedFlightComputer.Features.Ui.Logic;
 
 // Plain checks of the console's pure UI rules. Each failure prints one line, and any failure ends with exit code 1.
-internal static class Program
+internal static partial class Program
 {
     private static int _failures;
     private static int _checks;
@@ -59,6 +59,7 @@ internal static class Program
         SentenceAndVerbRules();
         LandingLegRules();
         SiteSlopeRules();
+        IdleEngineParkingRules();
         BurnTurnChecks();
 
         Console.WriteLine(_failures == 0

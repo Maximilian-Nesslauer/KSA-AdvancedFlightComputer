@@ -8,5 +8,6 @@
   <ItemGroup>
     <Compile Include="../../AdvancedFlightComputer/Features/Ui/Logic/*.cs" LinkBase="Logic" />
     <Compile Include="../../AdvancedFlightComputer/Features/MultiPass/MultiPassLoss.cs" LinkBase="Logic" />
+    <Compile Include="../../AdvancedFlightComputer/Features/Guidance/Control/IdleEngineParking.cs" LinkBase="Logic" />
   </ItemGroup>
 </Project>

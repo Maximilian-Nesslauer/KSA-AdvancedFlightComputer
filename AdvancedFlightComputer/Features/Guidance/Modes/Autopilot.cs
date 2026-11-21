@@ -1135,6 +1135,7 @@ public static partial class GuidanceWindow
             return;
 
         LogModeChanges(vehicle);
+        PublishIdleEngineParking(vehicle);
 
         // Ahead of the returns below, so a craft whose planning ends releases its hold also when it is not in focus and flies nothing.
         StepRealSpeedHold(vehicle, focused);

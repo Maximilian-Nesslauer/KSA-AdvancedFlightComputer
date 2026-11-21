@@ -153,6 +153,8 @@ internal static class GuidanceSettingSpecs
         "Switches RCS off while an engine on a gimbal burns under a landing mode, so that the gimbal alone points the craft. Off leaves RCS as it is. A craft whose gimbals cannot hold both pitch and yaw keeps RCS either way.");
     public static readonly BoolSpec VehicleHeightAuto = new("VehicleHeightAuto", "MEASURE COM ABOVE LEGS", P, true,
         "Measures the COM above the legs from the colliders of the craft, with the legs deployed, and keeps it current.");
+    public static readonly BoolSpec ParkIdleEngines = new("ParkIdleEngines", "PARK IDLE ENGINES", P, true,
+        "In a landing burn, tilts the gimbals of the engines that are off away from the lit ones, clear of each other. For looks: an engine that is off makes no thrust, and the lit engines steer as before.");
     public static readonly BoolSpec LegsAutoDeploy = new("LegsAutoDeploy", "DEPLOY LEGS IN A LANDING", P, true,
         "A landing that AFC flies deploys every landing leg once, DEPLOY TIME plus BUFFER before the touchdown. A retract or a deploy by hand stands.");
 
@@ -407,7 +409,7 @@ internal static class GuidanceSettingSpecs
     {
         GLimitEnabled, AutoLaunch, MatchTargetArgPe, ArgPeFixed, OptimiseInsertion, InsertBeforeApoapsis,
         FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, AscentOwnAttitude, AscentAeroControl, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
-        VehicleHeightAuto, LegsAutoDeploy, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
+        VehicleHeightAuto, LegsAutoDeploy, ParkIdleEngines, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
         SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ThreeDofFromGlide, ThreeDofSixDofHandover,
     };
 

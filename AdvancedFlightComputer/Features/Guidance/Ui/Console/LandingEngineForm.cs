@@ -4,6 +4,7 @@ using AdvancedFlightComputer.Features.Ui.Canvas;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
+using Specs = AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs;
 
 namespace AdvancedFlightComputer.Features.Guidance;
 
@@ -82,6 +83,8 @@ public static partial class GuidanceWindow
             DrawOtherEngines(layout, chosen, scope, options, editable);
             DrawEngineChoiceNumbers(layout, chosen, loadedLabel);
             DrawEngineSuggestions(layout, options, chosen, scope, editable, loadedLabel);
+            if (craft)
+                GaugeRowCheck(Specs.ParkIdleEngines, ref _s.ParkIdleEngines);
 
             if (manual && chosen.Count > 0)
             {

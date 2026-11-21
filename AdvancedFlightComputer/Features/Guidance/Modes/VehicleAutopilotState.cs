@@ -21,6 +21,13 @@ public sealed class VehicleAutopilotState
     internal ManualEngineChange ManualEngineChange;
     internal GuidanceModeId? LandingEngineCommitPending;
     internal LandingEngineActivation EngineActivation;
+
+    /// <summary>A landing burn parks the gimbals of the engines it leaves off away from the lit ones (KsaIdleEngineParking), for looks.</summary>
+    public bool ParkIdleEngines = true;
+    // The plan for the engines as they were at IdleParkingKey (KsaIdleEngineParking.Signature), so it is built again only when an engine is switched.
+    internal KsaIdleEngineParking.Plan IdleParkingPlan;
+    internal int IdleParkingKey;
+    internal bool IdleParkingBuilt;
     internal bool LandingGroupWaiting;
     internal string LandingGroupRefusal = "";
     internal bool LandingGroupReplanPending;
