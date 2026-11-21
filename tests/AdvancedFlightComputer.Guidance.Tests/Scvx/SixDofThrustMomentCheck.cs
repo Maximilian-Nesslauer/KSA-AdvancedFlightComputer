@@ -81,7 +81,33 @@ internal static class SixDofThrustMomentCheck
         bool pass = worst < 1e-6 && momentOk;
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"  thrust column worst {worst:E1}, rest acceleration {f0[Dynamics6Dof.IW]:E3} {f0[Dynamics6Dof.IW + 1]:E3} against {wx:E3} {wy:E3}  {(pass ? "ok" : "FAIL")}"));
-        return pass;
+
+        // THE ROLL A SIDEWAYS DEFLECTION BRINGS (Dynamics6Dof.Params.GimbalRollPerTdx/Tdy): the lateral columns of the roll row against central differences, a sideways thrust tdx at the engine (OffsetX, OffsetY, -L) rolls the craft by -OffsetY tdx, and the trim deflection rolls it not at all.
+        double rollWorst = 0;
+        foreach (int j in new[] { Dynamics6Dof.ITDX, Dynamics6Dof.ITDY })
+        {
+            double[] lp = (double[])u.Clone(), lm = (double[])u.Clone();
+            lp[j] += h;
+            lm[j] -= h;
+            Dynamics6Dof.Eval(x, lp, p, fp);
+            Dynamics6Dof.Eval(x, lm, p, fm);
+            double fd = (fp[Dynamics6Dof.IW + 2] - fm[Dynamics6Dof.IW + 2]) / (2 * h);
+            rollWorst = Math.Max(rollWorst, Math.Abs(B[(Dynamics6Dof.IW + 2) * nu + j] - fd) / Math.Max(Math.Abs(fd), 1e-12));
+        }
+        var side = (double[])u0.Clone();
+        side[Dynamics6Dof.ITDX] = 2e3;
+        Dynamics6Dof.Eval(rest, side, p, f0);
+        double rollSide = f0[Dynamics6Dof.IW + 2], rollExpected = -OffsetY * 2e3 / p.Izz;
+        var trim = (double[])u0.Clone();
+        trim[Dynamics6Dof.ITDX] = p.ThrustMomentY * 350e3 / Arm;
+        trim[Dynamics6Dof.ITDY] = -p.ThrustMomentX * 350e3 / Arm;
+        Dynamics6Dof.Eval(rest, trim, p, f0);
+        double rollTrim = f0[Dynamics6Dof.IW + 2];
+        bool rollOk = rollWorst < 1e-6 && Math.Abs(rollSide - rollExpected) <= 1e-9 * Math.Abs(rollExpected) && Math.Abs(rollTrim) < 1e-12
+                      && Math.Abs(f0[Dynamics6Dof.IW]) < 1e-12 && Math.Abs(f0[Dynamics6Dof.IW + 1]) < 1e-12;
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"  roll from a sideways deflection: lateral columns worst {rollWorst:E1}, {rollSide:E3} rad/s2 for {rollExpected:E3}; the trim holds the moment with {rollTrim:E1} of roll  {(rollOk ? "ok" : "FAIL")}"));
+        return pass && rollOk;
     }
 
     private static bool Landing(bool verbose)
@@ -164,7 +190,21 @@ internal static class SixDofThrustMomentCheck
         bool cLands = cMiss <= 2.0 * bMiss + 5.0 && cSpeed <= 2.0 * bSpeed + 2.0;
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"  cone centred on the trim: plan in {ci} iterations, {cs.Sigma:F1} s; flown open loop ends {cMiss:F1} m from its aim at {cSpeed:F1} m/s, as the balanced craft {(cLands ? "ok" : "FAIL")}"));
-        return cLands;
+
+        // 4. THE WIDTH THE ROLL COUPLING ALLOWS: with the roll a sideways deflection brings in the dynamics, the cone around the trim is the main gimbal's room beyond the trim (Ksa6DofSetup.CoupledLateralTorqueLimit), not the zero-roll width. 6 deg of gimbal less the 3 deg trim against the 1.5 deg cone above: it must plan and land no worse.
+        double wideDeg = Math.Atan(Math.Tan(GimbalDeg * Math.PI / 180.0) - Math.Sqrt(OffsetX * OffsetX + OffsetY * OffsetY) / Arm) * 180.0 / Math.PI;
+        bool wideOk = Plan(offCentre, x0, xf, verbose, out Scvx6DofSolver ws, out int wi, wideDeg, centred: true);
+        if (!wideOk)
+        {
+            Console.WriteLine($"4. a {wideDeg:F1} deg cone around the trim: NO PLAN after {wi} iterations  FAIL");
+            return false;
+        }
+        double[] wEnd = Fly(ws, offCentre, x0);
+        double wMiss = Miss(wEnd, xf), wSpeed = Speed(wEnd);
+        bool wideLands = wMiss <= Math.Max(cMiss, 2.0 * bMiss + 5.0) && wSpeed <= Math.Max(cSpeed, 2.0 * bSpeed + 2.0);
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"4. a {wideDeg:F1} deg cone around the trim: plan in {wi} iterations, {ws.Sigma:F1} s; flown open loop ends {wMiss:F1} m from its aim at {wSpeed:F1} m/s, no worse than the 1.5 deg cone {(wideLands ? "ok" : "FAIL")}"));
+        return cLands && wideLands;
     }
 
     private static double Miss(double[] end, double[] xf) => Math.Sqrt(end[0] * end[0] + end[1] * end[1] + (end[2] - xf[2]) * (end[2] - xf[2]));

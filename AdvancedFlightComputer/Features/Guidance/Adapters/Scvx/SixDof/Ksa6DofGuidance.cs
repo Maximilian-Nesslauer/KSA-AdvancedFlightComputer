@@ -1579,6 +1579,13 @@ public sealed class Ksa6DofGuidance
     /// <summary>What the attitude feedback added on the last command - default when there was none.</summary>
     public AttitudeFeedback6Dof.Result AttitudeCorrection { get; private set; }
 
+    /// <summary>The roll the last command's lateral gimbal torque brings with it, model body z, N m (Dynamics6Dof.Params.GimbalRollPerTdx/Tdy): already in the command's roll, and the part the allocator solves with pitch and yaw (KsaTvcAllocator.Solve's coupled). Zero for a balanced cluster.</summary>
+    public double CoupledRollNm { get; private set; }
+
+    /// <summary>The roll a lateral gimbal torque (model body x, y) brings: the lateral thrust is tdy = tau_x / L, tdx = -tau_y / L, and the roll is e_x tdy - e_y tdx (Dynamics6Dof).</summary>
+    private double RollWith(double tauX, double tauY)
+        => _dyn.LArm > 0.0 ? (_dyn.GimbalRollPerTdx * -tauY + _dyn.GimbalRollPerTdy * tauX) / _dyn.LArm : 0.0;
+
     /// <param name="x">The measured state, model frame, for the tracker; null flies the plan open loop.</param>
     /// <param name="tracker">The feedback to fly the plan through, or null.</param>
     /// <param name="attitude">The feedback that holds the plan's attitude from the torque margin, or null.</param>
@@ -1589,6 +1596,7 @@ public sealed class Ksa6DofGuidance
         thrustN = 0.0;
         RcsTorqueModel = default;
         AttitudeCorrection = default;
+        CoupledRollNm = 0.0;
 
         // ONE READ of the published plan, into a local. Re-reading the field would reintroduce exactly the tear this exists to prevent: a solve landing between two reads would pair the new controls with the old anchor time, and the vehicle would be commanded from the wrong point of the right trajectory.
         Ksa6DofPlan plan = _published;
@@ -1670,6 +1678,10 @@ public sealed class Ksa6DofGuidance
                 RcsTorqueModel += fb.Rcs;
             AttitudeCorrection = fb;
         }
+
+        // THE ROLL THAT COMES WITH THE LATERAL TORQUE, plan and feedback together, as the dynamics have it: the deflection makes it whether asked or not, so it is asked for, and the allocator solves it with pitch and yaw rather than holding it at zero with the verniers (KsaTvcAllocator.Solve's coupled).
+        CoupledRollNm = InCoast ? 0.0 : RollWith(torqueModel.X, torqueModel.Y);
+        torqueModel = new double3(torqueModel.X, torqueModel.Y, torqueModel.Z + CoupledRollNm);
 
         // THE TRACKER, when there is one: the axial thrust corrected for where the vehicle is against the plan. The torques, and the lateral thrust they come from, are the plan's. Not in the coast, where there is no thrust to correct.
         if (!InCoast && tracker != null && x != null && x.Length >= NX && plan.X.Length >= plan.Nodes * NX)

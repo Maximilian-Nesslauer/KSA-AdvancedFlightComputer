@@ -295,6 +295,9 @@ public static class Ksa6DofSetup
     /// Peak LATERAL (pitch/yaw) torque the vehicle can actually produce, N*m, at PlanningThrust: the smaller of the two model lateral axes. See TorqueAlong.
     ///  This matters more than it looks. The model bounds lateral torque as LArm * T * tan(gimbal), and if that overstates the truth the solver plans a trajectory needing torque the allocator cannot deliver, the allocator saturates, and the vehicle does not fly its own plan - with nothing in the numbers to say why.
     /// </summary>
+    /// <summary>A trim under this tangent (0.06 deg) is a balanced cluster: its cone keeps the zero-roll width.</summary>
+    private const double OffAxisTrimTan = 1e-3;
+
     public static double LateralTorqueLimit(Vehicle vehicle)
     {
         KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out _);
@@ -305,7 +308,23 @@ public static class Ksa6DofSetup
     /// The torque the allocator actually delivers along one model axis (KSA body coordinates), N*m, with every planning gimbal at its MaximumThrust: it is asked for far more than it has, and what it hands back along that axis is the capability.
     ///  THAT, AND NOT TvcAllocationResult.MaxTorque. MaxTorque is a per-KSA-axis figure that every gimbal could reach on its own, and it came out twice what the allocator delivers in any one direction: an over-asked allocator keeps the demand's direction and scales it down until the first gimbal saturates, so the deliverable torque is where that happens. Planned against MaxTorque, the 2026-10-08 booster's torques were scaled to about half by the allocator at every step and it never flew the attitude its plan turned on (measured live: 0.135 m of pitch torque per newton of thrust against MaxTorque's 0.268, 0.041 of roll against 0.088). The shared deflection is not the binding thing: 70 % of the pitch capability with 70 % of the roll fits.
     /// </summary>
-    public static double TorqueAlong(Vehicle vehicle, double3 axis)
+    /// <summary>
+    /// The lateral torque the allocator delivers along each model axis, N*m, the smaller of the two, when the roll a deflection of thrust acting off the axis brings is asked for with it (Dynamics6Dof.Params.GimbalRollPerTdx/Tdy, from <paramref name="thrustMomentPerN"/>): the authority the plan has once its dynamics carry that roll. For one engine off the stack's axis it is the main gimbal's; at zero roll (LateralTorqueLimit) it is what the verniers can take out.
+    /// </summary>
+    public static double CoupledLateralTorqueLimit(Vehicle vehicle, double3 thrustMomentPerN, double arm)
+    {
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        if (!(arm > 0.0))
+            return LateralTorqueLimit(vehicle);
+        // A unit lateral torque about x is tdy = 1/L, about y tdx = -1/L; the roll is e_x tdy - e_y tdx with e = (-m_y, m_x).
+        double rollPerX = -thrustMomentPerN.Y / arm, rollPerY = thrustMomentPerN.X / arm;
+        return Math.Min(TorqueAlong(vehicle, mx, rollPerX, mz), TorqueAlong(vehicle, my, rollPerY, mz));
+    }
+
+    public static double TorqueAlong(Vehicle vehicle, double3 axis) => TorqueAlong(vehicle, axis, 0.0, default);
+
+    /// <param name="rollPerUnit">The roll, about <paramref name="rollAxis"/>, that comes with each newton metre along <paramref name="axis"/>; asked for with it as the allocator's coupled torque, and allocated with redistribution, since nothing it brings is unmodelled. Zero for the zero-roll figure.</param>
+    public static double TorqueAlong(Vehicle vehicle, double3 axis, double rollPerUnit, double3 rollAxis)
     {
         GimbalController[] gimbals = KsaGimbalControl.PlanningGimbals(vehicle);
         double length = axis.Length();
@@ -325,8 +344,11 @@ public static class Ksa6DofSetup
         var commands = new double[2 * gimbals.Length];
         // Far beyond anything the gimbals can give - thrust times a kilometre - so the result is the saturation point.
         //  WITHOUT REDISTRIBUTION: the min-norm solution scaled to its first gimbal at a stop, which keeps the roll at zero. Past that point the free gimbals can bring roll with them (KsaTvcAllocator.Redistribute), which the plan's lateral cone does not model; the flight's allocation has that margin on top, for the attitude feedback.
+        double size = Math.Max(total, 1.0) * 1000.0;
+        bool coupled = rollPerUnit != 0.0;
+        double3 roll = coupled ? rollAxis * (rollPerUnit * size) : default;
         TvcAllocationResult a = KsaTvcAllocator.Solve(gimbals, thrusts, vehicle.CenterOfMassAsmbF,
-                                                      unit * (Math.Max(total, 1.0) * 1000.0), commands, redistribute: false);
+                                                      unit * size + roll, commands, redistribute: coupled, coupled: roll);
         return Math.Max(double3.Dot(a.AchievedTorque, unit), 0.0);
     }
 
@@ -548,7 +570,19 @@ public static class Ksa6DofSetup
         double latCapability = LateralTorqueLimit(vehicle);
         if (latCapability > 0.0)
         {
-            double effectiveTan = latCapability / (arm * (planningThrust > 0.0 ? planningThrust : thrust));
+            double perN = arm * (planningThrust > 0.0 ? planningThrust : thrust);
+            double effectiveTan = latCapability / perN;
+            // THRUST OFF THE AXIS (an off-centre engine choice): the plan's dynamics carry the roll a deflection brings (Dynamics6Dof.Params.GimbalRollPerTdx/Tdy) and its cone is centred on the trim (GimbalTrimX/Y), so its width is the authority with that roll AROUND the trim: the coupled capability less the trim, never under the zero-roll width and never past the hardware's travel beyond the trim. On one 10 deg engine of the triple plate the zero-roll width was 1.54 deg, the verniers' roll authority, and every plan sat at its edge (2026-11-21 10:58). A balanced cluster keeps the zero-roll width it had.
+            double3 thrustMoment = noGimbal ? double3.Zero : ThrustMomentPerNewton(vehicle);
+            double trimTan = Math.Sqrt(thrustMoment.X * thrustMoment.X + thrustMoment.Y * thrustMoment.Y) / arm;
+            if (trimTan > OffAxisTrimTan)
+            {
+                double coupledTan = CoupledLateralTorqueLimit(vehicle, thrustMoment, arm) / perN;
+                double hardwareTan = Math.Tan(gimbalDeg * Math.PI / 180.0);
+                double aroundTrim = Math.Min(coupledTan, hardwareTan) - trimTan;
+                if (aroundTrim > effectiveTan)
+                    effectiveTan = aroundTrim;
+            }
             double effectiveDeg = Math.Atan(effectiveTan) * 180.0 / Math.PI;
             gimbalDeg = Math.Clamp(effectiveDeg, 0.1, gimbalDeg);
         }

@@ -1974,7 +1974,8 @@ public static partial class GuidanceWindow
 
         // Published for THIS vehicle.
         // The override used to be a single global target, so a second guided craft silently stole the first one's gimbals.
-        KsaGimbalControl.SetLsq(vehicle, torqueKsa);
+        // The roll the lateral torque brings with it (Ksa6DofGuidance.CoupledRollNm) is named apart, so the allocator solves it with pitch and yaw.
+        KsaGimbalControl.SetLsq(vehicle, torqueKsa, _s.Guidance.CoupledRollNm * mz);
         FlyPlanRcs(vehicle, mx, my, mz);
         FlyPlanFins(vehicle);
 

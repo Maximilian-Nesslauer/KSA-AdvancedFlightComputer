@@ -106,13 +106,15 @@ public static class KsaTvcAllocator
     /// <summary>An axis whose capability is under this share of the strongest axis's is the weak one, allocated last (see Solve).</summary>
     private const double WeakAxisShare = 0.25;
 
-    /// <param name="redistribute">When a gimbal reaches its stop, hold it there and give the rest of the demand to the gimbals still free (Redistribute). False scales the whole solution to the first gimbal at its stop, the conservative figure the plan's limits are measured with (Ksa6DofSetup.TorqueAlong).</param>
+    /// <param name="redistribute">When a gimbal reaches its stop, hold it there and give the rest of the demand to the gimbals still free (Redistribute). False scales the whole solution to the first gimbal at its stop.</param>
+    /// <param name="coupled">The part of <paramref name="desiredTorque"/> that comes with its pitch and yaw on its own: the roll an off-centre engine's deflection brings (Ksa6DofGuidance.CoupledRoll). Its weak-axis share is solved with the strong axes rather than taken out and put back.</param>
     public static TvcAllocationResult Solve(ReadOnlySpan<GimbalController> gimbals,
                                             ReadOnlySpan<double> thrusts,
                                             float3 comAsmb,
                                             double3 desiredTorque,
                                             double[] commands,
-                                            bool redistribute = true)
+                                            bool redistribute = true,
+                                            double3 coupled = default)
     {
         int n = gimbals.Length;
         var result = new TvcAllocationResult { GimbalCount = n, SaturationScale = 1.0 };
@@ -164,10 +166,12 @@ public static class KsaTvcAllocator
             else if (cy < WeakAxisShare * strongest && cy <= cx && cy <= cz) weak = 1;
             else if (cz < WeakAxisShare * strongest && cz <= cx && cz <= cy) weak = 2;
         }
-        double weakDemand = weak == 0 ? Math.Clamp(desiredTorque.X, -cap.X, cap.X)
-                          : weak == 1 ? Math.Clamp(desiredTorque.Y, -cap.Y, cap.Y)
-                          : weak == 2 ? Math.Clamp(desiredTorque.Z, -cap.Z, cap.Z) : 0.0;
-        var strong = new double3(weak == 0 ? 0.0 : desiredTorque.X, weak == 1 ? 0.0 : desiredTorque.Y, weak == 2 ? 0.0 : desiredTorque.Z);
+        // THE WEAK AXIS'S COUPLED SHARE (coupled) goes with the strong axes: the roll an off-centre engine's deflection brings with its pitch and yaw. Solved with the strong axes at zero roll, the verniers would take it out and the weak step would put it back, and on one engine of a triple plate the verniers' stops were the whole craft's limit. Only the rest of the weak demand is allocated apart.
+        double coupledWeak = weak == 0 ? coupled.X : weak == 1 ? coupled.Y : weak == 2 ? coupled.Z : 0.0;
+        double weakDemand = weak == 0 ? Math.Clamp(desiredTorque.X - coupledWeak, -cap.X, cap.X)
+                          : weak == 1 ? Math.Clamp(desiredTorque.Y - coupledWeak, -cap.Y, cap.Y)
+                          : weak == 2 ? Math.Clamp(desiredTorque.Z - coupledWeak, -cap.Z, cap.Z) : 0.0;
+        var strong = new double3(weak == 0 ? coupledWeak : desiredTorque.X, weak == 1 ? coupledWeak : desiredTorque.Y, weak == 2 ? coupledWeak : desiredTorque.Z);
 
         // w = G^-1 tau, then u = B^T w.
         double wx = inv[0] * strong.X + inv[1] * strong.Y + inv[2] * strong.Z;
@@ -194,16 +198,17 @@ public static class KsaTvcAllocator
             result.SaturationScale = scale;
             if (redistribute)
             {
-                Redistribute(bTorque, cols, strong, weak, lambda, commands);
-                // The share of the strong axes' demand the allocation gives along it.
+                Redistribute(bTorque, cols, strong, weak, lambda, commands, trackWeak: coupledWeak != 0.0);
+                // The share of the strong axes' demand the allocation gives along it, their own axes only.
                 double3 got = default;
                 for (int c = 0; c < cols; c++)
                     got += new double3(bTorque[3 * c], bTorque[3 * c + 1], bTorque[3 * c + 2]) * commands[c];
-                if (weak == 0) got = new double3(0.0, got.Y, got.Z);
-                else if (weak == 1) got = new double3(got.X, 0.0, got.Z);
-                else if (weak == 2) got = new double3(got.X, got.Y, 0.0);
-                double want = double3.Dot(strong, strong);
-                result.SaturationScale = want > 0.0 ? Math.Clamp(double3.Dot(got, strong) / want, 0.0, 1.0) : 1.0;
+                double3 lat = strong;
+                if (weak == 0) { got = new double3(0.0, got.Y, got.Z); lat = new double3(0.0, lat.Y, lat.Z); }
+                else if (weak == 1) { got = new double3(got.X, 0.0, got.Z); lat = new double3(lat.X, 0.0, lat.Z); }
+                else if (weak == 2) { got = new double3(got.X, got.Y, 0.0); lat = new double3(lat.X, lat.Y, 0.0); }
+                double want = double3.Dot(lat, lat);
+                result.SaturationScale = want > 0.0 ? Math.Clamp(double3.Dot(got, lat) / want, 0.0, 1.0) : 1.0;
             }
         }
 
@@ -271,7 +276,8 @@ public static class KsaTvcAllocator
     ///  WHY. Scaling the whole solution to the first gimbal at its stop let the smallest actuator set the craft's torque. On 2026-11-21 one 10 deg engine of a triple plate landed with its main gimbal at a third of its travel while a 70 deg vernier sat at its stop, and the allocation delivered 51-69 % of the demand for the last 1.5 s of the burn: the craft could not make the turn its plan flew and touched down at 4.5 m/s sideways.
     ///  Where the free gimbals cannot make the missing torque without roll (a single engine whose verniers are at their stops), the solve is a least-squares compromise between the two, the regularisation keeping it well defined.
     /// </summary>
-    private static void Redistribute(double[] b, int cols, double3 strong, int weak, double lambda, double[] commands)
+    /// <param name="trackWeak">The strong target carries the weak axis's coupled share (Solve's coupled): the passes keep making it, rather than holding the weak axis where the commands have it.</param>
+    private static void Redistribute(double[] b, int cols, double3 strong, int weak, double lambda, double[] commands, bool trackWeak = false)
     {
         Span<bool> held = stackalloc bool[cols];
         Span<double> g = stackalloc double[9];
@@ -292,7 +298,8 @@ public static class KsaTvcAllocator
             double3 got = default;
             for (int c = 0; c < cols; c++)
                 got += new double3(b[3 * c], b[3 * c + 1], b[3 * c + 2]) * commands[c];
-            var r = new double3(weak == 0 ? 0.0 : strong.X - got.X, weak == 1 ? 0.0 : strong.Y - got.Y, weak == 2 ? 0.0 : strong.Z - got.Z);
+            var r = new double3(weak == 0 && !trackWeak ? 0.0 : strong.X - got.X, weak == 1 && !trackWeak ? 0.0 : strong.Y - got.Y,
+                                weak == 2 && !trackWeak ? 0.0 : strong.Z - got.Z);
             if (!(Math.Sqrt(double3.Dot(r, r)) > 1e-9 * (size + 1.0)))
                 return;
 

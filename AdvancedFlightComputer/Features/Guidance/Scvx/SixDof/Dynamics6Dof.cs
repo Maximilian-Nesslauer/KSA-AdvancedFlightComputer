@@ -65,6 +65,12 @@ public static class Dynamics6Dof
         /// </summary>
         public double ThrustMomentX, ThrustMomentY, ThrustMomentZ;
 
+        /// <summary>
+        /// THE ROLL A SIDEWAYS DEFLECTION BRINGS, for thrust that acts off the axis. The thrust point sits at (e_x, e_y, -L) from the centre of mass, and the moment above is e x z per newton, so e = (-m_y, m_x); a lateral thrust (tdx, tdy) acting there turns the craft by r x f = (L tdy, -L tdx, e_x tdy - e_y tdx). The roll term is what an off-centre engine makes as it steers: zero for its trim deflection (which is parallel to e), the offset over the arm of the lateral torque across it. Without it the plan took a sideways deflection as rollless, the allocator had to hold the roll at zero with whatever it had (a single engine's verniers), and the plan's gimbal cone was sized by that (Ksa6DofSetup.LateralTorqueLimit). Zero for a balanced cluster.
+        /// </summary>
+        public double GimbalRollPerTdx => -ThrustMomentX;
+        public double GimbalRollPerTdy => -ThrustMomentY;
+
         /// <summary>Mass flow per newton of axial thrust.</summary>
         public double Alpha => 1.0 / (Isp * G0);
 
@@ -209,10 +215,10 @@ public static class Dynamics6Dof
         xdot[IQ + 2] = 0.5 * (qw * wy - qx * wz + qz * wx);
         xdot[IQ + 3] = 0.5 * (qw * wz + qx * wy - qy * wx);
 
-        // wdot = I^-1 ( tau - w x (I w) ),  tau = [L*tdy, -L*tdx, tau_roll] + T * m_thrust, plus the air's
+        // wdot = I^-1 ( tau - w x (I w) ),  tau = [L*tdy, -L*tdx, tau_roll + e_x tdy - e_y tdx] + T * m_thrust, plus the air's
         Dual taux = p.LArm * tdy + p.ThrustMomentX * T + aeroTx + rcsTx;
         Dual tauy = -(p.LArm * tdx) + p.ThrustMomentY * T + aeroTy + rcsTy;
-        tauRoll += p.ThrustMomentZ * T + aeroTz + rcsTz;
+        tauRoll += p.ThrustMomentZ * T + p.GimbalRollPerTdx * tdx + p.GimbalRollPerTdy * tdy + aeroTz + rcsTz;
         Dual iwx = p.Ixx * wx, iwy = p.Iyy * wy, iwz = p.Izz * wz;
         Dual gyrox = wy * iwz - wz * iwy;
         Dual gyroy = wz * iwx - wx * iwz;
