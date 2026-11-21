@@ -501,6 +501,9 @@ public sealed class AscentPlan
 
     /// <summary>The stages, numbered from 1, that this plan throttles although the flight burns them at full thrust after the hand-over, because the solve with them held at full thrust did not converge. Empty when the plan burns every stage as the flight does.</summary>
     public string ThrottledStages { get; init; } = "";
+
+    /// <summary>The plan flies through air with drag alone, its lift and side force left out (#216): the sweep had no nose-first table, or the solve with lift did not converge (AscentPlanJob).</summary>
+    public bool LiftLeftOut { get; init; }
     /// <summary>The mass to orbit of the last try of that held solve, kg, NaN when it accepted no step or did not end under this plan's <see cref="AscentSolution.FinalMass"/>. It comes from a solve that did not converge, so it is only a rough guide to what the flight delivers.</summary>
     public double HeldTryMassKg { get; init; } = double.NaN;
 
@@ -619,6 +622,9 @@ public sealed class AscentPlanJob : IDisposable
             AscentProblem bestProblem = null;
             ThrottledKept kept = null;
             int bestK = 0;
+            // THE LADDER SOLVES DRAG ALONE (#216), as it always has; the lift comes after, from its plan (below).
+            bool lift = _build(_initial, _qMax, null).Atmosphere.BodyForce != null;
+            _dragOnly = lift;
             double bestQ = _qMax, qMax = _qMax;
             bool relaxed = false;
             var tried = new HashSet<int>();
@@ -627,7 +633,7 @@ public sealed class AscentPlanJob : IDisposable
             {
                 int stages = k;
                 string what = $"{stages} stage{(stages == 1 ? "" : "s")}{(relaxed ? $", {qMax / 1000.0:F0} kPa" : "")}";
-                AscentProblem problem = _build(stages, qMax, null);
+                AscentProblem problem = Build(stages, qMax, null);
                 AscentSolution sol = SolveOne(problem, what);
                 lock (_gate)
                 {
@@ -703,17 +709,19 @@ public sealed class AscentPlanJob : IDisposable
                 break;
             }
 
+            bool[] heldStages = null;
             // The held throttle can also give a rate-constrained solid launch a feasible trajectory.
             if (best != null && (best.Usable || (bestProblem?.PadRoll != null && best.Nodes > 0))
                 && _toHold != null && !_cts.IsCancellationRequested)
             {
                 bool[] hold = _toHold(bestProblem, best);
+                heldStages = hold != null && Array.IndexOf(hold, true) >= 0 ? hold : null;
                 if (hold != null && Array.IndexOf(hold, true) >= 0)
                 {
                     string which = string.Join(", ", Enumerable.Range(0, hold.Length).Where(i => hold[i]).Select(i => (i + 1).ToString()));
                     lock (_gate)
                         _retry = $"Stage {which} is flown at full thrust after the hand-over: planning it held at full thrust.";
-                    AscentProblem heldProblem = _build(bestK, bestQ, hold);
+                    AscentProblem heldProblem = Build(bestK, bestQ, hold);
                     AscentSolution held = SolveOne(heldProblem, $"stage {which} held at full thrust", best);
                     lock (_gate)
                         _notes.Add($"{bestK} of {_available} stages at {bestQ / 1000.0:F0} kPa, stage {which} held at full thrust: {held.Message}"
@@ -727,6 +735,29 @@ public sealed class AscentPlanJob : IDisposable
                     else if (best.Usable && held.Status != AscentStatus.Cancelled)
                         // The held solve starts from this plan, so until it accepts a step its mass is this plan's own.
                         kept = new ThrottledKept(which, held.Nodes > 0 && held.Accepted > 0 && held.FinalMass < best.FinalMass ? held.FinalMass : double.NaN);
+                }
+            }
+
+            // THE LIFT, BY CONTINUATION (#216): the plan the ladder found with drag alone solved again with the whole aero force, lift and side force, starting from it, with the same stages and the same stages held. A cold solve with lift stalled where the drag-only one converged (the solids stack in the harness, 2026-11-21): the lift couples the tilt to the path, and from a seed far off the optimum the linearisation holds for too small a step. From a converged plan it only has to move as far as the lift moves the optimum. A lift solve that does not converge leaves the drag-only plan to fly, and the notes and the status say so.
+            if (lift && best is { Usable: true } && !_cts.IsCancellationRequested)
+            {
+                _dragOnly = false;
+                lock (_gate)
+                    _retry = "Converged with drag alone: planning again from it with the lift and side force.";
+                AscentProblem withLift = Build(bestK, bestQ, heldStages);
+                AscentSolution lifted = SolveOne(withLift, "with lift", best);
+                lock (_gate)
+                {
+                    _attempts++;
+                    _notes.Add($"{bestK} of {_available} stages at {bestQ / 1000.0:F0} kPa with lift, from the drag-only plan: {lifted.Message}"
+                            + (lifted.Nodes > 0 ? $", {lifted.FinalMass / 1000.0:F2} t to orbit" : "")
+                            + (lifted.Usable ? "" : "; DRAG ONLY: the drag-only plan is kept, the lift left out"));
+                }
+                if (lifted.Usable)
+                {
+                    best = lifted;
+                    bestProblem = withLift;
+                    kept = null;
                 }
             }
 
@@ -746,6 +777,16 @@ public sealed class AscentPlanJob : IDisposable
                 _progress = plan == null ? "no plan" : plan.Solution.Message;
             }
         }
+    }
+
+    /// <summary>Build the problems with drag alone (KsaAscentAtmosphere.DragOnly): the ladder's solves, before the lift is added from their plan (Run).</summary>
+    private bool _dragOnly;
+
+    /// <summary>The problem the caller builds, with drag alone while _dragOnly says so.</summary>
+    private AscentProblem Build(int stages, double qMax, bool[] held)
+    {
+        AscentProblem p = _build(stages, qMax, held);
+        return _dragOnly ? p.WithAero(p.Atmosphere.DragOnly(), p.QAlphaMax) : p;
     }
 
     private AscentSolution SolveOne(AscentProblem problem, string what, AscentSolution start = null)

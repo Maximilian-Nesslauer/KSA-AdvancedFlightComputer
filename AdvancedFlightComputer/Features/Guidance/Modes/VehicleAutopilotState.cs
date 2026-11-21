@@ -208,6 +208,33 @@ public sealed class VehicleAutopilotState
     public bool ForceRoll = true;
     public double ForceRollDeg = 180.0;
 
+    /// <summary>
+    /// Steer the ascent with AFC's own attitude controller (AttitudeController), not the stock flight computer: the engines' gimbals take the torque first (KsaGimbalControl.SetLsq), the RCS the rest - roll, and what the gimbals' travel cannot reach - against the air's moment, which the feedforward reads off the ascent's nose-first aero tables (AscentFlightAero). The roll is held where the stock flight computer would track it (FORCE ROLL, clear of the pad) and left free, its rate damped, where stock decoupled it. On by default; off points through the stock flight computer as before.
+    /// </summary>
+    public bool AscentOwnAttitude = true;
+
+    /// <summary>
+    /// Let the ascent's attitude controller use the craft's control surfaces too (KsaAeroTorqueControl, from their nose-first tables). OFF by default: the plan models the bare airframe, and fins turned to steer push the climb with forces it never planned for; off, they are held at rest and the gimbals and RCS steer.
+    /// </summary>
+    public bool AscentAeroControl = false;
+
+    /// <summary>The ascent's attitude controller gains (AttitudeController.Settings): natural frequency, rad/s, damping, and the rate error's filter, s. Stiffer than the glide's (Autopilot.FlyOwnAttitude says why).</summary>
+    public double AscentAttitudeBandwidthRadS = 2.0;
+    public double AscentAttitudeDamping = 1.0;
+    public double AscentRateFilterS = 0.05;
+
+    /// <summary>The fastest the ascent's controller turns the roll onto its target, deg/s (AttitudeController.Settings.RollCaptureRateDegS): the roll program's heads-down roll, up to 180 deg, inside its 10 s. The glide's 5 deg/s took 23 s for 111 deg (harness, 2026-11-21).</summary>
+    public double AscentRollRateDegS = 30.0;
+
+    /// <summary>The ascent's roll gain, rad/s (AttitudeController.Settings.RollBandwidthRadS): softer than its pointing's, since the roll is the axis the gimbals give least of and slew to give.</summary>
+    public double AscentRollBandwidthRadS = 1.0;
+
+    /// <summary>The craft's nose-first aero sweep the ascent's controller reads its feedforward from (KsaAeroSweep.Result.NoseBodyMoment): the plan's, then one swept again whenever the craft's aero mesh changes (staging), on its own thread (AscentFlightAeroJob). Used only while its mesh hash is the craft's.</summary>
+    internal KsaAeroSweep.Result AscentFlightAero;
+    internal KsaAeroSweep.Job AscentFlightAeroJob;
+    internal double AscentFlightAeroRetryAt = double.NegativeInfinity;
+    internal double AscentAttitudeLogAt = double.NegativeInfinity;
+
     public bool CutoffDone;
     public bool StagingActive;
     public double LastSequenceTime = double.NegativeInfinity;
@@ -1629,9 +1656,10 @@ public sealed class VehicleAutopilotState
     public double3 ThreeDofMeasuredAccel;
 
     /// <summary>
-    /// A returning booster's roll reference, body-fixed (CCF): the wing direction up x d, horizontal and square to the ground track to its site, from where it was first commanded, frozen (GuidanceWindow.ReturnRollRefCci says why). The body's +y is held along its part square to the axis, wings level to the local vertical (KsaPointMassModel.RollRef). Zero until set.
+    /// A returning booster's roll reference, body-fixed (CCF): the wing direction up x d, level to the local horizon and square to the track to its site from where the booster is now, turned to follow that at a limited rate and held still near the site (GuidanceWindow.ReturnRollRefCci and UpdateReturnRollRef say why). The body's +y is held along its part square to the axis, wings level to the local vertical (KsaPointMassModel.RollRef). Zero until set; and the sim time it was last moved.
     /// </summary>
     public double3 ReturnRollRefCcf;
+    internal double ReturnRollRefAt = double.NegativeInfinity;
 
     /// <summary>
     /// Roll entry guidance's glide to the nearest roll at which the air's rolling moment is zero and restoring (GuidanceWindow.UpdateGlideRoll), under AFC's own attitude controller. OFF by default since 2026-11-20: on 2stage_KSAero no roll trims (the rolling moment is a near-constant bias), and the search only wandered; the glide flies wings level to the local vertical, as before. The offset it has turned the held wing direction by, rad, about the engine-first axis (ReturnRollRefCci); when it last chose; and the air's rolling moment at the held roll and at the one it heads for then, N m.
@@ -1667,6 +1695,11 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double3 ThreeDofCommandLocal;
     public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Plan3Dof ThreeDofPlan;
+
+    /// <summary>
+    /// The glide plan of a guidance entry guidance dropped (GuidanceWindow.Drop3Dof), flown open loop while the cold solve that replaces it runs, until this sim time: its ignition lock, which a plan from a dropped guidance must not reach. NaN while ThreeDofPlan is the live guidance's own.
+    /// </summary>
+    internal double ThreeDofKeptPlanUntil = double.NaN;
 
     /// <summary>The same command in CCI, before the attitude trim: what the low-pass and the slew guard step from. CommandDir is this plus the trim, which is what the flight computer points. Zero until entry guidance has sent one.</summary>
     public double3 ThreeDofPlanCommandCci;

@@ -202,7 +202,7 @@ public static partial class GuidanceWindow
 
         double maxAoa = Math.Clamp(_s.GlideMaxAoaDeg, 0.0, 60.0);
         // Off under AFC's own attitude controller (BoostbackGlideOwnAttitude): it holds the command against the air itself, where the trim wound out the stock flight computer's lag.
-        bool ownAttitude = OwnsGlideAttitude(vehicle, boostbackGuides: true, threeDofGuides: false);
+        bool ownAttitude = OwnsAttitude(vehicle, boostbackGuides: true, threeDofGuides: false);
         if (ownAttitude)
             _s.GlideTrimUpDeg = _s.GlideTrimLeftDeg = 0.0;
         double sendUp = _s.GlideTiltUpDeg + _s.GlideTrimUpDeg;

@@ -340,6 +340,9 @@ public abstract class ConvexAscentFlightTest : AfcTest
         double3 lastSampleR = double3.Zero;
         bool frozenReported = false, cutoffLogged = false;
         bool pitchOverObserved = false;
+        // The roll program: when it starts and ends, and how far the roll is off its reference, logged each second through the first minute and at worst after.
+        double rollStart = double.NaN, rollEnd = double.NaN, rollEndErr = double.NaN, nextRollLog = 0.0, worstHeldRoll = 0.0, worstHeldRollTime = double.NaN;
+        double peakRollRate = 0.0;
         double3 lastR = vehicle.Orbit.StateVectors.PositionCci, lastV = vehicle.Orbit.StateVectors.VelocityCci;
         double nextThrustLog = 0.0;
         // The solves before the hand-over are only known to be before it once it happens, so they wait here and are logged then.
@@ -369,6 +372,28 @@ public abstract class ConvexAscentFlightTest : AfcTest
             double altKm = (r.Length() - home.MeanRadius) / 1000.0;
             double air = (v - double3.Cross(new double3(0, 0, home.GetAngularVelocity()), r)).Length();
             upfgConverged |= state.Upfg.Converged;
+            {
+                double rollErr = RollErrorDeg(vehicle, state);
+                if (double.IsNaN(rollStart) && double.IsFinite(state.RollProgramStart))
+                    rollStart = time;
+                if (double.IsNaN(rollEnd) && state.RollProgramDone)
+                {
+                    rollEnd = time;
+                    rollEndErr = rollErr;
+                }
+                double rollRate = Math.Abs(vehicle.BodyRates.X) * 180.0 / Math.PI;
+                peakRollRate = Math.Max(peakRollRate, double.IsFinite(rollRate) ? rollRate : 0.0);
+                if (double.IsFinite(rollEnd) && time > rollEnd + 5.0 && double.IsNaN(handoverTime) && rollErr > worstHeldRoll)
+                {
+                    worstHeldRoll = rollErr;
+                    worstHeldRollTime = time;
+                }
+                if (time >= nextRollLog && time <= 60.0)
+                {
+                    nextRollLog += 1.0;
+                    t.Info(FormattableString.Invariant($"roll t={time,5:F1}s alt {(r.Length() - home.MeanRadius):F0} m  off roll {rollErr,6:F1} deg  roll rate {rollRate,5:F2} deg/s  cmd tilt {AngleDeg(r, state.CommandDir),5:F2} deg  program {(state.RollProgramDone ? "done" : double.IsFinite(state.RollProgramStart) ? "holding" : "not begun")}"));
+                }
+            }
             if (RequiresSolids && !pitchOverObserved && state.Phase == GuidanceWindow.AscentPhase.Profile
                 && AngleDeg(r, state.CommandDir) > 1.0)
             {
@@ -551,7 +576,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 double planThrustKn = PlanThrustAt(sol, profile, state.ConvexPlanTime) / 1000.0;
                 t.Info($"t={time,6:F1}s {state.Phase,-10} alt {altKm,6:F1} km  air {air,6:F0} m/s  plan stage {state.ConvexStage + 1} t {state.ConvexPlanTime,6:F1} s alt {profile.AltitudeAt(state.ConvexPlanTime) / 1000.0,6:F1} km {profile.SpeedAt(state.ConvexPlanTime),6:F0} m/s  "
                      + $"cmd pitch {pitch,5:F1} (plan {planPitch * 180.0 / Math.PI,5:F1})  plan throttle {100.0 * profile.Throttle(state.ConvexPlanTime, state.ConvexStage),3:F0} %  "
-                     + $"thrust {thrustKn,6:F0} kN (plan {planThrustKn,6:F0})  tgo {state.Upfg.Tgo,6:F1}s  mass {vehicle.TotalMass / 1000.0,7:F1} t  '{state.Status}'");
+                     + $"thrust {thrustKn,6:F0} kN (plan {planThrustKn,6:F0})  tgo {state.Upfg.Tgo,6:F1}s  mass {vehicle.TotalMass / 1000.0,7:F1} t  '{state.Status}'"
+                     + AttitudeText(vehicle, home, r, state, sol, state.ConvexPlanTime));
             }
         }
 
@@ -580,6 +606,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 firstSplitBurnTime, sol.Time[firstPlannedSplit], 2 * StepDt);
         }
         t.Info($"worst altitude deviation {worstDevKm:F2} km at {worstDevSpeed:F0} m/s air speed; worst at a staging {worstStagingAltKm:F2} km");
+        t.Info(FormattableString.Invariant($"ROLL PROGRAM: began t={rollStart:F1} s, ended t={rollEnd:F1} s ({rollEnd - rollStart:F1} s) {rollEndErr:F1} deg off; peak roll rate {peakRollRate:F2} deg/s; worst off the roll from 5 s after to the hand-over {worstHeldRoll:F1} deg at t={worstHeldRollTime:F1} s"));
         t.Check("the hand-over blends onto UPFG's steering", blended);
         t.Info($"the plan's attitude and UPFG's steering are {handoverApartDeg:F1} deg apart at the hand-over and {blendApartDeg:F1} deg at most through the blend"
              + (keptThrottledPlan ? "; the planner kept a plan that throttles a stage UPFG flies at full thrust" : ""));
@@ -606,6 +633,26 @@ public abstract class ConvexAscentFlightTest : AfcTest
         t.CheckAbs("flown periapsis altitude, km", (flown.Periapsis - radius) / 1000.0, TargetAltKm, PeriapsisTolKm);
         t.CheckAbs("flown apoapsis altitude, km", (flown.Apoapsis - radius) / 1000.0, TargetAltKm, ApoapsisTolKm);
         t.CheckAbs("flown inclination, deg", flown.Inclination * 180.0 / Math.PI, TargetIncDeg, InclinationTolDeg);
+    }
+
+    // How far the body Y is from the ascent's roll reference about the thrust axis, deg (as GuidanceWindow.RollErrorDeg): the plane's -n square to the axis, turned by the forced roll. NaN without a forced roll or a direction across the axis.
+    private static double RollErrorDeg(Vehicle vehicle, VehicleAutopilotState state)
+    {
+        double3 x = KsaFrameBridge.ThrustAxisCci(vehicle);
+        if (!state.ForceRoll || !(x.Length() > 0.5))
+            return double.NaN;
+        x = double3.Normalize(x);
+        double3 n = -AdvancedFlightComputer.Features.Guidance.Upfg.UpfgTarget.OrbitNormal(AdvancedFlightComputer.Features.Guidance.Upfg.UpfgTarget.DegToRad(state.IncDeg), AdvancedFlightComputer.Features.Guidance.Upfg.UpfgTarget.DegToRad(state.LanDeg));
+        double3 yRef = n - double3.Dot(n, x) * x;
+        if (!(yRef.Length() > 1e-6))
+            return double.NaN;
+        yRef = double3.Normalize(yRef);
+        double3 zRef = double3.Cross(x, yRef);
+        double forced = AdvancedFlightComputer.Features.Guidance.Upfg.UpfgTarget.DegToRad(state.ForceRollDeg);
+        double3 want = Math.Cos(forced) * yRef + Math.Sin(forced) * zRef;
+        double3 have = new double3(0, 1, 0).Transform(KsaFrameBridge.BodyToCci(vehicle));
+        have -= double3.Dot(have, x) * x;
+        return AngleDeg(want, have);
     }
 
     // Degrees between two directions, NaN for a zero one.
@@ -637,6 +684,32 @@ public abstract class ConvexAscentFlightTest : AfcTest
         for (int k = 1; k < sol.Nodes; k++)
             if (Math.Abs(sol.Time[k] - planTime) <= Math.Abs(sol.Time[best] - planTime)) best = k;
         return sol.FullThrust.Length > best ? sol.FullThrust[best] : double.NaN;
+    }
+
+    /// <summary>
+    /// How the craft holds the command: its thrust axis off the command, its angle off the airflow against the plan's at the nearest node, the dynamic pressure, and the torque AFC's attitude controller asked for and what the gimbals and RCS gave (kN m), when it flies the craft.
+    /// </summary>
+    private static string AttitudeText(Vehicle vehicle, IParentBody home, double3 r, VehicleAutopilotState state, AscentSolution sol, double planTime)
+    {
+        double3 axis = KsaFrameBridge.ThrustAxisCci(vehicle);
+        if (!(axis.Length() > 0.5) || !(state.CommandDir.Length() > 0.5))
+            return "";
+        axis = double3.Normalize(axis);
+        double off = Math.Acos(Math.Clamp(double3.Dot(axis, double3.Normalize(state.CommandDir)), -1.0, 1.0)) * 180.0 / Math.PI;
+        double3 air = vehicle.Orbit.StateVectors.VelocityCci - double3.Cross(home.GetAngularVelocityCci(), r);
+        double aoa = air.Length() > 1.0 ? Math.Acos(Math.Clamp(double3.Dot(axis, double3.Normalize(air)), -1.0, 1.0)) * 180.0 / Math.PI : double.NaN;
+        double q = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * air.Length() * air.Length();
+        int best = 0;
+        for (int k = 1; k < sol.Nodes; k++)
+            if (Math.Abs(sol.Time[k] - planTime) <= Math.Abs(sol.Time[best] - planTime)) best = k;
+        double planAoa = sol.AngleOfAttackDeg.Length > best ? sol.AngleOfAttackDeg[best] : double.NaN;
+        string text = FormattableString.Invariant($"  off cmd {off:F2} deg  aoa {aoa:F1} (plan {planAoa:F1}) deg  q {q / 1000.0:F2} kPa");
+        if (state.OwnAttitudeFlying)
+        {
+            AttitudeController.Report a = AttitudeController.Last(vehicle);
+            text += FormattableString.Invariant($"  ctrl |demand| {a.DemandNm.Length() / 1000.0:F0} gimbals {a.GimbalsNm.Length() / 1000.0:F0} rcs {a.RcsNm.Length() / 1000.0:F1} air {(a.AirKnown ? (a.AirNm.Length() / 1000.0).ToString("F0") : "-")} kN m");
+        }
+        return text;
     }
 
     private static void CheckStageBoundary(TestContext t, AscentSolution sol, IParentBody home)

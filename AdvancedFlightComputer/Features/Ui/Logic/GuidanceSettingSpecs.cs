@@ -67,6 +67,10 @@ internal static class GuidanceSettingSpecs
         "Draws the solved plan in the map view with SHOW IN MAP on. The FLIGHT PROFILE picture always shows it.");
     public static readonly BoolSpec ForceRoll = new("ForceRoll", "FORCE ROLL", E, true,
         "Holds the ROLL ANGLE during the ascent.");
+    public static readonly BoolSpec AscentOwnAttitude = new("AscentOwnAttitude", "AFC ATTITUDE CONTROL", E, true,
+        "Steers the ascent with AFC's attitude controller: the gimbals first, RCS for the rest, against the air's moment from the aero tables. Off steers through the stock flight computer.");
+    public static readonly BoolSpec AscentAeroControl = new("AscentAeroControl", "STEER WITH FINS", E, false,
+        "Lets AFC's attitude controller use the control surfaces on the ascent. Off holds them at rest.");
     public static readonly BoolSpec LaunchDescending = new("LaunchDescending", "DESC NODE", P, false,
         "Launches at the descending node with no target.");
 
@@ -298,7 +302,7 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec[] LaunchExpert =
         { ChaseOffsetKm, ArgPeDeg, ConvexThrottleMinPct, TurnStartAltKm, TurnRateDegS, ForceRollDeg };
     public static readonly BoolSpec[] LaunchExpertBools =
-        { MatchTargetArgPe, ArgPeFixed, OptimiseInsertion, InsertBeforeApoapsis, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll };
+        { MatchTargetArgPe, ArgPeFixed, OptimiseInsertion, InsertBeforeApoapsis, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, AscentOwnAttitude, AscentAeroControl };
 
     public static readonly SettingSpec[] LandBoostbackExpert =
         { BoostbackClearanceM, BoostbackSeparationS, BoostbackGlideMissKm, BoostbackLargeMissKm, BoosterCorrectionDvMs, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg };
@@ -402,7 +406,7 @@ internal static class GuidanceSettingSpecs
     public static readonly BoolSpec[] AllBools =
     {
         GLimitEnabled, AutoLaunch, MatchTargetArgPe, ArgPeFixed, OptimiseInsertion, InsertBeforeApoapsis,
-        FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
+        FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, AscentOwnAttitude, AscentAeroControl, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
         VehicleHeightAuto, LegsAutoDeploy, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
         SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ThreeDofFromGlide, ThreeDofSixDofHandover,
     };
