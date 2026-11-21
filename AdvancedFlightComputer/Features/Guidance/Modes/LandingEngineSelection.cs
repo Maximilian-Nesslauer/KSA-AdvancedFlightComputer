@@ -519,4 +519,30 @@ public static partial class GuidanceWindow
         _s.LandingGroupRefusal = "";
         _s.LandingGroupReplanPending = false;
     }
+
+    /// <summary>
+    /// Publishes where the gimbals of the engines that are off are parked (KsaIdleEngineParking): in a landing burn, entry guidance's or touchdown guidance's, with PARK IDLE ENGINES on; otherwise nothing, and the worker slews any it parked back to rest. Touchdown guidance counts from its engage, so the idle nozzles are already out of the way when the engines light. The plan is built again only when an engine is switched on or off.
+    /// </summary>
+    private static void PublishIdleEngineParking(Vehicle vehicle)
+    {
+        bool burn = _s.ThreeDofPhase == ThreeDofPhase.Burn || _s.Active;
+        KsaIdleEngineParking.Plan? plan = null;
+        if (_s.ParkIdleEngines && _s.Engage && burn && vehicle.Parts != null)
+        {
+            int key = KsaIdleEngineParking.Signature(vehicle);
+            if (!_s.IdleParkingBuilt || key != _s.IdleParkingKey)
+            {
+                _s.IdleParkingPlan = KsaIdleEngineParking.Build(vehicle);
+                _s.IdleParkingKey = key;
+                _s.IdleParkingBuilt = true;
+                if (_s.IdleParkingPlan is { } built)
+                    GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                        $"Idle engine parking: {built.Parked} of {built.Gimbals.Length} idle gimbals parked, largest {built.LargestDeg:F1} deg."));
+            }
+            plan = _s.IdleParkingPlan;
+        }
+        else
+            _s.IdleParkingBuilt = false;
+        KsaGimbalControl.SetIdleParking(vehicle, plan);
+    }
 }

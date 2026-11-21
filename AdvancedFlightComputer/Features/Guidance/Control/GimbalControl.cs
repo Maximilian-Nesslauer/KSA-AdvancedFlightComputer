@@ -71,6 +71,9 @@ public static class KsaGimbalControl
 
         /// <summary>The vehicle the demand is for. The worker reads Vehicle.IsControllable through it, which Vehicle.UpdateControl writes on the main thread while no worker runs.</summary>
         internal volatile Vehicle Owner;
+
+        /// <summary>Where the gimbals of the engines a landing burn leaves off are parked (KsaIdleEngineParking), or null outside one. Published whole by the sim thread like the demand, and independent of it: entry guidance's burn steers through stock TVC with the override off.</summary>
+        internal volatile KsaIdleEngineParking.Plan Parking;
     }
 
     /// <summary>
@@ -115,6 +118,14 @@ public static class KsaGimbalControl
             s.Cmd = new Command(GimbalOverrideMode.Direct, y, z, 0, 0, 0);
     }
 
+    /// <summary>Park the gimbals of this vehicle's idle engines as this plan says, or with null slew any it parked back to rest. Only a gimbal whose engine is not activated is ever written, so the live engines and their allocation are untouched.</summary>
+    internal static void SetIdleParking(Vehicle vehicle, KsaIdleEngineParking.Plan plan)
+    {
+        Slot s = plan != null ? SlotFor(vehicle) : Diagnostics(vehicle);
+        if (s != null)
+            s.Parking = plan;
+    }
+
     /// <summary>Hand this vehicle's gimbals back to the game.</summary>
     public static void Disengage(Vehicle vehicle)
     {
@@ -132,17 +143,28 @@ public static class KsaGimbalControl
             return;
 
         FlightComputer.VehicleConfigInfo cfg = flightComputer.VehicleConfig;
-        if (cfg == null || !Slots.TryGetValue(cfg, out Slot st))
+        Slot st = null;
+        if (cfg != null)
+            Slots.TryGetValue(cfg, out st);
+
+        // A craft out of control flies only what stock commands, as with the player's inputs, which ControlsLockout blocks.
+        if (st?.Owner != null && (!st.Owner.IsControllable || VehicleControlOwnership.KfsOwns(st.Owner)))
             return;
 
+        if (st != null)
+            ApplyCommand(st, flightComputer, cfg, ref outputs, ref receipt);
+
+        // LAST, after stock TVC and the allocation, so nothing writes the idle gimbals after it. It runs with no slot too: a flight computer reset (an engine shut off, a split) makes a new VehicleConfigInfo, and a gimbal parked before it still has to come back to rest.
+        KsaIdleEngineParking.Apply(st?.Parking, ref outputs, ref receipt);
+    }
+
+    private static void ApplyCommand(Slot st, FlightComputer flightComputer, FlightComputer.VehicleConfigInfo cfg,
+                                     ref FlightComputerOutput outputs, ref VehicleCommandSink.Receipt receipt)
+    {
         // ONE read of the demand, into a local. Re-reading the field would let a sim thread publish land between two reads and mix two demands together.
         Command cmd = st.Cmd;
         GimbalOverrideMode mode = cmd.Mode;
         if (mode == GimbalOverrideMode.Off)
-            return;
-
-        // A craft out of control flies only what stock commands, as with the player's inputs, which ControlsLockout blocks.
-        if (st.Owner != null && (!st.Owner.IsControllable || VehicleControlOwnership.KfsOwns(st.Owner)))
             return;
 
         if (mode == GimbalOverrideMode.Lsq)
@@ -233,6 +255,7 @@ public static class KsaGimbalControl
     //  Two passes over the gimbals because the solve needs every gimbal's thrust before it can produce any command.
     //  FlightComputer.VehicleConfig.Gimbals holds only the gimbals whose engine is activated, so a stage that is not staged yet never enters the solve.
     //  An unlit gimbal enters the solve with zero thrust while another gimbal is lit, as in stock FlightComputer.UpdateTvcThrusts, and stock ComputeTvcControl gives it a zero command. With nameplate thrust in its columns the minimum-norm solve would give it a share of the demand by its moment arm, and that share would produce no torque. Only when no gimbal has thrust does the nameplate maximum stand in, so the allocation can still be inspected on the pad.
+    //  A gimbal whose engine is not activated is not in the solve at all. In a landing burn KsaIdleEngineParking parks it, after this writer, and never touches a gimbal the solve drives.
     private static void ApplyLsq(Slot st, Command cmd, FlightComputer.VehicleConfigInfo cfg,
                                  float3 com, ref FlightComputerOutput outputs,
                                  ref VehicleCommandSink.Receipt receipt)
