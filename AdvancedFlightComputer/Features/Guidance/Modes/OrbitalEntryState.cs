@@ -58,6 +58,9 @@ public sealed class OrbitalEntryState
     public double PlanAt = double.NaN;
     public double HeadingErrorDeg;
 
+    /// <summary>The ENTRY TRAJ window's fixed axes for this entry, built from its first plan; cleared by a reset so the next entry builds its own.</summary>
+    public object TrajLayout;
+
     /// <summary>AFC's attitude controller's last report while it flew the entry (FlyOwnAttitude), for the log.</summary>
     internal AttitudeController.Report Attitude;
     internal bool AttitudeOwn;
@@ -125,5 +128,6 @@ public sealed class OrbitalEntryState
         StopPending = false;
         RollRefCci = default;
         NextTraceAt = double.NegativeInfinity;
+        TrajLayout = null;
     }
 }
