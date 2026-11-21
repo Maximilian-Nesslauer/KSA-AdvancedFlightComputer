@@ -31,7 +31,7 @@ using AdvancedFlightComputer.Guidance.Numerics.Flight;
 ///
 /// THE SPLIT, in one programme. The control surfaces and the RCS thrusters share the demand (KsaAeroTorqueControl.Command with the RCS as its backup): a degree of fin costs next to nothing, a thruster its propellant, so the fins take every axis they can and the RCS only what they cannot - roll included, where a fixed "fins first, roll last" order had left roll to the RCS. Each fin is asked only for what its rate reaches by the next step, from where it is, and pays to move, so it does not chatter. The RCS is then fired for what the fins will give short of the demand (KsaRcsTorqueControl, pitch and yaw before roll). The engine's gimbals come in only where the settings use them (see THE GIMBALS).
 ///
-/// AUTHORITY-AWARE CAPTURE (Settings.AuthorityCapture; an orbital entry). The capture rate becomes the square-root law of a time-optimal stop: k theta near the target, and past theta = a / k^2, sqrt(2 a (theta - a / 2k^2)), the fastest the craft can still stop from in the angle left, joined to the linear part without a kink (ArduPilot's sqrt controller has the same shape). a is the angular acceleration the craft can spare about the axis now: what its surfaces and RCS can give each way (their Characterise) less the trim they hold against the air, over the inertia, at AuthorityShare of it, measured every AuthorityEveryS. Near the target nothing changes; far off, or with little authority, it asks only for rates it can stop from, so the demand stays within reach and the surfaces do not slam from stop to stop (2026-11-21: 1.5-4 MN m asked against 0.1-0.6 given, 34 full flap reversals a minute). The integral stands still while the actuators fall short of the demand (conditional integration, against wind-up). The report carries the acceleration the craft can spare about the airflow, which entry guidance holds its bank's slew to.
+/// AUTHORITY-AWARE CAPTURE (Settings.AuthorityCapture; an orbital entry). The capture rate becomes the square-root law of a time-optimal stop: k theta near the target, and past theta = a / k^2, sqrt(2 a (theta - a / 2k^2)), the fastest the craft can still stop from in the angle left, joined to the linear part without a kink (ArduPilot's sqrt controller has the same shape). a is the angular acceleration the craft can spare about the axis now: what its surfaces and RCS can give each way (their Characterise) less the trim they hold against the air, over the inertia, at AuthorityShare of it: the surfaces' reach measured every AuthorityEveryS, as it follows the air, and the RCS's once, and again only when the mass or the centre of mass moves past RcsRemeasureShare. Near the target nothing changes; far off, or with little authority, it asks only for rates it can stop from, so the demand stays within reach and the surfaces do not slam from stop to stop (2026-11-21: 1.5-4 MN m asked against 0.1-0.6 given, 34 full flap reversals a minute). The integral stands still while the actuators fall short of the demand (conditional integration, against wind-up). The report carries the acceleration the craft can spare about the airflow, which entry guidance holds its bank's slew to.
 ///
 /// SURFACE SMOOTHING (Settings.SurfaceSmoothS; an orbital entry, where RCS backs the surfaces). The surfaces' deflections follow the allocator's through a first-order lag of that time, and the RCS takes what they then give short: dynamic control allocation (Harkegard), a price on the surfaces' rate of movement and none on their deflection, so slow demand goes to the surfaces and fast jitter to the RCS. In thin air the RCS's flutter about a held attitude swung the flaps 10 deg every half second for next to no torque (2026-11-21).
 ///
@@ -73,9 +73,14 @@ internal static class AttitudeController
         /// <summary>The roll acceleration the lit gimbals and the RCS can give, rad/s^2 (RollAuthority), and when it was measured.</summary>
         public double RollAccel = double.NaN;
         public double RollAccelAt = double.NaN;
-        /// <summary>The most torque the surfaces and RCS can give about each model axis, each way, N m (Authority), and when measured.</summary>
-        public double3 MaxPlusNm, MaxMinusNm;
+        /// <summary>The most torque the surfaces can give about each model axis, each way, N m (SpareAccel), and when measured.</summary>
+        public double3 FinPlusNm, FinMinusNm;
         public double MaxAt = double.NaN;
+        /// <summary>The same for the RCS, measured once and again only when the mass or the centre of mass has moved past RcsRemeasureShare (SpareAccel): the mass and centre of mass it was measured at, and whether it has been.</summary>
+        public double3 RcsPlusNm, RcsMinusNm;
+        public double RcsMassKg = double.NaN;
+        public double3 RcsComAsmb;
+        public bool RcsKnown;
         public readonly List<ControlSurface> Scratch = new();
         /// <summary>Last step the actuators fell short of the demand: the integral stands still.</summary>
         public bool Saturated;
@@ -236,6 +241,7 @@ internal static class AttitudeController
             slot.Integral = default;
             slot.Saturated = false;
             slot.MaxAt = double.NaN;
+            slot.RcsKnown = false;
         }
     }
 
@@ -288,6 +294,11 @@ internal static class AttitudeController
     /// <summary>How often the surfaces' and RCS's reach is measured again, s (six small LPs each).</summary>
     private const double AuthorityEveryS = 0.5;
 
+    /// <summary>
+    /// How far the mass may change, as a share of it, and the centre of mass move, as a share of the craft's largest radius of gyration (about the size of the thrusters' levers), before the RCS's reach is measured again: a lever off by that share puts the torque off by about as much. Measuring it took six linear programmes on the main thread every half second of game time, more often under warp (2026-11-21).
+    /// </summary>
+    private const double RcsRemeasureShare = 0.02;
+
     /// <summary>The share of the demand the actuators may fall short by before the step counts as saturated.</summary>
     private const double SaturatedShare = 0.15;
 
@@ -318,33 +329,51 @@ internal static class AttitudeController
     private static double3 SpareAccel(Vehicle vehicle, Slot slot, double now, KsaAeroSweep.Result aero, double momentLimiterPerPa, bool surfaces,
                                       double3 mx, double3 my, double3 mz, double ixx, double iyy, double izz, double3 trimModel)
     {
+        // The surfaces' reach follows the air, so it is measured again every AuthorityEveryS.
         if (!(double.IsFinite(slot.MaxAt) && now - slot.MaxAt < AuthorityEveryS && now >= slot.MaxAt))
         {
             slot.MaxAt = now;
             double[] plus = new double[3], minus = new double[3];
             AeroTorqueAllocator fins = surfaces ? KsaAeroTorqueControl.Measure(vehicle, aero, mx, my, mz, momentLimiterPerPa, slot.Scratch, out _) : null;
-            RcsTorqueAllocator rcs = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out _);
-            for (int axis = 0; axis < 3; axis++)
-            {
-                if (fins != null)
+            if (fins != null)
+                for (int axis = 0; axis < 3; axis++)
                 {
-                    plus[axis] += Math.Max(fins.Characterise(axis, 1).MaxTorqueNm, 0.0);
-                    minus[axis] += Math.Max(fins.Characterise(axis, -1).MaxTorqueNm, 0.0);
+                    plus[axis] = Math.Max(fins.Characterise(axis, 1).MaxTorqueNm, 0.0);
+                    minus[axis] = Math.Max(fins.Characterise(axis, -1).MaxTorqueNm, 0.0);
                 }
-                if (rcs != null)
-                {
-                    plus[axis] += Math.Max(rcs.Characterise(axis, 1).MaxTorqueNm, 0.0);
-                    minus[axis] += Math.Max(rcs.Characterise(axis, -1).MaxTorqueNm, 0.0);
-                }
-            }
-            slot.MaxPlusNm = new double3(plus[0], plus[1], plus[2]);
-            slot.MaxMinusNm = new double3(minus[0], minus[1], minus[2]);
+            slot.FinPlusNm = new double3(plus[0], plus[1], plus[2]);
+            slot.FinMinusNm = new double3(minus[0], minus[1], minus[2]);
         }
+        // The RCS's reach does not: its thrusters' levers change only as the mass and centre of mass do, so it is measured once and again only past RcsRemeasureShare of either.
+        double mass = vehicle.TotalMass;
+        float3 comF = vehicle.CenterOfMassAsmbF;
+        var com = new double3(comF.X, comF.Y, comF.Z);
+        double gyration = mass > 0.0 ? Math.Sqrt(Math.Max(Math.Max(ixx, iyy), izz) / mass) : double.NaN;
+        bool moved = !slot.RcsKnown
+                     || !(Math.Abs(mass - slot.RcsMassKg) <= RcsRemeasureShare * slot.RcsMassKg)
+                     || (double.IsFinite(gyration) && !((com - slot.RcsComAsmb).Length() <= RcsRemeasureShare * gyration));
+        if (moved)
+        {
+            double[] plus = new double[3], minus = new double[3];
+            RcsTorqueAllocator rcs = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out _);
+            if (rcs != null)
+                for (int axis = 0; axis < 3; axis++)
+                {
+                    plus[axis] = Math.Max(rcs.Characterise(axis, 1).MaxTorqueNm, 0.0);
+                    minus[axis] = Math.Max(rcs.Characterise(axis, -1).MaxTorqueNm, 0.0);
+                }
+            slot.RcsPlusNm = new double3(plus[0], plus[1], plus[2]);
+            slot.RcsMinusNm = new double3(minus[0], minus[1], minus[2]);
+            slot.RcsMassKg = mass;
+            slot.RcsComAsmb = com;
+            slot.RcsKnown = true;
+        }
+        double3 up = slot.FinPlusNm + slot.RcsPlusNm, down = slot.FinMinusNm + slot.RcsMinusNm;
         static double Spare(double up, double down, double trim, double inertia)
             => inertia > 0.0 ? Math.Max(Math.Min(up - trim, down + trim), 0.0) / inertia : double.NaN;
-        return new double3(Spare(slot.MaxPlusNm.X, slot.MaxMinusNm.X, trimModel.X, ixx),
-                           Spare(slot.MaxPlusNm.Y, slot.MaxMinusNm.Y, trimModel.Y, iyy),
-                           Spare(slot.MaxPlusNm.Z, slot.MaxMinusNm.Z, trimModel.Z, izz));
+        return new double3(Spare(up.X, down.X, trimModel.X, ixx),
+                           Spare(up.Y, down.Y, trimModel.Y, iyy),
+                           Spare(up.Z, down.Z, trimModel.Z, izz));
     }
 
     /// <summary>
