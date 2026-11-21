@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.Burns;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.Features.Ui.Logic;
@@ -77,9 +78,27 @@ internal static class PageKit
         CommitAction? delete = next != null
             ? new CommitAction(PlanVerbs.DeleteBurn, "", PageText.DeleteNodeTip, () => BurnModeInput.DeleteNode(craft, next))
             : null;
+        PointingCheck pointing = rcs ? PointingCheck.None : BurnPointing.CheckNextNode(craft);
         return new CommitSpec(PlanVerbs.FlyBurn, rcs ? FlownBy.Afc : FlownBy.StockAuto, BurnModeInput.FlyNextRefusal(craft), status, false,
-            rcs ? PageText.FlyRcsTip : PageText.FlyStockTip, Act: () => BurnModeInput.FlyWithAuto(craft), Owner: rcs ? Owner.Afc : Owner.Stock,
-            Secondary: delete);
+            WithPointing(rcs ? PageText.FlyRcsTip : PageText.FlyStockTip, in pointing), Act: () => BurnModeInput.FlyWithAuto(craft), Owner: rcs ? Owner.Afc : Owner.Stock,
+            Secondary: delete, Caution: pointing.Caution);
+    }
+
+    /// <summary>The verb card of a node that stock AUTO is about to fly, with the pointing warning first.</summary>
+    public static string WithPointing(string tip, in PointingCheck pointing)
+        => pointing.Warning == PointingWarning.None ? tip : pointing.Card + "\n\n" + tip;
+
+    /// <summary>
+    /// The outlined action beside the status while stock AUTO flies the next node: STOP WARP while the warp to the turn
+    /// runs, WARP TO TURN while one is offered, and otherwise <paramref name="fallback"/>.
+    /// </summary>
+    public static CommitAction? TurnWarpOr(Vehicle craft, CommitAction? fallback)
+    {
+        if (TurnWarp.Running)
+            return new CommitAction(BurnTurnRules.StopWarpVerb, "", BurnTurnRules.StopWarpTip, TurnWarp.Cancel, Danger: false);
+        return TurnWarp.OfferedEnd(craft) != null
+            ? new CommitAction(BurnTurnRules.WarpVerb, "", BurnTurnRules.WarpTip, () => TurnWarp.Start(craft), Danger: false)
+            : fallback;
     }
 
     public static CommitSpec FlyPass(Vehicle craft, MultiPassExecution exec)
@@ -88,7 +107,7 @@ internal static class PageKit
         if (VehicleControlOwnership.HolderOf(craft) == ControlClaimant.RcsTranslation)
             return CommitSpec.StatusOnly(which + ": RCS", true, FlownBy.Afc);
         if (BurnModeInput.StockAutoOnNode(craft))
-            return CommitSpec.StatusOnly(which + ": STOCK AUTO", true, FlownBy.AfcPlansStockAuto);
+            return CommitSpec.StatusOnly(which + ": STOCK AUTO", true, FlownBy.AfcPlansStockAuto) with { Secondary = TurnWarpOr(craft, null) };
         return BurnModeInput.NextNode(craft) != null && ReferenceEquals(craft, Program.ControlledVehicle)
             ? CommitSpec.StatusOnly(which + ": MANUAL", false, FlownBy.You)
             : CommitSpec.StatusOnly(which, false, FlownBy.AfcPlansStockAuto);
@@ -114,14 +133,14 @@ internal static class PageKit
             : (PlanVerbs.DeleteBurn, PageText.DeleteNodeTip, "");
     }
 
-    /// <summary>The footer while stock AUTO flies the next node: a pending status and DELETE BURN, as the head drawer offers it.</summary>
+    /// <summary>The footer while stock AUTO flies the next node: a pending status, and the warp to the turn while one is offered, or else DELETE BURN, as the head drawer offers it.</summary>
     public static CommitSpec StockAutoFlies(Vehicle craft)
     {
         Burn? next = BurnModeInput.NextNode(craft);
         CommitAction? delete = next != null
             ? new CommitAction(PlanVerbs.DeleteBurn, "", PageText.DeleteNodeTip, () => BurnModeInput.DeleteNode(craft, next))
             : null;
-        return CommitSpec.StatusOnly("STOCK AUTO: BURN", true, FlownBy.StockAuto) with { Secondary = delete };
+        return CommitSpec.StatusOnly("STOCK AUTO: BURN", true, FlownBy.StockAuto) with { Secondary = TurnWarpOr(craft, delete) };
     }
 
     /// <summary>Whether the guidance pages can draw, and the footer they show when they cannot.</summary>
