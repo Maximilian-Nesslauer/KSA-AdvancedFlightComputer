@@ -2203,8 +2203,7 @@ public static partial class GuidanceWindow
                                                        ascent ? _s.AscentAttitudeDamping : AttitudeController.Settings.Default.Damping,
                                                        _s.AttitudeDeadbandDeg, AttitudeController.Settings.Default.RateDeadbandDegS)
         {
-            // Belly first the surfaces' tables (swept within 20 deg of engine-first) do not reach, so orbital entry holds its attitude on RCS until they are swept belly first too.
-            UseSurfaces = (!ascent || _s.AscentAeroControl) && !OrbitalEntryLive,
+            UseSurfaces = !ascent || _s.AscentAeroControl,
             UseGimbals = ascent,
             RollFree = ascent && !AscentHoldsRoll(vehicle, parent),
         };

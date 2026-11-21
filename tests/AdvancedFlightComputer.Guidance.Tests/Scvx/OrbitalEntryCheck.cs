@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Guidance.Numerics.Flight;
 using AdvancedFlightComputer.Guidance.Scvx.OrbitalEntry;
 
 
@@ -36,7 +37,7 @@ internal static class OrbitalEntryCheck
 
     public static int Run(bool verbose)
     {
-        int fails = TrimCheck();
+        int fails = TrimCheck() + FrameCheck();
         foreach (var v in Vehicles)
         {
             fails += OpenLoop(v, verbose);
@@ -67,6 +68,38 @@ internal static class OrbitalEntryCheck
                   && Math.Abs(t.AlphaDeg[0] - 62) < 1.5 && Math.Abs(t.AlphaDeg[1] - 64) < 1.5 && Math.Abs(t.AlphaDeg[2] - 60) < 1e-9
                   && t.LiftToDrag[0] > 0.3;
         Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} trim schedule: alpha {t.AlphaDeg[0]:F1}/{t.AlphaDeg[1]:F1}/{t.AlphaDeg[2]:F1}, trimmed {t.TrimmedRows}/3, L/D {t.LiftToDrag[0]:F2}");
+        return ok ? 0 : 1;
+    }
+
+    /// <summary>
+    /// The body tables' angle frames: engine first and nose first read as they always did, every frame inverts its own AirDirection, and a belly-flop at 60 deg from nose-first reads alpha 30 on its belly table.
+    /// </summary>
+    static int FrameCheck()
+    {
+        double worst = 0;
+        var frames = new[] { BodyAeroFrame.TailFirst, BodyAeroFrame.NoseFirst, BodyAeroFrame.Belly(0, -1), BodyAeroFrame.Belly(0, 1), BodyAeroFrame.Belly(-1, 0), BodyAeroFrame.Belly(1, 0) };
+        foreach (var f in frames)
+            for (double a = -40; a <= 40; a += 10)
+                for (double b = -20; b <= 20; b += 10)
+                {
+                    var (ux, uy, uz) = BodyAeroTable.AirDirection(a * Math.PI / 180, b * Math.PI / 180, f);
+                    BodyAeroTable.Angles(f, ux, uy, uz, out double a2, out double b2);
+                    worst = Math.Max(worst, Math.Max(Math.Abs(a2 * 180 / Math.PI - a), Math.Abs(b2 * 180 / Math.PI - b)));
+                }
+        // The old formulas: engine first alpha = atan2(u_z, -u_x), beta = atan2(u_y, -u_x); nose first with +u_x.
+        double old = 0;
+        (double, double, double)[] dirs = [(-0.9, 0.2, 0.3), (-0.7, -0.4, 0.1), (0.8, 0.3, -0.2)];
+        foreach (var (x, y, z) in dirs)
+        {
+            var f = x < 0 ? BodyAeroFrame.TailFirst : BodyAeroFrame.NoseFirst;
+            double lead = x < 0 ? -x : x;
+            BodyAeroTable.Angles(f, x, y, z, out double a, out double b);
+            old = Math.Max(old, Math.Max(Math.Abs(a - Math.Atan2(z, lead)), Math.Abs(b - Math.Atan2(y, lead))));
+        }
+        // Belly -Z at 60 deg from nose-first: u = cos 60 x + sin 60 (-z).
+        BodyAeroTable.Angles(BodyAeroFrame.Belly(0, -1), Math.Cos(Math.PI / 3), 0, -Math.Sin(Math.PI / 3), out double ab, out double bb);
+        bool ok = worst < 1e-9 && old < 1e-12 && Math.Abs(ab * 180 / Math.PI - 30) < 1e-9 && Math.Abs(bb) < 1e-12;
+        Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} table frames: round trip {worst:E1} deg, against the old formulas {old:E1} rad, belly-flop 60 deg reads alpha {ab * 180 / Math.PI:F2}");
         return ok ? 0 : 1;
     }
 

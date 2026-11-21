@@ -138,8 +138,28 @@ public static partial class GuidanceWindow
             }
             st.Worker = new Ksa3DofWorker();
             st.Phase = OrbitalEntryPhase.Entry;
+            // The belly-first body and surface tables, on the side the trim chose: the same sweep as the nose- and engine-first ones, so the attitude controller and the fins' and flaps' allocator read the air belly first as they read it the other ways.
+            if (KsaAeroSweep.TryStart(vehicle, parent, now, out KsaAeroSweep.Job tables, out string tablesError, bellySide: st.BellyIndex))
+                st.TablesJob = tables;
+            else
+                GuidanceLog.Info(vehicle, "Orbital entry: the belly-first tables could not be swept (" + tablesError + "); the attitude holds without them.");
             GuidanceLog.Info(vehicle, FormattableString.Invariant(
                 $"Orbital entry: belly axis {st.BellyAxisName}, {st.Trim.TrimmedRows}/{st.Trim.Mach.Length} Mach rows trimmed, alpha {st.Trim.AlphaAt(20):F0} deg at Mach 20, {st.Trim.AlphaAt(5):F0} at Mach 5, L/D {st.Trim.LiftToDragAt(20):F2} / {st.Trim.LiftToDragAt(5):F2}."));
+        }
+
+        // The belly-first tables, once swept, replace the first sweep's for the attitude controller. The trim stays the first sweep's.
+        if (st.TablesJob != null && st.TablesJob.TryTake(out KsaAeroSweep.Result swept, out string sweptError))
+        {
+            st.TablesJob = null;
+            if (swept?.BellyBodyAero != null)
+            {
+                st.Aero = swept;
+                st.TablesReady = true;
+                GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                    $"Orbital entry: belly-first tables on {st.BellyAxisName} swept, {swept.Surfaces?.Length ?? 0} control surfaces so far."));
+            }
+            else
+                GuidanceLog.Info(vehicle, "Orbital entry: the belly-first table sweep gave nothing (" + sweptError + ").");
         }
 
         // ---- where the craft is ----

@@ -62,12 +62,9 @@ internal static class KsaAeroTorqueControl
             return null;
         // Retrograde-first, as the body table: u is the craft's velocity through the air in body axes, alpha = atan2(u_z, -u_x), beta = atan2(u_y, -u_x). Nose first (an ascent, #216), about the nose instead, from the surfaces' nose-first tables where the sweep has them.
         double3 u = air / speed;
-        bool nose = u.X > 0.0 && HasNoseTables(aero);
-        double lead = nose ? 1.0 : -1.0;
-        double alpha = Math.Atan2(u.Z, lead * u.X), beta = Math.Atan2(u.Y, lead * u.X);
+        // Engine first, nose first (an ascent) or belly first (an orbital entry): the surfaces' tables for whichever set the air is in (KsaAeroSweep.TryPickTables).
+        bool inTable = KsaAeroSweep.TryPickTables(aero, u, surfacesToo: true, out KsaAeroSweep.TableSet set, out double alpha, out double beta);
         double mach = aero.Atmosphere.Mach(speed);
-        double limit = (nose ? KsaAeroSweep.NoseAngleMaxDeg : KsaAeroSweep.BodyAngleMaxDeg) * Math.PI / 180.0;
-        bool inTable = lead * u.X > 0.0 && Math.Abs(alpha) <= limit && Math.Abs(beta) <= limit;
         condition = new Report(0, default, 0.0, default, mach, q, alpha * 180.0 / Math.PI, beta * 180.0 / Math.PI, inTable);
         if (!inTable || !(q > MinQPa))
             return null;
@@ -77,20 +74,9 @@ internal static class KsaAeroTorqueControl
         double divisor = 1.0 + (double.IsFinite(momentLimiterPerPa) && momentLimiterPerPa > 0.0 ? momentLimiterPerPa * q : 0.0);
         float3 comNow = vehicle.CenterOfMassAsmbF;
         double3 shift = aero.BodyMomentComAsmb - new double3(comNow.X, comNow.Y, comNow.Z);
-        AeroTorqueAllocator allocator = Build(aero, live, mach, q, alpha, beta, divisor, shift, ax, ay, az, surfaces, nose);
+        AeroTorqueAllocator allocator = Build(aero, live, mach, q, alpha, beta, divisor, shift, ax, ay, az, surfaces, set);
         condition = condition with { Surfaces = surfaces.Count };
         return allocator;
-    }
-
-    /// <summary>Whether every swept surface has its nose-first tables (KsaAeroSweep.SurfaceTable.NoseForce): a sweep an ascent asked for.</summary>
-    private static bool HasNoseTables(KsaAeroSweep.Result aero)
-    {
-        if (aero?.Surfaces == null || aero.Surfaces.Length == 0)
-            return false;
-        foreach (KsaAeroSweep.SurfaceTable t in aero.Surfaces)
-            if (t.NoseForce.Length != t.DeflectionDeg.Length || t.NoseMoment.Length != t.DeflectionDeg.Length)
-                return false;
-        return true;
     }
 
     /// <summary>
@@ -99,6 +85,12 @@ internal static class KsaAeroTorqueControl
     internal static AeroTorqueAllocator Build(KsaAeroSweep.Result aero, IReadOnlyList<ControlSurface> live,
                                               double mach, double q, double alpha, double beta, double divisor, double3 comShift,
                                               double3 ax, double3 ay, double3 az, List<ControlSurface> surfaces, bool noseFirst = false)
+        => Build(aero, live, mach, q, alpha, beta, divisor, comShift, ax, ay, az, surfaces, noseFirst ? KsaAeroSweep.TableSet.Nose : KsaAeroSweep.TableSet.Tail);
+
+    /// <summary>The same from a table set's surface tables (KsaAeroSweep.TableSet), alpha and beta about that set's frame.</summary>
+    internal static AeroTorqueAllocator Build(KsaAeroSweep.Result aero, IReadOnlyList<ControlSurface> live,
+                                              double mach, double q, double alpha, double beta, double divisor, double3 comShift,
+                                              double3 ax, double3 ay, double3 az, List<ControlSurface> surfaces, KsaAeroSweep.TableSet set)
     {
         surfaces.Clear();
         if (aero?.Surfaces == null || !(aero.ReferenceArea > 0.0) || !(aero.ReferenceLength > 0.0))
@@ -110,7 +102,7 @@ internal static class KsaAeroTorqueControl
         foreach (ControlSurface surface in live)
             foreach (KsaAeroSweep.SurfaceTable table in aero.Surfaces)
                 if (ReferenceEquals(table.Part, surface.Part) && table.DeflectionDeg.Length > 1
-                    && (!noseFirst || table.NoseForce.Length == table.DeflectionDeg.Length))
+                    && table.ForceTables(set).Length == table.DeflectionDeg.Length)
                 {
                     rows.Add((surface, table));
                     break;
@@ -127,8 +119,10 @@ internal static class KsaAeroTorqueControl
             var force = new double[3 * n];
             for (int k = 0; k < n; k++)
             {
-                (noseFirst ? t.NoseForce[k] : t.Force[k]).Coefficients(mach, alpha, beta, out double cx, out double cy, out double cz);
-                (noseFirst ? t.NoseMoment[k] : t.Moment[k]).Coefficients(mach, alpha, beta, out double cl, out double cm, out double cn);
+                AdvancedFlightComputer.Guidance.Numerics.Flight.BodyAeroTable ft = t.ForceTables(set)[k], mt = t.MomentTables(set)[k];
+                double mk = Math.Clamp(mach, ft.MachMin, ft.MachMax);
+                ft.Coefficients(mk, alpha, beta, out double cx, out double cy, out double cz);
+                mt.Coefficients(mk, alpha, beta, out double cl, out double cm, out double cn);
                 var f = new double3(qs * cx, qs * cy, qs * cz);
                 // About the present centre of mass, M_now = M_swept + (r_swept - r_now) x F, then the game's limiter on the whole of it.
                 double3 m = (new double3(qsl * cl, qsl * cm, qsl * cn) + double3.Cross(shift, f)) / divisor;

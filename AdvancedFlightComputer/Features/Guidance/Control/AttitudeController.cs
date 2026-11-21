@@ -229,12 +229,11 @@ internal static class AttitudeController
         if (!(speed > 1.0) || !(q > 50.0))
             return false;
         double3 u = airVelocity / speed;
-        // Nose first (an ascent) from the nose-first tables, where the sweep has them (KsaAeroSweep.Result.NoseBodyAero).
-        bool nose = u.X > 0.0 && aero.NoseBodyAero != null && aero.NoseBodyMoment != null;
-        BodyAeroTable forceTable = nose ? aero.NoseBodyAero : aero.BodyAero, momentTable = nose ? aero.NoseBodyMoment : aero.BodyMoment;
-        forceTable.Angles(u.X, u.Y, u.Z, out double alpha, out double beta);
-        double limit = (nose ? KsaAeroSweep.NoseAngleMaxDeg : KsaAeroSweep.BodyAngleMaxDeg) * Math.PI / 180.0;
-        if (!(forceTable.Lead * u.X > 0.0) || Math.Abs(alpha) > limit || Math.Abs(beta) > limit)
+        // Engine first, nose first (an ascent) or belly first (an orbital entry): whichever of the sweep's tables the air is in (KsaAeroSweep.TryPickTables).
+        if (!KsaAeroSweep.TryPickTables(aero, u, surfacesToo: false, out KsaAeroSweep.TableSet set, out double alpha, out double beta))
+            return false;
+        BodyAeroTable forceTable = aero.BodyForceFor(set), momentTable = aero.BodyMomentFor(set);
+        if (forceTable == null || momentTable == null)
             return false;
         double mach = Math.Clamp(aero.Atmosphere.Mach(speed), forceTable.MachMin, forceTable.MachMax);
         forceTable.Coefficients(mach, alpha, beta, out double cx, out double cy, out double cz);

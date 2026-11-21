@@ -22,6 +22,9 @@ public sealed class OrbitalEntryState
 
     // ---- aero ----
     public KsaAeroSweep.Job AeroJob;
+    /// <summary>The second sweep: the belly-first body and surface tables on the side the trim chose (KsaAeroSweep.TryStart's bellySide). Until it lands the attitude flies on the first sweep's tables, with no surfaces belly first.</summary>
+    public KsaAeroSweep.Job TablesJob;
+    public bool TablesReady;
     public KsaAeroSweep.Result Aero;
     public EntryTrim Trim;
     public string BellyAxisName = "";
@@ -69,6 +72,8 @@ public sealed class OrbitalEntryState
         Pending = null;
         Trim = null;
         AeroJob = null;
+        TablesJob = null;
+        TablesReady = false;
         Aero = null;
         BellyAxisName = "";
         BellyIndex = -1;

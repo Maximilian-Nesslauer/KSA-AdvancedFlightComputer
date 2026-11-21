@@ -164,6 +164,19 @@ public static class KsaAeroSweep
         public BellySweep[] Belly;
 
         /// <summary>
+        /// The body-axis force and moment BELLY FIRST (BodyAeroFrame.Belly) on the side <see cref="BellySide"/> names, over Mach and the belly-first alpha and beta (BellyAlphaTableDeg, BellyBetaTableDeg), in the same units and about the same centre of mass as <see cref="BodyAero"/>: what an orbital entry flies with, and the moment AFC's attitude controller holds it against. The fins' and flaps' own belly-first tables are in SurfaceTable.BellyForce. Swept only when asked for (TryStart's bellySide), null otherwise.
+        /// </summary>
+        public BodyAeroTable BellyBodyAero;
+        public BodyAeroTable BellyBodyMoment;
+
+        /// <summary>Which side the belly-first tables lead with: 0 -Z, 1 +Z, 2 -Y, 3 +Y (BellyAxes), -1 for none.</summary>
+        public int BellySide = -1;
+
+        /// <summary>The body-axis force and moment tables of a set (TableSet).</summary>
+        public BodyAeroTable BodyForceFor(TableSet set) => set switch { TableSet.Nose => NoseBodyAero, TableSet.Belly => BellyBodyAero, _ => BodyAero };
+        public BodyAeroTable BodyMomentFor(TableSet set) => set switch { TableSet.Nose => NoseBodyMoment, TableSet.Belly => BellyBodyMoment, _ => BodyMoment };
+
+        /// <summary>
         /// Each control surface's effect (ControlSurfaces), swept like the body table and on its grid: the change its deflection makes to the body-axis force and moment, per deflection swept. Empty for a craft with none, or one swept on an airless body.
         /// </summary>
         public SurfaceTable[] Surfaces = [];
@@ -309,7 +322,14 @@ public static class KsaAeroSweep
         /// <summary>The same nose first (Result.NoseBodyAero's grid), per deflection; empty where the sweep had no nose-first pass.</summary>
         public BodyAeroTable[] NoseForce = [];
         public BodyAeroTable[] NoseMoment = [];
+        /// <summary>The same belly first (Result.BellyBodyAero's grid and side), per deflection; empty where the sweep had no belly-first pass.</summary>
+        public BodyAeroTable[] BellyForce = [];
+        public BodyAeroTable[] BellyMoment = [];
         public double SweepMillis;
+
+        /// <summary>The per-deflection force tables of a set (TableSet).</summary>
+        public BodyAeroTable[] ForceTables(TableSet set) => set switch { TableSet.Nose => NoseForce, TableSet.Belly => BellyForce, _ => Force };
+        public BodyAeroTable[] MomentTables(TableSet set) => set switch { TableSet.Nose => NoseMoment, TableSet.Belly => BellyMoment, _ => Moment };
     }
 
     /// <summary>The deflections a surface is swept at: every SurfaceStepDeg out from rest inside its range, its two ends, and rest.</summary>
@@ -344,6 +364,87 @@ public static class KsaAeroSweep
         public string AxisName => Axis.Z < -0.5 ? "-Z" : Axis.Z > 0.5 ? "+Z" : Axis.Y < -0.5 ? "-Y" : "+Y";
     }
 
+    /// <summary>The body-axis tables a reader can fly with: engine first (BodyAero), nose first (NoseBodyAero) or belly first (BellyBodyAero).</summary>
+    public enum TableSet { Tail, Nose, Belly }
+
+    /// <summary>
+    /// THE ONE RULE for which body-axis tables describe the air as it is now: belly first where the sweep has those tables and the air is inside them, else nose first likewise, else engine first likewise. With <paramref name="surfacesToo"/>, a set counts only where every swept surface has it too. False where the air is inside none. <paramref name="u"/> is the craft's velocity through the air in body axes, unit; the angles come back about the chosen set's frame, radians.
+    /// </summary>
+    public static bool TryPickTables(Result aero, double3 u, bool surfacesToo, out TableSet set, out double alphaRad, out double betaRad)
+    {
+        set = TableSet.Tail;
+        alphaRad = betaRad = 0.0;
+        if (aero == null)
+            return false;
+        bool SurfacesHave(TableSet s)
+        {
+            if (!surfacesToo)
+                return true;
+            if (aero.Surfaces == null || aero.Surfaces.Length == 0)
+                return false;
+            foreach (SurfaceTable t in aero.Surfaces)
+                if (t.ForceTables(s).Length != t.DeflectionDeg.Length || t.MomentTables(s).Length != t.DeflectionDeg.Length)
+                    return false;
+            return true;
+        }
+        if (aero.BellyBodyAero != null && aero.BellyBodyMoment != null && SurfacesHave(TableSet.Belly))
+        {
+            BodyAeroFrame f = aero.BellyBodyAero.Frame;
+            if (f.LeadOf(u.X, u.Y, u.Z) > 0.0)
+            {
+                BodyAeroTable.Angles(in f, u.X, u.Y, u.Z, out double a, out double b);
+                double aDeg = a * 180.0 / Math.PI, bDeg = b * 180.0 / Math.PI;
+                if (aDeg >= BellyAlphaTableMinDeg && aDeg <= BellyAlphaTableMaxDeg && Math.Abs(bDeg) <= BellyBetaTableMaxDeg)
+                {
+                    set = TableSet.Belly;
+                    alphaRad = a;
+                    betaRad = b;
+                    return true;
+                }
+            }
+        }
+        if (u.X > 0.0 && aero.NoseBodyAero != null && aero.NoseBodyMoment != null && SurfacesHave(TableSet.Nose))
+        {
+            BodyAeroTable.Angles(BodyAeroFrame.NoseFirst, u.X, u.Y, u.Z, out double a, out double b);
+            double limit = NoseAngleMaxDeg * Math.PI / 180.0;
+            if (Math.Abs(a) <= limit && Math.Abs(b) <= limit)
+            {
+                set = TableSet.Nose;
+                alphaRad = a;
+                betaRad = b;
+                return true;
+            }
+        }
+        if (u.X < 0.0 && aero.BodyAero != null && SurfacesHave(TableSet.Tail))
+        {
+            BodyAeroTable.Angles(BodyAeroFrame.TailFirst, u.X, u.Y, u.Z, out double a, out double b);
+            double limit = BodyAngleMaxDeg * Math.PI / 180.0;
+            if (Math.Abs(a) <= limit && Math.Abs(b) <= limit)
+            {
+                set = TableSet.Tail;
+                alphaRad = a;
+                betaRad = b;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>The four sides a belly can be, body axes, in Result.Belly's and BellySide's order: -Z, +Z, -Y, +Y.</summary>
+    public static readonly double3[] BellyAxes = { new(0, 0, -1), new(0, 0, 1), new(0, -1, 0), new(0, 1, 0) };
+
+    /// <summary>The belly-first body table's frame for a side (BellyAxes index).</summary>
+    public static BodyAeroFrame BellyFrame(int side) => BodyAeroFrame.Belly(BellyAxes[side].Y, BellyAxes[side].Z);
+
+    /// <summary>
+    /// Alpha and beta breakpoints of the belly-first body-axis table (Result.BellyBodyAero), degrees about the belly. Alpha, towards the nose, is 90 deg less the angle of attack from nose-first, so this covers 40 to 110 deg of it: a belly-flop's trim and its controls' reach either side. Beta is the sideslip a bank and a reversal see. As coarse as the nose-first table's, and on one side only, the one the trim chose.
+    /// </summary>
+    public static readonly double[] BellyAlphaTableDeg = [-20, -15, -10, -5, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50];
+    public static readonly double[] BellyBetaTableDeg = [-20, -12, -6, -3, 0, 3, 6, 12, 20];
+
+    /// <summary>How far the belly-first table reaches, deg: past it a reader goes back to the other tables, or to none.</summary>
+    public const double BellyAlphaTableMinDeg = -20.0, BellyAlphaTableMaxDeg = 50.0, BellyBetaTableMaxDeg = 20.0;
+
     /// <summary>The belly-first sweep's angles of attack, deg: dense through the belly-first range, sparse towards nose- and tail-first.</summary>
     public static readonly double[] BellyAlphaBreakpointsDeg =
         [0, 10, 20, 30, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100, 110, 120, 135, 150, 165, 180];
@@ -369,8 +470,11 @@ public static class KsaAeroSweep
         /// <summary>Sweep the nose-first tables too (Result.NoseBodyAero): an ascent's. Whole-craft sweeps only.</summary>
         public bool NoseFirst;
 
-        /// <summary>Sweep the belly-first tables too (Result.Belly): an orbital entry's. Whole-craft sweeps only.</summary>
+        /// <summary>Sweep the belly-first trim rows too (Result.Belly): an orbital entry's. Whole-craft sweeps only.</summary>
         public bool BellyFirst;
+
+        /// <summary>Sweep the belly-first body and surface tables on this side (BellyAxes index), -1 for none: an orbital entry's, once its trim has chosen the side.</summary>
+        public int BellySide = -1;
 
         /// <summary>The control surfaces to sweep (ControlSurfaces), each with the binder that finds it in the private mesh. Whole-craft sweeps only.</summary>
         public List<(ControlSurface Surface, Func<Aerodynamics, Action<double>> Binder)> Surfaces = new();
@@ -581,13 +685,15 @@ public static class KsaAeroSweep
     /// <summary>The whole craft's sweep, started on its own thread. False, with the reason, where it cannot be prepared - <see cref="RebuildingError"/> while the game rebuilds the mesh. Main thread.</summary>
     /// <param name="noseFirst">Sweep the nose-first tables too (Result.NoseBodyAero), for an ascent.</param>
     /// <param name="bellyFirst">Sweep the belly-first tables too (Result.Belly), for an orbital entry.</param>
-    public static bool TryStart(Vehicle vehicle, IParentBody parent, double simTime, out Job job, out string error, bool noseFirst = false, bool bellyFirst = false)
+    /// <param name="bellySide">Sweep the belly-first body and surface tables on this side (BellyAxes index), for an orbital entry; -1 for none.</param>
+    public static bool TryStart(Vehicle vehicle, IParentBody parent, double simTime, out Job job, out string error, bool noseFirst = false, bool bellyFirst = false, int bellySide = -1)
     {
         job = null;
         if (!TryPrepareCraft(vehicle, parent, simTime, out Prepared prepared, out error))
             return false;
         prepared.NoseFirst = noseFirst;
         prepared.BellyFirst = bellyFirst;
+        prepared.BellySide = bellySide;
         job = Job.StartFor(prepared);
         return true;
     }
@@ -727,13 +833,16 @@ public static class KsaAeroSweep
         double momentLength = dx;
         // One grid of directions flown: per alpha and beta of the grid (about the nose for a nose-first one), the coefficients of the force and the moment, as BodyAeroTable lays them out.
         void FlyGrid(double[] anglesDeg, bool nose, double[] coefficients, double[] moments)
+            => FlyFrame(anglesDeg, anglesDeg, nose ? BodyAeroFrame.NoseFirst : BodyAeroFrame.TailFirst, coefficients, moments);
+        // The same about any frame, with its own alpha and beta grids.
+        void FlyFrame(double[] alphaDeg, double[] betaDeg, BodyAeroFrame frame, double[] coefficients, double[] moments)
         {
-            int na2 = anglesDeg.Length;
+            int na2 = alphaDeg.Length, nb2 = betaDeg.Length;
             for (int ja = 0; ja < na2; ja++)
             {
-                for (int jb = 0; jb < na2; jb++)
+                for (int jb = 0; jb < nb2; jb++)
                 {
-                    (double ux, double uy, double uz) = BodyAeroTable.AirDirection(anglesDeg[ja] * Math.PI / 180.0, anglesDeg[jb] * Math.PI / 180.0, nose);
+                    (double ux, double uy, double uz) = BodyAeroTable.AirDirection(alphaDeg[ja] * Math.PI / 180.0, betaDeg[jb] * Math.PI / 180.0, frame);
                     var u = new double3(ux, uy, uz);
                     probe.Wrench(BaselineSpeed * u, out double3 baseline, out double3 baselineTorque);
                     flow.Prepare(u);
@@ -744,7 +853,7 @@ public static class KsaAeroSweep
                         double3 force = rawForce - baseline;
                         double3 torque = rawTorque - baselineTorque;
                         double qa = 0.5 * sea.Density * speed * speed * refArea;
-                        int node = ((i * na2 + ja) * na2 + jb) * 3;
+                        int node = ((i * na2 + ja) * nb2 + jb) * 3;
                         coefficients[node] = force.X / qa;
                         coefficients[node + 1] = force.Y / qa;
                         coefficients[node + 2] = force.Z / qa;
@@ -770,12 +879,23 @@ public static class KsaAeroSweep
             noseMoments = new double[nbm * nan * nan * 3];
             FlyGrid(NoseAngleBreakpointsDeg, true, noseCoefficients, noseMoments);
         }
+        // BELLY FIRST body tables, for an orbital entry on the side its trim chose: the same calls again, about the belly.
+        double[] bellyCoefficients = null, bellyMoments = null;
+        int bellySide = p.BellySide >= 0 && p.BellySide < BellyAxes.Length ? p.BellySide : -1;
+        BodyAeroFrame bellyFrame = bellySide >= 0 ? BellyFrame(bellySide) : default;
+        int nbelly = BellyAlphaTableDeg.Length * BellyBetaTableDeg.Length;
+        if (bellySide >= 0)
+        {
+            bellyCoefficients = new double[nbm * nbelly * 3];
+            bellyMoments = new double[nbm * nbelly * 3];
+            FlyFrame(BellyAlphaTableDeg, BellyBetaTableDeg, bellyFrame, bellyCoefficients, bellyMoments);
+        }
         // BELLY FIRST, for an orbital entry: per candidate belly axis b (body axes, square to x), the air at angle of attack a comes from cos(a) x + sin(a) b, so 0 is nose-first and 90 is belly-first. Drag is along that direction, lift along sin(a) x - cos(a) b, and the pitch moment about b x x, positive when it raises a.
         if (p.BellyFirst)
         {
             double[] bellyAlpha = BellyAlphaBreakpointsDeg;
             int nba = bellyAlpha.Length;
-            var axes = new[] { new double3(0, 0, -1), new double3(0, 0, 1), new double3(0, -1, 0), new double3(0, 1, 0) };
+            double3[] axes = BellyAxes;
             var sweeps = new BellySweep[axes.Length];
             for (int ax = 0; ax < axes.Length; ax++)
             {
@@ -930,6 +1050,12 @@ public static class KsaAeroSweep
                 res.NoseBodyAero = new BodyAeroTable(bodyMach, NoseAngleBreakpointsDeg, NoseAngleBreakpointsDeg, noseCoefficients, noseFirst: true);
                 res.NoseBodyMoment = momentLength > 0.0 ? new BodyAeroTable(bodyMach, NoseAngleBreakpointsDeg, NoseAngleBreakpointsDeg, noseMoments, noseFirst: true) : null;
             }
+            if (bellyCoefficients != null)
+            {
+                res.BellyBodyAero = new BodyAeroTable(bodyMach, BellyAlphaTableDeg, BellyBetaTableDeg, bellyCoefficients, bellyFrame);
+                res.BellyBodyMoment = momentLength > 0.0 ? new BodyAeroTable(bodyMach, BellyAlphaTableDeg, BellyBetaTableDeg, bellyMoments, bellyFrame) : null;
+                res.BellySide = bellySide;
+            }
         }
         catch (Exception ex)
         {
@@ -978,23 +1104,27 @@ public static class KsaAeroSweep
                 var momentTables = new BodyAeroTable[grid.Length];
                 var noseForceTables = p.NoseFirst ? new BodyAeroTable[grid.Length] : [];
                 var noseMomentTables = p.NoseFirst ? new BodyAeroTable[grid.Length] : [];
+                var bellyForceTables = bellySide >= 0 ? new BodyAeroTable[grid.Length] : [];
+                var bellyMomentTables = bellySide >= 0 ? new BodyAeroTable[grid.Length] : [];
                 // The change from the body's own: the grid flown with the surface turned, less the body table at rest.
                 void Delta(double[] anglesDeg, bool nose, double[] restForce, double[] restMoment, int d, BodyAeroTable[] forceOut, BodyAeroTable[] momentOut)
+                    => DeltaFrame(anglesDeg, anglesDeg, nose ? BodyAeroFrame.NoseFirst : BodyAeroFrame.TailFirst, restForce, restMoment, d, forceOut, momentOut);
+                void DeltaFrame(double[] alphaDeg, double[] betaDeg, BodyAeroFrame frame, double[] restForce, double[] restMoment, int d, BodyAeroTable[] forceOut, BodyAeroTable[] momentOut)
                 {
-                    int n3 = nbm * anglesDeg.Length * anglesDeg.Length * 3;
+                    int n3 = nbm * alphaDeg.Length * betaDeg.Length * 3;
                     var df = new double[n3];
                     var dm = new double[n3];
                     if (grid[d] != 0.0)
                     {
-                        FlyGrid(anglesDeg, nose, df, dm);
+                        FlyFrame(alphaDeg, betaDeg, frame, df, dm);
                         for (int k = 0; k < n3; k++)
                         {
                             df[k] -= restForce[k];
                             dm[k] -= restMoment[k];
                         }
                     }
-                    forceOut[d] = new BodyAeroTable(bodyMach, anglesDeg, anglesDeg, df, nose);
-                    momentOut[d] = new BodyAeroTable(bodyMach, anglesDeg, anglesDeg, dm, nose);
+                    forceOut[d] = new BodyAeroTable(bodyMach, alphaDeg, betaDeg, df, frame);
+                    momentOut[d] = new BodyAeroTable(bodyMach, alphaDeg, betaDeg, dm, frame);
                 }
                 try
                 {
@@ -1005,6 +1135,8 @@ public static class KsaAeroSweep
                         Delta(BodyAngleBreakpointsDeg, false, bodyCoefficients, bodyMoments, d, forceTables, momentTables);
                         if (p.NoseFirst)
                             Delta(NoseAngleBreakpointsDeg, true, noseCoefficients, noseMoments, d, noseForceTables, noseMomentTables);
+                        if (bellySide >= 0)
+                            DeltaFrame(BellyAlphaTableDeg, BellyBetaTableDeg, bellyFrame, bellyCoefficients, bellyMoments, d, bellyForceTables, bellyMomentTables);
                     }
                 }
                 finally
@@ -1016,6 +1148,7 @@ public static class KsaAeroSweep
                     Part = surface.Part, Name = surface.Name, MinDeg = surface.MinDeg, MaxDeg = surface.MaxDeg,
                     DeflectionDeg = grid, Force = forceTables, Moment = momentTables,
                     NoseForce = noseForceTables, NoseMoment = noseMomentTables,
+                    BellyForce = bellyForceTables, BellyMoment = bellyMomentTables,
                     SweepMillis = surfaceClock.Elapsed.TotalMilliseconds,
                 };
                 surfaceTables.Add(table);
