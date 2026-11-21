@@ -1785,9 +1785,8 @@ public sealed class VehicleAutopilotState
     public double OrbitalEntryBankMinDeg = 15.0;
     /// <summary>Largest bank the plan uses, deg.</summary>
     public double OrbitalEntryBankMaxDeg = 100.0;
-    /// <summary>Largest bank the tracker may overbank to, deg, for at most OrbitalEntryOverbankS.</summary>
+    /// <summary>Largest bank the tracker may command, deg: further than the plan's, with nothing else of its own.</summary>
     public double OrbitalEntryOverbankDeg = 120.0;
-    public double OrbitalEntryOverbankS = 0.0;
     /// <summary>Roll rate the tracker slews at and the plan leaves room for, deg/s.</summary>
     public double OrbitalEntryRollRateDegS = 5.0;
     /// <summary>Hand-over altitude, km, and Mach (airspeed over the sea-level speed of sound, as the aero tables use).</summary>
@@ -1812,7 +1811,9 @@ public sealed class VehicleAutopilotState
     /// <summary>Natural frequency of the drag-tracking loop, rad/s: higher pulls the drag onto the plan's faster.</summary>
     public double OrbitalEntryTrackOmega = 0.06;
     /// <summary>Weight keeping the plan in the middle of the corridor, against the heat load that pushes it to the high-energy edge.</summary>
-    public double OrbitalEntryCorridorWeight = 0.3;
+    public double OrbitalEntryCorridorWeight = 1.0;
+    /// <summary>The heading error to the site at which the bank reverses, deg, narrowing below 2 km/s.</summary>
+    public double OrbitalEntryReversalBandDeg = 5.0;
     /// <summary>Take orbital entry guidance at the end of a DEORBIT ONLY burn.</summary>
     public bool OrbitalEntryAfterDeorbit = true;
     /// <summary>Time that DEORBIT ONLY burn so the site sits at OrbitalEntryAimFraction of the corridor at the start of the air (OrbitalEntryAim).</summary>

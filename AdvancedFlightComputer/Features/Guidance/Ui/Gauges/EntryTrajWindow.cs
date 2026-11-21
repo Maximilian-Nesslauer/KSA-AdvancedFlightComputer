@@ -182,6 +182,78 @@ public static partial class GuidanceWindow
             if (Map(xa, ya, out float2 a) && Map(xb, yb, out float2 b))
                 dl.AddLine(a, b, col, thick);
         }
+
+        /// <summary>A segment cut to the area (Liang-Barsky), so a page shows only its own part of a line rather than the rest pressed along its edges.</summary>
+        public void ClippedLine(ImDrawListPtr dl, double xa, double ya, double xb, double yb, ImColor8 col, float thick)
+        {
+            if (!double.IsFinite(xa) || !double.IsFinite(ya) || !double.IsFinite(xb) || !double.IsFinite(yb))
+                return;
+            double lo = Math.Min(_x0, _x1), hi = Math.Max(_x0, _x1), ylo = Math.Min(_y0, _y1), yhi = Math.Max(_y0, _y1);
+            double t0 = 0, t1 = 1, dx = xb - xa, dy = yb - ya;
+            if (!Clip(-dx, xa - lo, ref t0, ref t1) || !Clip(dx, hi - xa, ref t0, ref t1)
+                || !Clip(-dy, ya - ylo, ref t0, ref t1) || !Clip(dy, yhi - ya, ref t0, ref t1))
+                return;
+            Line(dl, xa + t0 * dx, ya + t0 * dy, xa + t1 * dx, ya + t1 * dy, col, thick);
+        }
+
+        static bool Clip(double pp, double q, ref double t0, ref double t1)
+        {
+            if (pp == 0) return q >= 0;
+            double t = q / pp;
+            if (pp < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+            else { if (t < t0) return false; if (t < t1) t1 = t; }
+            return true;
+        }
+
+        public bool Inside(double x, double y)
+            => x >= Math.Min(_x0, _x1) && x <= Math.Max(_x0, _x1) && y >= Math.Min(_y0, _y1) && y <= Math.Max(_y0, _y1);
+    }
+
+    /// <summary>How many pages the range-to-go plot splits the plan into, the Shuttle's ENTRY TRAJ way.</summary>
+    private const int TrajPages = 4;
+
+    /// <summary>
+    /// The speed band of each page: the plan's speeds where its range to go has fallen by a quarter, a half and three quarters. Each page then spans a like share of the range, and early on, where the speed hardly falls over thousands of km, its own few hundred m/s fill the height instead of a sliver at the top.
+    /// </summary>
+    private static double[] TrajPageEdges(EntryPlan plan)
+    {
+        var edges = new double[TrajPages + 1];
+        double s0 = plan.S[0], sF = plan.S[^1];
+        edges[0] = plan.SpeedMs[0];
+        edges[TrajPages] = plan.SpeedMs[^1];
+        int k = 0;
+        for (int page = 1; page < TrajPages; page++)
+        {
+            double sCut = s0 + (sF - s0) * page / TrajPages;
+            while (k < plan.Count - 2 && plan.S[k + 1] > sCut) k++;
+            double ds = plan.S[k + 1] - plan.S[k];
+            double f = ds != 0 ? Math.Clamp((sCut - plan.S[k]) / ds, 0.0, 1.0) : 0.0;
+            edges[page] = plan.SpeedMs[k] + f * (plan.SpeedMs[k + 1] - plan.SpeedMs[k]);
+        }
+        return edges;
+    }
+
+    /// <summary>Widens [lo, hi] to the x of a polyline's part inside the speed band, its crossings of the band's edges included.</summary>
+    private static void FitBand(ref double lo, ref double hi, Func<int, double> x, Func<int, double> v, int count, double vLo, double vHi)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            double xi = x(i), vi = v(i);
+            if (!double.IsFinite(xi) || !double.IsFinite(vi)) continue;
+            if (vi >= vLo && vi <= vHi) { lo = Math.Min(lo, xi); hi = Math.Max(hi, xi); }
+            if (i == 0) continue;
+            double xp = x(i - 1), vp = v(i - 1);
+            if (!double.IsFinite(xp) || !double.IsFinite(vp) || vp == vi) continue;
+            for (int j = 0; j < 2; j++)
+            {
+                double edge = j == 0 ? vLo : vHi;
+                if ((vp - edge) * (vi - edge) < 0)
+                {
+                    double xe = xp + (edge - vp) / (vi - vp) * (xi - xp);
+                    lo = Math.Min(lo, xe); hi = Math.Max(hi, xe);
+                }
+            }
+        }
     }
 
     private static double Finite(double v, double fallback) => double.IsFinite(v) ? v : fallback;
@@ -197,47 +269,82 @@ public static partial class GuidanceWindow
             return;
         Frame(dl, p0, p1);
 
-        double vMax = Math.Max(Finite(st.SpeedMs, 0), 1000.0), vMin = 0.0, xMax = Math.Max(Finite(st.RangeM, 0), 1000.0);
+        // The page: the plan's speed band holding the craft's speed (the first before the plan's start, the last after its end).
+        double vMax = Math.Max(Finite(st.SpeedMs, 0), 1000.0), vMin = 0.0;
+        string pageName = "";
+        if (plan != null && plan.Count >= 2)
+        {
+            double[] edges = TrajPageEdges(plan);
+            double vNow = Finite(st.SpeedMs, edges[0]);
+            int page = 0;
+            while (page < TrajPages - 1 && vNow < edges[page + 1]) page++;
+            vMax = page == 0 ? Math.Max(edges[0], vNow) : edges[page];
+            vMin = edges[page + 1];
+            pageName = FormattableString.Invariant($"PAGE {page + 1}/{TrajPages}");
+            dl.AddText(new float2(p1.X - ImGui.CalcTextSize(pageName).X, a.Y), Palette.Dim.Solid, pageName);
+        }
+        double vPad = 0.04 * Math.Max(vMax - vMin, 50.0);
+        vMax += vPad; vMin = Math.Max(0, vMin - vPad);
+
+        // The range across: the plan, the corridor's short edge and the flown path inside the band; the long edge only so far, as it runs out to far beyond.
+        double xLo = double.PositiveInfinity, xHi = double.NegativeInfinity;
+        var tr = st.Trace;
         if (plan != null)
         {
-            vMax = Math.Max(vMax, Finite(plan.SpeedMs[0], vMax));
-            vMin = Math.Max(0, Finite(plan.SpeedMs[^1], 0));
-            double s0 = Finite(plan.S[0] * plan.BodyRadius, xMax);
-            xMax = Math.Max(xMax, s0);
-            xMax = Math.Max(xMax, Math.Min(Finite(plan.RangeLongM[0], s0), 2.0 * s0));
+            double r0 = plan.BodyRadius;
+            FitBand(ref xLo, ref xHi, i => plan.S[i] * r0, i => plan.SpeedMs[i], plan.Count, vMin, vMax);
+            FitBand(ref xLo, ref xHi, i => plan.RangeShortM[i], i => plan.SpeedMs[i], plan.Count, vMin, vMax);
         }
-        vMax *= 1.02;
-        xMax = NiceCeiling(xMax * 1.05);
-        // Range across (0 at the left), speed down the page (fast at the top).
-        var area = new PlotArea(p0, p1, 0, xMax, vMin, vMax);
-        AxisLabels(dl, p0, p1, s, $"{xMax / 1000:F0} km", "0", $"{vMax / 1000:F1} km/s", $"{vMin / 1000:F1}");
+        FitBand(ref xLo, ref xHi, i => tr[i].RangeM, i => tr[i].SpeedMs, tr.Count, vMin, vMax);
+        if (st.SpeedMs >= vMin && st.SpeedMs <= vMax && double.IsFinite(st.RangeM))
+        {
+            xLo = Math.Min(xLo, st.RangeM); xHi = Math.Max(xHi, st.RangeM);
+        }
+        if (plan != null && double.IsFinite(xHi))
+        {
+            double longLo = double.PositiveInfinity, longHi = double.NegativeInfinity;
+            FitBand(ref longLo, ref longHi, i => plan.RangeLongM[i], i => plan.SpeedMs[i], plan.Count, vMin, vMax);
+            if (double.IsFinite(longHi)) xHi = Math.Max(xHi, Math.Min(longHi, xHi + 1.5 * Math.Max(xHi - xLo, 0.25 * Math.Abs(xHi))));
+        }
+        if (!double.IsFinite(xLo) || !double.IsFinite(xHi)) { xLo = 0; xHi = Math.Max(Finite(st.RangeM, 0), 1000.0); }
+        double xPad = 0.05 * Math.Max(xHi - xLo, 1000.0);
+        double xMin = xLo >= 0 ? Math.Max(0, xLo - xPad) : xLo - xPad;   // below zero only with the site behind, near the end
+        double xMax = xHi + xPad;
+        double step = NiceCeiling((xMax - xMin) / 4.0);
+        if (step > 0) { xMin = Math.Floor(xMin / step) * step; xMax = Math.Ceiling(xMax / step) * step; }
+
+        // Range across (low at the left), speed down the page (fast at the top).
+        var area = new PlotArea(p0, p1, xMin, xMax, vMin, vMax);
+        AxisLabels(dl, p0, p1, s, $"{xMax / 1000:F0} km", $"{xMin / 1000:F0}", $"{vMax / 1000:F2} km/s", $"{vMin / 1000:F2}");
 
         if (plan != null)
         {
             ImColor8 edge = Palette.Text.Solid;
             double r0 = plan.BodyRadius;
+            double labelBelow = vMax - 0.3 * (vMax - vMin);
+            int hiLabel = -1, loLabel = -1;
             for (int k = 0; k < plan.Count - 1; k++)
             {
-                area.Line(dl, plan.RangeShortM[k], plan.SpeedMs[k], plan.RangeShortM[k + 1], plan.SpeedMs[k + 1], edge, 2f * s);
-                area.Line(dl, plan.RangeLongM[k], plan.SpeedMs[k], plan.RangeLongM[k + 1], plan.SpeedMs[k + 1], edge, 2f * s);
-                area.Line(dl, plan.S[k] * r0, plan.SpeedMs[k], plan.S[k + 1] * r0, plan.SpeedMs[k + 1], Palette.Plan.Solid, 2.5f * s);
+                area.ClippedLine(dl, plan.RangeShortM[k], plan.SpeedMs[k], plan.RangeShortM[k + 1], plan.SpeedMs[k + 1], edge, 2f * s);
+                area.ClippedLine(dl, plan.RangeLongM[k], plan.SpeedMs[k], plan.RangeLongM[k + 1], plan.SpeedMs[k + 1], edge, 2f * s);
+                area.ClippedLine(dl, plan.S[k] * r0, plan.SpeedMs[k], plan.S[k + 1] * r0, plan.SpeedMs[k + 1], Palette.Plan.Solid, 2.5f * s);
+                if (hiLabel < 0 && plan.SpeedMs[k] < labelBelow && area.Inside(plan.RangeShortM[k], plan.SpeedMs[k])) hiLabel = k;
+                if (loLabel < 0 && plan.SpeedMs[k] < labelBelow && area.Inside(plan.RangeLongM[k], plan.SpeedMs[k])) loLabel = k;
             }
-            int mid = plan.Count / 3;
-            if (area.Map(plan.RangeShortM[mid], plan.SpeedMs[mid], out float2 hi))
+            if (hiLabel >= 0 && area.Map(plan.RangeShortM[hiLabel], plan.SpeedMs[hiLabel], out float2 hi))
                 dl.AddText(new float2(Math.Max(p0.X + 2f * s, hi.X - 84f * s), hi.Y), Palette.Dim.Solid, "HIGH ENERGY");
-            if (area.Map(plan.RangeLongM[mid], plan.SpeedMs[mid], out float2 lo))
+            if (loLabel >= 0 && area.Map(plan.RangeLongM[loLabel], plan.SpeedMs[loLabel], out float2 lo))
                 dl.AddText(new float2(Math.Min(lo.X + 6f * s, p1.X - 80f * s), lo.Y), Palette.Dim.Solid, "LOW ENERGY");
         }
 
         // The flown path, and a trailer every 30 s for the last 150 s.
-        var tr = st.Trace;
         for (int i = 1; i < tr.Count; i++)
-            area.Line(dl, tr[i - 1].RangeM, tr[i - 1].SpeedMs, tr[i].RangeM, tr[i].SpeedMs, Palette.Flown.Solid, 1.2f * s);
+            area.ClippedLine(dl, tr[i - 1].RangeM, tr[i - 1].SpeedMs, tr[i].RangeM, tr[i].SpeedMs, Palette.Flown.Solid, 1.2f * s);
         for (int n = 1; n <= 5; n++)
         {
             int i = tr.Count - 1 - 30 * n;
             if (i < 0) break;
-            if (area.Map(tr[i].RangeM, tr[i].SpeedMs, out float2 at))
+            if (area.Inside(tr[i].RangeM, tr[i].SpeedMs) && area.Map(tr[i].RangeM, tr[i].SpeedMs, out float2 at))
                 Bug(dl, at, 4f * s, Palette.Flown.Solid, filled: false);
         }
         if (st.SpeedMs > 0 && area.Map(st.RangeM, st.SpeedMs, out float2 now))
@@ -307,7 +414,7 @@ public static partial class GuidanceWindow
             FormattableString.Invariant($"BANK {(o.BankDeg >= 0 ? "R" : "L")}{Math.Abs(o.BankDeg):F0}  PLAN {o.BankRefDeg:F0}°{(o.Overbanked ? "  OVERBANK" : "")}"),
             FormattableString.Invariant($"AoA {st.AlphaFlownDeg:F0}° (ASKED {st.AlphaDeg:F0})  MACH {st.Mach:F1}"),
             FormattableString.Invariant($"ALT {st.AltitudeM / 1000:F1} km  RANGE {st.RangeM / 1000:F0} km"),
-            FormattableString.Invariant($"CROSS {st.CrossrangeM / 1000:F1} km  BAND {o.DeadbandRad * (plan?.BodyRadius ?? 0) / 1000:F1} km"),
+            FormattableString.Invariant($"CROSS {st.CrossrangeM / 1000:F1} km  HDG ERR {st.HeadingErrorDeg:+0.0;-0.0}°  BAND ±{o.DeadbandRad * 180.0 / Math.PI:F1}°"),
             FormattableString.Invariant($"L/D {st.LiftToDrag:F2} (x{st.LiftToDragScale:F2})  AIR x{st.DensityScale:F2}"),
             FormattableString.Invariant($"BELLY {st.BellyAxisName}  TRIM {(st.Trim != null ? st.Trim.TrimmedRows + "/" + st.Trim.Mach.Length : "-")}"),
             FormattableString.Invariant($"PLANS {st.Solves} ({st.Refusals} REFUSED)  {st.LastSolveMs:F0} ms"),

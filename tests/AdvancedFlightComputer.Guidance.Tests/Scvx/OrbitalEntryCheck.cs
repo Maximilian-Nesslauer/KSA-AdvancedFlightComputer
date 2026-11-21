@@ -216,6 +216,15 @@ internal static class OrbitalEntryCheck
         dy[5] = (l * Math.Sin(bankRad) / Math.Cos(g) + v * v / r * Math.Cos(g) * Math.Sin(psi) * Math.Tan(lat)) / v;
     }
 
+    /// <summary>The site's bearing off the heading, rad, + to the left.</summary>
+    static double HeadingError(double[] y, double tLat, double tLon)
+    {
+        double lat = y[2], lon = y[1], psi = y[5];
+        double bearing = Math.Atan2(Math.Sin(tLon - lon) * Math.Cos(tLat),
+                                    Math.Cos(lat) * Math.Sin(tLat) - Math.Sin(lat) * Math.Cos(tLat) * Math.Cos(tLon - lon));
+        return Math.IEEERemainder(psi - bearing, 2 * Math.PI);
+    }
+
     static (double S, double Cross) RangeAndCross(double[] y, double tLat, double tLon)
     {
         double lat = y[2], lon = y[1], psi = y[5];
@@ -290,7 +299,7 @@ internal static class OrbitalEntryCheck
                 nextSolve = t + (dMeas >= cfg.StartDrag ? 5.0 : 30.0);
             }
 
-            var outp = tracker.Update(new EntryTracker.Input(dt, e, dMeas, vel * Math.Sin(y[4]), ldMeas, Hs, cross, vN, plan, h < Top));
+            var outp = tracker.Update(new EntryTracker.Input(dt, e, dMeas, vel * Math.Sin(y[4]), ldMeas, Hs, HeadingError(y, tLat, tLon), vN, plan, h < Top));
             if (lastSide != 0 && outp.Side != lastSide) reversals++;
             if (outp.Side != 0) lastSide = outp.Side;
             // Positive bank lifts to the right; in Truth positive bank turns towards +heading (clockwise, right). Same sense.
@@ -308,7 +317,7 @@ internal static class OrbitalEntryCheck
             for (int i = 0; i < 6; i++) y[i] += dt / 6 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
             t += dt;
             if (verbose && ((int)(t / dt)) % 60 == 0)
-                Console.WriteLine($"      t {t,5:F0}  h {h / 1000,5:F1}  V {vel,5:F0}  D {dMeas,5:F1}/{outp.DragRefMs2,5:F1}  bank {outp.BankDeg,6:F1}  s {s * R0 / 1000,6:F0}  x {cross * R0 / 1000,6:F1}  {outp.Status}");
+                Console.WriteLine($"      t {t,5:F0}  h {h / 1000,5:F1}  V {vel,5:F0}  D {dMeas,5:F1}/{outp.DragRefMs2,5:F1}  bank {outp.BankDeg,6:F1}  s {s * R0 / 1000,6:F0}  x {cross * R0 / 1000,6:F1}  hdg {HeadingError(y, tLat, tLon) * 180 / Math.PI,6:F1}/{outp.DeadbandRad * 180 / Math.PI,4:F1}  {outp.Status}");
         }
 
         var (sf, cf) = RangeAndCross(y, tLat, tLon);

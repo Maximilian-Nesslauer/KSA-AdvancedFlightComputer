@@ -13,7 +13,7 @@ using KSA;
 /// ORBITAL ENTRY GUIDANCE: from the air's first touch to a hand-over at about Mach 2, belly first at the pitch-trim angle of attack, banking to fly the planner's vertical lift over drag.
 ///
 ///  PLAN. The planner (Scvx/OrbitalEntry/EntryPlanner) chooses vertical L/D against energy to reach the target's range inside the heating, dynamic-pressure and load limits, with the least heat load. It runs on its own thread and is re-solved every OrbitalEntryResolveS from the craft's state, warm from the plan before.
-///  TRACK. The tracker (EntryTracker) flies the plan with drag and sink-rate feedback, turns vertical L/D into bank from the measured L/D, reverses the bank's side on a crossrange deadband, and may overbank past the plan's limit for a while to stop a sink.
+///  TRACK. The tracker (EntryTracker) flies the plan with drag and sink-rate feedback, turns vertical L/D into bank from the measured L/D, reverses the bank's side when the heading error to the site leaves a band, and may bank further than the plan does (to the tracker's limit) to absorb what the plan did not foresee.
 ///  ATTITUDE. The angle of attack is the pitch-trim one at the current Mach, from a belly-first sweep of the craft taken at engage (KsaAeroSweep, bellyFirst). The nose goes at that angle above the flight path towards the lift, the belly axis faces the air, and the bank turns both about the velocity.
 ///  END. At the hand-over energy the craft holds its entry attitude, wings level, until the player takes it; how it flies out of the plan (a belly-flop landing or an aircraft-like approach) is for later.
 /// </summary>
@@ -37,13 +37,13 @@ public static partial class GuidanceWindow
         BankMinDeg = _s.OrbitalEntryBankMinDeg,
         BankMaxDeg = _s.OrbitalEntryBankMaxDeg,
         OverbankDeg = Math.Max(_s.OrbitalEntryOverbankDeg, _s.OrbitalEntryBankMaxDeg),
-        OverbankMaxS = _s.OrbitalEntryOverbankS,
         RollRateDegS = Math.Max(_s.OrbitalEntryRollRateDegS, 0.5),
         StartDrag = _s.OrbitalEntryStartDragMs2,
         HandoverAltitude = _s.OrbitalEntryHandoverAltKm * 1000.0,
         HandoverMach = _s.OrbitalEntryHandoverMach,
         TrackOmega = Math.Max(_s.OrbitalEntryTrackOmega, 0.01),
         CorridorWeight = Math.Max(_s.OrbitalEntryCorridorWeight, 0.0),
+        ReversalBandDeg = Math.Max(_s.OrbitalEntryReversalBandDeg, 0.5),
         EngageInAtmosphere = _s.OrbitalEntryEngageInAir,
         CommandSmoothS = Math.Max(_s.OrbitalEntrySmoothS, 0.0),
     };
@@ -77,7 +77,7 @@ public static partial class GuidanceWindow
         {
             EntryConfig c = OrbitalEntryConfig();
             string setup = FormattableString.Invariant(
-                $"limits: q {c.DynamicPressureMax / 1000:F1} kPa, load {c.LoadFactorMax:F2} g, heating {c.HeatingRateMax / 1000:F0} kW/m2 (nose {_s.OrbitalEntryNoseRadiusM:F2} m); bank plan {c.BankMinDeg:F0}-{c.BankMaxDeg:F0}, overbank {c.OverbankDeg:F0} for {c.OverbankMaxS:F0} s, roll {c.RollRateDegS:F1} deg/s; hand-over {c.HandoverAltitude / 1000:F1} km Mach {c.HandoverMach:F2}; start drag {c.StartDrag:F2}; re-solve {_s.OrbitalEntryResolveS:F2} s; site {_s.SiteLatDeg:F4} {_s.SiteLonDeg:F4}; mass {vehicle.TotalMass:F0} kg");
+                $"limits: q {c.DynamicPressureMax / 1000:F1} kPa, load {c.LoadFactorMax:F2} g, heating {c.HeatingRateMax / 1000:F0} kW/m2 (nose {_s.OrbitalEntryNoseRadiusM:F2} m); bank plan {c.BankMinDeg:F0}-{c.BankMaxDeg:F0}, tracker to {c.OverbankDeg:F0}, reversal band {c.ReversalBandDeg:F1} deg, corridor margin {c.CorridorWeight:F2}, roll {c.RollRateDegS:F1} deg/s; hand-over {c.HandoverAltitude / 1000:F1} km Mach {c.HandoverMach:F2}; start drag {c.StartDrag:F2}; re-solve {_s.OrbitalEntryResolveS:F2} s; site {_s.SiteLatDeg:F4} {_s.SiteLonDeg:F4}; mass {vehicle.TotalMass:F0} kg");
             if (OrbitalEntryLog.Start(st, vehicle.Id, (parent as Astronomical)?.Id ?? "", setup))
                 GuidanceLog.Info(vehicle, "Orbital entry log: " + OrbitalEntryLog.Path);
         }
@@ -198,7 +198,12 @@ public static partial class GuidanceWindow
         double rangeRad = Math.Acos(Math.Clamp(double3.Dot(rHat, siteHat), -1.0, 1.0));
         double3 leftHat = double3.Cross(r, vRel).NormalizeOrZero();
         double crossRad = Math.Asin(Math.Clamp(double3.Dot(leftHat, siteHat), -1.0, 1.0));
-        // Range to go ALONG the ground track, signed: negative once the site is behind. The planner is longitudinal, so it plans this, and the crossrange is the deadband's.
+        // The site's bearing off the ground track, + to the left: the angle the reversals are kept within.
+        double3 trackHat = (vRel - double3.Dot(vRel, rHat) * rHat).NormalizeOrZero();
+        double3 toSite = (siteHat - double3.Dot(siteHat, rHat) * rHat).NormalizeOrZero();
+        double headingErr = Math.Atan2(double3.Dot(double3.Cross(trackHat, toSite), rHat), double3.Dot(trackHat, toSite));
+        st.HeadingErrorDeg = headingErr * 180.0 / Math.PI;
+        // Range to go ALONG the ground track, signed: negative once the site is behind. The planner is longitudinal, so it plans this, and the crossrange is the reversal band's.
         double3 headHat = (vHat - double3.Dot(vHat, rHat) * rHat).NormalizeOrZero();
         double downRad = Math.Atan2(double3.Dot(siteHat, headHat), double3.Dot(siteHat, rHat));
         double greatCircleRad = rangeRad;
@@ -294,7 +299,7 @@ public static partial class GuidanceWindow
         {
             int side = st.Tracker.Side;
             var outp = st.Tracker.Update(new EntryTracker.Input(dt, e, drag, st.HdotMs, ld, atm.ScaleHeightAt(Math.Max(alt, 0.0)),
-                                                                crossRad, vMag / nominal.SpeedUnit, st.Plan, alt < atm.TopAltitude));
+                                                                headingErr, vMag / nominal.SpeedUnit, st.Plan, alt < atm.TopAltitude));
             if (side != 0 && outp.Side != side) st.Reversals++;
             st.Last = outp;
             bankDeg = outp.BankDeg;
@@ -396,7 +401,7 @@ public static partial class GuidanceWindow
         double q = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * st.SpeedMs * st.SpeedMs;
         EntryPlan.Sample? ps = p?.At(e);
         v.Add(now); v.Add((int)st.Phase); v.Add(st.AltitudeM); v.Add(st.SpeedMs); v.Add(mach); v.Add(gamma * 180 / Math.PI); v.Add(q);
-        v.Add(e); v.Add(ef); v.Add(st.GreatCircleM / 1000); v.Add(st.RangeM / 1000); v.Add(st.CrossrangeM / 1000); v.Add(o.DeadbandRad * R0 / 1000);
+        v.Add(e); v.Add(ef); v.Add(st.GreatCircleM / 1000); v.Add(st.RangeM / 1000); v.Add(st.CrossrangeM / 1000); v.Add(st.HeadingErrorDeg); v.Add(o.DeadbandRad * 180.0 / Math.PI);
         v.Add(st.RangeShortM / 1000); v.Add(st.RangeLongM / 1000);
         v.Add(ps.HasValue ? ps.Value.S * R0 / 1000 : double.NaN); v.Add(st.Reach);
         v.Add(st.DragMs2); v.Add(o.DragRefMs2); v.Add(ps.HasValue ? ps.Value.DragMaxMs2 : double.NaN); v.Add(ps.HasValue ? ps.Value.DragMinMs2 : double.NaN); v.Add(st.DragModelMs2);

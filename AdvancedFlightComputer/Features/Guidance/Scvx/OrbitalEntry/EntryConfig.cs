@@ -29,11 +29,8 @@ public sealed class EntryConfig
     /// <summary>Largest bank the plan uses, deg.</summary>
     public double BankMaxDeg { get; set; } = 100.0;
 
-    /// <summary>Largest bank the tracker may command, deg, for at most <see cref="OverbankMaxS"/> at a time.</summary>
+    /// <summary>Largest bank the tracker may command, deg: further than the plan's, so it can absorb what the plan did not foresee.</summary>
     public double OverbankDeg { get; set; } = 120.0;
-
-    /// <summary>How long the tracker may stay past <see cref="BankMaxDeg"/>, s; 0 for as long as the sink needs it. On 2026-11-21 a 20 s limit dropped the bank back to 100 deg mid-correction and left every entry a little high.</summary>
-    public double OverbankMaxS { get; set; } = 0.0;
 
     /// <summary>Roll rate the vehicle can sustain, deg/s. Sets the plan's rate limit and the tracker's slew.</summary>
     public double RollRateDegS { get; set; } = 5.0;
@@ -92,7 +89,7 @@ public sealed class EntryConfig
     /// <summary>
     /// Weight keeping the plan's range to go near the middle of the corridor at every energy (the TRAJ display's two lines). The heat load alone pushes the plan to the corridor's high-energy edge: 2026-11-21, on plan to the metre but closing on the edge, it had no drag left to spare at the end and landed long.
     /// </summary>
-    public double CorridorWeight { get; set; } = 0.3;
+    public double CorridorWeight { get; set; } = 1.0;
 
     /// <summary>Weight of the heat-load objective (normalised by the seed's).</summary>
     public double HeatWeight { get; set; } = 1.0;
@@ -123,11 +120,15 @@ public sealed class EntryConfig
     /// <summary>Damping ratio of the drag-tracking loop.</summary>
     public double TrackZeta { get; set; } = 0.7;
 
-    /// <summary>Crossrange deadband intercept, rad of arc (Lu 2008 Eq. 23, c0).</summary>
-    public double DeadbandC0 { get; set; } = 8.71e-5;
+    /// <summary>
+    /// The heading error to the site at which the bank reverses, deg, at speed; below <see cref="ReversalBandFullSpeed"/> (normalised) it narrows in proportion, to half at half that speed and a fifth at a fifth, so the craft still lines up on the site at the end. Offline, 5 deg kept every case within 4 km; 7.5 and 10 (the Shuttle's, at L/D 1) left the L/D 0.3 capsule 16 and 24 km to the side, its single reversal too late to come back. An angle rather than Lu's crossrange distance: a fixed 30 km was under a degree of heading 2000 km out, and the craft reversed again and again (2026-11-21).
+    /// </summary>
+    public double ReversalBandDeg { get; set; } = 5.0;
+    public double ReversalBandFullSpeed { get; set; } = 0.25;   // about 2 km/s on Earth: half the band at 1 km/s, a fifth at 400 m/s
 
-    /// <summary>Crossrange deadband slope, rad of arc per unit of normalised speed (Lu 2008 Eq. 23, c1).</summary>
-    public double DeadbandC1 { get; set; } = 5.21e-3;
+    /// <summary>The reversal band at a normalised speed, rad.</summary>
+    public double ReversalBand(double speedNorm)
+        => ReversalBandDeg * Math.PI / 180.0 * Math.Clamp(speedNorm / ReversalBandFullSpeed, 0.2, 1.0);
 
     public EntryConfig Clone() => (EntryConfig)MemberwiseClone();
 }

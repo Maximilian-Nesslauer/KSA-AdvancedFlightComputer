@@ -35,7 +35,7 @@ internal static class OrbitalEntryLog
     internal static readonly string[] Columns =
     {
         "t", "phase", "alt", "speed", "mach", "gammaDeg", "q",
-        "energy", "energyF", "rangeKm", "downKm", "crossKm", "deadbandKm",
+        "energy", "energyF", "rangeKm", "downKm", "crossKm", "headingErrDeg", "reversalBandDeg",
         "rangeShortKm", "rangeLongKm", "planRangeKm", "reach",
         "drag", "dragRef", "dragMax", "dragMin", "dragModel", "hdot", "hdotRef",
         "ldMeas", "ldModel", "ldScale", "rhoScale",

@@ -56,6 +56,7 @@ public sealed class OrbitalEntryState
     public int Reach;
     public double RangeShortM = double.NaN, RangeLongM = double.NaN, GreatCircleM, BankFlownDeg, AlphaFlownDeg, DragModelMs2;
     public double PlanAt = double.NaN;
+    public double HeadingErrorDeg;
 
     /// <summary>AFC's attitude controller's last report while it flew the entry (FlyOwnAttitude), for the log.</summary>
     internal AttitudeController.Report Attitude;
