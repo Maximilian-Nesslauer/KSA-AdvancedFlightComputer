@@ -72,7 +72,7 @@ public sealed class EntryConfig
     public int Nodes { get; set; } = 60;
     public int SubSteps { get; set; } = 6;
     public int ColdIterations { get; set; } = 60;
-    public int WarmIterations { get; set; } = 6;
+    public int WarmIterations { get; set; } = 15;
 
     /// <summary>Spread the linearisation over the thread pool. Off in the game, where the planner has a thread of its own.</summary>
     public bool ParallelLinearise { get; set; } = false;
@@ -86,6 +86,11 @@ public sealed class EntryConfig
     /// <summary>Weight pulling a re-solve's vertical L/D towards the plan before it, so successive plans do not jump.</summary>
     public double ConsistencyWeight { get; set; } = 0.2;
 
+    /// <summary>
+    /// Weight keeping the plan's range to go near the middle of the corridor at every energy (the TRAJ display's two lines). The heat load alone pushes the plan to the corridor's high-energy edge: 2026-11-21, on plan to the metre but closing on the edge, it had no drag left to spare at the end and landed long.
+    /// </summary>
+    public double CorridorWeight { get; set; } = 0.3;
+
     /// <summary>Weight of the heat-load objective (normalised by the seed's).</summary>
     public double HeatWeight { get; set; } = 1.0;
 
@@ -95,8 +100,8 @@ public sealed class EntryConfig
     /// <summary>Proximal weight on moving from the reference, per scaled unit squared.</summary>
     public double ProximalWeight { get; set; } = 1e-3;
 
-    /// <summary>Largest scaled defect a published plan may have (scales in <see cref="EntryPlanner"/>).</summary>
-    public double GateDefect { get; set; } = 0.05;
+    /// <summary>Largest scaled defect a published plan may have (scales in <see cref="EntryPlanner"/>: 0.25 is 1.25 km, 0.25 deg, 5 km of range). Re-solved every few seconds, a plan this close is flyable; late in the entry the roll-rate limit leaves a few tenths that 0.05 refused (2026-11-21 offline, 47 of 114).</summary>
+    public double GateDefect { get; set; } = 0.25;
 
     /// <summary>Largest terminal range error a published plan may have, m.</summary>
     public double GateRangeM { get; set; } = 25_000.0;
@@ -104,7 +109,13 @@ public sealed class EntryConfig
     // ---- Tracker ----
 
     /// <summary>Natural frequency of the drag-tracking loop, rad/s.</summary>
-    public double TrackOmega { get; set; } = 0.12;
+    public double TrackOmega { get; set; } = 0.06;
+
+    /// <summary>The most the drag feedback may add to or take from the plan's vertical L/D, as a share of the craft's L/D: the plan, re-solved every few seconds, does the work, the feedback only trims it.</summary>
+    public double FeedbackShare { get; set; } = 0.35;
+
+    /// <summary>Time constant of the low-pass on the measured drag and sink rate the feedback reads, s.</summary>
+    public double MeasureSmoothS { get; set; } = 1.0;
 
     /// <summary>Damping ratio of the drag-tracking loop.</summary>
     public double TrackZeta { get; set; } = 0.7;

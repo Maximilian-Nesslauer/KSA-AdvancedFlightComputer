@@ -43,6 +43,7 @@ public static partial class GuidanceWindow
         HandoverAltitude = _s.OrbitalEntryHandoverAltKm * 1000.0,
         HandoverMach = _s.OrbitalEntryHandoverMach,
         TrackOmega = Math.Max(_s.OrbitalEntryTrackOmega, 0.01),
+        CorridorWeight = Math.Max(_s.OrbitalEntryCorridorWeight, 0.0),
         EngageInAtmosphere = _s.OrbitalEntryEngageInAir,
         CommandSmoothS = Math.Max(_s.OrbitalEntrySmoothS, 0.0),
     };

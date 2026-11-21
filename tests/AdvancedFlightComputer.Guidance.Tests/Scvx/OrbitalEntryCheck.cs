@@ -222,6 +222,8 @@ internal static class OrbitalEntryCheck
         double dt = 0.5, t = 0, nextSolve = 0;
         double ef = EntryPlanner.FinalEnergy(nominal, cfg);
         int reversals = 0, lastSide = 0, solves = 0, refused = 0;
+        var whys = new Dictionary<string, int>();
+        double worstDefect = 0;
         double gMax = 0, qMax = 0, solveMsMax = 0;
         var dy = new double[6]; var k1 = new double[6]; var k2 = new double[6]; var k3 = new double[6]; var k4 = new double[6]; var yt = new double[6];
 
@@ -256,7 +258,14 @@ internal static class OrbitalEntryCheck
                 var res = planner.Solve(m, cfg, e0, x0, plan);
                 solves++;
                 if (res.Plan != null && res.Plan.Converged) { plan = res.Plan; solveMsMax = Math.Max(solveMsMax, res.Plan.SolveMs); }
-                else refused++;
+                else
+                {
+                    refused++;
+                    string why = res.Why.Length > 0 ? res.Why.Split(' ')[0] + " " + (res.Why.Contains("defect") ? "defect" : "miss") : "none";
+                    whys[why] = whys.GetValueOrDefault(why) + 1;
+                    if (res.Plan != null) worstDefect = Math.Max(worstDefect, res.Plan.MaxDefect);
+                    if (verbose && res.Plan != null) Console.WriteLine($"      refused at t {t:F0} h {(y[0] - R0) / 1000:F1} km V {vel:F0} D {dMeas:F2}: {res.Why}, it {res.Plan.Iterations}, nodes left to ef {(ef - e0):E2}");
+                }
                 nextSolve = t + (dMeas >= cfg.StartDrag ? 5.0 : 30.0);
             }
 
@@ -287,7 +296,7 @@ internal static class OrbitalEntryCheck
         bool ok = plan != null && rangeKm < 20 && Math.Abs(crossKm) < 15 && gMax < cfg.LoadFactorMax * 1.15 && Math.Abs(hEnd - cfg.HandoverAltitude / 1000) < 6;
         Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} {v.Name} closed loop (rho x1.15, L/D x0.92): miss {rangeKm:F1} km, cross {crossKm:F1} km, "
                         + $"h_end {hEnd:F1} km, V_end {y[3]:F0} m/s, g max {gMax:F2}, q max {qMax / 1000:F1} kPa, reversals {reversals}, "
-                        + $"solves {solves} ({refused} refused), worst {solveMsMax:F0} ms, t {t:F0} s");
+                        + $"solves {solves} ({refused} refused{(refused > 0 ? ": " + string.Join(", ", whys.Select(kv => kv.Key + " x" + kv.Value)) + $", worst defect {worstDefect:F3}" : "")}), worst {solveMsMax:F0} ms, t {t:F0} s");
         return ok ? 0 : 1;
     }
 }

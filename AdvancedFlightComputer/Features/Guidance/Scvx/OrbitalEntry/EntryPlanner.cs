@@ -78,6 +78,11 @@ public sealed class EntryPlanner
         Shoot(dyn, cfg, e, x0, u, x);
 
         var c = TrapezoidWeights(e);
+        // The corridor at each node, for the margin term: the range left on the most drag and on the glide.
+        CorridorAt(dyn, cfg, e, floor, cosMin, out double[] sShort, out double[] sLong);
+        double widest = 0;
+        for (int k = 0; k < n; k++) widest = Math.Max(widest, 0.5 * (sLong[k] - sShort[k]));
+        var corridor = new CorridorMargin(sShort, sLong, Math.Max(0.25 * widest, 50_000.0 / r0m));
         double qRef = 0;
         for (int k = 0; k < n; k++) qRef += c[k] * dyn.HeatPerEnergy(e[k], x[k, IR]);
         qRef = Math.Max(qRef, 1e-12);
@@ -105,10 +110,10 @@ public sealed class EntryPlanner
             if (iter > 0 && maxDefect <= 0.25 * cfg.GateDefect && lastStep < 0.02
                 && Math.Abs(x[n - 1, IS]) * r0m <= 0.25 * cfg.GateRangeM)
                 break;
-            double jRef = Merit(dyn, cfg, e, x, u, lin.Defect, c, qRef, floor, rfMin, rfMax, xs, uPrev);
+            double jRef = Merit(dyn, cfg, e, x, u, lin.Defect, c, qRef, floor, rfMin, rfMax, xs, uPrev, corridor);
 
             var sub = BuildAndSolve(dyn, cfg, e, x0, x, u, lin, c, qRef, floor, rfMin, rfMax,
-                                    cosMin, cosMax, rollRate, xs, eta, uPrev, out double jLin);
+                                    cosMin, cosMax, rollRate, xs, eta, uPrev, corridor, out double jLin);
             if (sub == null)
             {
                 eta *= 0.5;
@@ -119,7 +124,7 @@ public sealed class EntryPlanner
 
             var defC = new double[n - 1, NX];
             Defects(dyn, cfg, e, xc, uc, defC);
-            double jCand = Merit(dyn, cfg, e, xc, uc, defC, c, qRef, floor, rfMin, rfMax, xs, uPrev);
+            double jCand = Merit(dyn, cfg, e, xc, uc, defC, c, qRef, floor, rfMin, rfMax, xs, uPrev, corridor);
 
             double predicted = jRef - jLin;
             double actual = jRef - jCand;
@@ -140,7 +145,8 @@ public sealed class EntryPlanner
             lastStep = step;
             if (ratio < 0.25) eta *= 0.5;
             else if (ratio > 0.7) eta = Math.Min(eta * 2.0, 20.0);
-            if (step < 1e-3) { iter++; break; }
+            // A small step ends the solve only once the defect is inside the gate: before that the next iterations still close it.
+            if (step < 1e-3 && MaxScaledDefectOf(dyn, cfg, e, x, u, xs) <= cfg.GateDefect) { iter++; break; }
         }
 
         Linearise(dyn, cfg, e, x, u, lin);
@@ -341,6 +347,17 @@ public sealed class EntryPlanner
         return m;
     }
 
+    static double MaxScaledDefectOf(EntryDynamics dyn, EntryConfig cfg, double[] e, double[,] x, double[] u, double[] xs)
+    {
+        int n = e.Length;
+        var def = new double[n - 1, NX];
+        Defects(dyn, cfg, e, x, u, def);
+        double m = 0;
+        for (int k = 0; k < n - 1; k++)
+            for (int j = 0; j < NX; j++) m = Math.Max(m, Math.Abs(def[k, j]) / xs[j]);
+        return m;
+    }
+
     static double MaxScaledStep(double[,] x, double[] u, double[,] xc, double[] uc, double[] xs, int n)
     {
         double m = 0;
@@ -362,17 +379,68 @@ public sealed class EntryPlanner
 
     /// <summary>The true cost of a trajectory: heat, smoothness and exact penalties on what it violates.</summary>
     static double Merit(EntryDynamics dyn, EntryConfig cfg, double[] e, double[,] x, double[] u, double[,] def,
-                        double[] c, double qRef, double[] floor, double rfMin, double rfMax, double[] xs, double[]? uPrev)
+                        double[] c, double qRef, double[] floor, double rfMin, double rfMax, double[] xs, double[]? uPrev, CorridorMargin corridor)
     {
         int n = e.Length;
         double heat = 0;
         for (int k = 0; k < n; k++) heat += c[k] * dyn.HeatPerEnergy(e[k], x[k, IR]);
-        double j = cfg.HeatWeight * heat / qRef + ShapeCost(cfg, u, uPrev);
+        double j = cfg.HeatWeight * heat / qRef + ShapeCost(cfg, u, uPrev) + corridor.Cost(cfg, x, n);
         double pen = 0;
         for (int k = 0; k < n - 1; k++)
             for (int i = 0; i < NX; i++) pen += Math.Abs(def[k, i]) / xs[i];
         pen += SlackPenalty(x, floor, rfMin, rfMax, xs, n);
         return j + cfg.PenaltyWeight * pen;
+    }
+
+    /// <summary>The corridor's middle and half-width at each node, rad of range to go, for the margin term.</summary>
+    sealed class CorridorMargin(double[] sShort, double[] sLong, double halfFloor)
+    {
+        public readonly double[] Mid = Mids(sShort, sLong);
+        public readonly double[] Half = Halves(sShort, sLong, halfFloor);
+
+        static double[] Mids(double[] a, double[] b) { var m = new double[a.Length]; for (int k = 0; k < a.Length; k++) m[k] = 0.5 * (a[k] + b[k]); return m; }
+
+        // Floored: the corridor closes to nothing at the hand-over, and weighted by 1/half^2 the last nodes would be stiff enough that a warm re-solve could not close its defects (2026-11-21 offline: 82 of 113 refused).
+        static double[] Halves(double[] a, double[] b, double floor)
+        {
+            var m = new double[a.Length];
+            for (int k = 0; k < a.Length; k++) m[k] = Math.Max(0.5 * (b[k] - a[k]), floor);
+            return m;
+        }
+
+        /// <summary>sum over the nodes before the last of ((s - mid) / half)^2 / n: zero in the middle, one per node at an edge. The last node is the hand-over, where the range to go is zero by the terminal condition.</summary>
+        public double Cost(EntryConfig cfg, double[,] x, int n)
+        {
+            if (!(cfg.CorridorWeight > 0)) return 0;
+            double j = 0;
+            for (int k = 0; k < n - 1; k++)
+            {
+                double d = (x[k, IS] - Mid[k]) / Half[k];
+                j += d * d;
+            }
+            return cfg.CorridorWeight * j / n;
+        }
+    }
+
+    /// <summary>The range left from each node to the hand-over flying the most drag (the floors) and the glide (the lateral-reserve bank), rad: EntryPlanner.Corridor's quadrature, node by node.</summary>
+    static void CorridorAt(EntryDynamics dyn, EntryConfig cfg, double[] e, double[] floor, double cosMin, out double[] sShort, out double[] sLong)
+    {
+        int n = e.Length;
+        sShort = new double[n];
+        sLong = new double[n];
+        var iS = new double[n];
+        var iL = new double[n];
+        for (int k = 0; k < n; k++)
+        {
+            iS[k] = 1.0 / Math.Max(dyn.Drag(e[k], floor[k]), EntryDynamics.DragFloor);
+            iL[k] = 1.0 / Math.Max(dyn.Drag(e[k], dyn.EquilibriumGlideRadius(e[k], cosMin, cfg)), EntryDynamics.DragFloor);
+        }
+        for (int k = n - 2; k >= 0; k--)
+        {
+            double h = e[k + 1] - e[k];
+            sShort[k] = sShort[k + 1] + 0.5 * h * (iS[k] + iS[k + 1]);
+            sLong[k] = sLong[k + 1] + 0.5 * h * (iL[k] + iL[k + 1]);
+        }
     }
 
     /// <summary>The plan's shape terms: the change, the curvature, and the distance from the plan before (warm only), all in vertical L/D over U_s.</summary>
@@ -417,7 +485,7 @@ public sealed class EntryPlanner
     static (double[,], double[])? BuildAndSolve(
         EntryDynamics dyn, EntryConfig cfg, double[] e, double[] x0, double[,] xr, double[] ur, Linearisation lin,
         double[] c, double qRef, double[] floor, double rfMin, double rfMax,
-        double cosMin, double cosMax, double rollRate, double[] xs, double eta, double[]? uPrev, out double jLin)
+        double cosMin, double cosMax, double rollRate, double[] xs, double eta, double[]? uPrev, CorridorMargin corridor, out double jLin)
     {
         jLin = double.PositiveInfinity;
         int n = e.Length;
@@ -495,6 +563,14 @@ public sealed class EntryPlanner
             }
         }
         for (int k = 0; k < n; k++) P.Add(iU + k, iU + k, pu[k]);
+        // The corridor margin: (s_k - mid_k)^2 / half_k^2 / n on the range to go, every node before the hand-over.
+        if (cfg.CorridorWeight > 0)
+            for (int k = 0; k < n - 1; k++)
+            {
+                double w = cfg.CorridorWeight / (n * corridor.Half[k] * corridor.Half[k]);
+                P.Add(X(k, IS), X(k, IS), 2 * w);
+                cvec[X(k, IS)] += -2 * w * corridor.Mid[k];
+            }
 
         // Penalties.
         double lam = cfg.PenaltyWeight;
@@ -614,7 +690,7 @@ public sealed class EntryPlanner
             double d = xc[k, IR] - xr[k, IR];
             jl += wq * c[k] * (heatF0[k] + heatF1[k] * d + 0.5 * heatF2[k] * d * d);
         }
-        jl += ShapeCost(cfg, uc, uPrev);
+        jl += ShapeCost(cfg, uc, uPrev) + corridor.Cost(cfg, xc, n);
         double pen = 0;
         for (int k = 0; k < nI; k++)
             for (int j = 0; j < NX; j++) pen += Math.Abs(v[W(k, j)]) / xs[j];

@@ -49,6 +49,7 @@ public sealed class EntryTracker
     bool _reversing;
     bool _inAir;
     double _uFilt = double.NaN;
+    double _dragF = double.NaN, _hdotF = double.NaN;
 
     public EntryTracker(EntryConfig cfg) => _cfg = cfg;
 
@@ -66,6 +67,7 @@ public sealed class EntryTracker
         _reversing = false;
         _inAir = false;
         _uFilt = double.NaN;
+        _dragF = _hdotF = double.NaN;
     }
 
     public Output Update(in Input inp)
@@ -90,14 +92,21 @@ public sealed class EntryTracker
         }
 
         var p = inp.Plan.At(inp.E);
+        // The measured drag and sink rate, lightly low-passed: the flaps and the bank stir them faster than the drag loop should answer.
+        double km = cfg.MeasureSmoothS > 0 ? Math.Clamp(inp.Dt / cfg.MeasureSmoothS, 0.0, 1.0) : 1.0;
+        _dragF = double.IsNaN(_dragF) ? inp.DragMs2 : _dragF + km * (inp.DragMs2 - _dragF);
+        _hdotF = double.IsNaN(_hdotF) ? inp.HdotMs : _hdotF + km * (inp.HdotMs - _hdotF);
         // The gains are 1/D and 1/D^2, taken at the plan's reference drag (smooth, where the measured drag is not) and at no less than GainDragFloor, which matters at the first wisp of air.
         double d = Math.Max(p.DragMs2, cfg.GainDragFloor);
         double w = cfg.TrackOmega, z = cfg.TrackZeta;
         double f1 = w * w * inp.ScaleHeightM / (d * d);
         double f2 = 2 * z * w / d;
-        double uRaw = p.U + f1 * (inp.DragMs2 - p.DragMs2) - f2 * (inp.HdotMs - p.HdotMs);
-
         double ld = Math.Max(inp.LiftToDrag, 1e-3);
+        // The feedback trims the plan, within FeedbackShare of the craft's L/D either way: held to that, it cannot throw the bank from one limit to the other.
+        double fbMax = cfg.FeedbackShare * ld;
+        double fb = Math.Clamp(f1 * (_dragF - p.DragMs2) - f2 * (_hdotF - p.HdotMs), -fbMax, fbMax);
+        double uRaw = p.U + fb;
+
         double over = cfg.OverbankDeg * Math.PI / 180;
         bool liftUp = uRaw >= ld;
         bool liftDown = uRaw <= ld * Math.Cos(over);
