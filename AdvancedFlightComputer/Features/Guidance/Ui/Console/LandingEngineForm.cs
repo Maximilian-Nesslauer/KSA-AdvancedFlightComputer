@@ -11,6 +11,7 @@ public static partial class GuidanceWindow
 {
     private const float EngineMapSizePx = 168f;
 
+    /// <summary>A returnable stage's LANDING ENGINES section on its LAUNCH booster row. The row draws it only once the stage comes home (a site or an optimal return), so it opens by default: picking the target is when the landing engines matter. A fold the player closed stays closed.</summary>
     private static void DrawBoosterEngineGroups(Vehicle vehicle, ReturnableStage stage)
     {
         Part? root = vehicle.Parts.Find(stage.RootId);
@@ -24,10 +25,12 @@ public static partial class GuidanceWindow
         double reserve = PlannedBoosterReserveKg(vehicle, stage.RootId);
         double loaded = double.IsFinite(reserve) && reserve > 0 ? dry + reserve : double.NaN;
         DrawLandingEngineGroups(vehicle, root, stage.EngineGroupScope, leaving, parent,
-            KsaEnginePerf.AmbientPressureAt(parent, 0.0), dry, loaded, "WITH RESERVE");
+            KsaEnginePerf.AmbientPressureAt(parent, 0.0), dry, loaded, "WITH RESERVE", openByDefault: true);
     }
 
-    /// <summary>The craft's LANDING ENGINES section, on every way of LAND, in setup and in flight.</summary>
+    /// <summary>
+    /// The craft's LANDING ENGINES section, on every way of LAND, in setup and in flight: the craft being flown only. A returnable stage's choice is made on its booster row under LAUNCH, and it goes with the stage when it separates (RememberStageEngineChoices).
+    /// </summary>
     internal static void DrawLandEngineRows(Vehicle vehicle)
     {
         if (vehicle.Parts?.Root is not { } root || vehicle.Orbit?.Parent is not { } parent)
@@ -40,7 +43,8 @@ public static partial class GuidanceWindow
     internal static string LandingEngineFoldId(string scope) => "EngineGroups:" + scope;
 
     private static void DrawLandingEngineGroups(Vehicle vehicle, Part root, string scope, HashSet<Part>? allowed, IParentBody parent,
-                                                double pressurePa, double dryKg, double loadedKg, string loadedLabel)
+                                                double pressurePa, double dryKg, double loadedKg, string loadedLabel,
+                                                bool openByDefault = false)
     {
         if (vehicle.Parts == null)
             return;
@@ -56,7 +60,7 @@ public static partial class GuidanceWindow
             int onPicture = layout.Dots.Count(d => d.AftPlane);
             string title = chosen.Count == 0 ? "AS STAGED"
                 : $"{settings.Chosen!.Name} ({chosen.Count} OF {layout.Dots.Length})";
-            if (!ConsoleUi.Fold("LANDING ENGINES  " + title, LandingEngineFoldId(scope), false))
+            if (!ConsoleUi.Fold("LANDING ENGINES  " + title, LandingEngineFoldId(scope), openByDefault))
                 return;
             if (settings.Chosen is { } assigned && !LandingEngineGroups.Resolve(assigned, candidates, out _))
                 ConsoleUi.WarningWrapped("An engine of the landing choice is missing from this stage.");
@@ -301,7 +305,9 @@ public static partial class GuidanceWindow
             "Even minimum thrust lifts the empty stage, so the burn has to end exactly at the ground. Fewer engines can hover.", Palette.Warn.F4),
         LandingEngineVerdict.Weak => ("LITTLE BRAKING MARGIN", "Under 1.5 TWR at full throttle at the start of the burn: the burn starts low and long.", Palette.Warn.F4),
         LandingEngineVerdict.TooWeak => ("TOO WEAK TO BRAKE", "Full thrust does not lift the stage. AFC refuses this choice.", Palette.Bad.F4),
-        _ => (EngineText($"{s.OffsetM:F2} m OFF AXIS"), "The thrust center is off the stage axis, so the engines turn the stage. Choose a balanced set.", Palette.Bad.F4),
+        _ => (EngineText($"{s.OffsetM:F2} m OFF AXIS"),
+            "The thrust center is off the stage axis, so the engines turn the stage and their gimbals must hold them. Touchdown guidance plans for that moment. When entry guidance engages, AFC measures it from the centre of mass and lands on all engines instead if it takes over 80 % of what the gimbals can hold. A balanced set keeps the gimbals free.",
+            Palette.Warn.F4),
     };
 
     private static string DescribeEngineDot(Vehicle vehicle, LandingEngineDot dot, bool live, ReadOnlySpan<RocketState> states)
@@ -353,6 +359,13 @@ public static partial class GuidanceWindow
     {
         _s.EngineGroups[scope] = settings;
         _s.StageModelDirty = true;
+        // One line per change, so a flight's log says which choice each stage carried.
+        string stage = scope == LandingEngineGroups.CraftScope ? "this craft"
+            : _s.ReturnableStages.Find(s => s.EngineGroupScope == scope) is { } owner ? $"stage '{owner.Name}'" : "a stage no longer listed";
+        if (Program.ControlledVehicle is { } subject)
+            GuidanceLog.Info(subject, settings.Chosen is { } chosen
+                ? $"landing engines for {stage}: '{chosen.Name}', {chosen.Engines.Length} controller(s)."
+                : $"landing engines for {stage}: as staged.");
         if (scope == LandingEngineGroups.CraftScope)
             ResetLandingEngineSelection();
     }
