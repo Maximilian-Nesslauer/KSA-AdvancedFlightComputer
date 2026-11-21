@@ -79,6 +79,9 @@ if (args.Contains("--6dof-thrust-moment"))
 if (args.Contains("--6dof-aero"))
     return SixDofAeroCheck.Run(verbose);
 
+if (args.Contains("--orbital-entry"))
+    return OrbitalEntryCheck.Run(verbose);
+
 if (args.Contains("--3dof-mpc"))
     return ThreeDofMpcCheck.Run(verbose);
 

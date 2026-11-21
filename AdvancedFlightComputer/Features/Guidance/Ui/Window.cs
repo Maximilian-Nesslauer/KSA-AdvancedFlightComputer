@@ -65,6 +65,9 @@ public static partial class GuidanceWindow
         if (descentUi || boostbackUi)
             DrawLandingSiteMarker(viewport, parent);
 
+        // Orbital entry's own window, the Shuttle-style ENTRY TRAJ page: while it flies, or while the craft is on a path into the air.
+        DrawEntryTrajWindow(vehicle, parent);
+
         // Clickable retargeting: while armed, a world click sets the new landing site.
         HandleRetargetClick(viewport, parent);
     }

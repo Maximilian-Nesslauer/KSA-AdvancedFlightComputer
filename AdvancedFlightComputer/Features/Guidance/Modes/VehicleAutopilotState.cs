@@ -1768,6 +1768,48 @@ public sealed class VehicleAutopilotState
 
     public string GlideStatus = "";
 
+    // ---- Orbital entry (Modes/OrbitalEntry.cs; its window is Ui/Gauges/EntryTrajWindow.cs) ----
+
+    /// <summary>The craft's orbital entry: phase, plan, tracker and the ENTRY TRAJ window's history.</summary>
+    internal OrbitalEntryState OrbitalEntry = new();
+
+    /// <summary>Dynamic pressure limit of the entry plan, kPa. 0 is off.</summary>
+    public double OrbitalEntryQMaxKPa = 16.0;
+    /// <summary>Aerodynamic load limit of the entry plan, g. 0 is off.</summary>
+    public double OrbitalEntryGMax = 2.5;
+    /// <summary>Stagnation heating limit of the entry plan, kW/m^2 (Sutton-Graves on OrbitalEntryNoseRadiusM). 0 is off.</summary>
+    public double OrbitalEntryHeatMaxKWm2 = 0.0;
+    /// <summary>Nose radius for the heating estimate, m.</summary>
+    public double OrbitalEntryNoseRadiusM = 1.0;
+    /// <summary>Smallest bank the plan uses, deg: side lift kept for the roll reversals.</summary>
+    public double OrbitalEntryBankMinDeg = 15.0;
+    /// <summary>Largest bank the plan uses, deg.</summary>
+    public double OrbitalEntryBankMaxDeg = 100.0;
+    /// <summary>Largest bank the tracker may overbank to, deg, for at most OrbitalEntryOverbankS.</summary>
+    public double OrbitalEntryOverbankDeg = 120.0;
+    public double OrbitalEntryOverbankS = 20.0;
+    /// <summary>Roll rate the tracker slews at and the plan leaves room for, deg/s.</summary>
+    public double OrbitalEntryRollRateDegS = 5.0;
+    /// <summary>Hand-over altitude, km, and Mach (airspeed over the sea-level speed of sound, as the aero tables use).</summary>
+    public double OrbitalEntryHandoverAltKm = 25.0;
+    public double OrbitalEntryHandoverMach = 2.0;
+    /// <summary>Drag at which the tracker takes hold, m/s^2. Above it the craft holds its entry attitude lift-up.</summary>
+    public double OrbitalEntryStartDragMs2 = 0.5;
+    /// <summary>Fly the pitch-trim angle of attack at each Mach (from the belly-first sweep); off flies OrbitalEntryAoaDeg throughout.</summary>
+    public bool OrbitalEntryTrimAoa = true;
+    /// <summary>Preferred (and fallback) angle of attack from nose-first, deg, and the band a trim must lie in.</summary>
+    public double OrbitalEntryAoaDeg = 60.0;
+    public double OrbitalEntryAoaMinDeg = 30.0;
+    public double OrbitalEntryAoaMaxDeg = 90.0;
+    /// <summary>Which body axis is the belly: 0 the best of the four by the sweep, then -Z, +Z, -Y, +Y.</summary>
+    public double OrbitalEntryBellyAxis = 0.0;
+    /// <summary>Seconds between re-solves.</summary>
+    public double OrbitalEntryResolveS = 2.0;
+    /// <summary>Take orbital entry guidance at the end of a DEORBIT ONLY burn.</summary>
+    public bool OrbitalEntryAfterDeorbit = true;
+    /// <summary>Fly the entry attitude with AFC's own attitude controller; off steers through the stock flight computer.</summary>
+    public bool OrbitalEntryOwnAttitude = true;
+
     #region Status texts and their marks
 
     private string _error = "", _status = "", _landingStatus = "", _boostbackStatus = "", _threeDofStatus = "";

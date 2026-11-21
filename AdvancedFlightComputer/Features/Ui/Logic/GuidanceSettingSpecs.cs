@@ -266,6 +266,58 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec ThreeDofTrackTiltDeg = new("ThreeDofTrackTiltDeg", "TRACK MAX TILT", "deg", T, 10.0, 0.0, 30.0, "%.1f",
         "Largest tilt off the axis of the plan the burn feedback may command.");
 
+    // ---- Orbital entry: drawn in the ENTRY TRAJ window's PARAMS view, not on a console page, so all at the player tier ----
+    public static readonly SettingSpec OrbitalEntryQMaxKPa = new("OrbitalEntryQMaxKPa", "MAX DYNAMIC PRESSURE", "kPa", P, 16.0, 0.0, 1e3, "%.1f",
+        "The orbital entry plan stays above the altitude at which the air's dynamic pressure would pass this. 0 switches the limit off.");
+    public static readonly SettingSpec OrbitalEntryGMax = new("OrbitalEntryGMax", "MAX LOAD", "g", P, 2.5, 0.0, 50.0, "%.2f",
+        "The orbital entry plan stays above the altitude at which drag and lift together would pass this load. 0 switches the limit off.");
+    public static readonly SettingSpec OrbitalEntryHeatMaxKWm2 = new("OrbitalEntryHeatMaxKWm2", "MAX HEATING", "kW/m^2", P, 0.0, 0.0, 1e5, "%.0f",
+        "Stagnation heating limit for the orbital entry plan, from the Sutton-Graves estimate on NOSE RADIUS. 0 switches the limit off.");
+    public static readonly SettingSpec OrbitalEntryNoseRadiusM = new("OrbitalEntryNoseRadiusM", "NOSE RADIUS", "m", P, 1.0, 0.05, 100.0, "%.2f",
+        "Nose radius for the heating estimate: a blunter nose heats less.");
+    public static readonly SettingSpec OrbitalEntryBankMinDeg = new("OrbitalEntryBankMinDeg", "PLAN MIN BANK", "deg", P, 15.0, 0.0, 89.0, "%.0f",
+        "The smallest bank the plan uses, so some lift always points sideways for the roll reversals to turn with.");
+    public static readonly SettingSpec OrbitalEntryBankMaxDeg = new("OrbitalEntryBankMaxDeg", "PLAN MAX BANK", "deg", P, 100.0, 1.0, 180.0, "%.0f",
+        "The largest bank the plan uses.");
+    public static readonly SettingSpec OrbitalEntryOverbankDeg = new("OrbitalEntryOverbankDeg", "OVERBANK LIMIT", "deg", P, 120.0, 1.0, 180.0, "%.0f",
+        "The largest bank the tracker may command past the plan's, to stop a sink quickly, as the Shuttle did after its pull-out.");
+    public static readonly SettingSpec OrbitalEntryOverbankS = new("OrbitalEntryOverbankS", "OVERBANK TIME", "s", P, 20.0, 0.0, 600.0, "%.0f",
+        "How long the tracker may stay past PLAN MAX BANK at a time.");
+    public static readonly SettingSpec OrbitalEntryRollRateDegS = new("OrbitalEntryRollRateDegS", "ROLL RATE", "deg/s", P, 5.0, 0.5, 90.0, "%.1f",
+        "The roll rate the tracker slews the bank at, a reversal included; the plan uses half of it.");
+    public static readonly SettingSpec OrbitalEntryHandoverAltKm = new("OrbitalEntryHandoverAltKm", "HAND-OVER ALTITUDE", "km", P, 25.0, 1.0, 200.0, "%.1f",
+        "Where orbital entry guidance ends, with HAND-OVER MACH: the craft holds its entry attitude from there.");
+    public static readonly SettingSpec OrbitalEntryHandoverMach = new("OrbitalEntryHandoverMach", "HAND-OVER MACH", "", P, 2.0, 0.2, 20.0, "%.2f",
+        "Airspeed over the sea-level speed of sound at the hand-over, as the aero tables measure Mach.");
+    public static readonly SettingSpec OrbitalEntryStartDragMs2 = new("OrbitalEntryStartDragMs2", "START DRAG", "m/s^2", P, 0.5, 0.01, 20.0, "%.2f",
+        "Drag at which the tracker takes hold. Above the air the craft holds its entry attitude lift-up.");
+    public static readonly SettingSpec OrbitalEntryAoaDeg = new("OrbitalEntryAoaDeg", "ENTRY AoA", "deg", P, 60.0, 0.0, 180.0, "%.0f",
+        "Angle of attack from nose-first: the trim angle nearest this where a Mach row has several, and the angle flown where it has none.");
+    public static readonly SettingSpec OrbitalEntryAoaMinDeg = new("OrbitalEntryAoaMinDeg", "TRIM AoA MIN", "deg", P, 30.0, 0.0, 180.0, "%.0f",
+        "Lowest pitch-trim angle of attack the schedule accepts.");
+    public static readonly SettingSpec OrbitalEntryAoaMaxDeg = new("OrbitalEntryAoaMaxDeg", "TRIM AoA MAX", "deg", P, 90.0, 0.0, 180.0, "%.0f",
+        "Highest pitch-trim angle of attack the schedule accepts.");
+    public static readonly SettingSpec OrbitalEntryBellyAxis = new("OrbitalEntryBellyAxis", "BELLY AXIS", "", P, 0.0, 0.0, 4.0, "%.0f",
+        "Which body axis faces the air belly first: 0 picks the best of the four by the sweep, 1 -Z, 2 +Z, 3 -Y, 4 +Y.");
+    public static readonly SettingSpec OrbitalEntryResolveS = new("OrbitalEntryResolveS", "RE-SOLVE EVERY", "s", P, 2.0, 0.25, 60.0, "%.2f",
+        "Seconds between orbital entry re-solves, each warm from the plan before.");
+    public static readonly BoolSpec OrbitalEntryTrimAoa = new("OrbitalEntryTrimAoa", "TRIM AoA", P, true,
+        "Fly the pitch-trim angle of attack at each Mach, from the belly-first sweep. Off flies ENTRY AoA throughout.");
+    public static readonly BoolSpec OrbitalEntryAfterDeorbit = new("OrbitalEntryAfterDeorbit", "ENTRY AFTER DEORBIT", P, true,
+        "Orbital entry guidance takes the craft at the end of a DEORBIT ONLY burn.");
+    public static readonly BoolSpec OrbitalEntryOwnAttitude = new("OrbitalEntryOwnAttitude", "OWN ATTITUDE", P, true,
+        "Fly the entry attitude with AFC's own attitude controller (surfaces and RCS). Off steers through the stock flight computer.");
+
+    /// <summary>The ENTRY TRAJ window's parameter rows, in order.</summary>
+    public static readonly SettingSpec[] OrbitalEntryDoubles =
+    {
+        OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach,
+        OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
+        OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryOverbankS, OrbitalEntryRollRateDegS,
+        OrbitalEntryStartDragMs2, OrbitalEntryResolveS,
+    };
+    public static readonly BoolSpec[] OrbitalEntryBools = { OrbitalEntryTrimAoa, OrbitalEntryAfterDeorbit, OrbitalEntryOwnAttitude };
+
     public static readonly BoolSpec ThreeDofFromGlide = new("ThreeDofFromGlide", "ENTRY ON GLIDE", P, true,
         "ENTRY takes over a boostback glide at AT IMPACT T- and flies the glide and the landing burn. Off, the glide continues until another mode takes the craft or it is stopped, and no landing burn is planned.");
     public static readonly BoolSpec ThreeDofSixDofHandover = new("ThreeDofSixDofHandover", "TOUCHDOWN FOR BURN END", P, true,
@@ -403,6 +455,10 @@ internal static class GuidanceSettingSpecs
         ThreeDofBurnCeiling, ThreeDofTrackKp, ThreeDofTrackKd, ThreeDofTrackTiltDeg,
         TermTouchdownRate, TermConstAltM, TermQuadK, TermMaxDescRate, TermMaxTiltDeg, TermNudgeStep,
         TermKpV, TermKiV, TermKdV, TermKpL, TermKiL, TermKdL,
+        OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach,
+        OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
+        OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryOverbankS, OrbitalEntryRollRateDegS,
+        OrbitalEntryStartDragMs2, OrbitalEntryResolveS,
     };
 
     public static readonly BoolSpec[] AllBools =
@@ -411,6 +467,7 @@ internal static class GuidanceSettingSpecs
         FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, AscentOwnAttitude, AscentAeroControl, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
         VehicleHeightAuto, LegsAutoDeploy, ParkIdleEngines, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
         SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ThreeDofFromGlide, ThreeDofSixDofHandover,
+        OrbitalEntryTrimAoa, OrbitalEntryAfterDeorbit, OrbitalEntryOwnAttitude,
     };
 
     #endregion

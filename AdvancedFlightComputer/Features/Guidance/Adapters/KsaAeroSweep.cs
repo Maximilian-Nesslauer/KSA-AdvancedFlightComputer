@@ -159,6 +159,11 @@ public static class KsaAeroSweep
         public BodyAeroTable NoseBodyMoment;
 
         /// <summary>
+        /// The belly-first sweep for an orbital entry, null unless asked for (TryStart's bellyFirst): for each candidate belly axis, drag, lift and the pitch moment over Mach and the angle of attack from nose-first (0) through belly-first (90) to tail-first (180), at no sideslip. See <see cref="BellySweep"/>.
+        /// </summary>
+        public BellySweep[] Belly;
+
+        /// <summary>
         /// Each control surface's effect (ControlSurfaces), swept like the body table and on its grid: the change its deflection makes to the body-axis force and moment, per deflection swept. Empty for a craft with none, or one swept on an airless body.
         /// </summary>
         public SurfaceTable[] Surfaces = [];
@@ -239,7 +244,7 @@ public static class KsaAeroSweep
     /// <returns>False with a reason in <paramref name="error"/> if the vehicle has no
     /// usable geometry, the game's force function gives no drag, or the game rebuilds the aero mesh (<see cref="RebuildingError"/>). A body with no atmosphere is NOT an error: the game applies no aerodynamic force there, so nothing is measured, Atmosphere comes back null and the tables are zero.</returns>
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double simTime,
-                                out Result result, out string error, bool noseFirst = false)
+                                out Result result, out string error, bool noseFirst = false, bool bellyFirst = false)
     {
         result = null;
         error = "";
@@ -253,6 +258,7 @@ public static class KsaAeroSweep
         if (!TryPrepareCraft(vehicle, parent, simTime, out Prepared prepared, out error))
             return false;
         prepared.NoseFirst = noseFirst;
+        prepared.BellyFirst = bellyFirst;
         return Run(prepared, Log, out result, out error);
     }
 
@@ -324,6 +330,24 @@ public static class KsaAeroSweep
     /// <summary>
     /// Everything one sweep reads of the game, taken on the main thread (TryPrepareCraft, TryPrepareBooster): plain copies of the physics state and the vehicle properties - all value types - and a private aero mesh source gathered from the parts. Run reads nothing else, so it can run on any thread.
     /// </summary>
+    /// <summary>
+    /// One belly axis's belly-first sweep (Result.Belly), as flat arrays indexed [mach * alphas + alpha]. Cd and Cl on <see cref="ReferenceArea"/>; Cm on area times <see cref="ReferenceLength"/>, about the centre of mass at the sweep, positive when it raises the angle of attack.
+    /// </summary>
+    public sealed class BellySweep
+    {
+        public double3 Axis;
+        public double[] MachGrid;
+        public double[] AlphaDeg;
+        public double[] Cd, Cl, Cm;
+        public double ReferenceArea, ReferenceLength;
+
+        public string AxisName => Axis.Z < -0.5 ? "-Z" : Axis.Z > 0.5 ? "+Z" : Axis.Y < -0.5 ? "-Y" : "+Y";
+    }
+
+    /// <summary>The belly-first sweep's angles of attack, deg: dense through the belly-first range, sparse towards nose- and tail-first.</summary>
+    public static readonly double[] BellyAlphaBreakpointsDeg =
+        [0, 10, 20, 30, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100, 110, 120, 135, 150, 165, 180];
+
     internal sealed class Prepared
     {
         public string Name;
@@ -344,6 +368,9 @@ public static class KsaAeroSweep
 
         /// <summary>Sweep the nose-first tables too (Result.NoseBodyAero): an ascent's. Whole-craft sweeps only.</summary>
         public bool NoseFirst;
+
+        /// <summary>Sweep the belly-first tables too (Result.Belly): an orbital entry's. Whole-craft sweeps only.</summary>
+        public bool BellyFirst;
 
         /// <summary>The control surfaces to sweep (ControlSurfaces), each with the binder that finds it in the private mesh. Whole-craft sweeps only.</summary>
         public List<(ControlSurface Surface, Func<Aerodynamics, Action<double>> Binder)> Surfaces = new();
@@ -553,12 +580,14 @@ public static class KsaAeroSweep
 
     /// <summary>The whole craft's sweep, started on its own thread. False, with the reason, where it cannot be prepared - <see cref="RebuildingError"/> while the game rebuilds the mesh. Main thread.</summary>
     /// <param name="noseFirst">Sweep the nose-first tables too (Result.NoseBodyAero), for an ascent.</param>
-    public static bool TryStart(Vehicle vehicle, IParentBody parent, double simTime, out Job job, out string error, bool noseFirst = false)
+    /// <param name="bellyFirst">Sweep the belly-first tables too (Result.Belly), for an orbital entry.</param>
+    public static bool TryStart(Vehicle vehicle, IParentBody parent, double simTime, out Job job, out string error, bool noseFirst = false, bool bellyFirst = false)
     {
         job = null;
         if (!TryPrepareCraft(vehicle, parent, simTime, out Prepared prepared, out error))
             return false;
         prepared.NoseFirst = noseFirst;
+        prepared.BellyFirst = bellyFirst;
         job = Job.StartFor(prepared);
         return true;
     }
@@ -740,6 +769,48 @@ public static class KsaAeroSweep
             noseCoefficients = new double[nbm * nan * nan * 3];
             noseMoments = new double[nbm * nan * nan * 3];
             FlyGrid(NoseAngleBreakpointsDeg, true, noseCoefficients, noseMoments);
+        }
+        // BELLY FIRST, for an orbital entry: per candidate belly axis b (body axes, square to x), the air at angle of attack a comes from cos(a) x + sin(a) b, so 0 is nose-first and 90 is belly-first. Drag is along that direction, lift along sin(a) x - cos(a) b, and the pitch moment about b x x, positive when it raises a.
+        if (p.BellyFirst)
+        {
+            double[] bellyAlpha = BellyAlphaBreakpointsDeg;
+            int nba = bellyAlpha.Length;
+            var axes = new[] { new double3(0, 0, -1), new double3(0, 0, 1), new double3(0, -1, 0), new double3(0, 1, 0) };
+            var sweeps = new BellySweep[axes.Length];
+            for (int ax = 0; ax < axes.Length; ax++)
+            {
+                double3 b = axes[ax];
+                var cd = new double[nm * nba];
+                var cl = new double[nm * nba];
+                var cm = new double[nm * nba];
+                double3 pitchAxis = double3.Cross(b, new double3(1, 0, 0));
+                for (int j = 0; j < nba; j++)
+                {
+                    double a = bellyAlpha[j] * Math.PI / 180.0;
+                    double3 u = new double3(Math.Cos(a), 0, 0) + Math.Sin(a) * b;
+                    double3 lift = new double3(Math.Sin(a), 0, 0) - Math.Cos(a) * b;
+                    probe.Wrench(BaselineSpeed * u, out double3 baseline, out double3 baselineTorque);
+                    flow.Prepare(u);
+                    for (int i = 0; i < nm; i++)
+                    {
+                        probe.Wrench(speeds[i] * u, out double3 rawForce, out double3 rawTorque);
+                        double3 force = rawForce - baseline;
+                        double3 torque = rawTorque - baselineTorque;
+                        double qa = 0.5 * sea.Density * speeds[i] * speeds[i] * refArea;
+                        int cell = i * nba + j;
+                        cd[cell] = -double3.Dot(force, u) / qa;
+                        cl[cell] = double3.Dot(force, lift) / qa;
+                        cm[cell] = momentLength > 0.0 && double.IsFinite(torque.X)
+                            ? double3.Dot(torque, pitchAxis) / (qa * momentLength) : 0.0;
+                    }
+                }
+                sweeps[ax] = new BellySweep
+                {
+                    Axis = b, MachGrid = machGrid, AlphaDeg = bellyAlpha, Cd = cd, Cl = cl, Cm = cm,
+                    ReferenceArea = refArea, ReferenceLength = momentLength,
+                };
+            }
+            res.Belly = sweeps;
         }
         res.SweepMillis = clock.Elapsed.TotalMilliseconds;
         res.MeshHash = p.MeshHash;

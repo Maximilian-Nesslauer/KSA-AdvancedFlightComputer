@@ -256,6 +256,12 @@ public static partial class GuidanceWindow
                 _s.HasCommand = false;
                 _s.LandingPhase = LandingPhase.Done;
                 _s.LandingStatus = "ENTRY BURN COMPLETE. CONTROL RELEASED.";
+                // Orbital entry guidance takes the craft from here when asked to (OrbitalEntryAfterDeorbit), on the next step, ahead of the claim.
+                if (_s.OrbitalEntryAfterDeorbit)
+                {
+                    _s.OrbitalEntry.EngagePending = true;
+                    _s.LandingStatus = "ENTRY BURN COMPLETE. ORBITAL ENTRY GUIDANCE TAKES OVER.";
+                }
                 return;
             }
             ReleaseStockDeorbit(vehicle, keepClaim: true);
