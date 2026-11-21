@@ -77,7 +77,9 @@ internal static class TurnWarp
 
     /// <summary>
     /// Stops AFC's warp once it no longer ends before the turn it was started for: the node was removed or replaced, the
-    /// burn started, or the alignment start moved close to the end of the warp. Called once per frame.
+    /// burn started, AUTO was switched off, or the alignment start moved close to the end of the warp. Called once per
+    /// frame from the solver step, which runs before the frame's queued input is applied, so a change made through input
+    /// is seen one frame later and the warp advances for that one frame.
     /// </summary>
     public static void Guard()
     {
@@ -85,6 +87,7 @@ internal static class TurnWarp
             return;
         Vehicle craft = owned.Craft;
         bool stillAhead = !craft.IsDisposed && ReferenceEquals(craft.FlightComputer.Burn, owned.Target)
+            && craft.FlightComputer.BurnMode == FlightComputerBurnMode.Auto
             && !owned.Target.StartedAt.HasValue
             && (owned.Target.AlignmentStartTime - owned.End).Seconds() >= TurnMovedSeconds;
         if (!stillAhead)
