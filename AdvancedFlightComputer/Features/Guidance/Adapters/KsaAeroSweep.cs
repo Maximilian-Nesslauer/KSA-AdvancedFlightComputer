@@ -437,13 +437,13 @@ public static class KsaAeroSweep
     public static BodyAeroFrame BellyFrame(int side) => BodyAeroFrame.Belly(BellyAxes[side].Y, BellyAxes[side].Z);
 
     /// <summary>
-    /// Alpha and beta breakpoints of the belly-first body-axis table (Result.BellyBodyAero), degrees about the belly. Alpha, towards the nose, is 90 deg less the angle of attack from nose-first, so this covers 40 to 110 deg of it: a belly-flop's trim and its controls' reach either side. Beta is the sideslip a bank and a reversal see. As coarse as the nose-first table's, and on one side only, the one the trim chose.
+    /// Alpha and beta breakpoints of the belly-first body-axis table (Result.BellyBodyAero), degrees about the belly. Alpha, towards the nose, is 90 deg less the angle of attack from nose-first, so this covers 10 to 110 deg of it: a belly-flop's trim, and far enough towards nose-first that a craft the air has turned there keeps its flaps and its air moment to turn back with (2026-11-21: at 6 to 17 deg it had neither). Beta is the sideslip a bank and a reversal see. As coarse as the nose-first table's, and on one side only, the one the trim chose.
     /// </summary>
-    public static readonly double[] BellyAlphaTableDeg = [-20, -15, -10, -5, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50];
+    public static readonly double[] BellyAlphaTableDeg = [-20, -10, 0, 10, 20, 25, 30, 35, 40, 45, 50, 55, 60, 70, 80];
     public static readonly double[] BellyBetaTableDeg = [-20, -12, -6, -3, 0, 3, 6, 12, 20];
 
     /// <summary>How far the belly-first table reaches, deg: past it a reader goes back to the other tables, or to none.</summary>
-    public const double BellyAlphaTableMinDeg = -20.0, BellyAlphaTableMaxDeg = 50.0, BellyBetaTableMaxDeg = 20.0;
+    public const double BellyAlphaTableMinDeg = -20.0, BellyAlphaTableMaxDeg = 80.0, BellyBetaTableMaxDeg = 20.0;
 
     /// <summary>The belly-first sweep's angles of attack, deg: dense through the belly-first range, sparse towards nose- and tail-first.</summary>
     public static readonly double[] BellyAlphaBreakpointsDeg =

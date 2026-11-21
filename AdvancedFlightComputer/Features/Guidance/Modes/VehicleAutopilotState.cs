@@ -1805,6 +1805,8 @@ public sealed class VehicleAutopilotState
     public double OrbitalEntryBellyAxis = 0.0;
     /// <summary>Seconds between re-solves.</summary>
     public double OrbitalEntryResolveS = 2.0;
+    /// <summary>Natural frequency of the drag-tracking loop, rad/s: higher pulls the drag onto the plan's faster.</summary>
+    public double OrbitalEntryTrackOmega = 0.12;
     /// <summary>Take orbital entry guidance at the end of a DEORBIT ONLY burn.</summary>
     public bool OrbitalEntryAfterDeorbit = true;
     /// <summary>Time that DEORBIT ONLY burn so the site sits at OrbitalEntryAimFraction of the corridor at the start of the air (OrbitalEntryAim).</summary>

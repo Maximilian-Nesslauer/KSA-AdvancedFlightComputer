@@ -116,6 +116,8 @@ public static partial class GuidanceWindow
             DeorbitPlan? plan = EntryDeorbitPlanner.PlanAt(request, st.AimDeparture, out string why, _s.DeorbitEntryMeasuredPreparation);
             if (plan is not { } entry)
             {
+                GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                    $"Aimed entry burn refused at commit: {why} Engines in the request {request.Engines.Length}, throttle control {KsaEnginePerf.GetThrottleControlStatus(vehicle)}, exhaust velocity {request.ExhaustVelocity:F0} m/s, bound {request.Source.IsBound()}, departure in {st.AimDeparture - now:F0} s."));
                 RefuseDeorbit(vehicle, "AIMED ENTRY: " + why);
                 ClearAim(st);
                 return false;

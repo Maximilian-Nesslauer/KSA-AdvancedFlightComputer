@@ -42,6 +42,7 @@ public static partial class GuidanceWindow
         StartDrag = _s.OrbitalEntryStartDragMs2,
         HandoverAltitude = _s.OrbitalEntryHandoverAltKm * 1000.0,
         HandoverMach = _s.OrbitalEntryHandoverMach,
+        TrackOmega = Math.Max(_s.OrbitalEntryTrackOmega, 0.01),
     };
 
     /// <summary>Take the craft for orbital entry. Draw code only sets OrbitalEntry.EngagePending; this runs from the step, ahead of the claim.</summary>
@@ -313,7 +314,11 @@ public static partial class GuidanceWindow
                 status = double.IsNaN(st.PredictedStartS) ? "PLANNING THE ENTRY." : FormattableString.Invariant($"PLANNING THE ENTRY. AIR IN {st.PredictedStartS:F0} s.");
             else if (!st.Plan.Converged)
                 status += " (PLAN NOT CONVERGED: " + st.LastRefusal.ToUpperInvariant() + ")";
-            st.SetStatus(status, warn: reach != 0 || outp.Overbanked || outp.LiftUpLimit || outp.LiftDownLimit || (st.Plan != null && !st.Plan.Converged));
+            // The attitude the plan assumes is not the one flown: say so first, it explains the rest.
+            bool offAttitude = st.Tracker.InAir && Math.Abs(st.AlphaFlownDeg - st.AlphaDeg) > 10.0;
+            if (offAttitude)
+                status = FormattableString.Invariant($"ATTITUDE NOT HELD: AoA {st.AlphaFlownDeg:F0} DEG FLOWN, {st.AlphaDeg:F0} ASKED. ") + status;
+            st.SetStatus(status, warn: offAttitude || reach != 0 || outp.Overbanked || outp.LiftUpLimit || outp.LiftDownLimit || (st.Plan != null && !st.Plan.Converged));
         }
 
         // ---- attitude ----

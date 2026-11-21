@@ -86,7 +86,7 @@ public sealed class EntryConfig
     // ---- Tracker ----
 
     /// <summary>Natural frequency of the drag-tracking loop, rad/s.</summary>
-    public double TrackOmega { get; set; } = 0.06;
+    public double TrackOmega { get; set; } = 0.12;
 
     /// <summary>Damping ratio of the drag-tracking loop.</summary>
     public double TrackZeta { get; set; } = 0.7;

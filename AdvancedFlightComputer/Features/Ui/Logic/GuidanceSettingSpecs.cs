@@ -308,6 +308,8 @@ internal static class GuidanceSettingSpecs
     public static readonly BoolSpec OrbitalEntryOwnAttitude = new("OrbitalEntryOwnAttitude", "OWN ATTITUDE", P, true,
         "Fly the entry attitude with AFC's own attitude controller (surfaces and RCS). Off steers through the stock flight computer.");
 
+    public static readonly SettingSpec OrbitalEntryTrackOmega = new("OrbitalEntryTrackOmega", "DRAG TRACKING", "rad/s", P, 0.12, 0.01, 2.0, "%.3f",
+        "Natural frequency of the drag and sink-rate loop that holds the plan's drag: higher pulls the drag onto the plan's faster, at the cost of more bank activity.");
     public static readonly SettingSpec OrbitalEntryAimFraction = new("OrbitalEntryAimFraction", "AIM IN CORRIDOR", "", P, 0.5, 0.0, 1.0, "%.2f",
         "Where DEORBIT ONLY aims the site in the corridor at the start of the air: 0 the short end (most drag), 1 the long end (the glide), 0.5 the middle, the most margin both ways.");
     public static readonly SettingSpec OrbitalEntryAimMaxCrossKm = new("OrbitalEntryAimMaxCrossKm", "AIM MAX CROSSRANGE", "km", P, 200.0, 1.0, 5000.0, "%.0f",
@@ -323,7 +325,7 @@ internal static class GuidanceSettingSpecs
         OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach,
         OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
         OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryOverbankS, OrbitalEntryRollRateDegS,
-        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
+        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryTrackOmega, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
     };
     public static readonly BoolSpec[] OrbitalEntryBools = { OrbitalEntryTrimAoa, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude };
 
@@ -467,7 +469,7 @@ internal static class GuidanceSettingSpecs
         OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach,
         OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
         OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryOverbankS, OrbitalEntryRollRateDegS,
-        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
+        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryTrackOmega, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
     };
 
     public static readonly BoolSpec[] AllBools =

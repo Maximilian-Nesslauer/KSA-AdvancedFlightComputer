@@ -122,9 +122,18 @@ internal static class EntryDeorbitPlanner
     /// </summary>
     internal static DeorbitPlan? PlanAt(DeorbitRequest request, double departureSeconds, out string refusal, double measuredPreparation = 0.0)
     {
-        refusal = "DEORBIT ONLY NEEDS A BOUND PARKING ORBIT ABOVE THE ATMOSPHERE.";
-        if (!request.Source.IsBound() || request.Engines.Length == 0 || !(request.ExhaustVelocity > 0.0))
+        if (!request.Source.IsBound())
+        {
+            refusal = "DEORBIT ONLY NEEDS A BOUND PARKING ORBIT ABOVE THE ATMOSPHERE.";
             return null;
+        }
+        if (request.Engines.Length == 0 || !(request.ExhaustVelocity > 0.0))
+        {
+            refusal = request.Engines.Length == 0
+                ? "NO SUPPLIED ENGINE FOR THE ENTRY BURN: THE ENGINE MODEL HAS NO THROTTLE CONTROL (ACTIVE, FUELLED LIQUID ENGINES NEEDED)."
+                : "NO EXHAUST VELOCITY FOR THE ENTRY BURN.";
+            return null;
+        }
         if (!TryLowered(request, departureSeconds, out StateVectors state, out double3 velocity, out double3 dv, out Orbit lowered, out refusal))
             return null;
         double cutoff = request.Mass * Math.Exp(-dv.Length() / request.ExhaustVelocity);
