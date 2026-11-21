@@ -155,7 +155,8 @@ internal static class AttitudeController
         // The capture rate: kp/kd theta, which is the PD's own, capped - pointing and roll each on its own.
         double captureMax = settings.CaptureRateDegS * Math.PI / 180.0;
         double rollCaptureMax = captureMax;
-        if (double.IsFinite(settings.RollCaptureRateDegS))
+        // Not under AuthorityCapture, whose square-root capture holds the roll to the authority itself: measuring the roll's here too (four solves every half second of game time) was thrown away (2026-11-21).
+        if (double.IsFinite(settings.RollCaptureRateDegS) && !settings.AuthorityCapture)
         {
             // A fast roll is one the craft can stop: no faster than half its roll acceleration brings to rest in the roll left (RollAuthority). At 30 deg/s with nothing braking it, the solids stack rolled through its target and swung 30-128 deg either side of it for the rest of the solid burn (harness, 2026-11-21).
             rollCaptureMax = settings.RollCaptureRateDegS * Math.PI / 180.0;
