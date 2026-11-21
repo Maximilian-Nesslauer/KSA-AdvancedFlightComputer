@@ -48,6 +48,15 @@ public sealed class OrbitalEntryState
     public double DragMs2, LiftToDrag, HdotMs, SpeedMs, AltitudeM, RangeM, CrossrangeM, Mach, AlphaDeg, Energy;
     public int Reversals;
 
+    /// <summary>The site against the corridor at this energy (EntryPlan's short and long ranges): 0 inside, +1 too close (high energy), -1 too far (low energy).</summary>
+    public int Reach;
+    public double RangeShortM = double.NaN, RangeLongM = double.NaN, GreatCircleM, BankFlownDeg, AlphaFlownDeg, DragModelMs2;
+    public double PlanAt = double.NaN;
+
+    /// <summary>AFC's attitude controller's last report while it flew the entry (FlyOwnAttitude), for the log.</summary>
+    internal AttitudeController.Report Attitude;
+    internal bool AttitudeOwn;
+
     // ---- the TRAJ window's history: one sample a second ----
     public readonly List<TrajSample> Trace = new();
     public double NextTraceAt = double.NegativeInfinity;
@@ -87,6 +96,11 @@ public sealed class OrbitalEntryState
         LastStep = double.NaN;
         DensityScale = LiftToDragScale = 1.0;
         Reversals = 0;
+        Reach = 0;
+        RangeShortM = RangeLongM = double.NaN;
+        PlanAt = double.NaN;
+        Attitude = default;
+        AttitudeOwn = false;
         Trace.Clear();
         StopPending = false;
         RollRefCci = default;

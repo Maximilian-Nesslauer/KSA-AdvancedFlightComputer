@@ -2216,6 +2216,11 @@ public static partial class GuidanceWindow
             UpdateMomentLimiter(vehicle, SimNow());
         }
         AttitudeController.Report report = AttitudeController.Step(vehicle, target, _s.CommandRate, aero, _s.MomentLimiterPerPa, settings);
+        if (OrbitalEntryLive)
+        {
+            _s.OrbitalEntry.Attitude = report;
+            _s.OrbitalEntry.AttitudeOwn = true;
+        }
         if (ascent)
             LogAscentAttitude(vehicle, report, settings);
         _s.OwnAttitudeFlying = true;

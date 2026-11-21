@@ -50,7 +50,8 @@ public sealed class EntryPlan
 
     public readonly record struct Sample(
         double U, double DragMs2, double HdotMs, double R, double Gamma, double S,
-        double SpeedMs, double AltitudeM, double LiftToDrag, double BankRefDeg, double Fraction);
+        double SpeedMs, double AltitudeM, double LiftToDrag, double BankRefDeg, double Fraction,
+        double RangeShortM, double RangeLongM, double DragMaxMs2, double DragMinMs2);
 
     /// <summary>The plan at an energy, interpolated linearly between nodes and clamped to its ends.</summary>
     public Sample At(double e)
@@ -75,6 +76,7 @@ public sealed class EntryPlan
         double u = L(U), ld = L(LiftToDrag);
         double bank = ld > 1e-6 ? Math.Acos(Math.Clamp(u / ld, -1.0, 1.0)) * 180.0 / Math.PI : 0.0;
         double frac = (e - E[0]) / Math.Max(E[n - 1] - E[0], 1e-12);
-        return new Sample(u, L(DragMs2), L(HdotMs), L(R), L(Gamma), L(S), L(SpeedMs), L(AltitudeM), ld, bank, Math.Clamp(frac, 0, 1));
+        return new Sample(u, L(DragMs2), L(HdotMs), L(R), L(Gamma), L(S), L(SpeedMs), L(AltitudeM), ld, bank, Math.Clamp(frac, 0, 1),
+                          L(RangeShortM), L(RangeLongM), L(DragMaxMs2), L(DragMinMs2));
     }
 }

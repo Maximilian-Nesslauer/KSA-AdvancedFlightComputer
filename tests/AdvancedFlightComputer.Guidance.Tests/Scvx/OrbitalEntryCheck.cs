@@ -47,7 +47,7 @@ internal static class OrbitalEntryCheck
         return fails == 0 ? 0 : 1;
     }
 
-    /// <summary>The trim schedule finds a restoring zero of C_m, prefers the one nearest the preferred angle, and falls back where there is none.</summary>
+    /// <summary>The trim schedule finds a restoring zero of C_m, prefers the one nearest the preferred angle, and where there is none takes the angle of least moment in the band (Mach 20 here: 30 deg, the band's edge).</summary>
     static int TrimCheck()
     {
         double[] mach = [2, 10, 20];
@@ -65,7 +65,7 @@ internal static class OrbitalEntryCheck
             }
         var t = EntryTrim.Build(mach, alpha, cd, cl, cm, 30, 90, 60);
         bool ok = t.Trimmed[0] && t.Trimmed[1] && !t.Trimmed[2]
-                  && Math.Abs(t.AlphaDeg[0] - 62) < 1.5 && Math.Abs(t.AlphaDeg[1] - 64) < 1.5 && Math.Abs(t.AlphaDeg[2] - 60) < 1e-9
+                  && Math.Abs(t.AlphaDeg[0] - 62) < 1.5 && Math.Abs(t.AlphaDeg[1] - 64) < 1.5 && Math.Abs(t.AlphaDeg[2] - 30) < 1e-9
                   && t.LiftToDrag[0] > 0.3;
         Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} trim schedule: alpha {t.AlphaDeg[0]:F1}/{t.AlphaDeg[1]:F1}/{t.AlphaDeg[2]:F1}, trimmed {t.TrimmedRows}/3, L/D {t.LiftToDrag[0]:F2}");
         return ok ? 0 : 1;

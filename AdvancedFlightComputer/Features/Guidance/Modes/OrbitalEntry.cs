@@ -69,6 +69,14 @@ public static partial class GuidanceWindow
         st.Phase = OrbitalEntryPhase.Sweeping;
         st.SetStatus("MEASURING THE CRAFT BELLY FIRST.");
         GuidanceLog.Info(vehicle, "Orbital entry guidance engaged; belly-first aero sweep started.");
+        if (_s.EntryLogging)
+        {
+            EntryConfig c = OrbitalEntryConfig();
+            string setup = FormattableString.Invariant(
+                $"limits: q {c.DynamicPressureMax / 1000:F1} kPa, load {c.LoadFactorMax:F2} g, heating {c.HeatingRateMax / 1000:F0} kW/m2 (nose {_s.OrbitalEntryNoseRadiusM:F2} m); bank plan {c.BankMinDeg:F0}-{c.BankMaxDeg:F0}, overbank {c.OverbankDeg:F0} for {c.OverbankMaxS:F0} s, roll {c.RollRateDegS:F1} deg/s; hand-over {c.HandoverAltitude / 1000:F1} km Mach {c.HandoverMach:F2}; start drag {c.StartDrag:F2}; re-solve {_s.OrbitalEntryResolveS:F2} s; site {_s.SiteLatDeg:F4} {_s.SiteLonDeg:F4}; mass {vehicle.TotalMass:F0} kg");
+            if (OrbitalEntryLog.Start(st, vehicle.Id, (parent as Astronomical)?.Id ?? "", setup))
+                GuidanceLog.Info(vehicle, "Orbital entry log: " + OrbitalEntryLog.Path);
+        }
         return true;
     }
 
@@ -87,6 +95,7 @@ public static partial class GuidanceWindow
         var st = _s.OrbitalEntry;
         if (_s.OwnAttitudeFlying && _s.OwnAttitudeVehicle is { } flown)
             StopOwnAttitude(flown);
+        OrbitalEntryLog.Stop(st);
         st.Reset();
         st.Phase = OrbitalEntryPhase.Idle;
         st.SetStatus(why);
@@ -99,6 +108,7 @@ public static partial class GuidanceWindow
     /// <summary>The release path's reset: no log, no status change.</summary>
     private static void ResetOrbitalEntry()
     {
+        OrbitalEntryLog.Stop(_s.OrbitalEntry);
         _s.OrbitalEntry.Reset();
         _s.OrbitalEntry.Phase = OrbitalEntryPhase.Idle;
         _s.OrbitalEntry.EngagePending = false;
@@ -145,6 +155,10 @@ public static partial class GuidanceWindow
                 GuidanceLog.Info(vehicle, "Orbital entry: the belly-first tables could not be swept (" + tablesError + "); the attitude holds without them.");
             GuidanceLog.Info(vehicle, FormattableString.Invariant(
                 $"Orbital entry: belly axis {st.BellyAxisName}, {st.Trim.TrimmedRows}/{st.Trim.Mach.Length} Mach rows trimmed, alpha {st.Trim.AlphaAt(20):F0} deg at Mach 20, {st.Trim.AlphaAt(5):F0} at Mach 5, L/D {st.Trim.LiftToDragAt(20):F2} / {st.Trim.LiftToDragAt(5):F2}."));
+            var rows = new System.Text.StringBuilder();
+            for (int i = 0; i < st.Trim.Mach.Length; i++)
+                rows.Append(FormattableString.Invariant($" M{st.Trim.Mach[i]:0.#}: {st.Trim.AlphaDeg[i]:F0}{(st.Trim.Trimmed[i] ? "" : "*")} Cd {st.Trim.Cd[i]:F2} L/D {st.Trim.LiftToDrag[i]:F2}{(st.Trim.Trimmed[i] ? "" : FormattableString.Invariant($" Cm {st.Trim.ResidualCm[i]:F4}"))};"));
+            GuidanceLog.Info(vehicle, "Orbital entry schedule (alpha deg from nose-first; * no trim, least moment instead, with the Cm left):" + rows);
         }
 
         // The belly-first tables, once swept, replace the first sweep's for the attitude controller. The trim stays the first sweep's.
@@ -176,10 +190,15 @@ public static partial class GuidanceWindow
         double rangeRad = Math.Acos(Math.Clamp(double3.Dot(rHat, siteHat), -1.0, 1.0));
         double3 leftHat = double3.Cross(r, vRel).NormalizeOrZero();
         double crossRad = Math.Asin(Math.Clamp(double3.Dot(leftHat, siteHat), -1.0, 1.0));
+        // Range to go ALONG the ground track, signed: negative once the site is behind. The planner is longitudinal, so it plans this, and the crossrange is the deadband's.
+        double3 headHat = (vHat - double3.Dot(vHat, rHat) * rHat).NormalizeOrZero();
+        double downRad = Math.Atan2(double3.Dot(siteHat, headHat), double3.Dot(siteHat, rHat));
+        double greatCircleRad = rangeRad;
+        rangeRad = downRad;
 
         var atm = st.Aero.Atmosphere;
         double mach = atm.Mach(vMag);
-        st.SpeedMs = vMag; st.AltitudeM = alt; st.RangeM = rangeRad * R0; st.CrossrangeM = crossRad * R0;
+        st.SpeedMs = vMag; st.AltitudeM = alt; st.RangeM = rangeRad * R0; st.CrossrangeM = crossRad * R0; st.GreatCircleM = greatCircleRad * R0;
         st.HdotMs = vMag * Math.Sin(gamma); st.Mach = mach;
 
         // ---- the air the craft is in: the game's own aero force on it now ----
@@ -215,9 +234,18 @@ public static partial class GuidanceWindow
         if (Interlocked.Exchange(ref st.Pending, null) is { } res)
         {
             st.Solves++;
+            if (res.Plan != null)
+                OrbitalEntryLog.Plan(st, st.Solves, now, res.Plan);
+            string solveText = res.Plan == null ? "no plan: " + res.Why : FormattableString.Invariant(
+                $"{(res.Plan.Converged ? "converged" : "REFUSED " + res.Why)}, {res.Plan.Iterations} it, {res.Plan.SolveMs:F0} ms, miss {res.Plan.TerminalRangeErrorM / 1000:F1} km, defect {res.Plan.MaxDefect:F3}, from {res.Plan.S[0] * R0 / 1000:F0} km to go at {res.Plan.SpeedMs[0]:F0} m/s, corridor {res.Plan.RangeShortM[0] / 1000:F0}-{res.Plan.RangeLongM[0] / 1000:F0} km{(res.Plan.Cold ? ", cold" : "")}");
+            if (res.Plan == null || !res.Plan.Converged)
+                GuidanceLog.Info(vehicle, $"Orbital entry solve {st.Solves}: {solveText}.");
+            else
+                GuidanceLog.Debug(vehicle, $"Orbital entry solve {st.Solves}: {solveText}.");
             if (res.Plan != null && (res.Plan.Converged || st.Plan == null))
             {
                 st.Plan = res.Plan;
+                st.PlanAt = now;
                 st.LastSolveMs = res.Plan.SolveMs;
                 if (!res.Plan.Converged)
                     st.LastRefusal = res.Why;
@@ -228,6 +256,7 @@ public static partial class GuidanceWindow
                 st.LastRefusal = res.Why.Length > 0 ? res.Why : "no plan";
             }
         }
+        st.DragModelMs2 = modelDrag;
         if (st.Phase == OrbitalEntryPhase.Entry && e < ef && now >= st.NextSolveAt && st.Worker != null && !st.Worker.Busy)
             QueueOrbitalEntrySolve(vehicle, parent, st, cfg, nominal, e, rMag, vMag, gamma, rangeRad, drag, now);
 
@@ -259,11 +288,28 @@ public static partial class GuidanceWindow
             st.Last = outp;
             bankDeg = outp.BankDeg;
             string status = outp.Status;
+            // Where the site sits against the corridor at this energy: the TRAJ display's two lines.
+            int reach = 0;
+            if (st.Plan != null)
+            {
+                var ps = st.Plan.At(e);
+                st.RangeShortM = ps.RangeShortM;
+                st.RangeLongM = ps.RangeLongM;
+                reach = st.RangeM < ps.RangeShortM ? 1 : st.RangeM > ps.RangeLongM ? -1 : 0;
+                if (reach != st.Reach)
+                    GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                        $"Orbital entry reach: {(reach > 0 ? "HIGH ENERGY, the site is closer than the most drag can stop at" : reach < 0 ? "LOW ENERGY, the site is further than the craft can glide" : "inside the corridor")} ({st.RangeM / 1000:F0} km to go, corridor {ps.RangeShortM / 1000:F0}-{ps.RangeLongM / 1000:F0} km at {vMag:F0} m/s)."));
+            }
+            st.Reach = reach;
+            if (reach > 0)
+                status = FormattableString.Invariant($"HIGH ENERGY: SITE {(st.RangeShortM - st.RangeM) / 1000:F0} KM SHORT OF THE CORRIDOR. ") + status;
+            else if (reach < 0)
+                status = FormattableString.Invariant($"LOW ENERGY: SITE {(st.RangeM - st.RangeLongM) / 1000:F0} KM PAST THE CORRIDOR. ") + status;
             if (st.Plan == null)
                 status = double.IsNaN(st.PredictedStartS) ? "PLANNING THE ENTRY." : FormattableString.Invariant($"PLANNING THE ENTRY. AIR IN {st.PredictedStartS:F0} s.");
             else if (!st.Plan.Converged)
                 status += " (PLAN NOT CONVERGED: " + st.LastRefusal.ToUpperInvariant() + ")";
-            st.SetStatus(status, warn: outp.Overbanked || outp.LiftUpLimit || outp.LiftDownLimit || (st.Plan != null && !st.Plan.Converged));
+            st.SetStatus(status, warn: reach != 0 || outp.Overbanked || outp.LiftUpLimit || outp.LiftDownLimit || (st.Plan != null && !st.Plan.Converged));
         }
 
         // ---- attitude ----
@@ -286,6 +332,20 @@ public static partial class GuidanceWindow
         _s.CommandRate = double3.Zero;
         _s.HasCommand = true;
 
+        // ---- what the craft flies, off its own body axes ----
+        doubleQuat body2Cci = KsaFrameBridge.BodyToCci(vehicle);
+        double3 noseNow = double3.UnitX.Transform(body2Cci);
+        st.AlphaFlownDeg = Math.Acos(Math.Clamp(double3.Dot(noseNow, vHat), -1.0, 1.0)) * 180.0 / Math.PI;
+        if (st.BellyIndex >= 0)
+        {
+            double3 bellyNow = KsaAeroSweep.BellyAxes[st.BellyIndex].Transform(body2Cci);
+            double3 liftNow = -(bellyNow - double3.Dot(bellyNow, vHat) * vHat).NormalizeOrZero();
+            st.BankFlownDeg = Math.Atan2(double3.Dot(liftNow, right), double3.Dot(liftNow, liftUp)) * 180.0 / Math.PI;
+        }
+
+        if (OrbitalEntryLog.Due(st, now))
+            OrbitalEntryLogRow(st, now, e, ef, mach, gamma, nominal, vehicle);
+
         // ---- the TRAJ window's history ----
         if (now >= st.NextTraceAt)
         {
@@ -294,6 +354,40 @@ public static partial class GuidanceWindow
             if (st.Trace.Count > 4000)
                 st.Trace.RemoveRange(0, 1000);
         }
+    }
+
+    private static readonly System.Collections.Generic.List<double> _oeRow = new();
+
+    private static void OrbitalEntryLogRow(OrbitalEntryState st, double now, double e, double ef, double mach, double gamma, EntryModel nominal, Vehicle vehicle)
+    {
+        var o = st.Last;
+        var a = st.Attitude;
+        EntryPlan p = st.Plan;
+        double R0 = nominal.BodyRadius;
+        var v = _oeRow;
+        v.Clear();
+        double q = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * st.SpeedMs * st.SpeedMs;
+        EntryPlan.Sample? ps = p?.At(e);
+        v.Add(now); v.Add((int)st.Phase); v.Add(st.AltitudeM); v.Add(st.SpeedMs); v.Add(mach); v.Add(gamma * 180 / Math.PI); v.Add(q);
+        v.Add(e); v.Add(ef); v.Add(st.GreatCircleM / 1000); v.Add(st.RangeM / 1000); v.Add(st.CrossrangeM / 1000); v.Add(o.DeadbandRad * R0 / 1000);
+        v.Add(st.RangeShortM / 1000); v.Add(st.RangeLongM / 1000);
+        v.Add(ps.HasValue ? ps.Value.S * R0 / 1000 : double.NaN); v.Add(st.Reach);
+        v.Add(st.DragMs2); v.Add(o.DragRefMs2); v.Add(ps.HasValue ? ps.Value.DragMaxMs2 : double.NaN); v.Add(ps.HasValue ? ps.Value.DragMinMs2 : double.NaN); v.Add(st.DragModelMs2);
+        v.Add(st.HdotMs); v.Add(o.HdotRefMs);
+        v.Add(st.LiftToDrag); v.Add(st.Trim.LiftToDragAt(mach)); v.Add(st.LiftToDragScale); v.Add(st.DensityScale);
+        v.Add(ps.HasValue ? ps.Value.U : double.NaN); v.Add(o.UCmd); v.Add(o.BankRefDeg); v.Add(o.BankTargetDeg); v.Add(o.BankDeg); v.Add(st.BankFlownDeg);
+        v.Add(o.Side); v.Add(o.Reversing ? 1 : 0); v.Add(o.Overbanked ? 1 : 0); v.Add(o.LiftUpLimit ? 1 : 0); v.Add(o.LiftDownLimit ? 1 : 0);
+        v.Add(st.AlphaDeg); v.Add(st.AlphaFlownDeg); v.Add(a.ErrorDeg); v.Add(a.RateErrorDegS); v.Add(st.AttitudeOwn ? 1 : 0); v.Add(a.AirKnown ? 1 : 0);
+        v.Add(a.DemandNm.X); v.Add(a.DemandNm.Y); v.Add(a.DemandNm.Z); v.Add(a.AirNm.X); v.Add(a.AirNm.Y); v.Add(a.AirNm.Z);
+        v.Add(a.SurfacesNm.X); v.Add(a.SurfacesNm.Y); v.Add(a.SurfacesNm.Z); v.Add(a.RcsNm.X); v.Add(a.RcsNm.Y); v.Add(a.RcsNm.Z); v.Add(a.RcsFlowKgS);
+        v.Add(a.FinCommandDeg?.Length ?? 0);
+        for (int i = 0; i < 4; i++) v.Add(a.FinCommandDeg != null && i < a.FinCommandDeg.Length ? a.FinCommandDeg[i] : double.NaN);
+        for (int i = 0; i < 4; i++) v.Add(a.FinNowDeg != null && i < a.FinNowDeg.Length ? a.FinNowDeg[i] : double.NaN);
+        v.Add(st.Solves); v.Add(p != null && p.Converged ? 1 : 0); v.Add(p != null ? now - st.PlanAt : double.NaN);
+        v.Add(p != null ? p.TerminalRangeErrorM / 1000 : double.NaN); v.Add(p != null ? p.MaxDefect : double.NaN); v.Add(p != null ? p.Iterations : double.NaN); v.Add(st.LastSolveMs);
+        v.Add(st.Solves); v.Add(st.Refusals); v.Add(st.TablesReady ? 1 : 0);
+        st.AttitudeOwn = false;
+        OrbitalEntryLog.Row(st, now, v, st.Status);
     }
 
     private static void QueueOrbitalEntrySolve(Vehicle vehicle, IParentBody parent, OrbitalEntryState st, EntryConfig cfg, EntryModel nominal,
@@ -375,7 +469,10 @@ public static partial class GuidanceWindow
             double meanLd = 0;
             for (int j = 0; j < t.Mach.Length; j++) meanLd += t.LiftToDrag[j];
             meanLd /= Math.Max(t.Mach.Length, 1);
-            double score = t.TrimmedRows * 10.0 + meanLd;
+            // The side with the least pitch moment left over the schedule, then the most lift.
+            double residual = 0;
+            foreach (double cmLeft in t.ResidualCm) residual += Math.Abs(cmLeft);
+            double score = t.TrimmedRows * 10.0 - residual * 1000.0 + meanLd;
             if (score > bestScore) { bestScore = score; best = i; bestTrim = t; }
         }
         if (bestTrim == null)
