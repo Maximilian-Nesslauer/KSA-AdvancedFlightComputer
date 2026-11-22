@@ -342,7 +342,7 @@ public static partial class GuidanceWindow
         if (!FlatSearchFits(parent) || !double.IsFinite(_s.FlatSiteSlopeDeg) || DeorbitTargetLocked || _retargetStageId != 0
             || !Ui.Logic.SiteSlopeText.IsBetter(_s.FlatSiteSlopeDeg, SiteSlopeNowDeg(parent)))
             return false;
-        RetargetLandingSite(_s.FlatSiteLat, _s.FlatSiteLon);
+        RetargetVehicleSite(_s.FlatSiteLat, _s.FlatSiteLon);
         _s.FlatSearch = null;
         return true;
     }

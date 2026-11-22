@@ -11,6 +11,7 @@ using AdvancedFlightComputer.Features.Guidance.Upfg;
 using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 using AdvancedFlightComputer.Features.Ui.Canvas;
 using AdvancedFlightComputer.Features.Ui.Logic;
+using AdvancedFlightComputer.Features.LandingSites;
 using Specs = AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs;
 
 public static partial class GuidanceWindow
@@ -525,8 +526,10 @@ public static partial class GuidanceWindow
                     ClearStageReturn(_s, stage.RootId);
             }
             ConsoleUi.EndRow();
+            DrawStageSiteRow(vehicle, stage);
 
-            string site = home ? PageText.StageReturn(stage.HasTarget, stage.OptimalReturn, stage.TargetLatDeg, stage.TargetLonDeg)
+            string siteName = stage.HasTarget && LandingSiteRegistry.Holding(vehicle.Orbit?.Parent, stage.TargetLatDeg, stage.TargetLonDeg) is { } named ? named.Name : "";
+            string site = home ? PageText.StageReturn(stage.HasTarget, stage.OptimalReturn, stage.TargetLatDeg, stage.TargetLonDeg, siteName)
                 : "WILL NOT COME HOME. SET A SITE.";
             bool pending = home && !_s.Running && _s.AscentPlan is { } plan && !PlanHasBoosterSite(plan, stage);
             GaugeRowText(pending ? "PLAN NEEDED" : home ? "REUSED" : "EXPENDED", site,

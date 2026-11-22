@@ -5,6 +5,8 @@ namespace AdvancedFlightComputer.Features.Guidance;
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
+using System.Collections.Generic;
+using AdvancedFlightComputer.Features.LandingSites;
 using AdvancedFlightComputer.Guidance.Gfold;
 using KSA;
 
@@ -68,7 +70,7 @@ public static partial class GuidanceWindow
 
         if (hit && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
-            RetargetLandingSite(latDeg, lonDeg);
+            RetargetLandingSite(parent, latDeg, lonDeg);
             _retargetArmed = false;
         }
     }
@@ -158,25 +160,56 @@ public static partial class GuidanceWindow
         }
     }
 
-    /// <summary>
-    /// Move the landing site, and make whichever solver is flying notice.
-    ///  Setting the lat/lon alone is not enough for either of them. Both rebuild the pad frame from the site every step, so the frame jumps - but each is running a plan that was solved against the OLD pad and will not revisit it until its own cadence says so. Until then the vehicle flies the previous target through a frame that no longer points at it.
-    /// </summary>
-    private static void RetargetLandingSite(double latDeg, double lonDeg)
+    /// <summary>The answer to an armed click: the target of the stage that armed it, or the landing site of the craft.</summary>
+    private static void RetargetLandingSite(IParentBody parent, double latDeg, double lonDeg)
     {
         // BOUND TO A STAGE, when the click was armed from a stage's own Set button. It writes that stage's target and nothing else: the vehicle's site is what the craft being flown aims at, and a booster two separations away has no business moving it. Everything below is about the live guidance and is skipped.
         if (_retargetStageId != 0)
         {
-            _s.StageTargets[_retargetStageId] = new double2(latDeg, lonDeg);
-            // A site picked is the booster's way home: no longer an optimal return.
-            _s.StageOptimalReturn.Remove(_retargetStageId);
-            _s.OptimalReturnSites.Remove(_retargetStageId);
-            _s.LandingStatus = FormattableString.Invariant($"STAGE TARGET SET: LAT {latDeg:F3}, LON {lonDeg:F3}");
+            uint rootId = _retargetStageId;
             _retargetStageId = 0;
-            _s.StageModelDirty = true;   // so the list picks the new target up at once
+            SetStageTarget(_s, rootId, latDeg, lonDeg, parent);
             return;
         }
+        RetargetVehicleSite(latDeg, lonDeg);
+    }
 
+    /// <summary>
+    /// Gives the stage rooted at <paramref name="rootId"/> its landing site. A named site that another booster holds is refused, because one site takes one booster (LandingSiteRules.Owner).
+    /// </summary>
+    internal static bool SetStageTarget(VehicleAutopilotState state, uint rootId, double latDeg, double lonDeg, IParentBody parent)
+    {
+        IReadOnlyList<LandingSite> sites = LandingSiteRegistry.On(parent);
+        LandingSite site = sites.Count > 0 ? LandingSiteRules.Holding(sites, latDeg, lonDeg, parent.MeanRadius) : null;
+        if (site != null && LandingSiteRules.Owner(site, sites, StageTargetPoints(state), rootId, parent.MeanRadius) is uint owner)
+        {
+            state.WarnLanding($"STAGE TARGET REFUSED: {site.Name.ToUpperInvariant()} IS TAKEN BY {StageIdText(state, owner)}");
+            return false;
+        }
+        state.StageTargets[rootId] = new double2(latDeg, lonDeg);
+        // A site picked is the booster's way home: no longer an optimal return.
+        state.StageOptimalReturn.Remove(rootId);
+        state.OptimalReturnSites.Remove(rootId);
+        string named = site != null ? site.Name.ToUpperInvariant() + ", " : "";
+        state.LandingStatus = FormattableString.Invariant($"STAGE TARGET SET: {named}LAT {latDeg:F3}, LON {lonDeg:F3}");
+        state.StageModelDirty = true;   // so the list picks the new target up at once
+        return true;
+    }
+
+    // The targets of the stages still aboard. A booster that has left keeps its entry in StageTargets, and its site is free again for a later stage.
+    internal static IEnumerable<KeyValuePair<uint, (double LatDeg, double LonDeg)>> StageTargetPoints(VehicleAutopilotState state)
+    {
+        foreach (var target in state.StageTargets)
+            if (state.ReturnableStages.Exists(stage => stage.RootId == target.Key))
+                yield return new KeyValuePair<uint, (double, double)>(target.Key, (target.Value.X, target.Value.Y));
+    }
+
+    /// <summary>
+    /// Moves the landing site of the craft, and makes whichever solver is flying notice. A committed deorbit holds its site.
+    ///  Setting the lat/lon alone is not enough for either of them. Both rebuild the pad frame from the site every step, so the frame jumps - but each is running a plan that was solved against the OLD pad and will not revisit it until its own cadence says so. Until then the vehicle flies the previous target through a frame that no longer points at it.
+    /// </summary>
+    internal static void RetargetVehicleSite(double latDeg, double lonDeg)
+    {
         if (DeorbitTargetLocked)
         {
             _s.WarnLanding("TRANSFER TARGET LOCKED. STOP TO EDIT.");

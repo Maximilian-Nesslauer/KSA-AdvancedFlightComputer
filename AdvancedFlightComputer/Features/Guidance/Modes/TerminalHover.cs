@@ -5,6 +5,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 using System;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Features.LandingSites;
 
 // Terminal hover: a simple pilot-in-the-loop final descent.
 // Nulls the rates (velocity setpoints start at zero laterally), then descends on a quadratic velocity profile - v = touchdown rate + k*(h - h0)2 - dropping to a constant touchdown rate for the last h0 metres.
@@ -104,12 +105,12 @@ public static partial class GuidanceWindow
         return true;
     }
 
-    // Height of the touchdown plane above the terrain DIRECTLY BELOW the vehicle (not the landing site - a hover can drift anywhere), minus the vehicle height so zero means legs on the ground.
+    // Height of the touchdown plane above the terrain DIRECTLY BELOW the vehicle (not the landing site - a hover can drift anywhere), minus the vehicle height so zero means legs on the ground. Over the deck of a fixed named site the deck is the ground, because the terrain query reads the sea under it.
     private static double TerminalHeight(Orbit orbit, IParentBody parent, double bodyRadius)
     {
         double3 r = orbit.StateVectors.PositionCci;
         double3 dirCcf = double3.Normalize(r).Transform(parent.GetCci2Ccf());
-        double terrain = KsaSurfaceHeight.At(parent, dirCcf);
+        double terrain = LandingSiteRegistry.TryFixedHeight(parent, dirCcf, out double deckM) ? deckM : KsaSurfaceHeight.At(parent, dirCcf);
         return r.Length() - (bodyRadius + terrain) - _s.VehicleHeightM;
     }
 

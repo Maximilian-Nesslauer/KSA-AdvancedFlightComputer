@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Ui.Logic;
+using AdvancedFlightComputer.Features.LandingSites;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 using Brutal.ImGuiApi;
@@ -127,7 +128,10 @@ public static partial class GuidanceWindow
         if (parent == null || way == LandWay.Hover || way == LandWay.FromOrbit && _s.DeorbitOnly)
             return;
         using (ConsoleUi.Dim(DeorbitTargetLocked || (way == LandWay.Boostback && situation.Where == CraftSituation.Ground && NoStageHome)))
+        {
             DrawLandSiteRow(parent, pickSite);
+            DrawLandSiteList(vehicle, parent, way);
+        }
         DrawSiteSlopeRows(vehicle, parent);
         ConsoleUi.Gap();
     }
@@ -524,6 +528,15 @@ public static partial class GuidanceWindow
         ], changed, foldsOpen);
     }
 
+    // A fixed named site is a deck, whose height the file gives, so it reads DECK and not the sea under it.
+    private static string SiteTerrainText(IParentBody parent)
+    {
+        string height = Fmt.Distance(SiteTerrainHeight(parent));
+        if (LandingSiteRegistry.TryFixedHeight(parent, _s.SiteLatDeg, _s.SiteLonDeg, out _))
+            return height + " (DECK)";
+        return KsaSurfaceHeight.IsWater(parent, SiteDirCcf(_s.SiteLatDeg, _s.SiteLonDeg)) ? height + " (SEA)" : height;
+    }
+
     private static void DrawBurnLimitRow() => GaugeRow(Specs.LandingAccelLimitG, ref _s.LandingAccelLimitG);
 
     private static string SitePlace(IParentBody parent)
@@ -550,8 +563,7 @@ public static partial class GuidanceWindow
         ConsoleUi.PartsFold(PageText.Numbers, LandNumbersFoldId,
         [
             new FoldPart(FoldNames.Distance, siteRows, () => GaugeRowText("DISTANCE TO SITE", Fmt.Distance(AngleBetween(orbit.StateVectors.PositionCci, SiteDirCciAt(parent, 0)) * parent.MeanRadius))),
-            new FoldPart(FoldNames.Terrain, siteRows, () => GaugeRowText("SITE TERRAIN", KsaSurfaceHeight.IsWater(parent, SiteDirCcf(_s.SiteLatDeg, _s.SiteLonDeg))
-                ? Fmt.Distance(SiteTerrainHeight(parent)) + " (SEA)" : Fmt.Distance(SiteTerrainHeight(parent)))),
+            new FoldPart(FoldNames.Terrain, siteRows, () => GaugeRowText("SITE TERRAIN", SiteTerrainText(parent))),
             new FoldPart(FoldNames.Impact, impact, DrawBoostbackImpactDetails),
             new FoldPart(FoldNames.Feasibility, LandWays.HasSolver(way) && (descent.Known || FirstSolveStops(way, solver)), () => DrawDescentRows(way, solver, in descent, noSite, feasibilityAlone)),
             new FoldPart(FoldNames.Deorbit, deorbit, DrawDeorbitFigures),
