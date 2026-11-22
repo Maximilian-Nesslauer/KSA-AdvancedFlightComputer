@@ -36,8 +36,8 @@ internal static class KsaAeroTorqueControl
     {
         public readonly List<ControlSurface> Surfaces = new();
         public Report Last;
-        /// <summary>The deflections commanded last, for the smoothing (Command's smoothS).</summary>
-        public double[] Commanded;
+        /// <summary>The smoothing's own state (Command's smoothS): where each surface's lagged target is, before this step's rate clamp, deg.</summary>
+        public double[] Lagged;
     }
 
     private static readonly ConditionalWeakTable<Vehicle, Slot> Slots = new();
@@ -160,7 +160,7 @@ internal static class KsaAeroTorqueControl
     /// </summary>
     /// <param name="stepS">The time to the next command, s: each surface is asked only for what its rate reaches by then, from where it is now (AeroTorqueAllocator.Allocate). Not positive: anywhere in its range.</param>
     /// <param name="backup">The RCS thrusters in the frame (mx, my, mz) (KsaRcsTorqueControl.Measure), to share the demand with in one programme: the surfaces then take the axes the RCS finds dear. The RCS is not fired here; the caller gives it what the surfaces leave.</param>
-    /// <param name="smoothS">With a backup that can give torque: the time the deflections follow the allocator's answer over, s, a first-order lag from the last command (dynamic control allocation: their rate of movement priced, not their deflection); the backup then takes what they give short. 0: none.</param>
+    /// <param name="smoothS">With a backup that can give torque: the time the deflections follow the allocator's answer over, s (dynamic control allocation: their rate of movement priced, not their deflection). The answer is then taken over each surface's whole range, not one step's reach: a lag that chased a target one step ahead closed only Δt/(smoothS + Δt) of a step's travel each step, and held 30 deg/s flaps to about 1 deg/s (2026-11-21, 99th percentile 4 deg/s against 29 before). The lagged target is clamped to the step's reach, and the backup takes what the surfaces then give short. 0: none.</param>
     internal static Report Command(Vehicle vehicle, KsaAeroSweep.Result aero, double3 torqueAsmb,
                                    double3 mx, double3 my, double3 mz, ReadOnlySpan<double> priority, double momentLimiterPerPa,
                                    double stepS = 0.0, RcsTorqueAllocator backup = null, double smoothS = 0.0)
@@ -184,7 +184,9 @@ internal static class KsaAeroTorqueControl
             reach[i] = stepS > 0.0 && slot.Surfaces[i].RateDegS > 0.0 ? slot.Surfaces[i].RateDegS * stepS : 0.0;
         }
         BackupColumns(backup, out double[] backupTorque, out double[] backupCost);
-        AeroTorqueAllocator.Result r = allocator.Allocate(dx, dy, dz, priority, deflection, now, reach,
+        bool smooth = smoothS > 0.0 && stepS > 0.0 && backup != null && backup.Count > 0;
+        // Smoothed, the programme answers over each surface's whole range (an empty reach): the lag below sets how fast they get there, the rate clamp how fast they can.
+        AeroTorqueAllocator.Result r = allocator.Allocate(dx, dy, dz, priority, deflection, now, smooth ? new double[count] : reach,
                                                           backupTorque, backupCost, new double[backupCost.Length]);
         if (!r.Solved)
         {
@@ -192,22 +194,23 @@ internal static class KsaAeroTorqueControl
             slot.Last = condition with { ShortfallNm = torqueAsmb.Length() };
             return slot.Last;
         }
-        if (smoothS > 0.0 && stepS > 0.0 && backup != null && backup.Count > 0)
+        if (smooth)
         {
-            // The surfaces follow the answer through a lag, from where they were last sent; what they then give is the truth the backup is told.
+            // A first-order lag of the whole-range answer (backward Euler of T dx/dt = answer - x), kept in its own state so the rate clamp does not feed back into it; each surface is then sent the lagged target as far as its rate reaches this step. What they give is the truth the backup is told.
             double k = stepS / (smoothS + stepS);
-            bool known = slot.Commanded != null && slot.Commanded.Length == count;
+            bool known = slot.Lagged != null && slot.Lagged.Length == count;
+            var lagged = new double[count];
             for (int i = 0; i < count; i++)
             {
-                double from = known ? slot.Commanded[i] : now[i];
-                double want = from + k * (deflection[i] - from);
-                if (reach[i] > 0.0)
-                    want = Math.Clamp(want, now[i] - reach[i], now[i] + reach[i]);
-                deflection[i] = want;
+                double from = known ? slot.Lagged[i] : now[i];
+                lagged[i] = from + k * (deflection[i] - from);
+                deflection[i] = reach[i] > 0.0 ? Math.Clamp(lagged[i], now[i] - reach[i], now[i] + reach[i]) : lagged[i];
             }
+            slot.Lagged = lagged;
             r = allocator.Evaluate(deflection, dx, dy, dz);
         }
-        slot.Commanded = (double[])deflection.Clone();
+        else
+            slot.Lagged = null;
         for (int i = 0; i < slot.Surfaces.Count; i++)
             slot.Surfaces[i].Command(deflection[i]);
         slot.Last = condition with
@@ -262,7 +265,12 @@ internal static class KsaAeroTorqueControl
     /// <summary>Sends every surface on the vehicle home. Main thread.</summary>
     internal static void Release(Vehicle vehicle)
     {
-        if (vehicle == null || !ControlSurfaces.Any)
+        if (vehicle == null)
+            return;
+        // Sent home, the surfaces start the next smoothing from where they are, not from a stale lagged target.
+        if (Slots.TryGetValue(vehicle, out Slot slot))
+            slot.Lagged = null;
+        if (!ControlSurfaces.Any)
             return;
         var surfaces = new List<ControlSurface>();
         ControlSurfaces.Collect(vehicle, surfaces);
