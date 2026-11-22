@@ -179,13 +179,15 @@ internal static class ConsoleUi
     public static void Positive(ReadOnlySpan<char> text)
     {
         ConsoleStyle.PushValueFont();
-        ImGui.TextColored(in ConsoleStyle.Positive, text);
+        ImGui.PushStyleColor(ImGuiCol.Text, in ConsoleStyle.Positive);
+        ImGui.Text(text);
+        ImGui.PopStyleColor();
         ConsoleStyle.PopFont();
     }
 
     public static void Warning(ReadOnlySpan<char> text) => Sentence(text, WarnInk);
 
-    public static void DangerWrapped(string text) => FormattedWrapped(text, in ConsoleStyle.Danger);
+    public static void DangerWrapped(string text) => InkWrapped(text, in ConsoleStyle.Danger);
 
     public static string PageWarning { get; private set; } = "";
 
@@ -194,18 +196,18 @@ internal static class ConsoleUi
     public static void WarningWrapped(string text)
     {
         if (PageWarning.Length == 0)
-            PageWarning = text.Replace("%%", "%");
-        FormattedWrapped(text, WarnInk);
+            PageWarning = text;
+        InkWrapped(text, WarnInk);
     }
 
-    public static void AdviceWrapped(string text) => FormattedWrapped(text, WarnInk);
+    public static void AdviceWrapped(string text) => InkWrapped(text, WarnInk);
 
-    // ImGui.TextWrapped keeps a wrap position that is already pushed, and it reads the text as a printf format, so a caller escapes a percent sign.
-    private static void FormattedWrapped(string text, in float4 ink)
+    // ImGui.Text of the binding draws through TextUnformatted, which wraps at the pushed position like TextWrapped but does not read the text as a printf format, so a percent sign in the text is safe.
+    private static void InkWrapped(string text, in float4 ink)
     {
         PushWrapAtEdge();
         ImGui.PushStyleColor(ImGuiCol.Text, in ink);
-        ImGui.TextWrapped(BreakSentence(text, ConsoleStyle.ContentAvailWidth()));
+        ImGui.Text(BreakSentence(text, ConsoleStyle.ContentAvailWidth()));
         ImGui.PopStyleColor();
         ImGui.PopTextWrapPos();
     }
@@ -215,17 +217,17 @@ internal static class ConsoleUi
         float2 start = ImGui.GetCursorScreenPos();
         float tick = ConsoleStyle.ModifiedTickThicknessPx;
         ImGui.SetCursorScreenPos(new float2(start.X + tick + 4f * ImGuiHelper.InterfaceScale, start.Y));
-        FormattedWrapped(text, in ConsoleStyle.TextLabel);
+        InkWrapped(text, in ConsoleStyle.TextLabel);
         if (card.Length > 0 && ImGui.IsItemHovered())
             Tooltip(card.AsSpan());
         ImGui.GetWindowDrawList().AddRectFilled(start, new float2(start.X + tick, ImGui.GetItemRectMax().Y), ConsoleStyle.ApplyAlpha(Palette.Warn.U32));
     }
 
-    public static void MutedWrapped(string text) => FormattedWrapped(text, in ConsoleStyle.TextMuted);
+    public static void MutedWrapped(string text) => InkWrapped(text, in ConsoleStyle.TextMuted);
 
     public static void MutedNote(string text, string card)
     {
-        FormattedWrapped(text, in ConsoleStyle.TextMuted);
+        InkWrapped(text, in ConsoleStyle.TextMuted);
         if (card.Length > 0 && ImGui.IsItemHovered())
             Tooltip(card.AsSpan());
     }
@@ -492,7 +494,8 @@ internal static class ConsoleUi
     }
 
     /// <summary>Doubles every '%', for text that goes to an ImGui call which reads it as a printf
-    /// format, such as TextColored, TextWrapped or the ConsoleWidgets readouts.</summary>
+    /// format, such as TextColored, TextDisabled, TextWrapped or the ConsoleWidgets readouts. The wrapped
+    /// helpers of this class draw unformatted and take the text as it is.</summary>
     public static string EscapeFormat(string text) => text.Replace("%", "%%");
 
     /// <summary>The one card of the console: the name of what it speaks about in capitals, a hairline, and sentences, on the stock tooltip card (ConsoleWidgets.BeginTooltipCard).</summary>

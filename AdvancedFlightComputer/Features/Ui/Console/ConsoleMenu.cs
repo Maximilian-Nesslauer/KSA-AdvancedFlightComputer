@@ -41,7 +41,7 @@ internal static class ConsoleMenu
         ConsoleUi.SectionHead("ADVANCED FLIGHT COMPUTER");
         string key = Input.GetAssignmentString(InputAction.ToggleTransferPlan);
         ConsoleUi.MutedWrapped(PlannerRoute.Active
-            ? ConsoleUi.EscapeFormat($"AFC settings: console ({key}), STAGING + TUNE.")
+            ? $"AFC settings: console ({key}), STAGING + TUNE."
             : "AFC settings: console (AFC menu > OPEN AFC), STAGING + TUNE.");
         if (ConsoleWidgets.Button("OPEN AFC".AsSpan(), "AfcSettingsOpen".AsSpan(), default))
             AfcConsole.Open(ConsolePage.Tune);
@@ -102,7 +102,7 @@ internal static class ConsoleMenu
         if (count > 0)
         {
             ImGui.Separator();
-            ImGui.TextDisabled(count == 1 ? "AFC: 1 VEHICLE" : $"AFC: {count} VEHICLES");
+            ImGui.TextDisabled(ConsoleUi.EscapeFormat(count == 1 ? "AFC: 1 VEHICLE" : $"AFC: {count} VEHICLES"));
         }
     }
 }
