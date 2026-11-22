@@ -658,10 +658,11 @@ public static partial class GuidanceWindow
         _separationDrops.Clear();
         _pendingIgnition.Clear();
         bool anySequence = false;
+        FairingJettison.Row[] fairings = DeferredFairingRows(vehicle);
         ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
         for (int s = 0; s < sequences.Length && _separationDrops.Count == 0; s++)
         {
-            if (sequences[s].Activated || sequences[s].Parts.IsEmpty)
+            if (sequences[s].Activated || sequences[s].Parts.IsEmpty || FairingJettison.IsDeferred(fairings, sequences[s]))
                 continue;
             anySequence = true;
             ReadOnlySpan<Part> parts = sequences[s].Parts;

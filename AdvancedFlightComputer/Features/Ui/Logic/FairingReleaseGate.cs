@@ -1,19 +1,18 @@
 namespace AdvancedFlightComputer.Features.Ui.Logic;
 
-// Sim-time samples since leaving the pad. A low first pressure sample after loading
-// an ascent is not evidence that it has passed max Q.
+// Samples in sim time while the vehicle climbs. In air the dynamic pressure must fall for a dwell from the
+// highest value seen since sampling began, so the rising pressure after lift-off never opens the gate, and a
+// craft that loads or is armed past max Q opens it on its next fall without a remembered peak.
 internal sealed class FairingReleaseGate
 {
     private const double FallSeconds = 0.25;
-    private double _lastTime = double.NaN, _lastQ, _lowQ, _peakQ, _fallSince = double.NaN;
-    private bool _hasRise;
+    private double _lastTime = double.NaN, _lastQ, _peakQ, _fallSince = double.NaN;
 
     internal const double PadClearanceM = 20.0;
 
     internal void Reset()
     {
         _lastTime = _fallSince = double.NaN;
-        _hasRise = false;
     }
 
     internal bool Sample(double now, double q, double clearanceM, bool climbing, bool air,
@@ -35,20 +34,13 @@ internal sealed class FairingReleaseGate
         }
         if (!double.IsFinite(_lastTime) || now < _lastTime)
         {
-            _hasRise = false;
             _fallSince = double.NaN;
-            _lowQ = _peakQ = _lastQ = q;
+            _peakQ = _lastQ = q;
         }
         else if (now > _lastTime)
         {
-            _lowQ = Math.Min(_lowQ, q);
-            if (q > _peakQ)
-            {
-                _peakQ = q;
-                _hasRise |= q - _lowQ >= Math.Max(10.0, 0.01 * q);
-            }
-            double margin = Math.Max(10.0, 0.01 * _peakQ);
-            if (!_hasRise || _peakQ - q < margin || q > _lastQ)
+            _peakQ = Math.Max(_peakQ, q);
+            if (_peakQ - q < Math.Max(10.0, 0.01 * _peakQ) || q > _lastQ)
                 _fallSince = double.NaN;
             else if (double.IsNaN(_fallSince))
                 _fallSince = now;

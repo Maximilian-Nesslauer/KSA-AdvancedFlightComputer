@@ -176,8 +176,8 @@ internal static class StagingDetector
             if (!ControlAvailable(vehicle))
                 continue;
 
-            if (FairingJettison.AwaitRelease(vehicle, state, now))
-                continue;
+            // Before the staging evaluation, so a row whose mounts have just opened is out of the sequence when the next row is chosen.
+            FairingJettison.AwaitRelease(vehicle, state, now);
 
             // First, armed or not: the row is already marked activated and stock skips activated rows forever, so a module dropped here could never fire again.
             TickPendingStaging(vehicle, state, now);

@@ -3,8 +3,8 @@
 namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
-using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Ui.Canvas;
 using AdvancedFlightComputer.Features.Ui.Logic;
 using Brutal.ImGuiApi;
@@ -90,15 +90,19 @@ public static partial class GuidanceWindow
         DrawFairingRelease(vehicle, parent);
     }
 
+    /// <summary>The stock fairing rows of the craft, how each one leaves, and the release gate of the rows AutoStage releases itself.</summary>
     private static void DrawFairingRelease(Vehicle vehicle, IParentBody parent)
     {
         StagingState state = StagingDetector.StateOf(vehicle);
         FairingJettison.Row[] rows = FairingJettison.Rows(vehicle, state);
+        bool released = DeferredFairingRows(vehicle).Length > 0;
         bool automatic = false;
         foreach (FairingJettison.Row row in rows)
         {
             if (row.Mixed)
                 GaugeRowText("FAIRING", $"ROW {row.Number}: RELEASES WITH NORMAL STAGING", ConsoleStyle.Danger);
+            else if (!released)
+                GaugeRowText("FAIRING", $"ROW {row.Number}: STOCK STAGING, AUTOSTAGE OFF", ConsoleStyle.TextMuted);
             else
             {
                 automatic = true;

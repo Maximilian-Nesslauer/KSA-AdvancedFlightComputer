@@ -1,5 +1,5 @@
-using KSA;
 using AdvancedFlightComputer.Features.Ui.Logic;
+using KSA;
 
 namespace AdvancedFlightComputer.Features.AutoStage;
 
@@ -71,6 +71,7 @@ internal sealed class StagingState
     public int JettisonSequenceNumber = -1;
     public bool JettisonValid;
 
+    // The stock fairing rows and the release in flight, see FairingJettison.
     public readonly FairingReleaseGate FairingGate = new();
     public IParentBody? FairingBody;
     public FairingJettison.Row[]? FairingRows;

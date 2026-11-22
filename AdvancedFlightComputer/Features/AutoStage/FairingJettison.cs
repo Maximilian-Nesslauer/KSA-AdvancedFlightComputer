@@ -7,6 +7,9 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.AutoStage;
 
+// A stock aeroshroud has no release module of its own, so it leaves on the radial decoupler it sits on.
+// A row that holds only such mounts is released by pressure and clearance, apart from engine staging.
+// A row that also holds anything else stays with the stock sequence.
 internal static class FairingJettison
 {
     private static readonly EditorTag Structural = new("Structural");
@@ -18,8 +21,9 @@ internal static class FairingJettison
         "CoreFairingA_Prefab_AeroshroudLargeV3A",
     };
 
-    internal sealed record Row(int Number, (Decoupler Mount, Part Shroud)[] Leaves, bool Mixed)
+    internal sealed record Row(Sequence Sequence, (Decoupler Mount, Part Shroud)[] Leaves, bool Mixed)
     {
+        public int Number => Sequence.Number;
         public double MassKg => Leaves.Sum(leaf => leaf.Shroud.ComputeSubtreeInertMass());
     }
 
@@ -68,8 +72,7 @@ internal static class FairingJettison
                     continue;
                 }
                 containsShroud = true;
-                // A stock shroud has no release module of its own. Only a stock radial mount
-                // with a single inert shroud branch can leave the retained structure intact.
+                // Only a stock radial mount with a single inert shroud branch leaves the retained structure intact.
                 Part owner = mount.Parent.FullPart;
                 string mountId = owner.Template.Id;
                 if (!IsStockShroud(root.Template) || root.TreeChildren.Count != 0 || root.TreeParent != owner
@@ -87,7 +90,7 @@ internal static class FairingJettison
                 leaves.Add((mount, root));
             }
         }
-        return containsShroud ? new Row(sequence.Number, leaves.ToArray(), other) : null;
+        return containsShroud ? new Row(sequence, leaves.ToArray(), other) : null;
     }
 
     private static bool ContainsShroud(Part root)
@@ -108,8 +111,8 @@ internal static class FairingJettison
         if (state.FairingRows != null && state.FairingRowsGeneration == generation && state.FairingRowsPartCount == parts)
             return state.FairingRows;
         var rows = new List<Row>();
-        // Stock saves can mark a row passed when a later engine row was activated.
-        // The connected shroud remains a candidate until the actual joint opens.
+        // Activated rows count too. SequenceList.SetActiveSequence marks every row up to the active one,
+        // so a fairing row that engine staging passed reads as activated while its shrouds are still attached.
         foreach (Sequence sequence in vehicle.Parts.SequenceList.Sequences)
             if (Inspect(vehicle, sequence) is { } row)
                 rows.Add(row);
@@ -118,14 +121,25 @@ internal static class FairingJettison
         return state.FairingRows = rows.ToArray();
     }
 
-    internal static Sequence? NextAutomaticSequence(Vehicle vehicle, StagingState state)
+    internal static bool IsDeferred(Row[] rows, Sequence sequence)
     {
-        Row[] fairings = Rows(vehicle, state);
-        foreach (Sequence sequence in vehicle.Parts.SequenceList.Sequences)
-            if (!sequence.Activated && !sequence.Parts.IsEmpty && !fairings.Any(row => !row.Mixed && row.Number == sequence.Number))
+        foreach (Row row in rows)
+            if (!row.Mixed && ReferenceEquals(row.Sequence, sequence))
+                return true;
+        return false;
+    }
+
+    // The row stock's SequenceList.ActivateNextSequence would fire, with the deferred fairing rows passed over.
+    internal static Sequence? NextRowOutside(SequenceList list, Row[] deferred)
+    {
+        foreach (Sequence sequence in list.Sequences)
+            if (!sequence.Activated && !sequence.Parts.IsEmpty && !IsDeferred(deferred, sequence))
                 return sequence;
         return null;
     }
+
+    internal static Sequence? NextAutomaticSequence(Vehicle vehicle, StagingState state)
+        => NextRowOutside(vehicle.Parts.SequenceList, Rows(vehicle, state));
 
     internal static bool Observe(Vehicle vehicle, StagingState state, double now)
     {
@@ -146,9 +160,10 @@ internal static class FairingJettison
         bool air = parent.GetPhysicalAtmosphere() is { Height: > 0.0 };
         double speed = vehicle.GetSurfaceSpeed();
         double q = 0.5 * env.AtmosphericDensity * speed * speed;
-        double altitude = r.Length() - env.TerrainRadius - vehicle.BoundingSphereRadiusBody;
+        // The whole vehicle clears the terrain below it, so the bounding sphere comes off the centre's height.
+        double clearance = r.Length() - env.TerrainRadius - vehicle.BoundingSphereRadiusBody;
         state.FairingGateQ = q;
-        state.FairingGateClearance = altitude;
+        state.FairingGateClearance = clearance;
         double floor = BodyDefaults.DefaultOf(GuidanceSettingSpecs.FairingAltitudeKm, parent.Id);
         double ceiling = BodyDefaults.DefaultOf(GuidanceSettingSpecs.FairingQKpa, parent.Id);
         if (VehicleAutopilotState.TryGet(vehicle, out var settings))
@@ -156,22 +171,21 @@ internal static class FairingJettison
             floor = settings.FairingAltitudeKm;
             ceiling = settings.FairingQKpa;
         }
-        return state.FairingGate.Sample(now, q, altitude, double3.Dot(r, v) > 0.0, air,
+        return state.FairingGate.Sample(now, q, clearance, double3.Dot(r, v) > 0.0, air,
             Math.Clamp(floor, 0.0, 250.0) * 1000.0, Math.Clamp(ceiling, 0.0, 50.0) * 1000.0);
     }
 
     internal static void TryRelease(Vehicle vehicle, StagingState state, double now)
     {
+        if (state.FairingPending != null)
+            return;
         foreach (Row cached in Rows(vehicle, state))
         {
             if (cached.Mixed || cached.Leaves.Any(leaf => state.FairingFailed.Contains(leaf.Mount)))
                 continue;
-            // Re-read the live connections and row membership at the point of the write.
-            Sequence? live = null;
-            foreach (Sequence sequence in vehicle.Parts.SequenceList.Sequences)
-                if (sequence.Number == cached.Number)
-                    live = sequence;
-            if (live == null || Inspect(vehicle, live) is not { Mixed: false } row)
+            // The cache follows the sequence generation, so the joints are read again at the point of the write.
+            if (!vehicle.Parts.SequenceList.Contains(cached.Sequence)
+                || Inspect(vehicle, cached.Sequence) is not { Mixed: false } row)
                 continue;
             var drop = row.Leaves.Select(leaf => leaf.Shroud).ToHashSet();
             if (StageControl.Evaluate(vehicle, drop, exclude: true) != VehicleControl.Controllable)
@@ -179,30 +193,29 @@ internal static class FairingJettison
 
             state.FairingPending = row;
             state.FairingIssuedAt = now;
+            // Decoupler.SetIsActive queues the decouple for the next input drain, as stock staging does.
             foreach (var leaf in row.Leaves)
                 leaf.Mount.SetIsActive(vehicle, true);
             return;
         }
     }
 
-    internal static bool AwaitRelease(Vehicle vehicle, StagingState state, double now)
+    internal static void AwaitRelease(Vehicle vehicle, StagingState state, double now)
     {
-        if (state.FairingPending is not { } row)
-            return false;
-        if (now <= state.FairingIssuedAt)
-            return true;
+        if (state.FairingPending is not { } row || now <= state.FairingIssuedAt)
+            return;
         bool allSeparated = true;
         foreach (var leaf in row.Leaves)
         {
             bool separated = leaf.Shroud.Tree != vehicle.Parts && leaf.Mount.Connector.Connection == null;
             allSeparated &= separated;
-            // A disconnected decoupler remains sequenceable until disabled. Retire only a
-            // spent mount confirmed by stock, so the now-empty row no longer blocks staging.
+            // A spent decoupler keeps its part in the row, and stock fires the first unactivated row that has parts.
+            // A disabled one leaves the row (Part.ComputeIsSequenceable), so the empty row no longer stands in front of engine staging.
             if (separated && leaf.Mount.Parent.FullPart.Tree == vehicle.Parts)
                 leaf.Mount.SetIsEnabled(false);
         }
         if (!allSeparated && now - state.FairingIssuedAt < 1.0)
-            return true;
+            return;
         state.FairingPending = null;
         StagingHelpers.InvalidateSequenceCache();
         if (!allSeparated)
@@ -210,13 +223,12 @@ internal static class FairingJettison
             foreach (var leaf in row.Leaves)
                 state.FairingFailed.Add(leaf.Mount);
             DefaultCategory.Log.Warning($"[AFC] Fairing row {row.Number} on '{vehicle.Id}' did not finish separating. Check its joints.");
-            return false;
+            return;
         }
         if (VehicleAutopilotState.TryGet(vehicle, out var guidance))
             guidance.StageModelDirty = true;
         state.FairingLastRelease = FormattableString.Invariant($"ROW {row.Number} RELEASED {row.MassKg:F1} kg");
         DefaultCategory.Log.Info(FormattableString.Invariant(
             $"[AFC] Fairing row {row.Number} on '{vehicle.Id}' released {row.MassKg:F1} kg at t={now:F2} s. Gate at t={state.FairingIssuedAt:F2} s, q={state.FairingGateQ:F0} Pa, clearance={state.FairingGateClearance:F0} m."));
-        return false;
     }
 }

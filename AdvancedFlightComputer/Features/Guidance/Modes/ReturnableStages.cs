@@ -86,6 +86,15 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
+    /// The stock fairing rows that AutoStage releases by pressure and clearance on this craft, apart from engine staging.
+    /// Empty when AutoStage does not fly the craft, because stock staging then fires them in their place in the sequence.
+    /// </summary>
+    internal static FairingJettison.Row[] DeferredFairingRows(Vehicle vehicle)
+        => SharedVehicleHooks.AutoStageEnabled && (StagingDetector.IsArmed(vehicle) || (_s.Engage && _s.AutoStage))
+            ? FairingJettison.Rows(vehicle, StagingDetector.StateOf(vehicle))
+            : [];
+
+    /// <summary>
     /// Rebuild the list of stages that could fly themselves home.
     ///
     /// Rides the stage-model tick so changes in crew or probe power reach the return list.
@@ -113,15 +122,11 @@ public static partial class GuidanceWindow
         _returnDropsSoFar.Clear();
         _returnExcludedRoots.Clear();
         bool first = true;
-        FairingJettison.Row[] fairings = _s.AutoStage
-            ? FairingJettison.Rows(vehicle, StagingDetector.StateOf(vehicle)) : [];
+        FairingJettison.Row[] fairings = DeferredFairingRows(vehicle);
         ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
         for (int i = 0; i < sequences.Length; i++)
         {
-            if (sequences[i].Activated || sequences[i].Parts.IsEmpty)
-                continue;
-            int number = sequences[i].Number;
-            if (fairings.Any(row => !row.Mixed && row.Number == number))
+            if (sequences[i].Activated || sequences[i].Parts.IsEmpty || FairingJettison.IsDeferred(fairings, sequences[i]))
                 continue;
 
             SequenceRoots(sequences[i], _returnRoots);
