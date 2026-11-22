@@ -2,8 +2,8 @@
 # Build locally:  pip install -r docs/requirements.txt  then  mkdocs serve
 # .github/workflows/docs.yml builds every PR that touches the docs and deploys main to GitHub Pages.
 #
-# The User Guide pages are generated from README.md at build time by docs/hooks/site.py,
-# so the README stays the one copy of the player manual. See that file for the page list.
+# The User Guide lives in docs/user-guide/. It started as a copy of README.md (2026-11-22) and is
+# kept by hand from here on, so a change to the README does not reach the site by itself.
 
 site_name: Advanced Flight Computer
 site_description: Maneuver planning, burn execution and closed-loop guidance for Kitten Space Agency.
