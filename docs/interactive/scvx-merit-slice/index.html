@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SCvx Merit Slice</title>
+<link rel="icon" href="data:,">
+<script src="../theme.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one instrument page. A header, the slice plot with its readout panel beside it, three small iteration charts under it. */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --ink: #10151c;
+  --ink-2: #485260;
+  --muted: #6f7a89;
+  --rule: #dbe1e8;
+  --model: #eb6834;
+  --series: #2a78d6;
+  --good: #0a8a0a;
+  --warn: #b97800;
+  --critical: #d03b3b;
+  /* Merit ramp, lower merit first. Light: low recedes toward the light surface. */
+  --r0: #cde2fb; --r1: #b7d3f6; --r2: #9ec5f4; --r3: #86b6ef; --r4: #6da7ec; --r5: #5598e7;
+  --r6: #3987e5; --r7: #2a78d6; --r8: #256abf; --r9: #1c5cab; --r10: #184f95; --r11: #104281; --r12: #0d366b;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1216; --surface: #161a20; --ink: #edf0f4; --ink-2: #b4bdc9; --muted: #8590a0; --rule: #2a313b;
+    --model: #f07a45; --series: #3987e5; --good: #2fbf2f; --warn: #f0a81c; --critical: #e66767;
+    --r0: #0b2a52; --r1: #0d366b; --r2: #104281; --r3: #184f95; --r4: #1c5cab; --r5: #256abf;
+    --r6: #2a78d6; --r7: #3987e5; --r8: #5598e7; --r9: #6da7ec; --r10: #86b6ef; --r11: #9ec5f4; --r12: #b7d3f6;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1216; --surface: #161a20; --ink: #edf0f4; --ink-2: #b4bdc9; --muted: #8590a0; --rule: #2a313b;
+  --model: #f07a45; --series: #3987e5; --good: #2fbf2f; --warn: #f0a81c; --critical: #e66767;
+  --r0: #0b2a52; --r1: #0d366b; --r2: #104281; --r3: #184f95; --r4: #1c5cab; --r5: #256abf;
+  --r6: #2a78d6; --r7: #3987e5; --r8: #5598e7; --r9: #6da7ec; --r10: #86b6ef; --r11: #9ec5f4; --r12: #b7d3f6;
+  color-scheme: dark;
+}
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; overflow-x: hidden;
+  background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 24px 40px;
+}
+.page { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+header { display: flex; flex-direction: column; gap: 6px; }
+.eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+h1 { font-size: 26px; font-weight: 600; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.lede { margin: 0; max-width: 72ch; color: var(--ink-2); }
+.mock { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; font-family: var(--mono); font-size: 11px;
+  border: 1px solid var(--rule); background: var(--surface); padding: 2px 8px; border-radius: 4px; color: var(--ink-2); }
+.mock b { color: var(--model); font-weight: 500; }
+.controls { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.seg button { font: inherit; font-size: 13px; border: 0; background: transparent; color: var(--ink-2); padding: 6px 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--rule); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.seg button:focus-visible, .stepper button:focus-visible, input:focus-visible { outline: 2px solid var(--series); outline-offset: 2px; }
+.check { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.check input { accent-color: var(--model); width: 16px; height: 16px; }
+.stepper { display: flex; align-items: center; gap: 8px; flex: 1 1 280px; min-width: 0; }
+.stepper button { font: inherit; width: 30px; height: 30px; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); color: var(--ink); cursor: pointer; }
+.stepper input[type="range"] { flex: 1; min-width: 80px; accent-color: var(--ink); }
+.stepper output { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink-2); }
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
+@media (max-width: 860px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.plotwrap { position: relative; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 8px; min-width: 0; }
+.plotwrap svg { display: block; width: 100%; height: auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 8px 6px 2px; font-size: 12px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend svg { width: auto; flex: none; }
+.panel { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.chip { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
+.chip i { font-style: normal; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; color: var(--surface); font-size: 13px; }
+.k-title { font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
+dl { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; }
+dt { color: var(--ink-2); font-size: 13px; }
+dd { margin: 0; font-family: var(--mono); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+.gauge svg { width: 100%; height: auto; display: block; }
+.note { font-size: 13px; color: var(--ink-2); margin: 0; border-top: 1px solid var(--rule); padding-top: 12px; }
+.note strong { color: var(--ink); font-weight: 600; }
+.smalls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 760px) { .smalls { grid-template-columns: minmax(0, 1fr); } }
+.small { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 10px 6px; min-width: 0; }
+.small h2 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
+.small p { font-size: 12px; color: var(--muted); margin: 0 0 4px; }
+.small svg { display: block; width: 100%; height: auto; }
+.tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--surface); font-family: var(--mono); font-size: 12px;
+  padding: 6px 8px; border-radius: 4px; white-space: nowrap; transform: translate(-50%, calc(-100% - 10px)); z-index: 5; line-height: 1.4; }
+.axis text { fill: var(--muted); font-family: var(--mono); font-size: 10px; }
+.axis line, .axis path { stroke: var(--rule); }
+.axis-label { fill: var(--ink-2); font-family: var(--sans); font-size: 11px; }
+footer { font-size: 12px; color: var(--muted); max-width: 80ch; display: flex; flex-direction: column; gap: 6px; }
+footer p { margin: 0; }
+.gauge-note { font-size: 11px; color: var(--muted); margin: 2px 0 0; }
+.simplify { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px; }
+.simplify h2 { font-size: 14px; font-weight: 600; margin: 0 0 6px; }
+.simplify ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--ink-2); max-width: 90ch; }
+.simplify strong { color: var(--ink); font-weight: 600; }
+.simplify code { font-family: var(--mono); font-size: 12px; }
+@media (prefers-reduced-motion: no-preference) { .plotwrap svg .step-arrow { transition: opacity 120ms; } }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <header>
+    <div class="eyebrow">Successive convexification · merit landscape</div>
+    <h1>One plane through an 8-dimensional solve</h1>
+    <p class="lede">The merit φ that SCvx accepts steps on, evaluated on the plane through three iterates. The orange lines are the convex model L<sub>k</sub> inside the trust region. Where they part from the blue band edges, the linearisation is off, and the ratio ρ shows it.</p>
+    <span class="mock"><b>Toy model</b> a synthetic 8-variable problem with AFC's trust-region rule, not an AFC solve</span>
+  </header>
+
+  <div class="controls">
+    <div class="seg" role="group" aria-label="Plane">
+      <button type="button" id="plane-overview" aria-pressed="true">Plane through x₀, x<sub>m</sub>, x*</button>
+      <button type="button" id="plane-step" aria-pressed="false">Plane through this step</button>
+    </div>
+    <label class="check"><input type="checkbox" id="show-model" checked><span>Model L<sub>k</sub></span></label>
+    <div class="stepper">
+      <button type="button" id="prev" aria-label="Previous iteration">‹</button>
+      <input type="range" id="iter" min="0" max="0" value="0" aria-label="Iteration">
+      <button type="button" id="next" aria-label="Next iteration">›</button>
+      <output id="iter-out" for="iter">k = 0</output>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="plotwrap" id="plotwrap">
+      <svg id="plot" viewBox="0 0 640 480" role="img" aria-label="Contours of the merit function on a plane through three iterates, with the iterate path and the trust region"></svg>
+      <div class="legend" id="legend"></div>
+      <div class="tip" id="tip" hidden></div>
+    </div>
+
+    <aside class="panel" aria-live="polite">
+      <div>
+        <div class="k-title" id="k-title">ITERATION 0</div>
+        <div class="chip" id="chip"></div>
+      </div>
+      <div class="gauge">
+        <svg id="gauge" viewBox="0 0 300 64" role="img" aria-label="Ratio of actual to predicted improvement against the accept thresholds"></svg>
+        <p class="gauge-note">* η grows only if the step also used at least 80 % of it, and never past its cap.</p>
+      </div>
+      <dl id="readout"></dl>
+      <p class="note" id="note"></p>
+    </aside>
+  </div>
+
+  <section class="smalls" aria-label="Iteration history">
+    <div class="small"><h2>Merit above the optimum</h2><p>φ(x<sub>k</sub>) − φ(x*), log scale</p><svg id="sm-phi" viewBox="0 0 320 150"></svg></div>
+    <div class="small"><h2>Defect, the virtual control</h2><p>‖g(x<sub>k</sub>)‖₁, log scale</p><svg id="sm-def" viewBox="0 0 320 150"></svg></div>
+    <div class="small"><h2>Trust radius</h2><p>η<sub>k</sub>, log scale. × marks a rejected step</p><svg id="sm-eta" viewBox="0 0 320 150"></svg></div>
+  </section>
+
+  <section class="simplify" aria-labelledby="simplify-h">
+    <h2 id="simplify-h">What the toy simplifies</h2>
+    <ul>
+      <li><strong>The trust-region rule is AFC's.</strong> As in <code>Scvx6DofSolver.Iterate</code>: a step is kept when ρ &gt; 0; η halves when ρ &lt; 0.25, rejected or not; η grows ×1.5 when ρ ≥ 0.7 <em>and</em> the step used at least 80 % of η; otherwise it stays. η is clamped between a floor and a cap a hundred times larger (AFC: 10⁻³ and 0.1; here 0.01 and 1), and a cold solve starts at the cap.</li>
+      <li><strong>AFC's trust region is a box, not a ball.</strong> Every state, control and the burn and coast times must stay within η of the reference, each on its own scale: |x − x̄| ≤ η·scale per variable, an ∞-norm ball. "Used" is the largest such scaled change. The toy uses a 2-norm ball so that its slice on the plane is a circle.</li>
+      <li><strong>AFC prices the defect with a quadratic penalty.</strong> Its merit (<code>TrueCost</code>) is the fuel used + small quadratic prices on control changes, body rates, RCS and fins + ρ<sub>vc</sub> Σ (defect / scale)² over every interval and state channel, with ρ<sub>vc</sub> = 10⁵ and the defect taken from the true nonlinear dynamics, + the L1 prices of the soft acceleration and turn-rate limits. The predicted merit prices the subproblem's virtual control the same way. The toy uses an exact ℓ1 penalty, λ‖g‖₁, which puts the creases in the landscape.</li>
+      <li><strong>AFC's subproblems can fail.</strong> SCS can stop at its iteration cap. The solver can retry the same subproblem once with a larger cap; the flight guidance sets its caps so that retry does not fire. A solve that is still truncated, unusable, or outside its time bounds is a failed iteration: no step, and η halves. The toy's subproblem always solves.</li>
+      <li><strong>Convergence.</strong> AFC stops on a kept step whose largest scaled change is under 8·10⁻³ while the largest scaled defect is under 10⁻³. The toy stops when the model predicts a drop under 10⁻⁴.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p>The problem: minimise ½Σ w<sub>i</sub>(x<sub>i</sub> − c<sub>i</sub>)² + λ‖g(x)‖₁ over x ∈ ℝ⁸, with three nonlinear defects g<sub>j</sub>(x) = a<sub>j</sub>·x + 1.4 sin(b<sub>j</sub>·x) + 0.5 (d<sub>j</sub>·x)² − e<sub>j</sub> and λ = 6. Each iteration linearises g at x<sub>k</sub>, minimises the convex model inside a 2-norm ball of radius η, and keeps or refuses the step by the ratio ρ of actual to predicted improvement, with AFC's rule above. Axes are distances in x along the two orthonormal plane directions. Hollow markers are iterates that lie off the plane, drawn at their projection.</p>
+    <p>Part of the AFC docs. Toy model; its trust-region rule as of main 155357c (2026-11-21).</p>
+  </footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script>
+// ---- Toy SCvx problem and solver -------------------------------------------------------------
+const N = 8, M = 3;
+function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
+function makeProblem(seed, lambda) {
+  const r = rng(seed), g = () => r() * 2 - 1;
+  const w = Array.from({ length: N }, (_, i) => 0.4 + 2.6 * (i / (N - 1)) ** 2);
+  const c = Array.from({ length: N }, () => 0.6 * g());
+  const A = [], B = [], D = [], e = [];
+  for (let j = 0; j < M; j++) {
+    A.push(Array.from({ length: N }, () => g()));
+    B.push(Array.from({ length: N }, () => 0.9 * g()));
+    D.push(Array.from({ length: N }, () => 0.6 * g()));
+    e.push(1.2 * g());
+  }
+  const alpha = 1.4, beta = 0.5;
+  const dot = (a, x) => { let s = 0; for (let i = 0; i < N; i++) s += a[i] * x[i]; return s; };
+  const J = x => { let s = 0; for (let i = 0; i < N; i++) { const d = x[i] - c[i]; s += 0.5 * w[i] * d * d; } return s; };
+  const gj = (j, x) => dot(A[j], x) + alpha * Math.sin(dot(B[j], x)) + beta * dot(D[j], x) ** 2 - e[j];
+  const gradG = (j, x) => { const cb = alpha * Math.cos(dot(B[j], x)), dd = 2 * beta * dot(D[j], x); return A[j].map((a, i) => a + cb * B[j][i] + dd * D[j][i]); };
+  const defect = x => { let s = 0; for (let j = 0; j < M; j++) s += Math.abs(gj(j, x)); return s; };
+  const phi = x => J(x) + lambda * defect(x);
+  const model = xk => {
+    const r0 = [], G = [];
+    for (let j = 0; j < M; j++) { r0.push(gj(j, xk)); G.push(gradG(j, xk)); }
+    const L = x => {
+      let s = J(x);
+      for (let j = 0; j < M; j++) { let l = r0[j]; for (let i = 0; i < N; i++) l += G[j][i] * (x[i] - xk[i]); s += lambda * Math.abs(l); }
+      return s;
+    };
+    return { r0, G, L };
+  };
+  return { w, c, lambda, J, defect, phi, model };
+}
+function solveSub(P, xk, eta, mdl) {
+  const { w, c, lambda } = P, { r0, G } = mdl;
+  let gn2 = 0; for (let j = 0; j < M; j++) for (let i = 0; i < N; i++) gn2 += G[j][i] ** 2;
+  const project = x => {
+    let d2 = 0; for (let i = 0; i < N; i++) d2 += (x[i] - xk[i]) ** 2;
+    const d = Math.sqrt(d2); if (d <= eta) return x;
+    const s = eta / d; return x.map((v, i) => xk[i] + (v - xk[i]) * s);
+  };
+  let x = xk.slice();
+  for (const eps of [1e-1, 1e-2, 1e-3, 3e-4]) {
+    const step = 1 / (Math.max(...w) + lambda * gn2 / eps);
+    let y = x.slice(), xPrev = x.slice(), t = 1;
+    const iters = eps > 5e-3 ? 400 : 2500;
+    for (let it = 0; it < iters; it++) {
+      const grad = w.map((wi, i) => wi * (y[i] - c[i]));
+      for (let j = 0; j < M; j++) {
+        let rj = r0[j]; for (let i = 0; i < N; i++) rj += G[j][i] * (y[i] - xk[i]);
+        const s = lambda * rj / Math.sqrt(rj * rj + eps * eps);
+        for (let i = 0; i < N; i++) grad[i] += s * G[j][i];
+      }
+      const xn = project(y.map((v, i) => v - step * grad[i]));
+      const tn = (1 + Math.sqrt(1 + 4 * t * t)) / 2;
+      y = xn.map((v, i) => v + ((t - 1) / tn) * (v - xPrev[i]));
+      xPrev = xn; x = xn; t = tn;
+    }
+  }
+  return x;
+}
+// The trust-region rule of AFC's Scvx6DofSolver.Iterate: keep the step when rho > 0 (RhoAccept); halve eta when rho < 0.25 (RhoShrink, Shrink),
+// kept or not; grow it x1.5 when rho >= 0.7 (RhoGrow, Grow) and the step used at least 80 % of it; clamp to [min, max], max = 100 x min, starting at max.
+// AFC's limits are 1e-3 and 0.1 in scaled units; the toy's are 0.01 and 1, the same ratio on its own scale.
+const ETA_MAX = 1.0, ETA_MIN = 0.01, RHO_ACCEPT = 0, RHO_SHRINK = 0.25, RHO_GROW = 0.7, SHRINK = 0.5, GROW = 1.5, USED_TO_GROW = 0.8;
+function runScvx(P, x0) {
+  let x = x0.slice(), eta = ETA_MAX;
+  const steps = [];
+  for (let k = 0; k < 30; k++) {
+    const mdl = P.model(x), trial = solveSub(P, x, eta, mdl);
+    const phiK = P.phi(x), phiT = P.phi(trial), predicted = phiK - mdl.L(trial), actual = phiK - phiT;
+    const rho = Math.abs(predicted) > 1e-9 ? actual / predicted : (actual >= 0 ? 1 : -1);
+    let d2 = 0; for (let i = 0; i < N; i++) d2 += (trial[i] - x[i]) ** 2;
+    const used = Math.sqrt(d2) / eta;   // the share of the radius the step used; AFC measures it on the box, as the largest scaled change
+    let decision, etaNext = eta;
+    if (predicted < 1e-4) decision = 'converged';
+    else {
+      if (rho < RHO_SHRINK) etaNext = Math.max(ETA_MIN, eta * SHRINK);
+      else if (rho >= RHO_GROW && used >= USED_TO_GROW) etaNext = Math.min(ETA_MAX, eta * GROW);
+      if (!(rho > RHO_ACCEPT)) decision = 'rejected';
+      else if (rho < RHO_SHRINK) decision = 'accepted-shrink';
+      else if (etaNext > eta) decision = 'accepted-grow';
+      else if (rho >= RHO_GROW) decision = used >= USED_TO_GROW ? 'accepted-capped' : 'accepted-inside';
+      else decision = 'accepted';
+    }
+    steps.push({ k, x: x.slice(), trial, eta, etaNext, rho, used, predicted, actual, phi: phiK, defect: P.defect(x), decision, model: mdl });
+    if (decision === 'converged') break;
+    if (decision !== 'rejected') x = trial;
+    eta = etaNext;
+  }
+  return steps;
+}
+
+const P = makeProblem(19, 6);
+const r0 = rng(119);
+const X0 = Array.from({ length: N }, () => 2.2 * (r0() * 2 - 1));
+const STEPS = runScvx(P, X0);
+const K = STEPS.length;
+const XSTAR = STEPS[K - 1].x, PHISTAR = P.phi(XSTAR);
+// Distinct iterates: a rejected step leaves x_{k+1} = x_k.
+const ITERATES = STEPS.filter((s, i) => i === 0 || STEPS[i - 1].decision !== 'rejected');
+const MID = ITERATES[Math.floor((ITERATES.length - 1) / 2)];
+
+// ---- Vector helpers and plane --------------------------------------------------------------
+const sub = (a, b) => a.map((v, i) => v - b[i]);
+const dotv = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
+const norm = a => Math.sqrt(dotv(a, a));
+const scale = (a, s) => a.map(v => v * s);
+function makePlane(a, b, c) {
+  const o = a.slice();
+  let e1 = sub(b, a); const n1 = norm(e1);
+  e1 = n1 > 1e-9 ? scale(e1, 1 / n1) : Array.from({ length: N }, (_, i) => (i === 0 ? 1 : 0));
+  let w2 = sub(c, a); w2 = sub(w2, scale(e1, dotv(w2, e1)));
+  if (norm(w2) < 1e-9) { w2 = Array.from({ length: N }, (_, i) => (i === 1 ? 1 : 0)); w2 = sub(w2, scale(e1, dotv(w2, e1))); }
+  const e2 = scale(w2, 1 / norm(w2));
+  const proj = x => { const d = sub(x, o), u = dotv(d, e1), v = dotv(d, e2); const off = norm(d.map((q, i) => q - u * e1[i] - v * e2[i])); return { u, v, off }; };
+  const lift = (u, v) => o.map((q, i) => q + u * e1[i] + v * e2[i]);
+  return { o, e1, e2, proj, lift };
+}
+
+// ---- State and rendering -------------------------------------------------------------------
+const state = { k: 0, plane: 'overview', showModel: true };
+const W = 640, H = 480, MG = { l: 46, r: 12, t: 12, b: 40 };
+const IW = W - MG.l - MG.r, IH = H - MG.t - MG.b;
+const svg = d3.select('#plot');
+const tip = document.getElementById('tip');
+const sub_ = n => String(n).split('').map(ch => '₀₁₂₃₄₅₆₇₈₉'[+ch]).join('');
+const fmt = (v, d = 3) => (Math.abs(v) >= 1e4 || (Math.abs(v) < 1e-3 && v !== 0)) ? v.toExponential(2) : v.toFixed(d);
+
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function ramp() { return d3.range(13).map(i => css('--r' + i)); }
+
+function decisionInfo(s) {
+  switch (s.decision) {
+    case 'accepted-grow': return { label: 'Accepted, η ×1.5', icon: '✓', color: css('--good') };
+    case 'accepted-capped': return { label: 'Accepted, η at its cap', icon: '✓', color: css('--good') };
+    case 'accepted-inside': return { label: 'Accepted, η kept', icon: '✓', color: css('--good') };
+    case 'accepted': return { label: 'Accepted, η kept', icon: '✓', color: css('--good') };
+    case 'accepted-shrink': return { label: 'Accepted, η halves', icon: '!', color: css('--warn') };
+    case 'rejected': return { label: 'Rejected, η halves', icon: '✕', color: css('--critical') };
+    default: return { label: 'Converged', icon: '✓', color: css('--good') };
+  }
+}
+
+function currentPlane() {
+  const s = STEPS[state.k];
+  if (state.plane === 'step') {
+    // X runs from this iterate to the answer, Y toward this step's trial point. At the answer itself, X falls back to the start.
+    const a = s.x;
+    const atStar = norm(sub(XSTAR, a)) < 1e-6;
+    const b = atStar ? X0 : XSTAR;
+    const c = norm(sub(s.trial, a)) > 1e-6 ? s.trial : MID.x;
+    return { pl: makePlane(a, b, c), anchors: [{ x: a, name: 'x' + sub_(s.k) }, { x: b, name: atStar ? 'x₀' : 'x*' }, { x: c, name: c === s.trial ? 'trial' : 'x' + sub_(MID.k) }] };
+  }
+  // X runs from the first guess to the answer, Y toward a middle iterate.
+  return { pl: makePlane(X0, XSTAR, MID.x), anchors: [{ x: X0, name: 'x₀' }, { x: XSTAR, name: 'x*' }, { x: MID.x, name: 'x' + sub_(MID.k) }] };
+}
+
+// The visible window, the merit grid and its contour levels for one plane. The overview plane is the same for every k, so its view is built once and kept: only the overlay moves when k changes.
+let overviewView = null;
+function buildView(pl, items) {
+  const us = [], vs = [];
+  items.forEach(q => { const r = q.r || 0; us.push(q.u - r, q.u + r); vs.push(q.v - r, q.v + r); });
+  let u0 = d3.min(us), u1 = d3.max(us), v0 = d3.min(vs), v1 = d3.max(vs);
+  const span = Math.max(u1 - u0, v1 - v0, 0.4), pad = 0.12 * span;
+  u0 -= pad; u1 += pad; v0 -= pad; v1 += pad;
+  const sc = Math.min(IW / (u1 - u0), IH / (v1 - v0));
+  const uc = (u0 + u1) / 2, vc = (v0 + v1) / 2;
+  u0 = uc - IW / sc / 2; u1 = uc + IW / sc / 2; v0 = vc - IH / sc / 2; v1 = vc + IH / sc / 2;
+  const nx = 160, ny = Math.round(160 * IH / IW);
+  const phiGrid = new Float64Array(nx * ny);
+  let fmin = PHISTAR;
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const u = u0 + (i + 0.5) / nx * (u1 - u0), v = v1 - (j + 0.5) / ny * (v1 - v0);
+    const f = P.phi(pl.lift(u, v));
+    phiGrid[j * nx + i] = f; if (f < fmin) fmin = f;
+  }
+  const tf = f => Math.log10(Math.max(f - fmin, 0) + 1e-2);
+  const tPhi = Array.from(phiGrid, tf);
+  const lo = d3.min(tPhi), hi = d3.max(tPhi);
+  const levels = d3.range(13).map(i => lo + (hi - lo) * (i / 13));
+  const bands = d3.contours().size([nx, ny]).thresholds(levels)(tPhi);
+  return { u0, u1, v0, v1, sc, span, nx, ny, tf, levels, bands };
+}
+
+function render() {
+  const s = STEPS[state.k];
+  const { pl, anchors } = currentPlane();
+  const pk = pl.proj(s.x), pt = pl.proj(s.trial);
+  const slice = pk.off < s.eta ? Math.sqrt(s.eta * s.eta - pk.off * pk.off) : NaN;
+  let view;
+  if (state.plane === 'overview') {
+    if (!overviewView) {
+      const items = [];
+      STEPS.forEach(st => {
+        const p = pl.proj(st.x), t = pl.proj(st.trial);
+        items.push(p, t);
+        if (p.off < st.eta) items.push({ u: p.u, v: p.v, r: Math.sqrt(st.eta * st.eta - p.off * p.off) });
+      });
+      overviewView = buildView(pl, items);
+    }
+    view = overviewView;
+  } else {
+    const items = ITERATES.map(it => pl.proj(it.x));
+    items.push(pk, pt);
+    if (isFinite(slice)) items.push({ u: pk.u, v: pk.v, r: slice });
+    view = buildView(pl, items);
+  }
+  const { u0, u1, v0, v1, sc, span, nx, ny, tf, levels, bands } = view;
+  const xs = d3.scaleLinear().domain([u0, u1]).range([MG.l, MG.l + IW]);
+  const ys = d3.scaleLinear().domain([v0, v1]).range([MG.t + IH, MG.t]);
+
+  // The model of this iteration on the same grid and levels, so its lines compare with the band edges.
+  const modelGrid = new Float64Array(nx * ny);
+  if (state.showModel && isFinite(slice))
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const u = u0 + (i + 0.5) / nx * (u1 - u0), v = v1 - (j + 0.5) / ny * (v1 - v0);
+      modelGrid[j * nx + i] = s.model.L(pl.lift(u, v));
+    }
+  const colors = ramp();
+  const proj = d3.geoPath(d3.geoTransform({ point(px, py) { this.stream.point(MG.l + px * IW / nx, MG.t + py * IH / ny); } }));
+
+  svg.selectAll('*').remove();
+  const defs = svg.append('defs');
+  defs.append('clipPath').attr('id', 'clip-area').append('rect').attr('x', MG.l).attr('y', MG.t).attr('width', IW).attr('height', IH);
+  if (isFinite(slice)) defs.append('clipPath').attr('id', 'clip-trust').append('circle').attr('cx', xs(pk.u)).attr('cy', ys(pk.v)).attr('r', slice * sc);
+  const ink = css('--ink'), surface = css('--surface'), model = css('--model'), muted = css('--muted');
+  defs.append('marker').attr('id', 'arrow').attr('viewBox', '0 0 10 10').attr('refX', 9).attr('refY', 5)
+    .attr('markerWidth', 7).attr('markerHeight', 7).attr('orient', 'auto-start-reverse')
+    .append('path').attr('d', 'M0,0 L10,5 L0,10 z').attr('fill', ink);
+
+  const g = svg.append('g').attr('clip-path', 'url(#clip-area)');
+  g.append('rect').attr('x', MG.l).attr('y', MG.t).attr('width', IW).attr('height', IH).attr('fill', colors[0]);
+  g.append('g').selectAll('path').data(bands).join('path').attr('d', proj).attr('fill', (d, i) => colors[i])
+    .attr('stroke', surface).attr('stroke-opacity', 0.35).attr('stroke-width', 0.6);
+
+  // Trust region slice and the model contours inside it, on the same levels as the merit bands.
+  if (isFinite(slice)) {
+    if (state.showModel) {
+      const tModel = Array.from(modelGrid, tf);
+      const mc = d3.contours().size([nx, ny]).thresholds(levels)(tModel);
+      g.append('g').attr('clip-path', 'url(#clip-trust)').selectAll('path').data(mc).join('path').attr('d', proj)
+        .attr('fill', 'none').attr('stroke', model).attr('stroke-width', 1.6);
+    }
+    g.append('circle').attr('cx', xs(pk.u)).attr('cy', ys(pk.v)).attr('r', slice * sc)
+      .attr('fill', model).attr('fill-opacity', 0.08).attr('stroke', model).attr('stroke-width', 2);
+  }
+
+  // Path of accepted iterates.
+  const pathPts = ITERATES.map(it => pl.proj(it.x));
+  const line = d3.line().x(d => xs(d.u)).y(d => ys(d.v));
+  const upto = ITERATES.filter(it => it.k <= state.k).length;
+  g.append('path').attr('d', line(pathPts)).attr('fill', 'none').attr('stroke', ink).attr('stroke-opacity', 0.25).attr('stroke-width', 1.5);
+  g.append('path').attr('d', line(pathPts.slice(0, upto))).attr('fill', 'none').attr('stroke', ink).attr('stroke-width', 2);
+
+  // The step of this iteration, to its trial point.
+  const stepLen = Math.hypot(xs(pt.u) - xs(pk.u), ys(pt.v) - ys(pk.v));
+  if (stepLen > 4) {
+    const rejected = s.decision === 'rejected';
+    g.append('line').attr('class', 'step-arrow').attr('x1', xs(pk.u)).attr('y1', ys(pk.v)).attr('x2', xs(pt.u)).attr('y2', ys(pt.v))
+      .attr('stroke', ink).attr('stroke-width', 2).attr('stroke-dasharray', rejected ? '5 4' : null)
+      .attr('marker-end', rejected ? null : 'url(#arrow)');
+    if (rejected) {
+      const cx = xs(pt.u), cy = ys(pt.v), crit = css('--critical');
+      g.append('path').attr('d', `M${cx - 6},${cy - 6}L${cx + 6},${cy + 6}M${cx - 6},${cy + 6}L${cx + 6},${cy - 6}`)
+        .attr('stroke', surface).attr('stroke-width', 5).attr('stroke-linecap', 'round');
+      g.append('path').attr('d', `M${cx - 6},${cy - 6}L${cx + 6},${cy + 6}M${cx - 6},${cy + 6}L${cx + 6},${cy - 6}`)
+        .attr('stroke', crit).attr('stroke-width', 2.5).attr('stroke-linecap', 'round');
+    }
+  }
+
+  // Iterate markers: solid on the plane, hollow when drawn at a projection.
+  const tol = 1e-6 * (1 + span);
+  const markers = g.append('g');
+  ITERATES.forEach((it, idx) => {
+    const p = pl.proj(it.x), onPlane = p.off < tol, isStar = idx === ITERATES.length - 1;
+    const r = it.k === s.k ? 6 : 4.5;
+    markers.append('circle').attr('cx', xs(p.u)).attr('cy', ys(p.v)).attr('r', isStar ? 6 : r)
+      .attr('fill', onPlane ? ink : surface).attr('stroke', onPlane ? surface : ink).attr('stroke-width', onPlane ? 2 : 1.6);
+    markers.append('circle').attr('cx', xs(p.u)).attr('cy', ys(p.v)).attr('r', 12).attr('fill', 'transparent')
+      .style('cursor', 'pointer')
+      .on('mousemove', ev => showTip(ev, `x${sub_(it.k)}  φ ${fmt(P.phi(it.x))}\n${onPlane ? 'on the plane' : 'off the plane by ' + fmt(p.off, 3)}`))
+      .on('mouseleave', hideTip)
+      .on('click', () => setK(it.k));
+  });
+  // Current iterate ring, after a rejection it is the same point as before.
+  markers.append('circle').attr('cx', xs(pk.u)).attr('cy', ys(pk.v)).attr('r', 10).attr('fill', 'none').attr('stroke', ink).attr('stroke-width', 1.5);
+
+  // Anchor labels.
+  anchors.forEach(a => {
+    const p = pl.proj(a.x);
+    const lx = xs(p.u) + 9, ly = ys(p.v) - 9;
+    const t = svg.append('text').attr('x', lx).attr('y', ly).attr('font-family', 'IBM Plex Mono, monospace').attr('font-size', 12)
+      .attr('font-weight', 500).text(a.name);
+    t.clone(true).lower().attr('stroke', surface).attr('stroke-width', 4).attr('stroke-linejoin', 'round');
+    t.attr('fill', ink);
+  });
+
+  // Axes: distances in x along e1 and e2.
+  const ax = svg.append('g').attr('class', 'axis').attr('transform', `translate(0,${MG.t + IH})`).call(d3.axisBottom(xs).ticks(6).tickSize(4));
+  ax.select('.domain').remove();
+  const ay = svg.append('g').attr('class', 'axis').attr('transform', `translate(${MG.l},0)`).call(d3.axisLeft(ys).ticks(5).tickSize(4));
+  ay.select('.domain').remove();
+  svg.append('rect').attr('x', MG.l).attr('y', MG.t).attr('width', IW).attr('height', IH).attr('fill', 'none').attr('stroke', css('--rule'));
+  const [n0, n1, n2] = anchors.map(a => a.name);
+  svg.append('text').attr('class', 'axis-label').attr('x', MG.l + IW).attr('y', H - 6).attr('text-anchor', 'end').text(`e₁: along ${n0} → ${n1}`);
+  svg.append('text').attr('class', 'axis-label').attr('transform', `translate(12,${MG.t + IH / 2}) rotate(-90)`).attr('text-anchor', 'middle').text(`e₂: toward ${n2}, orthogonal part`);
+
+  renderPanel(s, pk, pt, slice);
+  renderSmalls();
+  document.getElementById('iter-out').textContent = `k = ${s.k} of ${K - 1}`;
+}
+
+function renderPanel(s, pk, pt, slice) {
+  const info = decisionInfo(s);
+  document.getElementById('k-title').textContent = `ITERATION ${s.k}`;
+  document.getElementById('chip').innerHTML = `<i style="background:${info.color}">${info.icon}</i>${info.label}`;
+  const rows = [
+    ['Trust radius η', fmt(s.eta)],
+    ['Merit φ(x' + sub_(s.k) + ')', fmt(s.phi)],
+    ['Predicted drop φ − L', fmt(s.predicted)],
+    ['Actual drop', fmt(s.actual)],
+    ['Ratio ρ', fmt(s.rho, 2)],
+    ['Step used of η', s.decision === 'converged' ? '–' : Math.round(100 * s.used) + ' %'],
+    ['Defect ‖g‖₁', fmt(s.defect)],
+    ['x' + sub_(s.k) + ' off the plane', fmt(pk.off)],
+    ['Trial off the plane', fmt(pt.off)],
+  ];
+  document.getElementById('readout').innerHTML = rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('');
+  let note;
+  if (!isFinite(slice)) note = 'The trust ball of this iterate does not reach this plane, so no model is drawn. Switch to <strong>Plane through this step</strong>.';
+  else if (s.decision === 'rejected') note = `<strong>The model promised ${fmt(s.predicted)} and the merit ${s.actual < 0 ? 'rose by ' + fmt(-s.actual) : 'did not fall'}.</strong> The orange lines run far from the blue band edges inside the circle: the linearised defects are wrong that far out. The step is thrown away and the radius halves.`;
+  else if (s.decision === 'accepted-shrink') note = '<strong>The step helped, but much less than promised.</strong> It is kept, since ρ &gt; 0, and the radius halves so the next model is trusted less far.';
+  else if (s.decision === 'accepted-grow') note = '<strong>The model predicted the drop well, and the step pressed against the edge.</strong> Inside the circle the orange lines follow the band edges, so the radius grows ×1.5.';
+  else if (s.decision === 'accepted-capped') note = '<strong>The model predicted the drop well, and the step used the whole radius.</strong> That would grow η, but it is already at its cap, so it stays.';
+  else if (s.decision === 'accepted-inside') note = `<strong>The model predicted the drop well, but the step stopped inside the circle.</strong> It used ${Math.round(100 * s.used)} % of η, under the 80 % that growth needs: the radius is not what limits progress, so it stays.`;
+  else if (s.decision === 'converged') note = '<strong>The model predicts no further drop.</strong> The defects are near zero, so the convex model and the merit agree around x*.';
+  else note = '<strong>A fair prediction.</strong> The step is kept and the trust radius stays.';
+  if (state.plane === 'overview' && isFinite(slice) && pk.off > 1e-6) note += ' This iterate is off the plane, so the circle is a smaller slice of its trust ball.';
+  document.getElementById('note').innerHTML = note;
+  renderGauge(s);
+}
+
+function renderGauge(s) {
+  const gsv = d3.select('#gauge'); gsv.selectAll('*').remove();
+  const x = d3.scaleLinear().domain([-1.5, 1.5]).range([8, 292]).clamp(true);
+  const zones = [
+    { a: -1.5, b: 0, c: css('--critical'), t: 'reject' },
+    { a: 0, b: 0.25, c: css('--warn'), t: 'shrink' },
+    { a: 0.25, b: 0.7, c: css('--muted'), t: 'keep' },
+    { a: 0.7, b: 1.5, c: css('--good'), t: 'grow*' },
+  ];
+  zones.forEach(z => {
+    gsv.append('rect').attr('x', x(z.a) + 1).attr('y', 22).attr('width', x(z.b) - x(z.a) - 2).attr('height', 8).attr('rx', 2).attr('fill', z.c).attr('fill-opacity', 0.55);
+    gsv.append('text').attr('x', (x(z.a) + x(z.b)) / 2).attr('y', 16).attr('text-anchor', 'middle').attr('font-size', 10)
+      .attr('font-family', 'IBM Plex Mono, monospace').attr('fill', css('--muted')).text(z.t);
+  });
+  [0, 0.25, 0.7, 1].forEach(v => gsv.append('text').attr('x', x(v)).attr('y', 46).attr('text-anchor', 'middle').attr('font-size', 10)
+    .attr('font-family', 'IBM Plex Mono, monospace').attr('fill', css('--muted')).text(v));
+  const ink = css('--ink'), px = x(s.rho);
+  gsv.append('path').attr('d', `M${px},34 l-5,8 h10 z`).attr('fill', ink);
+  gsv.append('line').attr('x1', px).attr('x2', px).attr('y1', 18).attr('y2', 34).attr('stroke', ink).attr('stroke-width', 2);
+  gsv.append('text').attr('x', px).attr('y', 60).attr('text-anchor', px > 250 ? 'end' : px < 50 ? 'start' : 'middle').attr('font-size', 11)
+    .attr('font-family', 'IBM Plex Mono, monospace').attr('fill', ink).text(`ρ = ${fmt(s.rho, 2)}${s.rho < -1.5 || s.rho > 1.5 ? ' (off scale)' : ''}`);
+}
+
+function renderSmall(id, values, opts = {}) {
+  const sv = d3.select('#' + id); sv.selectAll('*').remove();
+  const w = 320, h = 150, m = { l: 40, r: 8, t: 8, b: 22 };
+  const x = d3.scaleLinear().domain([0, K - 1]).range([m.l, w - m.r]);
+  const y = d3.scaleLog().domain(d3.extent(values)).nice().range([h - m.b, m.t]);
+  const series = css('--series'), ink = css('--ink'), surface = css('--surface');
+  sv.append('g').attr('class', 'axis').attr('transform', `translate(0,${h - m.b})`).call(d3.axisBottom(x).ticks(Math.min(K - 1, 7)).tickFormat(d3.format('d')).tickSize(3)).select('.domain').remove();
+  const ya = sv.append('g').attr('class', 'axis').attr('transform', `translate(${m.l},0)`).call(d3.axisLeft(y).tickValues(logTicks(y)).tickFormat(d3.format('~g')).tickSize(-(w - m.l - m.r)));
+  ya.select('.domain').remove();
+  ya.selectAll('line').attr('stroke-opacity', 0.6);
+  sv.append('line').attr('x1', x(state.k)).attr('x2', x(state.k)).attr('y1', m.t).attr('y2', h - m.b).attr('stroke', ink).attr('stroke-opacity', 0.35).attr('stroke-width', 1);
+  sv.append('path').attr('d', d3.line().x((d, i) => x(i)).y(d => y(d))(values)).attr('fill', 'none').attr('stroke', series).attr('stroke-width', 2);
+  values.forEach((v, i) => {
+    const rej = opts.rejected && STEPS[i].decision === 'rejected';
+    if (rej) {
+      const cx = x(i), cy = y(v), crit = css('--critical');
+      sv.append('path').attr('d', `M${cx - 4},${cy - 4}L${cx + 4},${cy + 4}M${cx - 4},${cy + 4}L${cx + 4},${cy - 4}`).attr('stroke', crit).attr('stroke-width', 2);
+    } else {
+      sv.append('circle').attr('cx', x(i)).attr('cy', y(v)).attr('r', i === state.k ? 5 : 3).attr('fill', i === state.k ? ink : series)
+        .attr('stroke', surface).attr('stroke-width', 1.5);
+    }
+    sv.append('rect').attr('x', x(i) - 10).attr('y', m.t).attr('width', 20).attr('height', h - m.t - m.b).attr('fill', 'transparent')
+      .style('cursor', 'pointer')
+      .on('mousemove', ev => showTip(ev, `k = ${i}  ${opts.label} ${fmt(v)}${STEPS[i].decision === 'rejected' ? '\nrejected step' : ''}`))
+      .on('mouseleave', hideTip).on('click', () => setK(i));
+  });
+}
+function logTicks(y) {
+  const [a, b] = y.domain(), out = [];
+  for (let e = Math.ceil(Math.log10(a)); e <= Math.floor(Math.log10(b)); e++) out.push(10 ** e);
+  if (out.length > 5) return out.filter((_, i) => i % 2 === (out.length - 1) % 2);
+  return out.length >= 2 ? out : y.ticks(3);
+}
+function renderSmalls() {
+  renderSmall('sm-phi', STEPS.map(s => Math.max(s.phi - PHISTAR, 1e-5)), { label: 'φ − φ*' });
+  renderSmall('sm-def', STEPS.map(s => Math.max(s.defect, 1e-5)), { label: '‖g‖₁' });
+  renderSmall('sm-eta', STEPS.map(s => s.eta), { label: 'η', rejected: true });
+}
+
+function renderLegend() {
+  const ink = css('--ink'), surface = css('--surface'), model = css('--model'), c = ramp();
+  const grad = c.filter((_, i) => i % 3 === 0).map((col, i, arr) => `<rect x="${i * 9}" y="2" width="9" height="10" fill="${col}"/>`).join('');
+  document.getElementById('legend').innerHTML = `
+    <span><svg width="45" height="14">${grad}</svg>Merit φ, log scale, low to high</span>
+    <span><svg width="22" height="14"><line x1="1" x2="21" y1="7" y2="7" stroke="${model}" stroke-width="2"/></svg><span>Model L<sub>k</sub> in the trust region</span></span>
+    <span><svg width="14" height="14"><circle cx="7" cy="7" r="4.5" fill="${ink}" stroke="${surface}" stroke-width="2"/></svg>Iterate on the plane</span>
+    <span><svg width="14" height="14"><circle cx="7" cy="7" r="4.5" fill="${surface}" stroke="${ink}" stroke-width="1.6"/></svg>Iterate off the plane, projected</span>
+    <span><svg width="26" height="14"><line x1="1" x2="20" y1="7" y2="7" stroke="${ink}" stroke-width="2"/><path d="M18,3 L25,7 L18,11z" fill="${ink}"/></svg>Step to the trial point</span>`;
+}
+
+// ---- Interaction ---------------------------------------------------------------------------
+function showTip(ev, text) {
+  const host = ev.currentTarget.ownerSVGElement.closest('.plotwrap, .small');
+  const rect = host.getBoundingClientRect();
+  host.appendChild(tip);
+  host.style.position = 'relative';
+  tip.textContent = ''; text.split('\n').forEach((t, i) => { if (i) tip.appendChild(document.createElement('br')); tip.appendChild(document.createTextNode(t)); });
+  tip.hidden = false;
+  tip.style.left = Math.min(Math.max(ev.clientX - rect.left, 70), rect.width - 70) + 'px';
+  tip.style.top = (ev.clientY - rect.top) + 'px';
+}
+function hideTip() { tip.hidden = true; }
+function setK(k) { state.k = Math.max(0, Math.min(K - 1, k)); document.getElementById('iter').value = state.k; render(); }
+
+const slider = document.getElementById('iter');
+slider.max = K - 1;
+slider.addEventListener('input', () => setK(+slider.value));
+document.getElementById('prev').addEventListener('click', () => setK(state.k - 1));
+document.getElementById('next').addEventListener('click', () => setK(state.k + 1));
+document.getElementById('show-model').addEventListener('change', e => { state.showModel = e.target.checked; render(); });
+for (const [id, mode] of [['plane-overview', 'overview'], ['plane-step', 'step']]) {
+  document.getElementById(id).addEventListener('click', () => {
+    state.plane = mode;
+    document.getElementById('plane-overview').setAttribute('aria-pressed', mode === 'overview');
+    document.getElementById('plane-step').setAttribute('aria-pressed', mode === 'step');
+    render();
+  });
+}
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+  if (e.key === 'ArrowRight' && e.target !== slider) setK(state.k + 1);
+  if (e.key === 'ArrowLeft' && e.target !== slider) setK(state.k - 1);
+});
+const rerender = () => { renderLegend(); render(); };
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', rerender);
+new MutationObserver(rerender).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+// Open on the first rejected step: the most telling frame.
+const firstReject = STEPS.findIndex(s => s.decision === 'rejected');
+state.k = firstReject >= 0 ? firstReject : 0;
+slider.value = state.k;
+rerender();
+</script>
+
+</body></html>

@@ -4,7 +4,7 @@ This directory is the **bridge** between a successive-convexification solver and
 
 | Layer | Where | Job |
 |---|---|---|
-| Reference maths | [`scvx.md`](scvx.md), `tests/AdvancedFlightComputer.Guidance.Tests/Scvx/python_ref/` | The algorithm, in JAX, as a spec |
+| Reference maths | [Successive convexification](scvx/index.md), [Touchdown (6-DOF)](scvx/touchdown.md), `tests/AdvancedFlightComputer.Guidance.Tests/Scvx/python_ref/` | The algorithm and the problem |
 | Solver | `AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/` | SCvx loop, subproblem assembly |
 | Conic solvers | `AdvancedFlightComputer/Features/Guidance/Conic/` | SCS and Clarabel bindings, sparse assembly |
 | **Bridge (here)** | `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/`, with the shared `Adapters/KsaFrameBridge.cs` | Frames, vehicle measurement, MPC, actuator commands |
@@ -22,7 +22,7 @@ This directory is the **bridge** between a successive-convexification solver and
 
 - [1. What the solver actually solves](#1-what-the-solver-actually-solves)
 - [2. Scaling is load-bearing](#2-scaling-is-load-bearing)
-- [3. Node 0 is the vehicle - a whole family of bugs](#3-node-0-is-the-vehicle--a-whole-family-of-bugs)
+- [3. Node 0 is the vehicle - a whole family of bugs](#3-node-0-is-the-vehicle---a-whole-family-of-bugs)
 - [4. Reading the answer back out](#4-reading-the-answer-back-out)
 - [5. The actuator boundary](#5-the-actuator-boundary)
 - [6. Making it real-time](#6-making-it-real-time)
@@ -30,6 +30,24 @@ This directory is the **bridge** between a successive-convexification solver and
 - [8. Host integration](#8-host-integration)
 - [9. Diagnostics](#9-diagnostics)
 - [10. Still open](#10-still-open)
+
+---
+
+## See it work
+
+Two visualisers show the SCvx loop from the inside.
+
+**The merit slice** solves a small toy problem live and draws one plane through it: the true merit as contours, the convex model inside the trust region, and each step's ratio $\rho$ deciding whether the radius shrinks or grows. It uses AFC's radius rule; the page lists where the toy is simpler than the real solver.
+
+<!-- viz: scvx-merit-slice 900 -->
+
+*Step through the iterations and watch a good prediction grow the trust region and a bad one shrink it.*
+
+**The solver cell** replays recorded touchdown solves. The cell's size is the trust radius, its bulges are the constraint families, and its colour is the defect against the tolerance. The recordings are from v0.16.0, before the plan had RCS, fins and the coast phase.
+
+<!-- viz: solver-cell 760 -->
+
+*Pick a recorded run, such as the bad seed that fails, and play it.*
 
 ---
 
