@@ -40,6 +40,10 @@ internal static class GuidanceSettingSpecs
         "Roll angle held with FORCE ROLL on.");
     public static readonly SettingSpec ConvexQMaxKpa = new("ConvexQMaxKpa", "MAX Q", "kPa", P, 195.0, 0.0, 1e4, "%.1f",
         "Dynamic pressure limit of the solved climb.");
+    public static readonly SettingSpec FairingAltitudeKm = new("FairingAltitudeKm", "FAIRING CLEARANCE", "km", P, 30.0, 0.0, 250.0, "%.1f",
+        "Minimum whole-vehicle terrain clearance for automatic fairing release in air.");
+    public static readonly SettingSpec FairingQKpa = new("FairingQKpa", "FAIRING RELEASE Q", "kPa", P, 3.0, 0.0, 50.0, "%.1f",
+        "Fairing release requires this dynamic pressure or less on the falling side of max Q.");
     public static readonly SettingSpec ConvexThrottleMinPct = new("ConvexThrottleMinPct", "MIN THROTTLE", "%", E, 80.0, 0.0, 100.0, "%.0f",
         "Lowest throttle of the solved climb on a liquid stage. Solid stages stay at full thrust.");
     public static readonly SettingSpec ConvexQAlphaMax = new("ConvexQAlphaMax", "MAX Q-ALPHA", "Pa rad", T, 3500.0, 0.0, 1e7, "%.1f",
@@ -299,7 +303,7 @@ internal static class GuidanceSettingSpecs
     #region Tier arrays
 
     // LanDeg is left out of every count: it is seeded from the launch site, so the fixed default would mark it changed on every flight. The values a picked target writes stay in the arrays, and SettingAccess.SetBy keeps them out of the count while the chase writes them.
-    public static readonly SettingSpec[] LaunchPlayer = { ConvexQMaxKpa, MoonTransferPeKm };
+    public static readonly SettingSpec[] LaunchPlayer = { ConvexQMaxKpa, MoonTransferPeKm, FairingAltitudeKm, FairingQKpa };
     public static readonly BoolSpec[] LaunchPlayerBools = { FlyConvexAscent, LaunchDescending };
     public static readonly SettingSpec[] LaunchExpert =
         { ChaseOffsetKm, ArgPeDeg, ConvexThrottleMinPct, TurnStartAltKm, TurnRateDegS, ForceRollDeg };
@@ -388,7 +392,7 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec[] AllDoubles =
     {
         PeKm, ApKm, IncDeg, LanDeg, ArgPeDeg, ChaseOffsetKm, MoonTransferPeKm, GLimitG, TurnStartAltKm, TurnRateDegS, ForceRollDeg,
-        ConvexQMaxKpa, ConvexThrottleMinPct, ConvexQAlphaMax, ConvexHandoverAltKm,
+        ConvexQMaxKpa, ConvexThrottleMinPct, ConvexQAlphaMax, ConvexHandoverAltKm, FairingAltitudeKm, FairingQKpa,
         BoostbackSeparationS, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg, BoostbackClearanceM, BoostbackGlideMissKm, BoostbackLargeMissKm, BoosterCorrectionDvMs,
         BoostbackSlewDegS, GlideKp, GlideKi, GlideKd,
         SiteLatDeg, SiteLonDeg, BrakingAltitudeKm, DeorbitArrivalDescentDeg, DescentRate, LandingVerticalGateM,

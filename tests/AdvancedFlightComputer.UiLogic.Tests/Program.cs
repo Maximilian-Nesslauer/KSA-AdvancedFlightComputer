@@ -18,6 +18,7 @@ internal static partial class Program
         BodyDefaultRules();
         AscentHandoverRules();
         StagingCountdownRules();
+        FairingReleaseRules();
         SpecKeysAreUnique();
         TierArraysHoldOneTier();
         EveryValueHasAHome();
@@ -1240,6 +1241,31 @@ internal static partial class Program
             && !BodyDefaults.Overrides("Mars", GuidanceSettingSpecs.PeKm.Key) && BodyDefaults.DefaultOf(GuidanceSettingSpecs.TurnStartAltKm, "Luna") == 0.2);
         BodyDefaults.Reset();
         Check("a reset puts back the built-in table alone", !BodyDefaults.Overrides("Luna", GuidanceSettingSpecs.TurnStartAltKm.Key) && BodyDefaults.DefaultOf(handover, "Luna") == 10.0);
+    }
+
+    private static void FairingReleaseRules()
+    {
+        var gate = new FairingReleaseGate();
+        bool At(double t, double q, double alt = 31_000.0, bool climb = true, bool air = true)
+            => gate.Sample(t, q, alt, climb, air, 30_000.0, 3000.0);
+
+        Check("fairing holds on rising Q even above the altitude floor", !At(0, 0) && !At(1, 1000) && !At(2, 2000));
+        Check("fairing waits for falling Q below the ceiling", !At(3, 15_000) && !At(4, 5000) && !At(5, 4000));
+        Check("fairing still waits for the altitude floor", !At(6, 2800, 29_999));
+        Check("fairing releases after max Q when both guards hold", At(7, 2700));
+        Check("a new rise cancels the release dwell", !At(8, 2710));
+        Check("the dwell uses elapsed sim time", !At(9, 2500) && !At(9, 2500) && At(9.3, 2400));
+        Check("a descending craft cannot release its fairing", !At(10, 0, climb: false));
+        Check("a craft loaded past max Q releases after a fresh falling dwell",
+            !At(11, 20_000) && !At(12, 2500) && !At(13, 2510) && !At(14, 1000) && At(15, 0));
+        gate.Reset();
+        Check("a reset gate waits for a new falling dwell and ignores a short rise",
+            !At(16, 2000) && !At(16.5, 1980) && !At(16.6, 1985) && !At(16.7, 1900) && At(17.0, 1800));
+        gate.Reset();
+        Check("a gate reset out of the air opens on the ceiling and the floor alone",
+            !At(40, 5) && At(40.3, 6) && !At(40.4, 6, 29_999));
+        Check("airless release requires real pad clearance and a climb",
+            !At(16, 0, 19, air: false) && !At(17, 0, 25, climb: false, air: false) && At(18, 0, 20, air: false));
     }
 
     private static void StagingCountdownRules()

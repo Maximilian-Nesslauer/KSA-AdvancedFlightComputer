@@ -10,7 +10,7 @@ namespace AdvancedFlightComputer.Features.AutoStage;
 // Sorting per module lets one part fire its motor and its two mounts on three different rows.
 internal static class StagingExecution
 {
-    public static PendingStaging? ActivateNextSequenceSplit(Vehicle vehicle)
+    public static PendingStaging? ActivateNextSequenceSplit(Vehicle vehicle, Sequence? selected = null)
     {
         if (!StagingDetector.ControlAvailable(vehicle))
             return null;
@@ -21,6 +21,7 @@ internal static class StagingExecution
         ReadOnlySpan<Sequence> sequences = seqList.Sequences;
 
         Sequence? target = null;
+        int passedFrom = -1;
         for (int i = 0; i < sequences.Length; i++)
         {
             Sequence seq = sequences[i];
@@ -31,12 +32,24 @@ internal static class StagingExecution
                 seq.Activated = true;
                 continue;
             }
-            target = seq;
-            break;
+            if (selected == null || ReferenceEquals(selected, seq))
+            {
+                target = seq;
+                break;
+            }
+            if (passedFrom < 0)
+                passedFrom = i;
         }
 
         if (target == null)
             return null;
+
+        // The rows passed over wait for a release of their own. Stock's staging key fires the first unactivated row,
+        // and SequenceList.SetActiveSequence marks every row below the active one, so they are marked now
+        // and the cursor never steps back to them. FairingJettison finds them by their connected joints.
+        if (passedFrom >= 0)
+            for (int i = passedFrom; !ReferenceEquals(sequences[i], target); i++)
+                sequences[i].Activated = true;
 
         int seqNumber = target.Number;
         double engineDelay = StagingConfig.GetSequenceEngineDelay(vehicle, seqNumber);
