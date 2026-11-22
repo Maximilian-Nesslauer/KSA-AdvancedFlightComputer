@@ -1802,6 +1802,12 @@ public static partial class GuidanceWindow
         Attempt(() => KsaAttitudeRate.Clear(vehicle));
         Attempt(() => KsaGimbalControl.Disengage(vehicle));
         Attempt(() => KsaRcsTorqueControl.Release(vehicle));
+        // The step that lets the own controller go when it stops flying is not reached once nothing flies, so its surfaces are sent home here.
+        Attempt(() =>
+        {
+            if (_s.OwnAttitudeFlying && _s.OwnAttitudeVehicle is { } flown)
+                StopOwnAttitude(flown);
+        });
         Attempt(() => GiveRcsBack(vehicle));
         Attempt(_s.CancelGfoldSolve);
 
@@ -2163,12 +2169,14 @@ public static partial class GuidanceWindow
             return;
         FlightComputer fc = vehicle.FlightComputer;
         if (fc.AttitudeMode != FlightComputerAttitudeMode.Manual)
-        {
             KsaAttitudeRate.Clear(vehicle);
-            _s.AttitudeOwnership.BeginWrite(fc);
-            fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
-            _s.AttitudeOwnership.EndWrite(fc, writesRoll: false);
-        }
+        // Record the ownership also when the flight computer is in Manual already, as a new craft's is, because a player attitude selected during the flight is found as a takeover only against this record.
+        _s.AttitudeOwnership.BeginWrite(fc);
+        fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+        // FlightComputer.UpdateAttitudeTarget also runs in Manual and resets a burn or docking frame by itself once its burn or target is gone, which would read as a takeover. Release gives the frame back.
+        if (fc.AttitudeFrame is VehicleReferenceFrame.BurnBody or VehicleReferenceFrame.Dock)
+            fc.SetInertialNullRot();
+        _s.AttitudeOwnership.EndWrite(fc, writesRoll: false);
         double3 dir = double3.Normalize(_s.CommandDir);
         if (heldRoll && rollRef.HasValue)
         {
