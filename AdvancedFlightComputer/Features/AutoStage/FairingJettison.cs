@@ -114,8 +114,14 @@ internal static class FairingJettison
         // Activated rows count too. SequenceList.SetActiveSequence marks every row up to the active one,
         // so a fairing row that engine staging passed reads as activated while its shrouds are still attached.
         foreach (Sequence sequence in vehicle.Parts.SequenceList.Sequences)
-            if (Inspect(vehicle, sequence) is { } row)
-                rows.Add(row);
+        {
+            if (Inspect(vehicle, sequence) is not { } row)
+                continue;
+            // A row whose release did not finish goes back to stock staging until AutoStage is armed again.
+            if (!row.Mixed && row.Leaves.Any(leaf => state.FairingFailed.Contains(leaf.Mount)))
+                row = row with { Mixed = true };
+            rows.Add(row);
+        }
         state.FairingRowsGeneration = generation;
         state.FairingRowsPartCount = parts;
         return state.FairingRows = rows.ToArray();
@@ -141,6 +147,27 @@ internal static class FairingJettison
     internal static Sequence? NextAutomaticSequence(Vehicle vehicle, StagingState state)
         => NextRowOutside(vehicle.Parts.SequenceList, Rows(vehicle, state));
 
+    // Engine staging marks a passed fairing row activated (StagingExecution.ActivateNextSequenceSplit), and stock never
+    // fires an activated row. When AutoStage stops releasing it, the mark comes off a row whose shrouds are still attached,
+    // so the stock staging key reaches it again. SequenceList.SetActiveSequence can mark it again later, as it does every
+    // row below the active one.
+    internal static void ReturnToStock(Vehicle vehicle, StagingState state)
+    {
+        if (vehicle.IsDisposed || vehicle.Parts?.SequenceList is not { } list)
+            return;
+        bool changed = false;
+        foreach (Row row in Rows(vehicle, state))
+        {
+            bool failed = row.Leaves.Any(leaf => state.FairingFailed.Contains(leaf.Mount));
+            if ((row.Mixed && !failed) || !row.Sequence.Activated || !list.Contains(row.Sequence))
+                continue;
+            row.Sequence.Activated = false;
+            changed = true;
+        }
+        if (changed)
+            StagingHelpers.InvalidateSequenceCache();
+    }
+
     internal static bool Observe(Vehicle vehicle, StagingState state, double now)
     {
         var orbit = vehicle.Orbit;
@@ -155,13 +182,15 @@ internal static class FairingJettison
         var r = orbit!.StateVectors.PositionCci;
         var v = orbit.StateVectors.VelocityCci;
         PhysicsEnvironment env = vehicle.PhysicsEnvironment;
-        if (!env.InPhysicsRadius || !ReferenceEquals(env.ClosestParent, parent) || !(env.TerrainRadius > 0.0))
+        if (!ReferenceEquals(env.ClosestParent, parent))
             return false;
         bool air = parent.GetPhysicalAtmosphere() is { Height: > 0.0 };
-        double speed = vehicle.GetSurfaceSpeed();
-        double q = 0.5 * env.AtmosphericDensity * speed * speed;
-        // The whole vehicle clears the terrain below it, so the bounding sphere comes off the centre's height.
-        double clearance = r.Length() - env.TerrainRadius - vehicle.BoundingSphereRadiusBody;
+        double q = vehicle.ComputeDynamicPressure();
+        // PhysicsEnvironment.RecomputePositionalValues reads the terrain below the craft only inside the physics radius,
+        // the top of the air or of the highest terrain. Above it no terrain is higher than the highest one.
+        double ground = env.InPhysicsRadius && env.TerrainRadius > 0.0 ? env.TerrainRadius : parent.MaxTerrainRadius;
+        // The whole vehicle clears the terrain, so the bounding sphere comes off the height of its centre.
+        double clearance = r.Length() - ground - vehicle.BoundingSphereRadiusBody;
         state.FairingGateQ = q;
         state.FairingGateClearance = clearance;
         double floor = BodyDefaults.DefaultOf(GuidanceSettingSpecs.FairingAltitudeKm, parent.Id);
@@ -181,7 +210,7 @@ internal static class FairingJettison
             return;
         foreach (Row cached in Rows(vehicle, state))
         {
-            if (cached.Mixed || cached.Leaves.Any(leaf => state.FairingFailed.Contains(leaf.Mount)))
+            if (cached.Mixed)
                 continue;
             // The cache follows the sequence generation, so the joints are read again at the point of the write.
             if (!vehicle.Parts.SequenceList.Contains(cached.Sequence)
@@ -222,6 +251,7 @@ internal static class FairingJettison
         {
             foreach (var leaf in row.Leaves)
                 state.FairingFailed.Add(leaf.Mount);
+            ReturnToStock(vehicle, state);
             DefaultCategory.Log.Warning($"[AFC] Fairing row {row.Number} on '{vehicle.Id}' did not finish separating. Check its joints.");
             return;
         }

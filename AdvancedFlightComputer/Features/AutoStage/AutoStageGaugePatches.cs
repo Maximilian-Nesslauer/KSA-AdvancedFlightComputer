@@ -81,11 +81,13 @@ internal static class AutoStageGaugePatches
     private static bool IsAutoStageButton(GaugeButtonFlightComputer button) =>
         GameReflection.GaugeButtonFlightComputer_enumValueRef?.Invoke(button) is AfcAutoStageToggle;
 
-    // Stays enabled while armed, so the player can always switch it off, and while a pure jettison row is pending, which is what the spent-stage drop stages.
+    // Stays enabled while armed, so the player can always switch it off, while a pure jettison row is pending, which is what the spent-stage drop stages,
+    // and while a stock fairing row waits for a release of its own, which only an armed craft performs.
     // The jettison rebuild runs from the draw pass while solvers are queued; that is safe because the worker path snapshots PartTree.Parts itself and never reads the lazy Sequence.Parts cache.
     private static bool IsToggleDisabled(Vehicle vehicle) =>
         !StagingDetector.IsArmed(vehicle)
         && !StagingHelpers.HasNextEngineSequence(vehicle)
         && !(StagingConfig.DropSpentStages
-             && JettisonAnalysis.GetPendingJettison(vehicle, StagingDetector.StateOf(vehicle)) != null);
+             && JettisonAnalysis.GetPendingJettison(vehicle, StagingDetector.StateOf(vehicle)) != null)
+        && !FairingJettison.Rows(vehicle, StagingDetector.StateOf(vehicle)).Any(row => !row.Mixed);
 }

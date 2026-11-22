@@ -75,6 +75,12 @@ public sealed class StockFairingReleaseTest : AfcTest
                     $"active {list.ActiveSequence}, next {manualNext}");
                 t.Check("the passed row is still released by its joints",
                     FairingJettison.Rows(craft, state).Any(r => !r.Mixed && ReferenceEquals(r.Sequence, row.Sequence)));
+                StagingDetector.Arm(craft, true);
+                StagingDetector.Arm(craft, false);
+                t.Check("a disarm gives the passed row back to the stock staging key",
+                    !row.Sequence.Activated && list.GetNextSequenceNumber() == row.Number
+                    && shrouds.All(part => part.Tree == craft.Parts),
+                    $"next {list.GetNextSequenceNumber()}");
                 driver.Step(0.02, 3);
                 return;
             }

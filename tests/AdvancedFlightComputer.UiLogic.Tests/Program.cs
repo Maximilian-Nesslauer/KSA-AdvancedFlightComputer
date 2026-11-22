@@ -1261,6 +1261,9 @@ internal static partial class Program
         gate.Reset();
         Check("a reset gate waits for a new falling dwell and ignores a short rise",
             !At(16, 2000) && !At(16.5, 1980) && !At(16.6, 1985) && !At(16.7, 1900) && At(17.0, 1800));
+        gate.Reset();
+        Check("a gate reset out of the air opens on the ceiling and the floor alone",
+            !At(40, 5) && At(40.3, 6) && !At(40.4, 6, 29_999));
         Check("airless release requires real pad clearance and a climb",
             !At(16, 0, 19, air: false) && !At(17, 0, 25, climb: false, air: false) && At(18, 0, 20, air: false));
     }
