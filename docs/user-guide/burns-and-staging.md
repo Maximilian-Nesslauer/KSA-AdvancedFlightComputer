@@ -13,6 +13,17 @@ Execute a planned burn with RCS thrusters only, no main engine. Useful for small
 - An RCS burn ends like an engine auto-burn: time warp stops, the game shows its alert and the next burn loads.
 - The allocator is selectable per burn (default **BY AXIS**), as **THRUSTER MIX** in the **GNC** fold of **BURNS**. **BY AXIS** fires signed-axis groups and uses attitude control to counter residual torque. **MIN FUEL** solves a fuel-optimal jet-selection problem over individual thruster forces and torques, as a linear program (the Bergmann/Draper formulation). It can require costly counter-thrust, so it is opt-in, and it falls back to **BY AXIS** when the constraints are infeasible.
 
+## Warp to the turn
+
+While stock **AUTO** flies the next burn, the console offers **WARP TO TURN** when the turn is more than 90 s away. It warps to 30 s before stock AUTO starts to turn the craft, so the turn and the burn run at 1x. Stock AUTO stays on. The stock **WARP** runs to the ignition and turns the craft under warp. **STOP WARP** stops the warp to the turn, and it does not stop a warp that you started elsewhere.
+
+AFC also checks before the burn that the craft can aim it, and shows a warning on the burn. The warning is a caution, not a refusal:
+
+- **RCS OFF: CRAFT DOES NOT TURN** and **NO RCS FOR PITCH AND YAW**: stock AUTO turns the craft to the burn with RCS before the engine lights. With RCS off, the craft does not turn, and the engine lights on time pointed wherever the craft points. With no thruster that has propellant and turns the craft in pitch and yaw, the engine lights pointed wherever the craft points, or the burn waits.
+- **RCS TOO STRONG TO AIM**: one RCS pulse turns a light craft so fast that stock AUTO does not start the turn from rest, and the burn waits. Smaller thrusters or more mass fix it.
+- **MAY NOT TURN FROM n DEG OFF**: from rest less than that angle off the burn attitude, stock AUTO does not fire the RCS of the craft, and the burn waits until the craft drifts out. Point the craft farther away before the turn starts.
+- **BURN s, AIM NEEDS s**: the engine needs that time to settle its aim, and stock AUTO cannot stretch the burn further. The burn ends with an error in direction, so check the orbit after it.
+
 ## Automatic Staging
 
 <table>

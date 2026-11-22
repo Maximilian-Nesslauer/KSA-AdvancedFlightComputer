@@ -104,6 +104,7 @@ nav:
       - Maneuvers and transfers: user-guide/maneuvers.md
       - Burns and staging: user-guide/burns-and-staging.md
       - Powered guidance: user-guide/powered-guidance.md
+      - Landing sites for mod authors: user-guide/landing-sites.md
       - Compatibility and credits: user-guide/about.md
   - Developer:
       - dev/index.md
