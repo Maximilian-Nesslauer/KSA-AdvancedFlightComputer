@@ -39,6 +39,7 @@ public static partial class GuidanceWindow
 
     private static void DrawEntryTrajWindow(Vehicle vehicle, IParentBody parent)
     {
+        using var _perf = new AdvancedFlightComputer.Core.PerfTracker.Scope("Ui.EntryTraj");
         var st = _s.OrbitalEntry;
         bool live = OrbitalEntryLive || st.EngagePending;
         if (!live && !(OnEntryPath(vehicle, parent) && !_entryTrajClosed))

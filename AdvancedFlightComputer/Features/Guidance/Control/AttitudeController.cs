@@ -33,7 +33,7 @@ using AdvancedFlightComputer.Guidance.Numerics.Flight;
 ///
 /// AUTHORITY-AWARE CAPTURE (Settings.AuthorityCapture; an orbital entry). The capture rate becomes the square-root law of a time-optimal stop: k theta near the target, and past theta = a / k^2, sqrt(2 a (theta - a / 2k^2)), the fastest the craft can still stop from in the angle left, joined to the linear part without a kink (ArduPilot's sqrt controller has the same shape). a is the angular acceleration the craft can spare about the axis now: what its surfaces and RCS can give each way (their Characterise) less the trim they hold against the air, over the inertia, at AuthorityShare of it: the surfaces' reach measured when Mach or the airflow's direction moves (FinRemeasure*) and scaled by q in between, and the RCS's once, and again only when the mass or the centre of mass moves past RcsRemeasureShare. Near the target nothing changes; far off, or with little authority, it asks only for rates it can stop from, so the demand stays within reach and the surfaces do not slam from stop to stop (2026-11-21: 1.5-4 MN m asked against 0.1-0.6 given, 34 full flap reversals a minute). The integral stands still while the actuators fall short of the demand (conditional integration, against wind-up). The report carries the acceleration the craft can spare about the airflow, which entry guidance holds its bank's slew to.
 ///
-/// SURFACE SMOOTHING (Settings.SurfaceSmoothS; an orbital entry, where RCS backs the surfaces). The surfaces' deflections follow the allocator's through a first-order lag of that time, and the RCS takes what they then give short: dynamic control allocation (Harkegard), a price on the surfaces' rate of movement and none on their deflection, so slow demand goes to the surfaces and fast jitter to the RCS. In thin air the RCS's flutter about a held attitude swung the flaps 10 deg every half second for next to no torque (2026-11-21).
+/// SURFACE SMOOTHING (Settings.SurfaceSmoothS; an orbital entry, where RCS backs the surfaces). The torque demand is lagged over that time, and the RCS is given the fast part only as far as half its measured reach goes (SpareAccel's RCS reach); the surfaces are asked for the rest within one step's reach, and the RCS then takes whatever they leave: frequency-split allocation by reach, so with RCS to spare the jitter goes to it and the surfaces take the slow torque at their full rate, and with little RCS the surfaces take nearly all of it (KsaAeroTorqueControl.Command's smoothS). Needs AuthorityCapture, which measures the RCS's reach; without it the RCS takes none of the fast part. In thin air the RCS's flutter about a held attitude swung the flaps 10 deg every half second for next to no torque (2026-11-21).
 ///
 /// THE DEADBAND (Settings.DeadbandDeg, off by default). Inside it, turning at under RateDeadbandDegS from the target's rate, the feedback stands down and only the feedforward and the integral fly; it comes back past the deadband and stands down again under half of it. Off since the integral and the filtered rate went in: each return of the feedback kicked, and in the harness a 0.5 deg deadband cost 50 kg of RCS holding a tilt where none cost 46, and 1 deg cost 234 (2026-11-20).
 ///
@@ -100,6 +100,7 @@ internal static class AttitudeController
     internal static Report Step(Vehicle vehicle, doubleQuat targetBody2Cci, double3 targetRateCci, KsaAeroSweep.Result aero,
                                 double momentLimiterPerPa, in Settings settings)
     {
+        using var _perf = new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.Step");
         Slot slot = Slots.GetValue(vehicle, static _ => new Slot());
         double now = Universe.GetElapsedSeconds();
         double dt = double.IsFinite(slot.LastT) ? Math.Clamp(now - slot.LastT, 0.0, 0.2) : 0.0;
@@ -150,7 +151,10 @@ internal static class AttitudeController
         else
             slot.Feedback = errorDeg > settings.DeadbandDeg || rateErrorDegS > 2.0 * settings.RateDeadbandDegS;
 
-        bool airKnown = TryAirMoment(vehicle, aero, momentLimiterPerPa, out double3 air);
+        bool airKnown;
+        double3 air;
+        using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.AirMoment"))
+            airKnown = TryAirMoment(vehicle, aero, momentLimiterPerPa, out air);
         double kp = settings.BandwidthRadS * settings.BandwidthRadS, kd = 2.0 * settings.Damping * settings.BandwidthRadS;
         // The roll's own gains where RollBandwidthRadS is set (an ascent: see Settings).
         double rollBandwidth = double.IsFinite(settings.RollBandwidthRadS) ? settings.RollBandwidthRadS : settings.BandwidthRadS;
@@ -176,8 +180,9 @@ internal static class AttitudeController
         if (settings.AuthorityCapture)
         {
             // The acceleration the craft can spare about each model axis, after the trim it holds: the square-root law's a.
-            spare = SpareAccel(vehicle, slot, now, aero, momentLimiterPerPa, settings.UseSurfaces, mx, my, mz, ixx, iyy, izz,
-                               airKnown ? -Model(air, mx, my, mz) : default);
+            using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.SpareAccel"))
+                spare = SpareAccel(vehicle, slot, now, aero, momentLimiterPerPa, settings.UseSurfaces, mx, my, mz, ixx, iyy, izz,
+                                   airKnown ? -Model(air, mx, my, mz) : default);
             double rollCap = double.IsFinite(settings.RollCaptureRateDegS) ? settings.RollCaptureRateDegS * Math.PI / 180.0 : captureMax;
             capturePoint = SqrtCapture(thetaPoint, kd > 0.0 ? kp / kd : 0.0, captureMax, Math.Min(spare.X, spare.Y));
             captureRoll = SqrtCapture(thetaRoll, kdRoll > 0.0 ? kpRoll / kdRoll : 0.0, rollCap, spare.Z);
@@ -193,6 +198,7 @@ internal static class AttitudeController
         double3 remaining = demand, gimbalsBody = default;
         if (settings.UseGimbals)
         {
+            using var _gimbals = new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.Gimbals");
             gimbalsBody = KsaGimbalControl.PredictLsq(vehicle, demand, out _);
             KsaGimbalControl.SetLsq(vehicle, demand);
             slot.GimbalsOwned = true;
@@ -205,11 +211,14 @@ internal static class AttitudeController
         }
 
         // One programme for fins and RCS (the RCS as the fins' backup): the fins are commanded, the RCS fired for what they will give short. Fins off (Settings.UseSurfaces) are held at rest and the RCS takes it all.
-        RcsTorqueAllocator rcsColumns = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out _);
+        RcsTorqueAllocator rcsColumns;
+        using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.RcsColumns"))
+            rcsColumns = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out _);
         KsaAeroTorqueControl.Report surfaces = default;
         if (settings.UseSurfaces)
             surfaces = KsaAeroTorqueControl.Command(vehicle, aero, remaining, mx, my, mz, RcsPriority, momentLimiterPerPa,
-                                                    dt > 0.0 ? dt : 0.05, rcsColumns, settings.SurfaceSmoothS);
+                                                    dt > 0.0 ? dt : 0.05, rcsColumns, settings.SurfaceSmoothS,
+                                                    slot.RcsKnown ? slot.RcsPlusNm : default, slot.RcsKnown ? slot.RcsMinusNm : default);
         else
             KsaAeroTorqueControl.Release(vehicle);
         double3 surfacesBody = surfaces.GivenNm.X * mx + surfaces.GivenNm.Y * my + surfaces.GivenNm.Z * mz;
@@ -364,6 +373,7 @@ internal static class AttitudeController
                              && (machMoved || double3.Dot(airDir, slot.FinAirDir) < Math.Cos(FinRemeasureAirDeg * Math.PI / 180.0)));
             if (stale)
             {
+                using var _fin = new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.FinReach");
                 double[] plus = new double[3], minus = new double[3];
                 AeroTorqueAllocator fins = KsaAeroTorqueControl.Measure(vehicle, aero, mx, my, mz, momentLimiterPerPa, slot.Scratch, out _);
                 if (fins != null)
@@ -392,6 +402,7 @@ internal static class AttitudeController
                      || (double.IsFinite(gyration) && !((com - slot.RcsComAsmb).Length() <= RcsRemeasureShare * gyration));
         if (moved)
         {
+            using var _rcs = new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.RcsReach");
             double[] plus = new double[3], minus = new double[3];
             RcsTorqueAllocator rcs = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out _);
             if (rcs != null)

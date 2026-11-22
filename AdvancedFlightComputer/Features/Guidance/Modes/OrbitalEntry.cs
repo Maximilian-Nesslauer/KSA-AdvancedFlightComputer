@@ -185,7 +185,8 @@ public static partial class GuidanceWindow
 
         // Once the flaps' belly-first tables are in, the schedule is redone with their reach.
         if (st.TablesReady && !st.FlapTrimDone && st.Aero.Surfaces is { Length: > 0 })
-            RetrimWithFlaps(vehicle, st);
+            using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Entry.RetrimWithFlaps"))
+                RetrimWithFlaps(vehicle, st);
 
         // ---- where the craft is ----
         double3 r = orbit.StateVectors.PositionCci;
@@ -219,7 +220,11 @@ public static partial class GuidanceWindow
 
         // ---- the air the craft is in: the game's own aero force on it now ----
         double drag = 0.0, ld = st.Trim.LiftToDragAt(mach);
-        if (KsaAeroSweep.TryLiveAero(vehicle, out double3 forceBody, out _, dt))
+        bool liveAero;
+        double3 forceBody;
+        using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Entry.LiveAero"))
+            liveAero = KsaAeroSweep.TryLiveAero(vehicle, out forceBody, out _, dt);
+        if (liveAero)
         {
             double3 f = forceBody.Transform(KsaFrameBridge.BodyToCci(vehicle));
             double m = Math.Max(vehicle.TotalMass, 1.0);
@@ -277,7 +282,10 @@ public static partial class GuidanceWindow
         }
         st.DragModelMs2 = modelDrag;
         if (st.Phase == OrbitalEntryPhase.Entry && e < ef && now >= st.NextSolveAt && st.Worker != null && !st.Worker.Busy)
+        {
+            using var _queue = new AdvancedFlightComputer.Core.PerfTracker.Scope("Entry.QueueSolve");
             QueueOrbitalEntrySolve(vehicle, parent, st, cfg, nominal, e, rMag, vMag, gamma, rangeRad, drag, now);
+        }
 
         // ---- hand-over ----
         if (st.Phase == OrbitalEntryPhase.Entry && e >= ef)
@@ -301,6 +309,7 @@ public static partial class GuidanceWindow
         else
         {
             int side = st.Tracker.Side;
+            using var _tracker = new AdvancedFlightComputer.Core.PerfTracker.Scope("Entry.Tracker");
             var outp = st.Tracker.Update(new EntryTracker.Input(dt, e, drag, st.HdotMs, ld, atm.ScaleHeightAt(Math.Max(alt, 0.0)),
                                                                 headingErr, vMag / nominal.SpeedUnit, st.Plan, alt < atm.TopAltitude,
                                                                 st.AttitudeOwn ? st.Attitude.AirAxisAccelRadS2 * 180.0 / Math.PI : double.NaN));
@@ -388,7 +397,8 @@ public static partial class GuidanceWindow
         }
 
         if (OrbitalEntryLog.Due(st, now))
-            OrbitalEntryLogRow(st, now, e, ef, mach, gamma, nominal, vehicle);
+            using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Entry.LogRow"))
+                OrbitalEntryLogRow(st, now, e, ef, mach, gamma, nominal, vehicle);
 
         // ---- the TRAJ window's history ----
         if (now >= st.NextTraceAt)

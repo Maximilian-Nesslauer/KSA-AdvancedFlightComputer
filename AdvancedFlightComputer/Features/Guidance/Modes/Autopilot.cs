@@ -1104,6 +1104,8 @@ public static partial class GuidanceWindow
     {
 #if DEBUG
         using var _perf = new PerfTracker.Scope("Guidance.ApplyAutopilot");
+        if (ReferenceEquals(vehicle, Program.ControlledVehicle))
+            PerfTracker.Gap("Guidance.StepGap(focused)");
 #endif
         // Do not create state while guidance is disabled. Release each vehicle in its PrepareWorker prefix so cleanup reaches the next worker snapshot.
         if (!ModActive)
@@ -1223,13 +1225,15 @@ public static partial class GuidanceWindow
             RefreshStageModel(vehicle);
 
         // After the stage model, because both want a part tree that has finished settling after a separation and this is the first point in the frame where that is true. It engages boostback, so a fault here counts as a failed step like a mode's.
-        StepBoosterHandover(vehicle);
+        using (new PerfTracker.Scope("Guidance.StepBoosterHandover"))
+            StepBoosterHandover(vehicle);
 
         // A readout fault costs readouts, never the flight. After one, the readouts wait a second before they try again, so a fault that repeats does not throw on every step.
         if (GuidanceClock.NowMs >= _s.HousekeepingRetryTick)
         {
             try
             {
+                using var _readouts = new PerfTracker.Scope("Guidance.StepReadouts");
                 StepReadouts(vehicle, orbit, parent);
             }
             catch (Exception ex)
@@ -1241,11 +1245,15 @@ public static partial class GuidanceWindow
         }
 
         // Likewise the launch window: tracked, and FIRED, from here rather than from the console. It has to run for a focused vehicle that is not flying yet, which is precisely the state an armed launch sits in. It starts the ascent, so a fault here counts as a failed step like a mode's. See StepLaunchWindow.
-        StepLaunchWindow(vehicle, orbit, parent, parent.MeanRadius);
-        StepMoonTransfer(vehicle, orbit, parent);
+        using (new PerfTracker.Scope("Guidance.StepLaunchWindow+MoonTransfer"))
+        {
+            StepLaunchWindow(vehicle, orbit, parent, parent.MeanRadius);
+            StepMoonTransfer(vehicle, orbit, parent);
+        }
 
         // The convex ascent's Calculate request is built here for the same reason as the stage model: this is the one point in the frame where the part tree is settled and nothing else is reading it. The solve itself runs on its own thread. It catches its own faults, which cost the plan, never the step.
-        StepAscentPlanner(vehicle, orbit, parent);
+        using (new PerfTracker.Scope("Guidance.StepAscentPlanner"))
+            StepAscentPlanner(vehicle, orbit, parent);
 
         // A requested reset runs ahead of everything below: the whole point of the button is to recover when the mod's own state is wrong, so it must not depend on that state saying the autopilot is still active.
         if (_s.FcResetPending)
@@ -1306,7 +1314,8 @@ public static partial class GuidanceWindow
             LandingPhase landingBefore = _s.LandingPhase;
             bool boostbackBefore = BoostbackLive;
             bool ascentBefore = _s.Running;
-            Step6Dof(vehicle);
+            using (new PerfTracker.Scope("Guidance.Step6Dof"))
+                Step6Dof(vehicle);
             // Touchdown guidance keeps the RCS hold of the burn it took over, and the switch stays the player's there too.
             YieldRcsToThePlayer(vehicle);
 
@@ -1339,11 +1348,16 @@ public static partial class GuidanceWindow
             return;
 
         // Step this vehicle's guidance and apply its command.
-        StepLanding(vehicle, orbit, parent, parent.Mu, parent.MeanRadius);
-        StepAscent(vehicle, orbit, parent, parent.Mu, parent.MeanRadius);
-        StepBoostback(vehicle, orbit, parent);
-        Step3Dof(vehicle, orbit, parent);
-        StepOrbitalEntry(vehicle, orbit, parent);
+        using (new PerfTracker.Scope("Guidance.StepLanding"))
+            StepLanding(vehicle, orbit, parent, parent.Mu, parent.MeanRadius);
+        using (new PerfTracker.Scope("Guidance.StepAscent"))
+            StepAscent(vehicle, orbit, parent, parent.Mu, parent.MeanRadius);
+        using (new PerfTracker.Scope("Guidance.StepBoostback"))
+            StepBoostback(vehicle, orbit, parent);
+        using (new PerfTracker.Scope("Guidance.Step3Dof"))
+            Step3Dof(vehicle, orbit, parent);
+        using (new PerfTracker.Scope("Guidance.StepOrbitalEntry"))
+            StepOrbitalEntry(vehicle, orbit, parent);
 
         // Read straight off _s, not off the values the bail above was computed from: the flows just ran, and a touchdown, an abort or a handoff can have changed the phase on this very step.
         //
@@ -2178,6 +2192,7 @@ public static partial class GuidanceWindow
     /// <param name="heldRoll">The roll is the returning booster's held one (ReturnRollRefCci), which the glide may turn to its least rolling moment (UpdateGlideRoll).</param>
     private static void FlyOwnAttitude(Vehicle vehicle, IParentBody parent, double3? rollRef, bool heldRoll)
     {
+        using var _perf = new PerfTracker.Scope("Guidance.FlyOwnAttitude");
         if (!TryTakeCraft(vehicle, acquire: true))
             return;
         FlightComputer fc = vehicle.FlightComputer;
@@ -2213,7 +2228,7 @@ public static partial class GuidanceWindow
         else if (OrbitalEntryLive)
         {
             double entryCapture = Math.Max(10.0, _s.OrbitalEntryRollRateDegS);
-            // Authority-aware: the square-root capture and conditional integral (AttitudeController's AUTHORITY-AWARE CAPTURE), and the flaps lagged half the loop's time constant behind the allocator so the RCS takes the jitter (SURFACE SMOOTHING).
+            // Authority-aware: the square-root capture and conditional integral (AttitudeController's AUTHORITY-AWARE CAPTURE), and the flaps given the demand lagged over half the loop's time constant, the RCS the fast rest (SURFACE SMOOTHING).
             settings = settings with
             {
                 CaptureRateDegS = entryCapture, RollCaptureRateDegS = entryCapture,

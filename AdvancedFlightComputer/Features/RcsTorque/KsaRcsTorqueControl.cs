@@ -232,9 +232,13 @@ internal static class KsaRcsTorqueControl
     {
         if (vehicle == null)
             return default;
+        using var _perf = new AdvancedFlightComputer.Core.PerfTracker.Scope("Rcs.Command");
         Slot slot = ByVehicle.GetValue(vehicle, _ => new Slot());
         slot.Owner = vehicle;
-        RcsTorqueAllocator? alloc = Measure(vehicle, ax, ay, az, out ThrusterController[] modules);
+        RcsTorqueAllocator? alloc;
+        ThrusterController[] modules;
+        using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Rcs.Measure"))
+            alloc = Measure(vehicle, ax, ay, az, out modules);
         if (alloc == null)
         {
             Publish(slot, null);
@@ -244,7 +248,9 @@ internal static class KsaRcsTorqueControl
 
         double dx = double3.Dot(torqueAsmb, ax), dy = double3.Dot(torqueAsmb, ay), dz = double3.Dot(torqueAsmb, az);
         var duty = new double[alloc.Count];
-        RcsTorqueAllocator.Result r = alloc.Allocate(dx, dy, dz, priority, duty);
+        RcsTorqueAllocator.Result r;
+        using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Rcs.Allocate"))
+            r = alloc.Allocate(dx, dy, dz, priority, duty);
         if (!r.Solved)
         {
             Publish(slot, null);
