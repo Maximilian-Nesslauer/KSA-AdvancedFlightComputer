@@ -26,6 +26,8 @@ G-FOLD is the fallback, and it flies only a craft with a gimbal. Touchdown guida
 While AFC solves a launch plan or plans a deorbit burn, it holds the simulation at 1x and then gives your speed back. It does not give the speed back into a burn, an armed launch or a coast to a planned burn.
 The native solvers `clarabel_c.dll` and `scs.dll` ship with the mod. See the [guidance documentation](../guidance/README.md) for how it works.
 
+A mod can add named landing sites for **RETURN TO** and **LAND AT**, see [Landing sites for mod authors](landing-sites.md).
+
 ## Launch to a moon
 
 **THEN** on the LAUNCH page picks what follows the ascent: *Stay in orbit*, a flyby of a moon, or an orbit of a moon (every moon of the launch body is listed), with **PERIAPSIS AT MOON** below it, 100 km by default.
