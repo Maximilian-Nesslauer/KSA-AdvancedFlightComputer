@@ -19,6 +19,32 @@ const int RowLen = NX + RefNU + NX + NX * NX + NX * RefNU;
 
 bool verbose = args.Contains("--verbose");
 
+// The SCvx conic backend for every check below: --backend scs|clarabel (default: the mod's default, Clarabel).
+// --ir turns Clarabel's iterative refinement back on, --fresh builds a new Clarabel solver every solve instead of updating one in place, --eq N sets its equilibration iterations.
+{
+    int at = Array.IndexOf(args, "--backend");
+    if (at >= 0 && at + 1 < args.Length)
+        ScvxConic.Backend = args[at + 1].Equals("scs", StringComparison.OrdinalIgnoreCase) ? ScvxConicBackend.Scs : ScvxConicBackend.Clarabel;
+    if (args.Contains("--ir")) ClarabelWorkspace.IterativeRefinementDefault = true;
+    if (args.Contains("--fresh")) ClarabelWorkspace.Persistent = false;
+    int eq = Array.IndexOf(args, "--eq");
+    if (eq >= 0 && eq + 1 < args.Length) ClarabelWorkspace.EquilibrateMaxIter = uint.Parse(args[eq + 1], CultureInfo.InvariantCulture);
+    Console.Error.WriteLine($"[backend {ScvxConic.Backend}" + (ScvxConic.Backend == ScvxConicBackend.Clarabel
+        ? $" ir={ClarabelWorkspace.IterativeRefinementDefault} persistent={ClarabelWorkspace.Persistent} eq={ClarabelWorkspace.EquilibrateMaxIter?.ToString() ?? "default"}]" : "]"));
+    AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+    {
+        if (ClarabelWorkspace.TotalCalls > 0)
+            Console.Error.WriteLine($"[clarabel {ClarabelWorkspace.TotalCalls} solves, {ClarabelWorkspace.TotalRebuilds} rebuilds, " +
+                $"{(double)ClarabelWorkspace.TotalIpmIterations / ClarabelWorkspace.TotalCalls:F1} ipm/solve, " +
+                $"p50 {ClarabelWorkspace.SolveMsPercentile(0.5):F2} p95 {ClarabelWorkspace.SolveMsPercentile(0.95):F2} max {ClarabelWorkspace.SolveMsPercentile(1.0):F2} ms, " +
+                $"setup {ClarabelWorkspace.TotalSetupMs:F0} solve {ClarabelWorkspace.TotalSolveMs:F0} ms, IR fallbacks {ClarabelWorkspace.TotalRefinementFallbacks}]");
+        if (ScsWorkspace.TotalCalls > 0)
+            Console.Error.WriteLine($"[scs {ScsWorkspace.TotalCalls} solves, {(double)ScsWorkspace.TotalAdmmIterations / ScsWorkspace.TotalCalls:F0} admm/solve, " +
+                $"p50 {ScsWorkspace.SolveMsPercentile(0.5):F2} p95 {ScsWorkspace.SolveMsPercentile(0.95):F2} max {ScsWorkspace.SolveMsPercentile(1.0):F2} ms, " +
+                $"total {ScsWorkspace.TotalInitMs + ScsWorkspace.TotalSolveMs + ScsWorkspace.TotalFinishMs:F0} ms]");
+    };
+}
+
 if (args.Contains("--standby"))
 {
     StandbyTrackCheck.Verbose = verbose;

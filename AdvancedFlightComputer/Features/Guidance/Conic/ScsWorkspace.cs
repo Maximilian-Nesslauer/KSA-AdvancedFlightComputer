@@ -19,7 +19,7 @@ namespace AdvancedFlightComputer.Guidance.Conic;
 /// scs_solve's warm_start flag - which this class provides by holding onto the
 /// last solution and reusing it as the next call's starting point.
 /// </summary>
-public sealed class ScsWorkspace
+public sealed class ScsWorkspace : IScvxConicWorkspace
 {
     /// <summary>
     /// Iteration budget and tolerance for OFFLINE / validation solves.
@@ -157,6 +157,9 @@ public sealed class ScsWorkspace
     /// start away on exactly the cycles that needed it.
     /// </summary>
     public bool HasWarmStart => _prevX != null;
+
+    /// <summary>ADMM takes the requested budget as it is.</summary>
+    public int EffectiveIterationCap(int requested) => requested;
 
     /// <summary>Discard the carried solution, e.g. after a large jump the previous iterate can't help with.</summary>
     public void ResetWarmStart()

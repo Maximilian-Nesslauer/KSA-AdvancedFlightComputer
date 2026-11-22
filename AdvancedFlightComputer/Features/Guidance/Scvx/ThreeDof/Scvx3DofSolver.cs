@@ -228,7 +228,7 @@ public sealed class Scvx3DofSolver
                       _anchor, _anchorCos, _anchorRateKnown ? _anchorRate : ReadOnlySpan<double>.Empty,
                       AccelLimitTerms() ? _thrustSlope : null, _lossConstant, _lossGradient);
         ScsStatus st = _sub.Run(WarmStart && _sub.HasWarmStart, MaxSubproblemIterations, SubproblemEps, SubproblemEps);
-        if (_sub.HitIterationLimit && EscalatedSubproblemIterations > MaxSubproblemIterations)
+        if (_sub.HitIterationLimit && _sub.EffectiveIterationCap(EscalatedSubproblemIterations) > _sub.EffectiveIterationCap(MaxSubproblemIterations))
             st = _sub.Run(WarmStart && _sub.HasWarmStart, EscalatedSubproblemIterations, SubproblemEps, SubproblemEps);
 
         if (!st.IsUsable() || _sub.HitIterationLimit)

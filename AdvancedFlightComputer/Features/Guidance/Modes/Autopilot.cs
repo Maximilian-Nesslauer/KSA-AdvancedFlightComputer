@@ -1123,6 +1123,10 @@ public static partial class GuidanceWindow
         {
             Use(vehicle);
             TakeStageEngineChoice(vehicle, createState: false);
+            // The SCvx conic backend is one switch for every craft (Conic.ScvxConic), set from the focused one.
+            AdvancedFlightComputer.Guidance.Conic.ScvxConic.Backend = _s.ScvxClarabel
+                ? AdvancedFlightComputer.Guidance.Conic.ScvxConicBackend.Clarabel
+                : AdvancedFlightComputer.Guidance.Conic.ScvxConicBackend.Scs;
         }
         else if (VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState state))
         {

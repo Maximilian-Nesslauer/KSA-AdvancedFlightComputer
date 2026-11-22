@@ -72,6 +72,7 @@ typedef struct ClarabelDefaultSettings_f64
     uint32_t iterative_refinement_max_iter;
     double iterative_refinement_stop_ratio;
     bool presolve_enable;
+    bool input_sparse_dropzeros;
     #ifdef FEATURE_SDP
         bool chordal_decomposition_enable;
         ClarabelCliqueMergeMethods chordal_decomposition_merge_method;
@@ -124,6 +125,7 @@ typedef struct ClarabelDefaultSettings_f32
     uint32_t iterative_refinement_max_iter;
     float iterative_refinement_stop_ratio;
     bool presolve_enable;
+    bool input_sparse_dropzeros;
     #ifdef FEATURE_SDP
         bool chordal_decomposition_enable;
         enum ClarabelCliqueMergeMethods chordal_decomposition_merge_method;
