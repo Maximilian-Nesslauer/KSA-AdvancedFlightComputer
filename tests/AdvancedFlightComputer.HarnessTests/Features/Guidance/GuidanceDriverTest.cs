@@ -85,6 +85,8 @@ public sealed class GuidanceDriverTest : AfcTest
             driver.Step(0.05, 40);
 
             TheDriverFliesARunningMode(t, vehicle, driver);
+            TheOwnControllerYieldsToAPlayerAttitude(t, vehicle, driver);
+            TheOwnControllerKeepsTheCraftWhenItsBurnGoes(t, vehicle, driver);
             StockAutoIsHeldAndGivenBack(t, vehicle, driver);
             ArmingAutoTakesTheEngineBack(t, vehicle, driver);
             AReplacedBurnKeepsManual(t, vehicle, driver);
@@ -121,6 +123,8 @@ public sealed class GuidanceDriverTest : AfcTest
         VehicleReferenceFrame frameBefore = fc.AttitudeFrame;
         double3 ratesBefore = fc.AttitudeTarget.RatesCci;
         VehicleAutopilotState state = Running(vehicle);
+        // The attitude checks below are the stock flight computer's, so the ascent steers through it.
+        state.AscentOwnAttitude = false;
         try
         {
             driver.Step(0.05, 3);
@@ -157,6 +161,115 @@ public sealed class GuidanceDriverTest : AfcTest
         {
             VehicleAutopilotState.Remove(vehicle);
         }
+    }
+
+    // A new flight computer starts in Manual, which is also the mode AFC's own attitude controller holds,
+    // so the player's selection must still read as a takeover against what guidance recorded.
+    private static void TheOwnControllerYieldsToAPlayerAttitude(TestContext t, Vehicle vehicle, SimDriver driver)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        FlightComputerAttitudeMode modeBefore = fc.AttitudeMode;
+        FlightComputerAttitudeTrackTarget targetBefore = fc.AttitudeTrackTarget;
+        VehicleReferenceFrame frameBefore = fc.AttitudeFrame;
+        VehicleAutopilotState state = Running(vehicle);
+        state.AscentOwnAttitude = true;
+        fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+        try
+        {
+            driver.Step(0.05, 3);
+            if (!t.Check("the own attitude controller flies a running ascent from a Manual start",
+                    VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.Guidance && state.ControlAcquired
+                    && state.OwnAttitudeFlying && ReferenceEquals(state.OwnAttitudeVehicle, vehicle)
+                    && fc.AttitudeMode == FlightComputerAttitudeMode.Manual && Inputs(vehicle).EngineOn,
+                    $"holder={VehicleControlOwnership.HolderOf(vehicle)} own={state.OwnAttitudeFlying} mode={fc.AttitudeMode} on={Inputs(vehicle).EngineOn}"))
+                return;
+
+            vehicle.SetEnum(FlightComputerAttitudeTrackTarget.Prograde);
+            driver.Step(0.05, 1);
+            t.Check("a player attitude during an own-attitude ascent stops guidance without a cut",
+                VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.None
+                && !state.ControlAcquired && !state.Running && Inputs(vehicle).EngineOn,
+                $"holder={VehicleControlOwnership.HolderOf(vehicle)} running={state.Running} on={Inputs(vehicle).EngineOn}");
+            t.Check("the own-attitude takeover says why",
+                state.Status == "GUIDANCE STOPPED: ANOTHER WRITER TOOK ATTITUDE.", state.Status);
+            t.Check("the player's attitude survives the own-attitude takeover",
+                fc.AttitudeMode == FlightComputerAttitudeMode.Auto
+                && fc.AttitudeTrackTarget == FlightComputerAttitudeTrackTarget.Prograde,
+                $"mode={fc.AttitudeMode} target={fc.AttitudeTrackTarget}");
+            t.Check("the takeover lets the own attitude controller go", !state.OwnAttitudeFlying);
+        }
+        finally
+        {
+            EndOwnAttitude(vehicle);
+            fc.AttitudeMode = modeBefore;
+            fc.AttitudeTrackTarget = targetBefore;
+            fc.AttitudeFrame = frameBefore;
+            TestSupport.SetManualControlInputs(vehicle, 0f, engineOn: false);
+        }
+    }
+
+    // FlightComputer.UpdateAttitudeTarget resets a burn frame by itself, in Manual too, once the burn is
+    // gone. That reset must not read as a takeover, and a release must still give the frame back.
+    private static void TheOwnControllerKeepsTheCraftWhenItsBurnGoes(TestContext t, Vehicle vehicle, SimDriver driver)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        FlightComputerAttitudeMode modeBefore = fc.AttitudeMode;
+        FlightComputerAttitudeTrackTarget targetBefore = fc.AttitudeTrackTarget;
+        VehicleReferenceFrame frameBefore = fc.AttitudeFrame;
+        try
+        {
+            if (RcsFlightSupport.AddBurn(vehicle, driver, double3.UnitX, 100.0, 600.0) == null)
+            {
+                t.Fail("burn frame setup", "no patch or loaded burn target");
+                return;
+            }
+            fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+            fc.AttitudeFrame = VehicleReferenceFrame.BurnBody;
+            fc.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.PositiveDv;
+
+            VehicleAutopilotState state = Running(vehicle);
+            state.AscentOwnAttitude = true;
+            driver.Step(0.05, 3);
+            if (!t.Check("the own attitude controller flies from a burn frame",
+                    state.ControlAcquired && state.OwnAttitudeFlying, $"own={state.OwnAttitudeFlying} status='{state.Status}'"))
+                return;
+            state.Engage = false;
+            driver.Step(0.05, 1);
+            t.Check("a release of the own attitude controller gives the player's attitude back",
+                VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.None
+                && fc.AttitudeMode == FlightComputerAttitudeMode.Manual
+                && fc.AttitudeFrame == VehicleReferenceFrame.BurnBody
+                && fc.AttitudeTrackTarget == FlightComputerAttitudeTrackTarget.PositiveDv,
+                $"mode={fc.AttitudeMode} frame={fc.AttitudeFrame} target={fc.AttitudeTrackTarget}");
+            EndOwnAttitude(vehicle);
+
+            state = Running(vehicle);
+            state.AscentOwnAttitude = true;
+            driver.Step(0.05, 3);
+            RcsFlightSupport.CleanupBurns(fc);
+            driver.Step(0.05, 3);
+            t.Check("a burn that goes away during an own-attitude ascent is no takeover",
+                VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.Guidance
+                && state.ControlAcquired && state.Running && state.OwnAttitudeFlying,
+                $"holder={VehicleControlOwnership.HolderOf(vehicle)} running={state.Running} status='{state.Status}'");
+        }
+        finally
+        {
+            RcsFlightSupport.CleanupBurns(fc);
+            EndOwnAttitude(vehicle);
+            fc.AttitudeMode = modeBefore;
+            fc.AttitudeTrackTarget = targetBefore;
+            fc.AttitudeFrame = frameBefore;
+            TestSupport.SetManualControlInputs(vehicle, 0f, engineOn: false);
+        }
+    }
+
+    // VehicleAutopilotState.Remove drops the state only, so the own controller's actuators are let go first.
+    private static void EndOwnAttitude(Vehicle vehicle)
+    {
+        AttitudeController.Release(vehicle);
+        VehicleControlOwnership.ReleaseAll(vehicle);
+        VehicleAutopilotState.Remove(vehicle);
     }
 
     // Vehicle.PrepareWorker clears the engine switch on every step while the burn mode is Auto.
