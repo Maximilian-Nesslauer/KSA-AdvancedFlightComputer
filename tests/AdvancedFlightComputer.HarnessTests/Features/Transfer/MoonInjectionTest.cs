@@ -594,7 +594,9 @@ public sealed class MoonChainTest : AfcTest
             BurnTarget target = state.MoonChainTarget;
             // One step in Auto first, so the craft is awake and the flight computer steps again in the next one.
             driver.Step(1.0);
-            target.DeltaVAccumCci = target.DeltaVTargetCci * 1.01f;
+            // 1 m/s past the target along it: the step measures its own delta-v into the accumulator, and at some epochs that moves the
+            // remaining delta-v by a third of a metre per second, so a 1 percent overshoot of a 2 m/s correction is not enough to complete.
+            target.DeltaVAccumCci = target.DeltaVTargetCci * (1f + 1f / target.DeltaVTargetCci.Length());
             driver.Step(1.0);
             if (!t.Check($"{label}: stock completed the burn and selected Manual",
                     fc.AutoBurnCompleted && fc.BurnMode == FlightComputerBurnMode.Manual, $"completed {fc.AutoBurnCompleted}, mode {fc.BurnMode}"))
