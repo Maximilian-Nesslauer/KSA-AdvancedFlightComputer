@@ -1832,6 +1832,8 @@ public sealed class VehicleAutopilotState
     public double OrbitalEntryAimHorizonH = 24.0;
     /// <summary>Fly the entry attitude with AFC's own attitude controller; off steers through the stock flight computer.</summary>
     public bool OrbitalEntryOwnAttitude = true;
+    /// <summary>Let AFC's own attitude controller fire the RCS during orbital entry; off flies on the surfaces alone.</summary>
+    public bool OrbitalEntryUseRcs = true;
 
     #region Status texts and their marks
 

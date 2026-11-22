@@ -80,7 +80,7 @@ public static partial class GuidanceWindow
         {
             EntryConfig c = OrbitalEntryConfig();
             string setup = FormattableString.Invariant(
-                $"limits: q {c.DynamicPressureMax / 1000:F1} kPa, load {c.LoadFactorMax:F2} g, heating {c.HeatingRateMax / 1000:F0} kW/m2 (nose {_s.OrbitalEntryNoseRadiusM:F2} m); bank plan {c.BankMinDeg:F0}-{c.BankMaxDeg:F0}, tracker to {c.OverbankDeg:F0}, reversal band {c.ReversalBandDeg:F1} deg, corridor margin {c.CorridorWeight:F2}, roll {c.RollRateDegS:F1} deg/s; hand-over {c.HandoverAltitude / 1000:F1} km Mach {c.HandoverMach:F2}; start drag {c.StartDrag:F2}; re-solve {_s.OrbitalEntryResolveS:F2} s; site {_s.SiteLatDeg:F4} {_s.SiteLonDeg:F4}; mass {vehicle.TotalMass:F0} kg");
+                $"limits: q {c.DynamicPressureMax / 1000:F1} kPa, load {c.LoadFactorMax:F2} g, heating {c.HeatingRateMax / 1000:F0} kW/m2 (nose {_s.OrbitalEntryNoseRadiusM:F2} m); bank plan {c.BankMinDeg:F0}-{c.BankMaxDeg:F0}, tracker to {c.OverbankDeg:F0}, reversal band {c.ReversalBandDeg:F1} deg, corridor margin {c.CorridorWeight:F2}, roll {c.RollRateDegS:F1} deg/s; RCS {(_s.OrbitalEntryUseRcs ? "on" : "off")}; hand-over {c.HandoverAltitude / 1000:F1} km Mach {c.HandoverMach:F2}; start drag {c.StartDrag:F2}; re-solve {_s.OrbitalEntryResolveS:F2} s; site {_s.SiteLatDeg:F4} {_s.SiteLonDeg:F4}; mass {vehicle.TotalMass:F0} kg");
             if (OrbitalEntryLog.Start(st, vehicle.Id, (parent as Astronomical)?.Id ?? "", setup))
                 GuidanceLog.Info(vehicle, "Orbital entry log: " + OrbitalEntryLog.Path);
         }

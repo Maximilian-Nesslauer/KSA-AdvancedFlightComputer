@@ -2233,6 +2233,8 @@ public static partial class GuidanceWindow
             {
                 CaptureRateDegS = entryCapture, RollCaptureRateDegS = entryCapture,
                 AuthorityCapture = true, SurfaceSmoothS = 0.5 / Math.Max(settings.BandwidthRadS, 0.1),
+                // ENTRY RCS off: the flaps alone, the whole demand each step within their reach.
+                UseRcs = _s.OrbitalEntryUseRcs,
             };
         }
         KsaAeroSweep.Result aero = OrbitalEntryLive ? _s.OrbitalEntry.Aero : _s.Aero;

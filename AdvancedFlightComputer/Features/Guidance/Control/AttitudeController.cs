@@ -46,7 +46,7 @@ internal static class AttitudeController
                                              double IntegralWithinDeg = 3.0, double IntegralMaxDegS = 8.0,
                                              bool UseSurfaces = true, bool UseGimbals = false, bool RollFree = false,
                                              double RollCaptureRateDegS = double.NaN, double RollBandwidthRadS = double.NaN,
-                                             bool AuthorityCapture = false, double SurfaceSmoothS = 0.0)
+                                             bool AuthorityCapture = false, double SurfaceSmoothS = 0.0, bool UseRcs = true)
     {
         public static readonly Settings Default = new(1.0, 0.8, 0.0, 0.5);
     }
@@ -181,7 +181,7 @@ internal static class AttitudeController
         {
             // The acceleration the craft can spare about each model axis, after the trim it holds: the square-root law's a.
             using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.SpareAccel"))
-                spare = SpareAccel(vehicle, slot, now, aero, momentLimiterPerPa, settings.UseSurfaces, mx, my, mz, ixx, iyy, izz,
+                spare = SpareAccel(vehicle, slot, now, aero, momentLimiterPerPa, settings.UseSurfaces, settings.UseRcs, mx, my, mz, ixx, iyy, izz,
                                    airKnown ? -Model(air, mx, my, mz) : default);
             double rollCap = double.IsFinite(settings.RollCaptureRateDegS) ? settings.RollCaptureRateDegS * Math.PI / 180.0 : captureMax;
             capturePoint = SqrtCapture(thetaPoint, kd > 0.0 ? kp / kd : 0.0, captureMax, Math.Min(spare.X, spare.Y));
@@ -211,9 +211,11 @@ internal static class AttitudeController
         }
 
         // One programme for fins and RCS (the RCS as the fins' backup): the fins are commanded, the RCS fired for what they will give short. Fins off (Settings.UseSurfaces) are held at rest and the RCS takes it all.
-        RcsTorqueAllocator rcsColumns;
-        using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.RcsColumns"))
-            rcsColumns = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out _);
+        // RCS off (Settings.UseRcs): the surfaces alone, no backup in their programme and no thrusters fired.
+        RcsTorqueAllocator rcsColumns = null;
+        if (settings.UseRcs)
+            using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.RcsColumns"))
+                rcsColumns = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out _);
         KsaAeroTorqueControl.Report surfaces = default;
         if (settings.UseSurfaces)
             surfaces = KsaAeroTorqueControl.Command(vehicle, aero, remaining, mx, my, mz, RcsPriority, momentLimiterPerPa,
@@ -223,7 +225,11 @@ internal static class AttitudeController
             KsaAeroTorqueControl.Release(vehicle);
         double3 surfacesBody = surfaces.GivenNm.X * mx + surfaces.GivenNm.Y * my + surfaces.GivenNm.Z * mz;
         double3 rcsAsked = remaining - surfacesBody;
-        KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, RcsPriority);
+        KsaRcsTorqueControl.Report rcs = default;
+        if (settings.UseRcs)
+            rcs = KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, RcsPriority);
+        else
+            KsaRcsTorqueControl.Release(vehicle);
         // Short of the demand by more than SaturatedShare of it: the actuators are at their limits.
         double3 givenBody = gimbalsBody + surfacesBody + rcs.GivenNm.X * mx + rcs.GivenNm.Y * my + rcs.GivenNm.Z * mz;
         slot.Saturated = demand.Length() > 0.0 && (demand - givenBody).Length() > SaturatedShare * demand.Length();
@@ -347,7 +353,7 @@ internal static class AttitudeController
     /// <summary>
     /// The angular acceleration the craft can spare about each model axis, rad/s^2: the most its surfaces give that way and the other (measured as the flight condition moves, scaled by q between) and its RCS (measured as the mass and centre of mass move), less the trim torque <paramref name="trimModel"/> they hold against the air (model axes, N m), the smaller way round, over the inertia. NaN on an axis with no inertia.
     /// </summary>
-    private static double3 SpareAccel(Vehicle vehicle, Slot slot, double now, KsaAeroSweep.Result aero, double momentLimiterPerPa, bool surfaces,
+    private static double3 SpareAccel(Vehicle vehicle, Slot slot, double now, KsaAeroSweep.Result aero, double momentLimiterPerPa, bool surfaces, bool useRcs,
                                       double3 mx, double3 my, double3 mz, double ixx, double iyy, double izz, double3 trimModel)
     {
         // The surfaces' reach is q times coefficients that follow Mach and the airflow's direction, over the game's moment limiter: measured in full only when those move (or every FinRemeasureS of real time), and scaled by q / (1 + k q) in between.
@@ -397,9 +403,9 @@ internal static class AttitudeController
         float3 comF = vehicle.CenterOfMassAsmbF;
         var com = new double3(comF.X, comF.Y, comF.Z);
         double gyration = mass > 0.0 ? Math.Sqrt(Math.Max(Math.Max(ixx, iyy), izz) / mass) : double.NaN;
-        bool moved = !slot.RcsKnown
+        bool moved = useRcs && (!slot.RcsKnown
                      || !(Math.Abs(mass - slot.RcsMassKg) <= RcsRemeasureShare * slot.RcsMassKg)
-                     || (double.IsFinite(gyration) && !((com - slot.RcsComAsmb).Length() <= RcsRemeasureShare * gyration));
+                     || (double.IsFinite(gyration) && !((com - slot.RcsComAsmb).Length() <= RcsRemeasureShare * gyration)));
         if (moved)
         {
             using var _rcs = new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.RcsReach");
@@ -417,7 +423,8 @@ internal static class AttitudeController
             slot.RcsComAsmb = com;
             slot.RcsKnown = true;
         }
-        double3 up = finScale * slot.FinPlusNm + slot.RcsPlusNm, down = finScale * slot.FinMinusNm + slot.RcsMinusNm;
+        double3 rcsUp = useRcs ? slot.RcsPlusNm : default, rcsDown = useRcs ? slot.RcsMinusNm : default;
+        double3 up = finScale * slot.FinPlusNm + rcsUp, down = finScale * slot.FinMinusNm + rcsDown;
         static double Spare(double up, double down, double trim, double inertia)
             => inertia > 0.0 ? Math.Max(Math.Min(up - trim, down + trim), 0.0) / inertia : double.NaN;
         return new double3(Spare(up.X, down.X, trimModel.X, ixx),

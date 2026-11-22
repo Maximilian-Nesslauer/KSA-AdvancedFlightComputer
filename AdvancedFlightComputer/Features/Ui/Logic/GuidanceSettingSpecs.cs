@@ -307,6 +307,8 @@ internal static class GuidanceSettingSpecs
         "Orbital entry guidance takes the craft at the end of a DEORBIT ONLY burn.");
     public static readonly BoolSpec OrbitalEntryOwnAttitude = new("OrbitalEntryOwnAttitude", "OWN ATTITUDE", P, true,
         "Fly the entry attitude with AFC's own attitude controller (surfaces and RCS). Off steers through the stock flight computer.");
+    public static readonly BoolSpec OrbitalEntryUseRcs = new("OrbitalEntryUseRcs", "ENTRY RCS", P, true,
+        "Let OWN ATTITUDE fire the RCS during orbital entry. Off steers on the flaps alone, which give nothing in air too thin for them (under 50 Pa).");
 
     public static readonly SettingSpec OrbitalEntryTrackOmega = new("OrbitalEntryTrackOmega", "DRAG TRACKING", "rad/s", P, 0.03, 0.01, 2.0, "%.3f",
         "Natural frequency of the drag and sink-rate loop that holds the plan's drag: higher pulls the drag onto the plan's faster, at the cost of more bank activity.");
@@ -339,7 +341,7 @@ internal static class GuidanceSettingSpecs
         OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryReversalBandDeg, OrbitalEntryRollRateDegS, OrbitalEntryTrackRollRateDegS,
         OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryTrackOmega, OrbitalEntryGainDragFloor, OrbitalEntryMeasureSmoothS, OrbitalEntryCorridorWeight, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
     };
-    public static readonly BoolSpec[] OrbitalEntryBools = { OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude };
+    public static readonly BoolSpec[] OrbitalEntryBools = { OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude, OrbitalEntryUseRcs };
 
     public static readonly BoolSpec ThreeDofFromGlide = new("ThreeDofFromGlide", "ENTRY ON GLIDE", P, true,
         "ENTRY takes over a boostback glide at AT IMPACT T- and flies the glide and the landing burn. Off, the glide continues until another mode takes the craft or it is stopped, and no landing burn is planned.");
@@ -490,7 +492,7 @@ internal static class GuidanceSettingSpecs
         FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, AscentOwnAttitude, AscentAeroControl, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
         VehicleHeightAuto, LegsAutoDeploy, ParkIdleEngines, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
         SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ThreeDofFromGlide, ThreeDofSixDofHandover,
-        OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude,
+        OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude, OrbitalEntryUseRcs,
     };
 
     #endregion
