@@ -152,7 +152,10 @@ public sealed class GuidanceSiteSlopeTest : AfcTest
             state.FlatSiteSlopeDeg <= state.SiteTipDeg || GuidanceWindow.NextFlatSearchRadiusM(luna) == 3.0 * run.RadiusM,
             $"{state.FlatSiteSlopeDeg:F2} against {state.SiteTipDeg:F2} deg, next radius {GuidanceWindow.NextFlatSearchRadiusM(luna):F0} m");
         t.Check($"{save}: the answer is within the radius", state.FlatSiteDistanceM <= run.RadiusM + 1e-6);
-        double km = GroundKm(luna, 0.0, lon, state.FlatSiteLat, state.FlatSiteLon);
+        // The search lays its grid on the ground at the site, so its distances are at the surface radius there, not at the mean radius;
+        // on Luna the two differ by several kilometres, which makes about a metre over a few hundred.
+        double groundRadius = luna.MeanRadius + KsaSurfaceHeight.At(luna, GuidanceWindow.SiteDirCcf(0.0, lon));
+        double km = GroundKm(luna, 0.0, lon, state.FlatSiteLat, state.FlatSiteLon) * groundRadius / luna.MeanRadius;
         t.CheckAbs($"{save}: the distance shown is the distance on the ground", km * 1000.0, state.FlatSiteDistanceM, 1.0);
 
         double answer = state.FlatSiteSlopeDeg;
