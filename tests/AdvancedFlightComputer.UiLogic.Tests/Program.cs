@@ -1533,7 +1533,7 @@ internal static partial class Program
             GuidanceSettingSpecs.LandEntryExpert, GuidanceSettingSpecs.LandTouchdownExpert, GuidanceSettingSpecs.HoverExpert,
             GuidanceSettingSpecs.LandOrbitalEntryExpert,
         };
-        BoolSpec[][] foldBools = { GuidanceSettingSpecs.LaunchExpertBools, GuidanceSettingSpecs.LandFromOrbitExpertBools, GuidanceSettingSpecs.LandOrbitalEntryExpertBools };
+        BoolSpec[][] foldBools = { GuidanceSettingSpecs.LaunchExpertBools, GuidanceSettingSpecs.LandFromOrbitExpertBools, GuidanceSettingSpecs.LandOrbitalEntryExpertBools, GuidanceSettingSpecs.LandEntryExpertBools };
         foreach (SettingSpec s in GuidanceSettingSpecs.AllDoubles)
         {
             if (s.Tier == UiTier.Expert)

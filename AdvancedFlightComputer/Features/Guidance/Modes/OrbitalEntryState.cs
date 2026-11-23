@@ -57,6 +57,9 @@ public sealed class OrbitalEntryState
     public double LastStep = double.NaN;
     public double DensityScale = 1.0, LiftToDragScale = 1.0;
     public double DragMs2, LiftToDrag, HdotMs, SpeedMs, AltitudeM, RangeM, CrossrangeM, Mach, AlphaDeg, Energy;
+    /// <summary>The game's aero acceleration on the craft this step, CCI, m/s^2, for bellyflop's own force scale; <see cref="AeroAccelKnown"/> false where it could not be read.</summary>
+    public double3 AeroAccelCci;
+    public bool AeroAccelKnown;
     public int Reversals;
 
     /// <summary>The site against the corridor at this energy (EntryPlan's short and long ranges): 0 inside, +1 too close (high energy), -1 too far (low energy).</summary>
@@ -156,6 +159,11 @@ public sealed class BellyflopState
     public volatile BellyflopPlanner.Result Pending;
     /// <summary>The model the published plan was solved with, for the attitude: it carries the bearing yaw is referenced to.</summary>
     public volatile BellyflopModel Model;
+    /// <summary>The last plan whose dynamics closed, converged or not: the warm start of the next solve, so a plan refused only because the site is not yet in reach does not leave the next one to start cold.</summary>
+    public volatile BellyflopPlan Warm;
+    /// <summary>The measured aero force over bellyflop's own model of it at the angles flown, low-passed: the model's force scale. 1 until measured.</summary>
+    public double ForceScale = 1.0;
+    public bool ForceScaleKnown;
     public double NextSolveAt = double.NegativeInfinity;
     public int Solves, Refusals;
     public string LastRefusal = "";
@@ -173,6 +181,9 @@ public sealed class BellyflopState
         Plan = null;
         Pending = null;
         Model = null;
+        Warm = null;
+        ForceScale = 1.0;
+        ForceScaleKnown = false;
         NextSolveAt = double.NegativeInfinity;
         Solves = Refusals = 0;
         LastRefusal = "";

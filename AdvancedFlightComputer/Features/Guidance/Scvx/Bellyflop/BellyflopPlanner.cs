@@ -40,7 +40,7 @@ public sealed class BellyflopPlanner
         if (model.Altitude(x0) <= cfg.TargetAltitude)
             return new Result { Why = "at or under the target altitude" };
         double rate = cfg.AngleRateDegS * Deg, yawRate = cfg.YawRateDegS * Deg;
-        double angleMax = cfg.AngleMaxDeg * Deg;
+        double angleMax = cfg.AngleMaxDeg * Deg, pitchUp = Math.Max(cfg.PitchUpMaxDeg, cfg.AngleMaxDeg) * Deg, bankMax = cfg.BankMaxDeg * Deg;
 
         var x = new double[n, NX];
         var u = new double[n, NU];
@@ -69,14 +69,16 @@ public sealed class BellyflopPlanner
         }
         Shoot(model, cfg, x0, u, sigma, x);
 
-        // The angle limits at each node: the configured limit, widened at the start to the attitude flown and closing at the rate.
+        // The angle limits at each node: the configured limit, widened at the start to an attitude flown beyond it and closing at the rate. Pitch has its own limit each way: nose up as far as the entry flies, nose down only a little.
         var limA = new double[n];
+        var limADown = new double[n];
         var limB = new double[n];
         for (int k = 0; k < n; k++)
         {
             double t = sigma * k / (n - 1);
-            limA[k] = Math.Max(angleMax, Math.Abs(alphaNow) - rate * t);
-            limB[k] = Math.Max(angleMax, Math.Abs(betaNow) - rate * t);
+            limA[k] = Math.Max(pitchUp, alphaNow - rate * t);
+            limADown[k] = Math.Max(angleMax, -alphaNow - rate * t);
+            limB[k] = Math.Max(bankMax, Math.Abs(betaNow) - rate * t);
         }
 
         var lin = new Linearisation(n);
@@ -91,7 +93,7 @@ public sealed class BellyflopPlanner
             if (iter > 0 && defect <= 0.25 * cfg.GateDefect && lastStep < 0.02 && Miss(x, n) <= 0.25 * cfg.GateMissM)
                 break;
             double jRef = Merit(model, cfg, x, u, lin.Defect, n);
-            var sub = BuildAndSolve(model, cfg, x0, x, u, sigma, lin, eta, limA, limB, rate, yawRate,
+            var sub = BuildAndSolve(model, cfg, x0, x, u, sigma, lin, eta, limA, limADown, limB, rate, yawRate,
                                     alphaNow, betaNow, psiNow, out double jLin);
             if (sub == null)
             {
@@ -385,7 +387,7 @@ public sealed class BellyflopPlanner
     /// </summary>
     static (double[,], double[,], double)? BuildAndSolve(
         BellyflopModel model, BellyflopConfig cfg, double[] x0, double[,] xr, double[,] ur, double sr, Linearisation lin, double eta,
-        double[] limA, double[] limB, double rate, double yawRate, double alphaNow, double betaNow, double psiNow, out double jLin)
+        double[] limA, double[] limADown, double[] limB, double rate, double yawRate, double alphaNow, double betaNow, double psiNow, out double jLin)
     {
         jLin = double.PositiveInfinity;
         int n = xr.GetLength(0), nI = n - 1;
@@ -503,7 +505,7 @@ public sealed class BellyflopPlanner
             Le(0, (U(k, 2), 1.0), (iY + k, -1.0));
             Le(0, (U(k, 2), -1.0), (iY + k, -1.0));
             Le(limA[k], (U(k, 0), 1.0));
-            Le(limA[k], (U(k, 0), -1.0));
+            Le(limADown[k], (U(k, 0), -1.0));
             Le(limB[k], (U(k, 1), 1.0));
             Le(limB[k], (U(k, 1), -1.0));
         }

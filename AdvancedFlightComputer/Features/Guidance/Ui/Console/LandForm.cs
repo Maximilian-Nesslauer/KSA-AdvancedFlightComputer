@@ -539,7 +539,7 @@ public static partial class GuidanceWindow
             case LandWay.FromHere when LandSolverRoute == LandSolver.Entry:
                 doubles = Specs.LandEntryExpert;
                 bools = Specs.LandEntryExpertBools;
-                wayParts = [new FoldPart(FoldNames.BurnLimit, true, InExpert(DrawBurnLimitRow))];
+                wayParts = [new FoldPart(FoldNames.BurnLimit, true, InExpert(DrawBurnLimitRow)), new FoldPart(FoldNames.Attitude, true, InExpert(DrawGlideAttitudeRows))];
                 break;
             case LandWay.FromHere when LandSolverRoute == LandSolver.Touchdown:
                 doubles = Specs.LandTouchdownExpert;
@@ -567,6 +567,14 @@ public static partial class GuidanceWindow
     }
 
     private static void DrawBurnLimitRow() => GaugeRow(Specs.LandingAccelLimitG, ref _s.LandingAccelLimitG);
+
+    /// <summary>GNC > ATTITUDE of GLIDE + BURN: which attitude control flies the glide.</summary>
+    private static void DrawGlideAttitudeRows()
+    {
+        GaugeRowCheck(Specs.ThreeDofNewAttitude, ref _s.ThreeDofNewAttitude);
+        using (new ImGuiDisabledScope(!_s.ThreeDofNewAttitude))
+            GaugeRow(Specs.ThreeDofRcsDeadbandDeg, ref _s.ThreeDofRcsDeadbandDeg);
+    }
 
     private static string SitePlace(IParentBody parent)
         => NoSitePicked(parent) ? string.Create(Fmt.Inv, $"{_s.SiteLatDeg:F3}, {_s.SiteLonDeg:F3}") : "SITE";

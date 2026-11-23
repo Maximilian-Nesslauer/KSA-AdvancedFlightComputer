@@ -97,7 +97,9 @@ public static partial class GuidanceWindow
             using (new ImGuiDisabledScope(!_s.OrbitalEntryUseRcs))
                 GaugeRow(Specs.OrbitalEntryRcsDeadbandDeg, ref _s.OrbitalEntryRcsDeadbandDeg);
         }
+        GaugeRow(Specs.OrbitalEntryBellyflopPitchUpDeg, ref _s.OrbitalEntryBellyflopPitchUpDeg);
         GaugeRow(Specs.OrbitalEntryBellyflopAngleMaxDeg, ref _s.OrbitalEntryBellyflopAngleMaxDeg);
+        GaugeRow(Specs.OrbitalEntryBellyflopBankMaxDeg, ref _s.OrbitalEntryBellyflopBankMaxDeg);
     }
 
     /// <summary>GNC > BANK of ORBITAL ENTRY: the bank the plan and the tracker may use, the reversals, and where the tracker takes hold.</summary>

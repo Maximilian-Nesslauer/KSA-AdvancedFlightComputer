@@ -1722,6 +1722,10 @@ public sealed class VehicleAutopilotState
     /// Fly entry guidance's glide with AFC's own attitude controller (AttitudeController): a feedforward of the air's moment from the sweep's tables plus filtered PD feedback and a slow integral, shared between the control surfaces and the RCS in one programme that spends the RCS only on what the fins cannot give, with an optional deadband (0, off, by default) inside which only the feedforward and integral fly. Off points the craft through the stock flight computer, as before 2026-11-20, which fired the RCS every way against the air it knows nothing of. The controller's natural frequency, rad/s, and its deadband, degrees.
     /// </summary>
     public bool ThreeDofOwnAttitude = true;
+    /// <summary>GLIDE + BURN's glide flies orbital entry's attitude control: the authority-aware capture, each axis owned by the flaps or the RCS, and the RCS on the stock flight computer's phase plane (AttitudeController). Off flies the joint flap and RCS programme as before.</summary>
+    public bool ThreeDofNewAttitude = true;
+    /// <summary>The band the RCS holds an axis in under NEW ATTITUDE CONTROL, deg (stock's Balanced 1 deg).</summary>
+    public double ThreeDofRcsDeadbandDeg = 1.0;
     public double AttitudeBandwidthRadS = 1.0;
     public double AttitudeDeadbandDeg = 0.0;
 
@@ -1792,14 +1796,18 @@ public sealed class VehicleAutopilotState
     /// <summary>Roll rate the tracker slews at and the plan leaves room for, deg/s.</summary>
     public double OrbitalEntryRollRateDegS = 5.0;
     /// <summary>Hand-over altitude, km, and Mach (airspeed over the sea-level speed of sound, as the aero tables use).</summary>
-    public double OrbitalEntryHandoverAltKm = 30.0;
-    public double OrbitalEntryHandoverMach = 3.0;
+    public double OrbitalEntryHandoverAltKm = 32.0;
+    public double OrbitalEntryHandoverMach = 4.0;
     /// <summary>Fly the terminal descent from the hand-over with bellyflop (docs/guidance/bellyflop-design.md): the entry aims at the ground through its predicted fall.</summary>
     public bool OrbitalEntryBellyflop = true;
     /// <summary>The Mach bellyflop starts solving from, in the background.</summary>
-    public double OrbitalEntryBellyflopArmMach = 4.0;
-    /// <summary>Bellyflop's largest pitch and bank from belly-first, deg.</summary>
+    public double OrbitalEntryBellyflopArmMach = 5.0;
+    /// <summary>Bellyflop's largest pitch from belly-first, deg.</summary>
     public double OrbitalEntryBellyflopAngleMaxDeg = 20.0;
+    /// <summary>Bellyflop's largest pitch nose up from belly-first, deg: the entry's own attitude and a little more, so it can take over from the entry and glide on.</summary>
+    public double OrbitalEntryBellyflopPitchUpDeg = 55.0;
+    /// <summary>Bellyflop's largest bank from belly-first, deg.</summary>
+    public double OrbitalEntryBellyflopBankMaxDeg = 45.0;
     /// <summary>Seconds between bellyflop's re-solves.</summary>
     public double OrbitalEntryBellyflopResolveS = 1.0;
     /// <summary>Drag at which the tracker takes hold, m/s^2. Above it the craft holds its entry attitude lift-up.</summary>

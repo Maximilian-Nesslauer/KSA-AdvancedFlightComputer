@@ -41,7 +41,7 @@ internal static class OrbitalEntryLog
         "ldMeas", "ldModel", "ldScale", "rhoScale",
         "uRef", "uCmd", "bankRef", "bankTarget", "bankCmd", "bankFlown", "side", "reversing", "overbank", "liftUp", "liftDown",
         "alphaCmd", "alphaFlown", "attErrDeg", "attRateErrDegS", "ownAtt", "airKnown",
-        "demandX", "demandY", "demandZ", "airX", "airY", "airZ", "surfX", "surfY", "surfZ", "rcsX", "rcsY", "rcsZ", "rcsAskX", "rcsAskY", "rcsAskZ", "rcsFlowKgS", "spareAccXDegS2", "spareAccYDegS2", "spareAccZDegS2", "bankAccDegS2", "saturated", "rcsAxes", "rcsFiring", "bfPitchDeg", "bfBankDeg", "bfYawDeg", "bfPlanMissM", "bfPlanEndS", "bfFallKm",
+        "demandX", "demandY", "demandZ", "airX", "airY", "airZ", "surfX", "surfY", "surfZ", "rcsX", "rcsY", "rcsZ", "rcsAskX", "rcsAskY", "rcsAskZ", "rcsFlowKgS", "spareAccXDegS2", "spareAccYDegS2", "spareAccZDegS2", "bankAccDegS2", "saturated", "rcsAxes", "rcsFiring", "bfPitchDeg", "bfBankDeg", "bfYawDeg", "bfPlanMissM", "bfPlanEndS", "bfFallKm", "bfForceScale",
         "fins", "fin1Cmd", "fin2Cmd", "fin3Cmd", "fin4Cmd", "fin1Deg", "fin2Deg", "fin3Deg", "fin4Deg",
         "plan", "planConverged", "planAgeS", "planMissKm", "planDefect", "planIter", "planMs", "solves", "refusals", "tablesReady",
         "status",
@@ -49,10 +49,9 @@ internal static class OrbitalEntryLog
 
     internal static bool Start(object owner, string vehicleName, string bodyName, string setup)
     {
+        // The newest start takes the log: an entry is started by the player, one at a time, and a reload leaves the old craft's state the owner with a row under StaleOwnerMs old (2026-11-23: a start 4 s after a reload was not logged).
         if (Enabled && Owner != null && !ReferenceEquals(Owner, owner))
         {
-            if (Environment.TickCount64 - _lastRowTick < StaleOwnerMs)
-                return false;
             Stop(Owner);
         }
         try

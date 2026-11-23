@@ -2238,6 +2238,16 @@ public static partial class GuidanceWindow
                 RcsAngleBandDeg = _s.OrbitalEntryRcsDeadbandDeg,
             };
         }
+        // GLIDE + BURN'S GLIDE with NEW ATTITUDE CONTROL: the same authority-aware capture and per-axis flaps or phase-plane RCS as orbital entry, at the glide's own capture rates.
+        else if (_s.ThreeDofNewAttitude && ThreeDofLive && _s.ThreeDofPhase == ThreeDofPhase.Glide)
+        {
+            settings = settings with
+            {
+                AuthorityCapture = true,
+                PhasePlaneRcs = true,
+                RcsAngleBandDeg = _s.ThreeDofRcsDeadbandDeg,
+            };
+        }
         KsaAeroSweep.Result aero = OrbitalEntryLive ? _s.OrbitalEntry.Aero : _s.Aero;
         if (ascent)
         {

@@ -21,6 +21,8 @@ public static partial class GuidanceWindow
     private static BellyflopConfig BellyflopConfigNow() => new()
     {
         AngleMaxDeg = _s.OrbitalEntryBellyflopAngleMaxDeg,
+        PitchUpMaxDeg = _s.OrbitalEntryBellyflopPitchUpDeg,
+        BankMaxDeg = _s.OrbitalEntryBellyflopBankMaxDeg,
         AngleRateDegS = Math.Max(_s.OrbitalEntryRollRateDegS, 1.0),
         YawRateDegS = Math.Max(_s.OrbitalEntryRollRateDegS, 1.0),
     };
@@ -41,7 +43,7 @@ public static partial class GuidanceWindow
         if (!_s.OrbitalEntryBellyflop || !st.TablesReady || st.Aero?.BellyBodyAero == null || st.Plan == null)
             return;
         var frame = BellyflopSiteFrame(parent, out double siteRadius);
-        BellyflopModel model = KsaBellyflopSetup.Build(vehicle, parent, frame, siteRadius, st.Aero, new double3(1, 0, 0), st.DensityScale, out _);
+        BellyflopModel model = KsaBellyflopSetup.Build(vehicle, parent, frame, siteRadius, st.Aero, new double3(1, 0, 0), BellyflopForceScale(st), out _);
         if (model == null)
             return;
         var p = st.Plan;
@@ -55,10 +57,42 @@ public static partial class GuidanceWindow
             bf.TerminalRangeM = range;
     }
 
+    /// <summary>Bellyflop's force scale: its own measurement once it has one, else the entry's density scale, measured against the entry's model before the craft turns belly first.</summary>
+    private static double BellyflopForceScale(OrbitalEntryState st) => st.Bellyflop.ForceScaleKnown ? st.Bellyflop.ForceScale : st.DensityScale;
+
+    /// <summary>Time constant of bellyflop's force-scale low-pass, s, as the entry's.</summary>
+    private const double BellyflopScaleSmoothS = 5.0;
+
+    /// <summary>
+    /// Bellyflop's force scale from this step's measured aero force against its own model's at the angles flown, with scale 1: the air and the tables together, as the craft flies now. The entry's density scale cannot stand in once the craft is belly first, because it compares the drag with the entry's model at its own angle of attack (it read 1.9 in the first flight, doubling the force bellyflop planned with).
+    /// </summary>
+    private static void MeasureBellyflopForceScale(OrbitalEntryState st, Vehicle vehicle, IParentBody parent, KsaFrameBridge.SiteFrame frame, double siteRadius,
+                                                   ReadOnlySpan<double> x, double alpha, double beta, double psi, double dt)
+    {
+        var bf = st.Bellyflop;
+        if (!st.AeroAccelKnown)
+            return;
+        BellyflopModel unit = KsaBellyflopSetup.Build(vehicle, parent, frame, siteRadius, st.Aero, bf.BearingLocal, 1.0, out _);
+        if (unit == null || !unit.AirForce(x, alpha, beta, psi, out double fx, out double fy, out double fz))
+            return;
+        double modelAccel = Math.Sqrt(fx * fx + fy * fy + fz * fz) / unit.Mass;
+        double measured = st.AeroAccelCci.Length();
+        if (!(modelAccel > 0.3) || !(measured > 0.3))
+            return;
+        double ratio = Math.Clamp(measured / modelAccel, 0.5, 2.0);
+        if (!bf.ForceScaleKnown)
+        {
+            bf.ForceScale = ratio;
+            bf.ForceScaleKnown = true;
+            return;
+        }
+        bf.ForceScale += Math.Clamp(dt / BellyflopScaleSmoothS, 0.0, 1.0) * (ratio - bf.ForceScale);
+    }
+
     /// <summary>
     /// One step of bellyflop under an orbital entry: take what the worker published, solve again in the background from BELLYFLOP FROM MACH, and take over at the hand-over once a plan has converged.
     /// </summary>
-    private static void StepBellyflop(Vehicle vehicle, IParentBody parent, OrbitalEntryState st, double mach, double now)
+    private static void StepBellyflop(Vehicle vehicle, IParentBody parent, OrbitalEntryState st, double mach, double now, double dt)
     {
         var bf = st.Bellyflop;
         if (!_s.OrbitalEntryBellyflop || !st.TablesReady || st.Aero?.BellyBodyAero == null || st.BellyIndex < 0)
@@ -77,12 +111,14 @@ public static partial class GuidanceWindow
             if (toSite.Length() > 0.5)
                 bf.BearingLocal = toSite;
         }
-        BellyflopModel model = KsaBellyflopSetup.Build(vehicle, parent, frame, siteRadius, st.Aero, bf.BearingLocal, st.DensityScale, out string why);
+        BellyflopModel model = KsaBellyflopSetup.Build(vehicle, parent, frame, siteRadius, st.Aero, bf.BearingLocal, 1.0, out string why);
         if (model == null)
             return;
         double3 bellyBody = KsaBellyflopSetup.BellyAxisBody(st.Aero.BellyBodyAero);
         var (aNow, bNow, pNow) = KsaBellyflopSetup.AnglesNow(vehicle, frame, model, bellyBody, x);
         bf.PitchDeg = aNow * 180.0 / Math.PI; bf.BankDeg = bNow * 180.0 / Math.PI; bf.YawDeg = pNow * 180.0 / Math.PI;
+        MeasureBellyflopForceScale(st, vehicle, parent, frame, siteRadius, x, aNow, bNow, pNow, dt);
+        model = model with { ForceScale = BellyflopForceScale(st) };
 
         // ---- plans: take what the worker published, ask for the next ----
         if (Interlocked.Exchange(ref bf.Pending, null) is { } res)
@@ -91,6 +127,9 @@ public static partial class GuidanceWindow
             var p = res.Plan;
             string text = p == null ? "no plan: " + res.Why : FormattableString.Invariant(
                 $"{(p.Converged ? "converged" : "REFUSED " + res.Why)}, {p.Iterations} it, {p.SolveMs:F0} ms, lands {p.MissM:F0} m from the site after {p.Sigma:F0} s, defect {p.MaxDefect:F3}{(p.Cold ? ", cold" : "")}");
+            // A plan whose dynamics closed seeds the next solve, also one refused only for its miss.
+            if (p != null && p.MaxDefect <= new BellyflopConfig().GateDefect)
+                bf.Warm = p;
             if (p != null && p.Converged)
             {
                 bf.Plan = p;
@@ -100,14 +139,18 @@ public static partial class GuidanceWindow
             {
                 bf.Refusals++;
                 bf.LastRefusal = res.Why.Length > 0 ? res.Why : "no plan";
-                GuidanceLog.Info(vehicle, $"Bellyflop solve {bf.Solves}: {text}.");
+                // Before the take-over the entry is still flying to the hand-over, so a site out of reach from here is expected: said once in the game log, then in the debug log.
+                if (flying || bf.Refusals == 1)
+                    GuidanceLog.Info(vehicle, $"Bellyflop solve {bf.Solves}: {text}{(flying ? "" : " (the entry still flies to the hand-over)")}.");
+                else
+                    GuidanceLog.Debug(vehicle, $"Bellyflop solve {bf.Solves}: {text}.");
             }
         }
         if (now >= bf.NextSolveAt && (bf.Worker == null || !bf.Worker.Busy))
         {
             bf.Worker ??= new Ksa3DofWorker();
             BellyflopConfig cfg = BellyflopConfigNow();
-            BellyflopPlan warm = bf.Plan;
+            BellyflopPlan warm = bf.Plan ?? bf.Warm;
             BellyflopModel solveModel = model;
             double a0 = aNow, b0 = bNow, p0 = pNow;
             bf.NextSolveAt = now + Math.Max(_s.OrbitalEntryBellyflopResolveS, 0.25);
@@ -120,9 +163,9 @@ public static partial class GuidanceWindow
             });
         }
 
-        // ---- take-over ----
+        // ---- take-over: at the first plan that reaches the site, from BELLYFLOP FROM MACH on. It may glide on as the entry does (BELLYFLOP PITCH UP), so it reaches the site long before the entry's own hand-over, which is now only the latest it can take over at: the entry holds its attitude there if no plan has come. ----
         if (!flying && (st.Phase is OrbitalEntryPhase.Entry or OrbitalEntryPhase.Holding)
-            && mach <= _s.OrbitalEntryHandoverMach && bf.Plan != null && bf.Plan.Converged && bf.Model != null)
+            && bf.Plan != null && bf.Plan.Converged && bf.Model != null)
         {
             st.Phase = OrbitalEntryPhase.Bellyflop;
             st.Tracker.Reset();

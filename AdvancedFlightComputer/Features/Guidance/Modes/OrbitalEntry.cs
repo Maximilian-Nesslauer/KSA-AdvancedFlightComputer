@@ -222,12 +222,15 @@ public static partial class GuidanceWindow
         double drag = 0.0, ld = st.Trim.LiftToDragAt(mach);
         bool liveAero;
         double3 forceBody;
+        st.AeroAccelKnown = false;
         using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Entry.LiveAero"))
             liveAero = KsaAeroSweep.TryLiveAero(vehicle, out forceBody, out _, dt);
         if (liveAero)
         {
             double3 f = forceBody.Transform(KsaFrameBridge.BodyToCci(vehicle));
             double m = Math.Max(vehicle.TotalMass, 1.0);
+            st.AeroAccelCci = f / m;
+            st.AeroAccelKnown = true;
             drag = Math.Max(-double3.Dot(f, vHat) / m, 0.0);
             double liftAccel = (f + drag * m * vHat).Length() / m;
             if (drag > 0.3)
@@ -237,7 +240,8 @@ public static partial class GuidanceWindow
 
         EntryModel nominal = OrbitalEntryModel(vehicle, parent, st, 1.0, 1.0).WithRotationAt(parent, r, vRel);
         double modelDrag = nominal.DragAccel(alt, vMag);
-        if (drag > 0.3 && modelDrag > 0.1)
+        // The scales are of the entry's own model at its angle of attack: under bellyflop the craft flies belly first, which that model does not describe, so they stand still (bellyflop measures its own, BellyflopState.ForceScale).
+        if (drag > 0.3 && modelDrag > 0.1 && st.Phase != OrbitalEntryPhase.Bellyflop)
         {
             double k = Math.Clamp(dt / 5.0, 0.0, 1.0);
             st.DensityScale += k * (Math.Clamp(drag / modelDrag, 0.5, 2.0) - st.DensityScale);
@@ -303,7 +307,7 @@ public static partial class GuidanceWindow
 
         // ---- bellyflop: solving in the background, taking over at the hand-over ----
         using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Entry.Bellyflop"))
-            StepBellyflop(vehicle, parent, st, mach, now);
+            StepBellyflop(vehicle, parent, st, mach, now, dt);
 
         // ---- bank ----
         double bankDeg;
@@ -460,6 +464,7 @@ public static partial class GuidanceWindow
         var bfp = st.Bellyflop.Plan;
         v.Add(st.Bellyflop.PitchDeg); v.Add(st.Bellyflop.BankDeg); v.Add(st.Bellyflop.YawDeg);
         v.Add(bfp?.MissM ?? double.NaN); v.Add(bfp != null ? bfp.EndTime - now : double.NaN); v.Add(st.Bellyflop.TerminalRangeM / 1000.0);
+        v.Add(st.Bellyflop.ForceScale);
         v.Add(a.FinCommandDeg?.Length ?? 0);
         for (int i = 0; i < 4; i++) v.Add(a.FinCommandDeg != null && i < a.FinCommandDeg.Length ? a.FinCommandDeg[i] : double.NaN);
         for (int i = 0; i < 4; i++) v.Add(a.FinNowDeg != null && i < a.FinNowDeg.Length ? a.FinNowDeg[i] : double.NaN);
