@@ -1,39 +1,73 @@
 # Powered guidance
 
-## Powered Guidance
-
 [![Watch the PoweredGuidance demo](../guidance/reference-material/images/twin_boosters.png)](https://youtu.be/hSUcV6tx3oY)
 
-Closed-loop guidance that flies the vehicle for you, originally the [PoweredGuidance](https://github.com/cairn5/PoweredGuidance) mod by cairn5, see [Credits](about.md#credits).
-Use the **LAUNCH** and **LAND** pages of the [AFC console](console.md). The footer of the page starts its mode, and the stop in the head acts on the mode that runs, whatever page is on screen. **GUIDANCE ENABLED** in the **AFC** menu of the top bar and on **TUNE > PREFERENCES** switches guidance off and on.
-The settings of a craft on **LAUNCH**, **LAND** and **TUNE** (the target orbit, the ascent method, **THEN**, the landing site, the legs and the tuning values) are saved with the game save, in `afc-craft-settings.toml` in the folder of that save, and come back on the same craft when the save loads, also after a rename. Only the values that differ from the defaults are written. A load gives back the settings only, so no mode starts by itself. The LAN is not kept, because it starts over the launch site. The **SHOW IN MAP** and **SHOW IN WORLD** switches are player preferences for all craft and are saved in `ui.toml`. The choice between **ORBIT** and **PLAN** on **SHOW IN MAP** is the craft setting **PLAN ON MAP** and is saved with the game save.
+Closed-loop guidance that flies ascent, booster return, entry and powered landing automatically. Originally developed by cairn5 as [PoweredGuidance](https://github.com/cairn5/PoweredGuidance); see [Credits](about.md#credits).
 
-- **Ascent** flies UPFG, the Space Shuttle's ascent guidance, to a target periapsis, apoapsis, inclination and LAN, optionally holding the argument of periapsis too and otherwise inserting wherever the burn costs least dV, with an optional launch window, g-limit and booster reserve. Launching to a target vehicle flies a co-elliptic chase orbit below it. LAUNCH refuses a plane that the launch site cannot reach and names the nearest inclination that it can reach, and it refuses a launch into a target plane outside its window with the time of the next window. Staging goes through [automatic staging](burns-and-staging.md#automatic-staging), and a stage that separates with a command pod can get its own landing site.
-- **Boostback** flies a separated booster back toward its landing site with a settling burn, a flip, the boostback burn and an entry attitude, against an impact prediction through the atmosphere.
-- **Launch to a moon** follows the ascent when **THEN** on LAUNCH picks a flyby or an orbit of a moon, see [Launch to a moon](#launch-to-a-moon).
-- **Land from orbit** flies the whole chain from orbit: the deorbit burn, a powered descent with touchdown guidance (the 6-DOF solver), and a terminal hover to touchdown for a craft that can hover. The plan ends where the first point of the craft meets the ground, so a craft that cannot hover touches down softly too. When touchdown guidance has no plan in the air for 6 s, G-FOLD (a point-mass solver) takes the craft if it can fly it. AFC refuses before the deorbit burn when no landing guidance can fly the craft, and says why. A craft with no roll torque from its engines is landed upright at whatever heading and roll rate it has. A landing deploys the landing legs when its time to the touchdown is the time the legs take to open plus **BUFFER** (1 s by default), on the clock of the plan that flies the landing. With **STEER BURN WITH GIMBAL** on (the default), a landing burn of an engine on a gimbal that has authority in pitch and yaw is steered with the gimbal alone: RCS that is on before the burn is switched off, and comes back when the engine is off or the landing mode ends, under touchdown guidance when that mode ends. After touchdown the attitude stays in **MANUAL**, so the RCS does not push the landed craft.
-- **Land from here** starts the landing from where the craft is now, with touchdown guidance, or with entry guidance first when the craft falls through an atmosphere.
-- **Landing engines** lets you choose native engine controllers. Open **LANDING ENGINES** on **LAND**, or in the row for a booster under **LAUNCH > BOOSTER RETURN**. Select the controllers, enter a name and save the group. Use **USE FOR LANDING** to recall a saved group and **AS STAGED** to return to normal stage activation. On **LAND** you can also activate a saved group or enable and disable individual controllers during manual flight. The stock engine switch and throttle still control firing. With **PARK IDLE ENGINES** on, a landing burn tilts the nozzles of the engines it leaves off away from the lit ones. This is for looks only, and the lit engines steer as before.
-- A selected booster group uses the calculated climb and return reserve. The launch and boostback stages keep their own engines. AFC activates the landing group during the glide, confirms its fuel supply, and uses that group for entry and touchdown. A standalone **LAND NOW** approach can also use a group. For an orbital deorbit followed by a separate engine selection, start the descent from a coast with **LAND NOW**.
-- **Entry guidance** (the 3-DOF solver) flies the glide through the atmosphere with the engine off, lights the engine at the planned ignition and flies the landing burn. With **ENTRY ON GLIDE** on, it takes a boostback glide over by itself, and with **TOUCHDOWN FOR BURN END** on, touchdown guidance takes the last seconds of the burn.
+Use the **LAUNCH** and **LAND** pages of the [AFC console](console.md). The page footer commits the active mode, and the head stop acts on whichever mode is running. Toggle **GUIDANCE ENABLED** in the **AFC** top-bar menu or on **TUNE > PREFERENCES** to disable or enable guidance globally.
 
-Guidance plans stay within the g-limit and the structural load limit at which KSA holds the throttle back.
-Guidance takes a craft only when you press the commit of a page, and it lets go when you abort, take over the attitude or arm the stock Auto burn. A commit that would take the craft from another running guidance mode asks first.
-An abort during the powered descent, the terminal hover or the landing burn of entry guidance leaves the engine as it is, so the craft does not drop, while every other abort cuts the engine. An abort of entry guidance in the glide cuts the engine, which is off in the glide in any case.
-The hover refuses a craft whose thrust at minimum throttle exceeds its weight, because such a craft climbs whenever the engine runs, and a G-FOLD or touchdown guidance descent that would hand over to it flies its own plan to touchdown instead.
-The aim of the hover is nudged with buttons. Numpad nudges are off by default, because the game also uses the numpad digits for its HUD layouts; **NUMPAD NUDGES THE HOVER** on **TUNE > PREFERENCES** turns them on. The keys then work while the craft hovers, whatever the console shows.
-G-FOLD is the fallback, and it flies only a craft with a gimbal. Touchdown guidance (the 6-DOF solver) models the vehicle rotation, so it handles boosters with high rotational inertia and descents through an atmosphere. It turns the craft with its gimbals, its RCS or both, so it also lands a craft with RCS and no gimbal.
-While AFC solves a launch plan or plans a deorbit burn, it holds the simulation at 1x and then gives your speed back. It does not give the speed back into a burn, an armed launch or a coast to a planned burn.
-The native solvers `clarabel_c.dll` and `scs.dll` ship with the mod. See the [guidance documentation](../guidance/README.md) for how it works.
+## Ascent
 
-A mod can add named landing sites for **RETURN TO** and **LAND AT**, see [Landing sites for mod authors](landing-sites.md).
+**LAUNCH** flies either **UPFG** (the Space Shuttle's ascent guidance) or **convex ascent** to a target periapsis, apoapsis, inclination and LAN. You can optionally hold the argument of periapsis (otherwise insertion happens where delta-v cost is lowest), set a launch window, set a g-limit and reserve propellant for a returning booster.
+
+- **Target rendezvous:** Launching to a target craft flies a co-elliptic chase orbit below it.
+- **Plane and window checks:** **LAUNCH** refuses an inclination the launch site cannot reach (and names the nearest reachable inclination) and refuses a target-plane launch outside its window (and reports the next window time).
+- **Attitude and fins (`LAUNCH > GNC`):** **AFC ATTITUDE CONTROL** (on by default) lets AFC steer ascent with gimbals first and RCS for the remainder against aerodynamic moments; switching it off hands attitude steering to the stock flight computer. **STEER WITH FINS** (off by default) lets AFC include aerodynamic control surfaces during ascent.
+- **Staging and fairings:** Staging runs through [automatic staging](burns-and-staging.md#automatic-staging), including independent payload fairing release.
 
 ## Launch to a moon
 
-**THEN** on the LAUNCH page picks what follows the ascent: *Stay in orbit*, a flyby of a moon, or an orbit of a moon (every moon of the launch body is listed), with **PERIAPSIS AT MOON** below it, 100 km by default.
+**THEN** on **LAUNCH** picks what follows the ascent: *Stay in orbit*, a flyby of a moon or an orbit of a moon (every moon of the launch body is listed), with **PERIAPSIS AT MOON** below it (`100 km` by default).
 
-- With a moon picked and no **TARGET**, the launch plane is set for the moon and LAUNCH arms for its window: the moon's own orbit plane when the launch site passes under it, and otherwise the plane just above the site's latitude that holds the moon at the soonest arrival.
-- After the ascent, AFC plans the injection burn from the parking orbit, checks the orbit as flown, and plans up to two small correction burns on the way, because a tenth of a m/s at the injection moves the periapsis at the moon by more than 100 km. For an orbit it then plans the capture burn at the periapsis, into a circular orbit, or into an ellipse when the craft has less delta-v than that.
-- Stock AUTO flies every burn, and AFC warps to each one for the craft in focus.
-- A burn that you plan, a chain burn that you remove or change, or AUTO switched off stops the chain and leaves everything as it is. *Stay in orbit* picked during the chain, another controller on the craft, or guidance switched off stops it too, and a chain burn that has not started then stays planned with AUTO off. **THEN** goes back to *Stay in orbit* when the chain ends.
-- A parking orbit that the moon is far out of is refused with the angle and the cost.
+- With a moon picked and no **TARGET**, AFC sets the launch plane for the moon and arms **LAUNCH** for its window: the moon's own plane when the launch site passes under it, or the plane just above the site's latitude that reaches the moon soonest.
+- After ascent, AFC plans the injection burn from the parking orbit, verifies the flown orbit and plans up to two small mid-course corrections (a `0.1 m/s` injection error can move moon periapsis by more than `100 km`). For a moon orbit, AFC then plans the capture burn at periapsis (circular, or elliptical if delta-v is limited).
+- Stock **AUTO** flies each burn and AFC warps to each one for the focused craft. If stock's low-battery warning interrupts an AFC warp during a moon chain or deorbit, AFC offers to resume warp.
+- Planning a manual burn, editing or deleting a chain burn, turning **AUTO** off, switching **THEN** back to *Stay in orbit*, starting another controller or disabling guidance stops the chain and leaves unexecuted burns planned with **AUTO** off.
+- A parking orbit far out of the moon's plane is refused with the plane angle and delta-v cost.
+
+## Booster return and boostback
+
+A stage that separates with a command pod can fly back to a landing site after separation:
+
+- Under **LAUNCH > BOOSTER RETURN**, assign each returnable stage either a named landing site (**RETURN TO**) or **OPTIMAL RETURN** (places a downrange drone-ship target during the climb solve and freezes it at lift-off). AFC sizes the booster fuel reserve from the solved climb.
+- **LAND > BOOSTBACK** flies a separated booster back toward its target site with a settling burn, flip, boostback burn and entry attitude guided by an atmospheric impact predictor.
+- With **ENTRY ON GLIDE** enabled, entry guidance takes over the boostback glide automatically and flies the landing burn.
+
+## Landing and deorbit
+
+**LAND** provides four ways down, all sharing the selected landing site (see [Landing sites for mod authors](landing-sites.md) to add custom pads or barges):
+
+- **DEORBIT** flies the full chain from orbit: deorbit burn, powered descent with **touchdown guidance** (the 6-DOF solver) and a terminal hover to touchdown for craft that can hover. On **DEORBIT > AFTER DEORBIT**, you can choose **LAND** or **ENTRY BURN ONLY** (with an **ENTRY PERIAPSIS** in km). In **ENTRY BURN ONLY** mode, the commit button becomes **DEORBIT ONLY**, stock **AUTO** flies the entry burn, and AFC releases control for a parachute descent. On atmospheric bodies, **DEORBIT + LAND** directs you to use **DEORBIT ONLY** and then **LAND NOW** in air.
+- **LAND NOW** starts landing from the current state, using **touchdown guidance** directly or **entry guidance** (the 3-DOF solver) first when falling through an atmosphere.
+- **Entry guidance (3-DOF)** flies the unpowered atmospheric glide, ignites at the planned time and flies the landing burn. With **TOUCHDOWN FOR BURN END** enabled, touchdown guidance takes over the final seconds of the burn.
+- **Touchdown guidance (6-DOF)** models vehicle rotation, handling high-inertia boosters, atmospheric descents and RCS-only craft (no gimbal required). Its plan ends where the lowest point of the craft meets the ground, so craft that cannot hover still touch down softly. Craft without engine roll torque land upright at whatever heading and roll rate they arrive with.
+- **G-FOLD fallback:** If touchdown guidance has no plan in the air for `6 s`, G-FOLD (a point-mass solver) takes over automatically if the craft qualifies (airless body, throttling liquid engines and a gimbal). AFC refuses before the deorbit burn if neither solver can fly the craft and states why.
+- **Landing legs (`LAND > LEGS`):** Deploys landing legs when time to touchdown on the active plan's clock equals leg deploy time plus **BUFFER** (`1.0 s` default).
+- **Gimbal-only burn steering:** With **STEER BURN WITH GIMBAL** enabled (default, under **LAND > DEORBIT > GNC**), a landing burn on gimballed engines with pitch/yaw authority switches RCS off during the burn so the gimbal steers alone, then restores RCS when the engine shuts off or the mode ends.
+- **Post-touchdown attitude:** After touchdown, attitude remains in **MANUAL** so RCS does not push the landed craft.
+
+## Landing engines
+
+Choose which engines fire for landing without changing launch or boostback staging. Open **LANDING ENGINES** on **LAND** or on a booster row under **LAUNCH > BOOSTER RETURN**:
+
+- **Aft engine map:** Shows an aft-view diagram of the craft's engines (`LANDS`, `STAYS OFF`, `NO GIMBAL`, `IN THE CHOICE`, plus live `SWITCHED ON`, `FIRING`, `NO PROPELLANT`). Click any engine dot to toggle it directly (custom selections appear as `CUSTOM N`).
+- **Automatic suggestions:** A table lists **AS STAGED** alongside symmetric engine subsets with engine count (`N`), `HOVER` TWR, `BRAKE` TWR, a verdict (`OK`, `NO HOVER`, `WEAK`, `TOO WEAK`, `OFF AXIS`) and a `BEST` marker. Click any row to select it immediately.
+- **Manual flight and staging:** During manual flight on **LAND**, click **APPLY NOW** to switch on the chosen landing engines immediately (stock engine switch and throttle still control firing). For a returning booster, AFC activates the selected landing engines during the glide, verifies propellant and uses them for entry and touchdown.
+- **PARK IDLE ENGINES:** Tilts the nozzles of unlit engines outward away from lit engines during a landing burn (visual only; lit engines steer normally).
+
+## Hover
+
+**LAND > HOVER** holds a controlled terminal hover and descends to touchdown. Hover refuses craft whose thrust at minimum throttle exceeds weight (`TWRmin > 1`), because such craft climb whenever lit; G-FOLD and touchdown guidance fly those craft directly to touchdown instead of handing over to hover.
+
+Use the console nudge buttons to shift the hover aim. Numpad nudges are off by default because KSA uses numpad digits for HUD layouts; enable **NUMPAD NUDGES THE HOVER** on **TUNE > PREFERENCES** to nudge with the numpad while hovering regardless of the active console page.
+
+## Control, aborts and saved settings
+
+- **Limits:** Guidance plans respect both the configured g-limit and KSA's structural load throttle limit.
+- **Control and takeovers:** Guidance claims a craft only when you click a page commit button and releases it on abort, manual attitude takeover or arming a stock Auto burn. A commit that would take a craft from another running guidance mode asks first.
+- **Aborts:** Aborting during powered descent, terminal hover or an entry landing burn leaves the engine throttle as-is so the craft does not drop. All other aborts (including aborting entry guidance during the unpowered glide) cut the engine.
+- **Time warp during solves:** AFC holds simulation speed at 1x while solving a launch plan or planning a deorbit burn, then restores your previous speed unless entering a burn, armed launch or coast to a planned burn.
+- **Countdown and diagnostics:** A green `SEPARATION T-` band appears under the altitude counter before stage separation even with the console closed. Detailed solver telemetry lives under **TUNE > DIAG** (`ASCENT`, `BOOSTBACK`, `AERO`, `ATMOSPHERE`, `G-FOLD`, `LOG`, `FLIGHT PLAN`).
+- **Saved settings:** Per-craft settings on **LAUNCH**, **LAND** and **TUNE** (target orbit, ascent method, **THEN**, landing site, legs, **PLAN ON MAP** and non-default tuning values) are saved with the game save in `afc-craft-settings.toml` and restored on load (even after renaming the craft), without auto-starting any mode. LAN is not saved because it starts over the launch site. Global UI preferences (**SHOW IN MAP**, **SHOW IN WORLD**, console layout) are saved in `ui.toml`.
+
+The native solvers `clarabel_c.dll` and `scs.dll` ship with the mod. See the [guidance developer documentation](../guidance/README.md) for the solver architecture and mathematics.
