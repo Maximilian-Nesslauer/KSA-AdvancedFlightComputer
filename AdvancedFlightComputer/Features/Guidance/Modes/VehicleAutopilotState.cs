@@ -1784,7 +1784,7 @@ public sealed class VehicleAutopilotState
     /// <summary>Aerodynamic load limit of the entry plan, g. 0 is off.</summary>
     public double OrbitalEntryGMax = 2.5;
     /// <summary>Stagnation heating limit of the entry plan, kW/m^2 (Sutton-Graves on OrbitalEntryNoseRadiusM). 0 is off.</summary>
-    public double OrbitalEntryHeatMaxKWm2 = 0.0;
+    public double OrbitalEntryHeatMaxKWm2 = 700.0;
     /// <summary>Nose radius for the heating estimate, m.</summary>
     public double OrbitalEntryNoseRadiusM = 1.0;
     /// <summary>Smallest bank the plan uses, deg: side lift kept for the roll reversals.</summary>

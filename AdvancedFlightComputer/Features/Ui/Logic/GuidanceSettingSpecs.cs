@@ -271,8 +271,8 @@ internal static class GuidanceSettingSpecs
         "The orbital entry plan stays above the altitude at which the air's dynamic pressure would pass this. 0 switches the limit off.");
     public static readonly SettingSpec OrbitalEntryGMax = new("OrbitalEntryGMax", "MAX LOAD", "g", P, 2.5, 0.0, 50.0, "%.2f",
         "The orbital entry plan stays above the altitude at which drag and lift together would pass this load. 0 switches the limit off.");
-    public static readonly SettingSpec OrbitalEntryHeatMaxKWm2 = new("OrbitalEntryHeatMaxKWm2", "MAX HEATING", "kW/m^2", P, 0.0, 0.0, 1e5, "%.0f",
-        "Stagnation heating limit for the orbital entry plan, from the Sutton-Graves estimate on NOSE RADIUS. 0 switches the limit off.");
+    public static readonly SettingSpec OrbitalEntryHeatMaxKWm2 = new("OrbitalEntryHeatMaxKWm2", "MAX HEATING", "kW/m^2", P, 700.0, 0.0, 1e5, "%.0f",
+        "Stagnation heating limit for the orbital entry plan, from the Sutton-Graves estimate on NOSE RADIUS: the game does not heat the craft yet, so this is an estimate of what a heat shield would see, and it keeps the plan higher where the heating peaks. A limit the craft cannot loft away gets no plan: lower it with care. 0 switches the limit off.");
     public static readonly SettingSpec OrbitalEntryNoseRadiusM = new("OrbitalEntryNoseRadiusM", "NOSE RADIUS", "m", E, 1.0, 0.05, 100.0, "%.2f",
         "Nose radius for the heating estimate: a blunter nose heats less.");
     public static readonly SettingSpec OrbitalEntryBankMinDeg = new("OrbitalEntryBankMinDeg", "PLAN MIN BANK", "deg", E, 15.0, 0.0, 89.0, "%.0f",

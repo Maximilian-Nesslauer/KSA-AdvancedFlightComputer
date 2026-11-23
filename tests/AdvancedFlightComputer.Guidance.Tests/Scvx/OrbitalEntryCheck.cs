@@ -44,6 +44,12 @@ internal static class OrbitalEntryCheck
             fails += OpenLoop(v, verbose);
             fails += ClosedLoop(v, verbose);
         }
+        // The heating limit: the belly-flop again under the console's default (OrbitalEntryHeatMaxKWm2, 700 kW/m^2 on a 1 m nose), which its plan without the limit passes (710). 600 is more than an L/D of 0.35 can loft away: the plan is refused.
+        HeatLimit = 700_000.0;
+        Console.WriteLine($"  with a {HeatLimit / 1000:F0} kW/m^2 heating limit:");
+        fails += OpenLoop(Vehicles[1], verbose);
+        fails += ClosedLoop(Vehicles[1], verbose);
+        HeatLimit = 0.0;
         Console.WriteLine(fails == 0 ? "PASS orbital-entry" : $"FAIL orbital-entry ({fails})");
         return fails == 0 ? 0 : 1;
     }
@@ -168,7 +174,10 @@ internal static class OrbitalEntryCheck
         return ok ? 0 : 1;
     }
 
-    static EntryConfig Config(Vehicle v) => new() { HeatingRateMax = 0, DynamicPressureMax = 16_000, LoadFactorMax = v.GMax };
+    /// <summary>The heating limit the next runs plan with, W/m^2; 0 for none.</summary>
+    static double HeatLimit;
+
+    static EntryConfig Config(Vehicle v) => new() { HeatingRateMax = HeatLimit, DynamicPressureMax = 16_000, LoadFactorMax = v.GMax };
 
     static int OpenLoop(Vehicle v, bool verbose)
     {
@@ -181,13 +190,17 @@ internal static class OrbitalEntryCheck
         var p = res.Plan;
         if (p == null) { Console.WriteLine($"  FAIL {v.Name}: no plan ({res.Why})"); return 1; }
 
-        double floorWorst = 0;
-        for (int k = 0; k < p.Count; k++) floorWorst = Math.Max(floorWorst, p.FloorAltitudeM[k] - p.AltitudeM[k]);
+        double floorWorst = 0, heatPeak = 0;
+        for (int k = 0; k < p.Count; k++)
+        {
+            floorWorst = Math.Max(floorWorst, p.FloorAltitudeM[k] - p.AltitudeM[k]);
+            heatPeak = Math.Max(heatPeak, model.HeatingRate(p.AltitudeM[k], p.SpeedMs[k]));
+        }
         double hf = p.AltitudeM[^1];
         bool ok = p.Converged && floorWorst < 1_000 && Math.Abs(hf - cfg.HandoverAltitude) < cfg.HandoverAltitudeTol + 500;
         Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} {v.Name} open loop: {(p.Converged ? "converged" : "refused " + res.Why)}, "
                         + $"{p.Iterations} it, {p.SolveMs:F0} ms, defect {p.MaxDefect:F4}, range err {p.TerminalRangeErrorM / 1000:F2} km, "
-                        + $"floor worst {floorWorst:F0} m, h_f {hf / 1000:F1} km, coast {start.Value.SecondsAhead:F0} s");
+                        + $"floor worst {floorWorst:F0} m, h_f {hf / 1000:F1} km, coast {start.Value.SecondsAhead:F0} s, heating peak {heatPeak / 1000:F0} kW/m^2");
         if (verbose || !ok)
         {
             for (int k = 0; k < p.Count; k += Math.Max(1, p.Count / 12))
@@ -296,7 +309,7 @@ internal static class OrbitalEntryCheck
         int reversals = 0, lastSide = 0, solves = 0, refused = 0;
         var whys = new Dictionary<string, int>();
         double worstDefect = 0;
-        double gMax = 0, qMax = 0, solveMsMax = 0;
+        double gMax = 0, qMax = 0, solveMsMax = 0, heatMax = 0;
         var dy = new double[6]; var k1 = new double[6]; var k2 = new double[6]; var k3 = new double[6]; var k4 = new double[6]; var yt = new double[6];
 
         while (t < 4_000)
@@ -359,6 +372,7 @@ internal static class OrbitalEntryCheck
             double bank = outp.BankDeg * Math.PI / 180;
             gMax = Math.Max(gMax, truth.LoadFactor(h, vel));
             qMax = Math.Max(qMax, truth.DynamicPressure(h, vel));
+            heatMax = Math.Max(heatMax, truth.HeatingRate(h, vel));
 
             Truth(y, bank, truth, k1);
             for (int i = 0; i < 6; i++) yt[i] = y[i] + 0.5 * dt * k1[i];
@@ -383,7 +397,7 @@ internal static class OrbitalEntryCheck
             return ok ? 0 : 1;
         }
         Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} {v.Name} closed loop (rho x1.15, L/D x0.92): miss {rangeKm:F1} km, cross {crossKm:F1} km, "
-                        + $"h_end {hEnd:F1} km, V_end {y[3]:F0} m/s, g max {gMax:F2}, q max {qMax / 1000:F1} kPa, reversals {reversals}, "
+                        + $"h_end {hEnd:F1} km, V_end {y[3]:F0} m/s, g max {gMax:F2}, q max {qMax / 1000:F1} kPa, heating max {heatMax / 1000:F0} kW/m^2, reversals {reversals}, "
                         + $"solves {solves} ({refused} refused{(refused > 0 ? ": " + string.Join(", ", whys.Select(kv => kv.Key + " x" + kv.Value)) + $", worst defect {worstDefect:F3}" : "")}), worst {solveMsMax:F0} ms, t {t:F0} s");
         return ok ? 0 : 1;
     }
