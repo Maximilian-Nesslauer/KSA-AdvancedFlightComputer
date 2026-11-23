@@ -15,6 +15,8 @@ namespace AdvancedFlightComputer.HarnessTests;
 
 // Opt-in flight: the player's belly-flop craft 'flopper' flown by ORBITAL ENTRY from the middle of an entry to 100 m over the site, bellyflop taking over on the way, on KSAero's aerodynamics (its hinged flaps are KSAero parts).
 //
+// RUN WITH KSAero's CONTENT: run-headless.ps1 -ContentMods KSAero -Tests afc-guidance-flopper-entry -Vehicle ''. The minimal manifest loads no mod's parts, and KsaeroScope loads only KSAero's code, so without the flag the flopper's flaps have no part template and the test skips.
+//
 // THE START is the 2026-11-23 11:36 flight at Mach 12: 48 km up, 4.2 km/s over the ground, 1.3 deg down, 720 km short of the site on the great circle through it heading east, belly first at 40 deg from nose-first, the craft's belly axis (+Z) to the air. AFC_FLOPPER_* override it.
 //
 // PACED: the entry and bellyflop solve on their own threads against the wall clock, every 2 s and 1 s of flight, so the flight runs at AFC_FLOPPER_PACE times real time (2 by default, as a player flies it under light warp).
@@ -133,6 +135,11 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
             catch (InvalidOperationException e)
             {
                 t.Skip($"{VehicleSave}: {e.Message}");
+                return;
+            }
+            catch (NullReferenceException e) when (e.Message.Contains("PartTemplate", StringComparison.Ordinal))
+            {
+                t.Skip($"{VehicleSave}: {e.Message}. KSAero's parts are not loaded: run with -ContentMods KSAero.");
                 return;
             }
             PhysicsBubble._forceOffRails = true;
