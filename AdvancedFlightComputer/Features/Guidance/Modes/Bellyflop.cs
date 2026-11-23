@@ -52,10 +52,14 @@ public static partial class GuidanceWindow
         // The entry's angle of attack there is from nose-first; the belly's is 90 deg less.
         double alphaBelly = (90.0 - st.Trim.AlphaAt(handMach)) * Math.PI / 180.0;
         double altitude = p.AltitudeM[last] - (siteRadius - parent.MeanRadius);
-        double range = BellyflopPlanner.FallRange(model, BellyflopConfigNow(), altitude, p.SpeedMs[last], p.Gamma[last], alphaBelly);
+        // Holding BellyflopAimPitchDeg rather than falling flat: bellyflop can glide far beyond its flat fall and go only a little short of it, so the site is aimed inside its reach, not at the short edge.
+        double range = BellyflopPlanner.FallRange(model, BellyflopConfigNow(), altitude, p.SpeedMs[last], p.Gamma[last], alphaBelly, BellyflopAimPitchDeg * Math.PI / 180.0);
         if (double.IsFinite(range) && range > 0)
             bf.TerminalRangeM = range;
     }
+
+    /// <summary>The pitch the entry's aim assumes bellyflop holds after the hand-over, deg: a fall a little longer than flat, so the site sits inside bellyflop's reach with room to go short.</summary>
+    private const double BellyflopAimPitchDeg = 20.0;
 
     /// <summary>Bellyflop's force scale: its own measurement once it has one, else the entry's density scale, measured against the entry's model before the craft turns belly first.</summary>
     private static double BellyflopForceScale(OrbitalEntryState st) => st.Bellyflop.ForceScaleKnown ? st.Bellyflop.ForceScale : st.DensityScale;
@@ -163,9 +167,9 @@ public static partial class GuidanceWindow
             });
         }
 
-        // ---- take-over: at the first plan that reaches the site, from BELLYFLOP FROM MACH on. It may glide on as the entry does (BELLYFLOP PITCH UP), so it reaches the site long before the entry's own hand-over, which is now only the latest it can take over at: the entry holds its attitude there if no plan has come. ----
+        // ---- take-over: at the hand-over (HAND-OVER MACH) with a plan that reaches the site, solved in the background from BELLYFLOP FROM MACH so it is ready; the entry holds its attitude until one comes. ----
         if (!flying && (st.Phase is OrbitalEntryPhase.Entry or OrbitalEntryPhase.Holding)
-            && bf.Plan != null && bf.Plan.Converged && bf.Model != null)
+            && mach <= _s.OrbitalEntryHandoverMach && bf.Plan != null && bf.Plan.Converged && bf.Model != null)
         {
             st.Phase = OrbitalEntryPhase.Bellyflop;
             st.Tracker.Reset();

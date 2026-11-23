@@ -36,8 +36,21 @@ public sealed class BellyflopConfig
     /// <summary>Price of pitch and bank, per deg^2 over the nodes (a mean): the plan flies as near belly-first as it can.</summary>
     public double EffortWeight { get; set; } = 0.01;
 
-    /// <summary>Price of yaw, per deg over the nodes (a mean, L1): far above bank's, so the plan turns the yaw only once bank is pinned at its limit.</summary>
+    /// <summary>Price of yaw, per deg over the nodes (a mean, L1), near belly-first: far above bank's, so the plan turns the yaw only once bank is pinned at its limit. While the plan glides it is cheaper (YawGlideScale).</summary>
     public double YawWeight { get; set; } = 2.0;
+
+    /// <summary>The share of YawWeight yaw costs at a node gliding at YawGlideFromDeg of pitch or more, falling linearly from 1 at AngleMaxDeg: gliding, the yaw turns the lift as the entry's bank does, and is how the plan should take out crossrange, not a last resort (2026-11-23: the plan unwound the entry's 63 deg at the take-over and fought 10 km of crossrange with sideslip). Offline on the flat plate the plan still takes out crossrange with bank (sideslip) rather than yaw at any price tried (0.02 to 1); the approach cone is what makes it do so early.</summary>
+    public double YawGlideScale { get; set; } = 0.1;
+    public double YawGlideFromDeg { get; set; } = 25.0;
+
+    /// <summary>The approach cone over the site: below ApproachConeTopM (of the plan's own altitude) the plan stays within ApproachConeDeg of the vertical through the site, plus ApproachConeFloorM, so it takes the miss out while it still has the speed to, and the last of the fall is steep. Priced as the defects (soft). 0 deg switches it off.</summary>
+    public double ApproachConeDeg { get; set; } = 15.0;
+    public double ApproachConeTopM { get; set; } = 12_000.0;
+    public double ApproachConeFloorM { get; set; } = 300.0;
+
+    /// <summary>The share of the pitch-down and bank limits a plan may count on beyond its first MarginAfterS: the next plan, a second later, has the whole limit again, so a plan never spends the authority the craft will need to correct with (2026-11-23: plans sat at the edge of reach and missed by 0.5 km at the end).</summary>
+    public double LimitMargin { get; set; } = 0.75;
+    public double MarginAfterS { get; set; } = 20.0;
 
     /// <summary>Price of the change of each angle between nodes, per deg^2.</summary>
     public double RateWeight { get; set; } = 0.01;

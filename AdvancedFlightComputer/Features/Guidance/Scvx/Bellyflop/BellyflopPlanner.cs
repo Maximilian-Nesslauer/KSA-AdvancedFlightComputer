@@ -76,9 +76,10 @@ public sealed class BellyflopPlanner
         for (int k = 0; k < n; k++)
         {
             double t = sigma * k / (n - 1);
+            double share = t > cfg.MarginAfterS ? Math.Clamp(cfg.LimitMargin, 0.1, 1.0) : 1.0;
             limA[k] = Math.Max(pitchUp, alphaNow - rate * t);
-            limADown[k] = Math.Max(angleMax, -alphaNow - rate * t);
-            limB[k] = Math.Max(bankMax, Math.Abs(betaNow) - rate * t);
+            limADown[k] = Math.Max(angleMax * share, -alphaNow - rate * t);
+            limB[k] = Math.Max(bankMax * share, Math.Abs(betaNow) - rate * t);
         }
 
         var lin = new Linearisation(n);
@@ -92,9 +93,12 @@ public sealed class BellyflopPlanner
             double defect = MaxScaledDefect(lin.Defect, n);
             if (iter > 0 && defect <= 0.25 * cfg.GateDefect && lastStep < 0.02 && Miss(x, n) <= 0.25 * cfg.GateMissM)
                 break;
-            double jRef = Merit(model, cfg, x, u, lin.Defect, n);
+            // This iteration's yaw prices (from the reference's pitch) and cone nodes (from its altitude): the same for the reference, the subproblem and the candidate, so the ratio compares like with like.
+            double[] yawW = YawPrices(cfg, u, n);
+            bool[] cone = ConeNodes(cfg, x, n);
+            double jRef = Merit(model, cfg, x, u, lin.Defect, n, yawW, cone);
             var sub = BuildAndSolve(model, cfg, x0, x, u, sigma, lin, eta, limA, limADown, limB, rate, yawRate,
-                                    alphaNow, betaNow, psiNow, out double jLin);
+                                    alphaNow, betaNow, psiNow, yawW, cone, out double jLin);
             if (sub == null)
             {
                 eta *= 0.5;
@@ -104,7 +108,7 @@ public sealed class BellyflopPlanner
             var (xc, uc, sc) = sub.Value;
             var defC = new double[n - 1, NX];
             Defects(model, cfg, xc, uc, sc, defC);
-            double jCand = Merit(model, cfg, xc, uc, defC, n);
+            double jCand = Merit(model, cfg, xc, uc, defC, n, yawW, cone);
             double predicted = jRef - jLin, actual = jRef - jCand;
             double step = MaxScaledStep(x, u, sigma, xc, uc, sc, n);
             if (predicted <= 1e-9 * (1 + Math.Abs(jRef)))
@@ -148,7 +152,7 @@ public sealed class BellyflopPlanner
     /// <summary>
     /// How far over the ground a belly-first fall covers to the target altitude, m, from a hand-over at <paramref name="altitude"/> (above the model's datum), <paramref name="speed"/> and flight-path angle <paramref name="gammaRad"/>, the airflow's angle on the belly easing from <paramref name="alphaStart"/> to zero at the angle rate: the range the entry leaves bellyflop to fly (EntryConfig.TerminalRangeM). The fall is flown along the model's bearing.
     /// </summary>
-    public static double FallRange(BellyflopModel model, BellyflopConfig cfg, double altitude, double speed, double gammaRad, double alphaStart)
+    public static double FallRange(BellyflopModel model, BellyflopConfig cfg, double altitude, double speed, double gammaRad, double alphaStart, double alphaHold = 0.0)
     {
         double bx = model.BearingX, by = model.BearingY;
         double[] x0 = [0, 0, altitude, speed * Math.Cos(gammaRad) * bx, speed * Math.Cos(gammaRad) * by, speed * Math.Sin(gammaRad)];
@@ -161,7 +165,7 @@ public sealed class BellyflopPlanner
         {
             if (model.Altitude(x) <= cfg.TargetAltitude)
                 break;
-            double aA = Ease(alphaStart, rate * t), aB = Ease(alphaStart, rate * (t + h / 2)), aC = Ease(alphaStart, rate * (t + h));
+            double aA = alphaHold + Ease(alphaStart - alphaHold, rate * t), aB = alphaHold + Ease(alphaStart - alphaHold, rate * (t + h / 2)), aC = alphaHold + Ease(alphaStart - alphaHold, rate * (t + h));
             model.Derivative(x, aA, 0, 0, k1);
             for (int j = 0; j < NX; j++) xt[j] = x[j] + 0.5 * h * k1[j];
             model.Derivative(xt, aB, 0, 0, k2);
@@ -349,14 +353,46 @@ public sealed class BellyflopPlanner
 
     // ---------------------------------------------------------------- merit
 
-    /// <summary>The control terms: pitch and bank (mean of squares), yaw (mean of magnitudes) and the change between nodes, in degrees.</summary>
-    static double ControlCost(BellyflopConfig cfg, double[,] u, int n)
+    /// <summary>The price of yaw at each node, per deg: YawWeight near belly-first, falling to YawGlideScale of it as the node's pitch rises from AngleMaxDeg to YawGlideFromDeg.</summary>
+    static double[] YawPrices(BellyflopConfig cfg, double[,] u, int n)
+    {
+        var w = new double[n];
+        double lo = cfg.AngleMaxDeg, hi = Math.Max(cfg.YawGlideFromDeg, lo + 1.0), floor = Math.Clamp(cfg.YawGlideScale, 0.0, 1.0);
+        for (int k = 0; k < n; k++)
+        {
+            double f = Math.Clamp((u[k, 0] / Deg - lo) / (hi - lo), 0.0, 1.0);
+            w[k] = cfg.YawWeight * (1.0 - f * (1.0 - floor));
+        }
+        return w;
+    }
+
+    /// <summary>The nodes under the approach cone's top, by their altitude in <paramref name="x"/>; none with the cone off.</summary>
+    static bool[] ConeNodes(BellyflopConfig cfg, double[,] x, int n)
+    {
+        var on = new bool[n];
+        if (!(cfg.ApproachConeDeg > 0))
+            return on;
+        for (int k = 1; k < n; k++)
+            on[k] = x[k, 2] <= cfg.ApproachConeTopM;
+        return on;
+    }
+
+    /// <summary>How far a node is outside the approach cone, m, on the octagon the subproblem uses.</summary>
+    static double ConeExcess(BellyflopConfig cfg, double[,] x, int k)
+    {
+        double r = Math.Tan(cfg.ApproachConeDeg * Deg) * Math.Max(x[k, 2], 0.0) + cfg.ApproachConeFloorM;
+        double ax = Math.Abs(x[k, 0]), ay = Math.Abs(x[k, 1]);
+        return Math.Max(0.0, Math.Max(Math.Max(ax - r, ay - r), ax + ay - Math.Sqrt(2.0) * r));
+    }
+
+    /// <summary>The control terms: pitch and bank (mean of squares), yaw (mean of magnitudes, at this iteration's prices) and the change between nodes, in degrees.</summary>
+    static double ControlCost(BellyflopConfig cfg, double[,] u, int n, double[] yawW)
     {
         double j = 0;
         for (int k = 0; k < n; k++)
         {
             double a = u[k, 0] / US, b = u[k, 1] / US, p = u[k, 2] / US;
-            j += (cfg.EffortWeight * (a * a + b * b) + cfg.YawWeight * Math.Abs(p)) / n;
+            j += (cfg.EffortWeight * (a * a + b * b) + yawW[k] * Math.Abs(p)) / n;
         }
         for (int k = 0; k < n - 1; k++)
             for (int i = 0; i < NU; i++)
@@ -367,9 +403,13 @@ public sealed class BellyflopPlanner
         return j;
     }
 
-    static double Merit(BellyflopModel model, BellyflopConfig cfg, double[,] x, double[,] u, double[,] def, int n)
+    static double Merit(BellyflopModel model, BellyflopConfig cfg, double[,] x, double[,] u, double[,] def, int n, double[] yawW, bool[] cone)
     {
-        double j = ControlCost(cfg, u, n);
+        double j = ControlCost(cfg, u, n, yawW);
+        double coneExcess = 0;
+        for (int k = 0; k < n; k++)
+            if (cone[k]) coneExcess += ConeExcess(cfg, x, k);
+        j += cfg.PenaltyWeight * coneExcess / XS[0];
         j += cfg.MissWeight * (Math.Abs(x[n - 1, 0]) + Math.Abs(x[n - 1, 1])) / 1000.0;
         double pen = 0;
         for (int k = 0; k < n - 1; k++)
@@ -383,17 +423,18 @@ public sealed class BellyflopPlanner
     // ---------------------------------------------------------------- subproblem
 
     /// <summary>
-    /// Variables: x (6N), u (3N), sigma, w (6(N-1)), |w| bounds t (6(N-1)), |psi| bounds y (N), the end's x and y split into positive and negative parts (4), the end altitude's slack pair (2).
+    /// Variables: x (6N), u (3N), sigma, w (6(N-1)), |w| bounds t (6(N-1)), |psi| bounds y (N), the end's x and y split into positive and negative parts (4), the end altitude's slack pair (2), the approach cone's slack per node (N).
     /// </summary>
     static (double[,], double[,], double)? BuildAndSolve(
         BellyflopModel model, BellyflopConfig cfg, double[] x0, double[,] xr, double[,] ur, double sr, Linearisation lin, double eta,
-        double[] limA, double[] limADown, double[] limB, double rate, double yawRate, double alphaNow, double betaNow, double psiNow, out double jLin)
+        double[] limA, double[] limADown, double[] limB, double rate, double yawRate, double alphaNow, double betaNow, double psiNow,
+        double[] yawW, bool[] cone, out double jLin)
     {
         jLin = double.PositiveInfinity;
         int n = xr.GetLength(0), nI = n - 1;
         int iX = 0, iU = NX * n, iS = iU + NU * n, iW = iS + 1, iT = iW + NX * nI, iY = iT + NX * nI;
-        int iMx = iY + n, iMy = iMx + 2, iZa = iMy + 2;
-        int nv = iZa + 2;
+        int iMx = iY + n, iMy = iMx + 2, iZa = iMy + 2, iC = iZa + 2;
+        int nv = iC + n;
         int X(int k, int j) => iX + NX * k + j;
         int U(int k, int i) => iU + NU * k + i;
         int W(int k, int j) => iW + NX * k + j;
@@ -409,7 +450,7 @@ public sealed class BellyflopPlanner
         {
             pd[U(k, 0)] += 2 * we;
             pd[U(k, 1)] += 2 * we;
-            c[iY + k] = cfg.YawWeight / (n * US);
+            c[iY + k] = yawW[k] / (n * US);
         }
         double wr = cfg.RateWeight / (US * US);
         for (int k = 0; k < nI; k++)
@@ -447,6 +488,8 @@ public sealed class BellyflopPlanner
         double wm = cfg.MissWeight / 1000.0;
         c[iMx] = c[iMx + 1] = c[iMy] = c[iMy + 1] = wm;
         c[iZa] = c[iZa + 1] = lam / XS[2];
+        for (int k = 0; k < n; k++)
+            c[iC + k] = cone[k] ? lam / XS[0] : 0.0;
 
         // ---- Equalities ----
         int nEq = NX + NX * nI + 3;
@@ -530,6 +573,22 @@ public sealed class BellyflopPlanner
         {
             Le(0, (iMx + s, -1.0)); Le(0, (iMy + s, -1.0)); Le(0, (iZa + s, -1.0));
         }
+        // The approach cone, an octagon round the vertical through the site, soft: |x|, |y| <= tan(cone) z + floor + s, and |x| + |y| <= sqrt(2) of that.
+        double tanC = Math.Tan(cfg.ApproachConeDeg * Deg), r2 = Math.Sqrt(2.0);
+        for (int k = 0; k < n; k++)
+        {
+            Le(0, (iC + k, -1.0));
+            if (!cone[k])
+                continue;
+            double floorM = cfg.ApproachConeFloorM;
+            foreach (int sx in new[] { -1, 1 })
+            {
+                Le(floorM, (X(k, 0), sx), (X(k, 2), -tanC), (iC + k, -1.0));
+                Le(floorM, (X(k, 1), sx), (X(k, 2), -tanC), (iC + k, -1.0));
+                foreach (int sy in new[] { -1, 1 })
+                    Le(r2 * floorM, (X(k, 0), sx), (X(k, 1), sy), (X(k, 2), -r2 * tanC), (iC + k, -1.0));
+            }
+        }
         Le(cfg.SigmaMax, (iS, 1.0));
         Le(-cfg.SigmaMin, (iS, -1.0));
         // Trust region.
@@ -567,11 +626,13 @@ public sealed class BellyflopPlanner
         }
         double sc = v[iS];
         // The model's prediction of the merit: the control terms, the miss and the penalties it chose.
-        double jl = ControlCost(cfg, uc, n) + wm * (Math.Abs(xc[n - 1, 0]) + Math.Abs(xc[n - 1, 1]));
+        double jl = ControlCost(cfg, uc, n, yawW) + wm * (Math.Abs(xc[n - 1, 0]) + Math.Abs(xc[n - 1, 1]));
         double pen = 0;
         for (int k = 0; k < nI; k++)
             for (int j = 0; j < NX; j++) pen += Math.Abs(v[W(k, j)]) / XS[j];
         pen += (v[iZa] + v[iZa + 1]) / XS[2];
+        for (int k = 0; k < n; k++)
+            if (cone[k]) pen += Math.Max(v[iC + k], 0.0) / XS[0];
         jLin = jl + lam * pen;
         return (xc, uc, sc);
     }

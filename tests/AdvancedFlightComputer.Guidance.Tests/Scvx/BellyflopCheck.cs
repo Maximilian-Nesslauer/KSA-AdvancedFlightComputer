@@ -52,8 +52,71 @@ internal static class BellyflopCheck
         // The take-over from the entry itself: at Mach 5, level at 38 km, at the entry's 50 deg (40 from nose-first), with the site as far ahead as the entry would still glide (the second flight was 147 km out here). Bellyflop may glide on at up to BELLYFLOP PITCH UP.
         Console.WriteLine(" take-over at Mach 5, 38 km, from the entry's attitude:");
         bad += RunFrom(5.0, 38_000.0, glide: true);
+        Console.WriteLine(" as flown 2026-11-23 (taken over at Mach 4.85, 10 km across, the entry banked 63 deg), force 15 % weak:");
+        bad += FlightLike();
         Console.WriteLine(bad == 0 ? "PASS bellyflop" : $"FAIL bellyflop ({bad})");
         return bad == 0 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// The 2026-11-23 take-over: Mach 5 at 38 km, level, at the entry's 50 deg of pitch and its 63 deg of bank (bellyflop's yaw), the site beyond the flat fall and 10 km to the side, in air whose force is 15 % short of the model's (the 0.8 measured transonic). Closed loop, re-planned every 2 s warm; the horizontal distance to the site as the craft passes 12, 8 and 4 km says whether the miss is taken out while there is speed to, and the end within 500 m passes.
+    /// </summary>
+    static int FlightLike()
+    {
+        int bad = 0;
+        var cfg = new BellyflopConfig();
+        var model = Model();
+        double a0 = 50 * Deg, y0 = 63 * Deg;
+        double fall = new BellyflopPlanner().Solve(model, new BellyflopConfig { MissWeight = 0.0, ColdIterations = 1 }, HandOver(0, 0, 5.0, 38_000.0), 0.0, a0, 0, 0, null) is { Plan: { } pr } ? pr.X[pr.Nodes - 1, 0] : 70_000.0;
+        foreach (var (name, down, cross, yaw) in new[] { ("18 km beyond the fall, 10 km beside, banked 63", 18_000.0, 10_000.0, y0), ("18 km beyond, 10 km beside, the other way", 18_000.0, -10_000.0, y0), ("flat fall, 10 km beside, wings level", 0.0, 10_000.0, 0.0) })
+        {
+            var truth = Model(1.0, 0.85);
+            double[] x = HandOver(fall + down, cross, 5.0, 38_000.0);
+            var planner = new BellyflopPlanner();
+            BellyflopPlan? plan = null;
+            double t = 0, nextPlan = 0, a = a0, b = 0, y = yaw;
+            int solves = 0, refused = 0;
+            var at = new Dictionary<int, double>();
+            double yaw30 = double.NaN, cross30 = double.NaN;
+            const double dt = 0.05;
+            Span<double> k1 = stackalloc double[6], k2 = stackalloc double[6], k3 = stackalloc double[6], k4 = stackalloc double[6], xt = stackalloc double[6];
+            while (truth.Altitude(x) > 0 && t < 900)
+            {
+                if (t >= nextPlan)
+                {
+                    var res = planner.Solve(model, cfg, x, t, a, b, y, plan);
+                    solves++;
+                    if (res.Plan != null && res.Plan.Converged) plan = res.Plan; else refused++;
+                    nextPlan = t + 2.0;
+                }
+                if (plan != null)
+                {
+                    var (pa, pb, py) = plan.ControlAt(t);
+                    double step = cfg.AngleRateDegS * Deg * dt;
+                    a += Math.Clamp(pa - a, -step, step); b += Math.Clamp(pb - b, -step, step);
+                    y += Math.Clamp(py - y, -cfg.YawRateDegS * Deg * dt, cfg.YawRateDegS * Deg * dt);
+                }
+                if (double.IsNaN(yaw30) && t >= 30) { yaw30 = y; cross30 = x[1]; }
+                foreach (int km in new[] { 12, 8, 4 })
+                    if (!at.ContainsKey(km) && truth.Altitude(x) <= km * 1000.0)
+                        at[km] = Math.Sqrt(x[0] * x[0] + x[1] * x[1]);
+                truth.Derivative(x, a, b, y, k1);
+                for (int j = 0; j < 6; j++) xt[j] = x[j] + 0.5 * dt * k1[j];
+                truth.Derivative(xt, a, b, y, k2);
+                for (int j = 0; j < 6; j++) xt[j] = x[j] + 0.5 * dt * k2[j];
+                truth.Derivative(xt, a, b, y, k3);
+                for (int j = 0; j < 6; j++) xt[j] = x[j] + dt * k3[j];
+                truth.Derivative(xt, a, b, y, k4);
+                for (int j = 0; j < 6; j++) x[j] += dt / 6 * (k1[j] + 2 * k2[j] + 2 * k3[j] + k4[j]);
+                t += dt;
+            }
+            double miss = Math.Sqrt(x[0] * x[0] + x[1] * x[1]);
+            bool ok = miss <= 500 && plan != null;
+            if (!ok) bad++;
+            Console.WriteLine(FormattableString.Invariant(
+                $"  {(ok ? "ok  " : "FAIL")} {name}: lands {miss,5:F0} m off after {t:F0} s; {solves} solves, {refused} refused; off the site {at.GetValueOrDefault(12, double.NaN) / 1000:F2} / {at.GetValueOrDefault(8, double.NaN) / 1000:F2} / {at.GetValueOrDefault(4, double.NaN) / 1000:F2} km at 12 / 8 / 4 km up; yaw {yaw30 / Deg:F0} deg and {cross30 / 1000:F1} km across at 30 s"));
+        }
+        return bad;
     }
 
     static int RunFrom(double mach, double altitude, bool glide)

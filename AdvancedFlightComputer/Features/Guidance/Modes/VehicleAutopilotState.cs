@@ -1796,12 +1796,12 @@ public sealed class VehicleAutopilotState
     /// <summary>Roll rate the tracker slews at and the plan leaves room for, deg/s.</summary>
     public double OrbitalEntryRollRateDegS = 5.0;
     /// <summary>Hand-over altitude, km, and Mach (airspeed over the sea-level speed of sound, as the aero tables use).</summary>
-    public double OrbitalEntryHandoverAltKm = 32.0;
-    public double OrbitalEntryHandoverMach = 4.0;
+    public double OrbitalEntryHandoverAltKm = 38.0;
+    public double OrbitalEntryHandoverMach = 5.0;
     /// <summary>Fly the terminal descent from the hand-over with bellyflop (docs/guidance/bellyflop-design.md): the entry aims at the ground through its predicted fall.</summary>
     public bool OrbitalEntryBellyflop = true;
     /// <summary>The Mach bellyflop starts solving from, in the background.</summary>
-    public double OrbitalEntryBellyflopArmMach = 5.0;
+    public double OrbitalEntryBellyflopArmMach = 10.0;
     /// <summary>Bellyflop's largest pitch from belly-first, deg.</summary>
     public double OrbitalEntryBellyflopAngleMaxDeg = 20.0;
     /// <summary>Bellyflop's largest pitch nose up from belly-first, deg: the entry's own attitude and a little more, so it can take over from the entry and glide on.</summary>

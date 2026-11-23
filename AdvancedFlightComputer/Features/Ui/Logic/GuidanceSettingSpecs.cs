@@ -285,12 +285,12 @@ internal static class GuidanceSettingSpecs
         "The roll rate of a reversal, and the fastest the attitude controller closes a roll error at during entry (never under 10 deg/s); the plan uses half of it. Tracking slews at TRACKING ROLL RATE.");
     public static readonly SettingSpec OrbitalEntryTrackRollRateDegS = new("OrbitalEntryTrackRollRateDegS", "TRACKING ROLL RATE", "deg/s", E, 5.0, 0.5, 90.0, "%.1f",
         "The roll rate the tracker slews the bank at while it tracks the drag; reversals use ROLL RATE.");
-    public static readonly SettingSpec OrbitalEntryHandoverAltKm = new("OrbitalEntryHandoverAltKm", "HAND-OVER ALTITUDE", "km", P, 32.0, 1.0, 200.0, "%.1f",
+    public static readonly SettingSpec OrbitalEntryHandoverAltKm = new("OrbitalEntryHandoverAltKm", "HAND-OVER ALTITUDE", "km", P, 38.0, 1.0, 200.0, "%.1f",
         "Where orbital entry guidance ends, with HAND-OVER MACH: BELLYFLOP takes over there, or with it off the craft holds its entry attitude.");
-    public static readonly SettingSpec OrbitalEntryHandoverMach = new("OrbitalEntryHandoverMach", "HAND-OVER MACH", "", P, 4.0, 0.2, 20.0, "%.2f",
+    public static readonly SettingSpec OrbitalEntryHandoverMach = new("OrbitalEntryHandoverMach", "HAND-OVER MACH", "", P, 5.0, 0.2, 20.0, "%.2f",
         "Airspeed over the sea-level speed of sound at the hand-over, as the aero tables measure Mach: where BELLYFLOP takes over.");
-    public static readonly SettingSpec OrbitalEntryBellyflopArmMach = new("OrbitalEntryBellyflopArmMach", "BELLYFLOP FROM MACH", "", P, 5.0, 0.5, 20.0, "%.1f",
-        "Bellyflop starts solving in the background from this Mach, and takes over at its first plan that reaches the site; HAND-OVER MACH is the latest it takes over at.");
+    public static readonly SettingSpec OrbitalEntryBellyflopArmMach = new("OrbitalEntryBellyflopArmMach", "BELLYFLOP FROM MACH", "", P, 10.0, 0.5, 20.0, "%.1f",
+        "Bellyflop starts solving in the background from this Mach, so its plan is ready when it takes over at HAND-OVER MACH.");
     public static readonly SettingSpec OrbitalEntryBellyflopAngleMaxDeg = new("OrbitalEntryBellyflopAngleMaxDeg", "BELLYFLOP PITCH DOWN", "deg", E, 20.0, 2.0, 45.0, "%.0f",
         "Bellyflop's largest pitch nose down past belly-first: the airflow's angle on the belly towards the tail.");
     public static readonly SettingSpec OrbitalEntryBellyflopPitchUpDeg = new("OrbitalEntryBellyflopPitchUpDeg", "BELLYFLOP PITCH UP", "deg", E, 55.0, 2.0, 80.0, "%.0f",
