@@ -64,6 +64,9 @@ public static partial class GuidanceWindow
     /// <summary>Bellyflop's force scale: its own measurement once it has one, else the entry's density scale, measured against the entry's model before the craft turns belly first.</summary>
     private static double BellyflopForceScale(OrbitalEntryState st) => st.Bellyflop.ForceScaleKnown ? st.Bellyflop.ForceScale : st.DensityScale;
 
+    /// <summary>Refusals in a row after which the next solve starts cold.</summary>
+    private const int BellyflopColdAfterRefusals = 3;
+
     /// <summary>Time constant of bellyflop's force-scale low-pass, s, as the entry's.</summary>
     private const double BellyflopScaleSmoothS = 5.0;
 
@@ -136,12 +139,14 @@ public static partial class GuidanceWindow
                 bf.Warm = p;
             if (p != null && p.Converged)
             {
+                bf.RefusedInRow = 0;
                 bf.Plan = p;
                 GuidanceLog.Debug(vehicle, $"Bellyflop solve {bf.Solves}: {text}.");
             }
             else
             {
                 bf.Refusals++;
+                bf.RefusedInRow++;
                 bf.LastRefusal = res.Why.Length > 0 ? res.Why : "no plan";
                 // Before the take-over the entry is still flying to the hand-over, so a site out of reach from here is expected: said once in the game log, then in the debug log.
                 if (flying || bf.Refusals == 1)
@@ -154,7 +159,14 @@ public static partial class GuidanceWindow
         {
             bf.Worker ??= new Ksa3DofWorker();
             BellyflopConfig cfg = BellyflopConfigNow();
-            BellyflopPlan warm = bf.Plan ?? bf.Warm;
+            // A run of refusals means the warm start no longer leads anywhere from the real state (2026-11-23: 40 in a row, each seeded from the same stale plan): start cold.
+            bool cold = bf.RefusedInRow >= BellyflopColdAfterRefusals;
+            BellyflopPlan warm = cold ? null : bf.Plan ?? bf.Warm;
+            if (cold)
+            {
+                bf.RefusedInRow = 0;
+                bf.Warm = null;
+            }
             BellyflopModel solveModel = model;
             double a0 = aNow, b0 = bNow, p0 = pNow;
             bf.NextSolveAt = now + Math.Max(_s.OrbitalEntryBellyflopResolveS, 0.25);

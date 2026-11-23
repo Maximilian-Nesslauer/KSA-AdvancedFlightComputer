@@ -43,6 +43,9 @@ public sealed class BellyflopConfig
     public double YawGlideScale { get; set; } = 0.1;
     public double YawGlideFromDeg { get; set; } = 25.0;
 
+    /// <summary>The largest yaw off the bearing to the site, deg: the plan may curve towards the site, not turn round. A turn-round planned at full pitch was more than the warm re-solves could follow from the real state, and the craft flew the stale plan 132 km past the site (harness, 2026-11-23).</summary>
+    public double YawMaxDeg { get; set; } = 90.0;
+
     /// <summary>The approach cone over the site: below ApproachConeTopM (of the plan's own altitude) the plan stays within ApproachConeDeg of the vertical through the site, plus ApproachConeFloorM, so it takes the miss out while it still has the speed to, and the last of the fall is steep. Priced as the defects (soft). 0 deg switches it off.</summary>
     public double ApproachConeDeg { get; set; } = 15.0;
     public double ApproachConeTopM { get; set; } = 12_000.0;

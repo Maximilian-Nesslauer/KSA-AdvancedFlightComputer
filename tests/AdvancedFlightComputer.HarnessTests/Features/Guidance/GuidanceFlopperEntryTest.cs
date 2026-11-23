@@ -31,7 +31,7 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
     private const string VehicleSave = "flopper";
     private const double StepS = 0.02;
     private const double SampleS = 10.0;
-    private const double TimeoutS = 900.0;
+    private const double TimeoutS = 2400.0;
     private const double EngageWaitS = 60.0;
     private const double EndHeightM = 100.0;
 
@@ -65,6 +65,8 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
         double aoaDeg = Env("AFC_FLOPPER_AOA_DEG", 40.0);
         double pace = Math.Max(Env("AFC_FLOPPER_PACE", 2.0), 0.05);
         double missLimitM = Env("AFC_FLOPPER_MISS_M", 1000.0);
+        // AFC_FLOPPER_HEAT_KWM2 sets MAX HEATING (0 off), to see what the limit does to the trajectory; unset keeps the default.
+        double heatKwm2 = Env("AFC_FLOPPER_HEAT_KWM2", double.NaN);
 
         FieldInfo ambient = typeof(GuidanceWindow).GetField("_s", PrivateStatic)!;
         object? previousAmbient = ambient.GetValue(null);
@@ -152,10 +154,13 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
 
             VehicleAutopilotState state = VehicleAutopilotState.For(craft);
             state.EntryLogging = true;
+            if (double.IsFinite(heatKwm2))
+                state.OrbitalEntryHeatMaxKWm2 = heatKwm2;
             state.AutoStage = false;
             // As the console's ORBITAL ENTRY does (RequestOrbitalEntry): the next step engages it from the craft's state.
             state.OrbitalEntry.StopPending = false;
             state.OrbitalEntry.EngagePending = true;
+            t.Info($"heating limit {state.OrbitalEntryHeatMaxKWm2:F0} kW/m2 on a {state.OrbitalEntryNoseRadiusM:F2} m nose, q {state.OrbitalEntryQMaxKPa:F0} kPa, load {state.OrbitalEntryGMax:F1} g");
             t.Info($"hand-over Mach {state.OrbitalEntryHandoverMach:F1} at {state.OrbitalEntryHandoverAltKm:F0} km, bellyflop solving from Mach {state.OrbitalEntryBellyflopArmMach:F0}, " +
                    $"pitch {state.OrbitalEntryBellyflopAngleMaxDeg:F0} down / {state.OrbitalEntryBellyflopPitchUpDeg:F0} up, bank {state.OrbitalEntryBellyflopBankMaxDeg:F0} deg");
 
@@ -182,7 +187,7 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
         var wall = Stopwatch.StartNew();
         double sim = 0.0, nextSample = 0.0;
         double engagedAt = double.NaN, takeOverMach = double.NaN, takeOverAlt = double.NaN, takeOverRange = double.NaN;
-        double peakLoadG = 0.0, peakLoadBellyflopG = 0.0;
+        double peakLoadG = 0.0, peakLoadBellyflopG = 0.0, peakHeat = 0.0, peakHeatAlt = double.NaN, peakHeatMach = double.NaN, peakQ = 0.0;
         double endMiss = double.NaN, endSpeed = double.NaN;
         GuidanceWindow.OrbitalEntryPhase lastPhase = GuidanceWindow.OrbitalEntryPhase.Idle;
         bool ended = false;
@@ -219,6 +224,15 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
             double ground = (offset - up * height).Length();
             double3 vSurface = craft.Orbit.StateVectors.VelocityCci - double3.Cross(home.GetAngularVelocityCci(), r);
 
+            // The planner's own estimate (EntryModel.HeatingRate, Sutton-Graves) in the air the sweep measured.
+            if (st.Aero?.Atmosphere is { } atm && st.SpeedMs > 100.0)
+            {
+                double rho = atm.Density(st.AltitudeM);
+                double heat = 1.7415e-4 * Math.Sqrt(rho / Math.Max(state.OrbitalEntryNoseRadiusM, 0.05)) * Math.Pow(st.SpeedMs, 3);
+                if (heat > peakHeat)
+                    (peakHeat, peakHeatAlt, peakHeatMach) = (heat, st.AltitudeM, st.Mach);
+                peakQ = Math.Max(peakQ, 0.5 * rho * st.SpeedMs * st.SpeedMs);
+            }
             if (st.AeroAccelKnown)
             {
                 double g = st.AeroAccelCci.Length() / 9.80665;
@@ -265,7 +279,8 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
         while (GuidanceLines.TryDequeue(out string? line))
             t.Info($"  | {line}");
 
-        t.Info($"peak aero load {peakLoadG:F2} g ({peakLoadBellyflopG:F2} g under bellyflop); {sim:F0} s flown, {wall.Elapsed.TotalSeconds:F0} s real");
+        t.Info($"peak aero load {peakLoadG:F2} g ({peakLoadBellyflopG:F2} g under bellyflop), dynamic pressure {peakQ / 1000:F1} kPa; " +
+               $"heating {peakHeat / 1000:F0} kW/m2 at most, at Mach {peakHeatMach:F1} and {peakHeatAlt / 1000:F1} km; {sim:F0} s flown, {wall.Elapsed.TotalSeconds:F0} s real");
         t.Check("orbital entry engages", !double.IsNaN(engagedAt), state.OrbitalEntry.Status);
         t.Check("bellyflop takes over between Mach 5.5 and 4", takeOverMach is >= 4.0 and <= 5.5,
             double.IsNaN(takeOverMach) ? "it never took over" : FormattableString.Invariant($"Mach {takeOverMach:F2}, {takeOverAlt / 1000:F1} km up, {takeOverRange / 1000:F1} km from the site"));

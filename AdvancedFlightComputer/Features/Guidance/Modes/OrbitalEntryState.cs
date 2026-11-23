@@ -166,6 +166,8 @@ public sealed class BellyflopState
     public bool ForceScaleKnown;
     public double NextSolveAt = double.NegativeInfinity;
     public int Solves, Refusals;
+    /// <summary>Refusals since the last plan that converged: past BellyflopColdAfterRefusals the next solve starts cold, not from a plan it cannot follow.</summary>
+    public int RefusedInRow;
     public string LastRefusal = "";
     /// <summary>The yaw reference, horizontal in the site frame: the bearing to the site, followed until bellyflop takes over and held from then.</summary>
     public double3 BearingLocal;
@@ -185,7 +187,7 @@ public sealed class BellyflopState
         ForceScale = 1.0;
         ForceScaleKnown = false;
         NextSolveAt = double.NegativeInfinity;
-        Solves = Refusals = 0;
+        Solves = Refusals = RefusedInRow = 0;
         LastRefusal = "";
         BearingLocal = default;
         TerminalRangeM = 0;

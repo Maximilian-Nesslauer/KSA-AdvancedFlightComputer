@@ -40,7 +40,7 @@ public sealed class BellyflopPlanner
         if (model.Altitude(x0) <= cfg.TargetAltitude)
             return new Result { Why = "at or under the target altitude" };
         double rate = cfg.AngleRateDegS * Deg, yawRate = cfg.YawRateDegS * Deg;
-        double angleMax = cfg.AngleMaxDeg * Deg, pitchUp = Math.Max(cfg.PitchUpMaxDeg, cfg.AngleMaxDeg) * Deg, bankMax = cfg.BankMaxDeg * Deg;
+        double angleMax = cfg.AngleMaxDeg * Deg, pitchUp = Math.Max(cfg.PitchUpMaxDeg, cfg.AngleMaxDeg) * Deg, bankMax = cfg.BankMaxDeg * Deg, yawMax = cfg.YawMaxDeg * Deg;
 
         var x = new double[n, NX];
         var u = new double[n, NU];
@@ -52,7 +52,7 @@ public sealed class BellyflopPlanner
             for (int k = 0; k < n; k++)
             {
                 var (a, b, p) = warm.ControlAt(now + sigma * k / (n - 1));
-                u[k, 0] = a; u[k, 1] = b; u[k, 2] = p;
+                u[k, 0] = a; u[k, 1] = b; u[k, 2] = Math.Clamp(p, -Math.Max(yawMax, Math.Abs(psiNow)), Math.Max(yawMax, Math.Abs(psiNow)));
             }
             u[0, 0] = alphaNow; u[0, 1] = betaNow; u[0, 2] = psiNow;
         }
@@ -73,9 +73,11 @@ public sealed class BellyflopPlanner
         var limA = new double[n];
         var limADown = new double[n];
         var limB = new double[n];
+        var limY = new double[n];
         for (int k = 0; k < n; k++)
         {
             double t = sigma * k / (n - 1);
+            limY[k] = Math.Max(yawMax, Math.Abs(psiNow) - yawRate * t);
             double share = t > cfg.MarginAfterS ? Math.Clamp(cfg.LimitMargin, 0.1, 1.0) : 1.0;
             limA[k] = Math.Max(pitchUp, alphaNow - rate * t);
             limADown[k] = Math.Max(angleMax * share, -alphaNow - rate * t);
@@ -97,7 +99,7 @@ public sealed class BellyflopPlanner
             double[] yawW = YawPrices(cfg, u, n);
             bool[] cone = ConeNodes(cfg, x, n);
             double jRef = Merit(model, cfg, x, u, lin.Defect, n, yawW, cone);
-            var sub = BuildAndSolve(model, cfg, x0, x, u, sigma, lin, eta, limA, limADown, limB, rate, yawRate,
+            var sub = BuildAndSolve(model, cfg, x0, x, u, sigma, lin, eta, limA, limADown, limB, limY, rate, yawRate,
                                     alphaNow, betaNow, psiNow, yawW, cone, out double jLin);
             if (sub == null)
             {
@@ -427,7 +429,7 @@ public sealed class BellyflopPlanner
     /// </summary>
     static (double[,], double[,], double)? BuildAndSolve(
         BellyflopModel model, BellyflopConfig cfg, double[] x0, double[,] xr, double[,] ur, double sr, Linearisation lin, double eta,
-        double[] limA, double[] limADown, double[] limB, double rate, double yawRate, double alphaNow, double betaNow, double psiNow,
+        double[] limA, double[] limADown, double[] limB, double[] limY, double rate, double yawRate, double alphaNow, double betaNow, double psiNow,
         double[] yawW, bool[] cone, out double jLin)
     {
         jLin = double.PositiveInfinity;
@@ -551,6 +553,8 @@ public sealed class BellyflopPlanner
             Le(limADown[k], (U(k, 0), -1.0));
             Le(limB[k], (U(k, 1), 1.0));
             Le(limB[k], (U(k, 1), -1.0));
+            Le(limY[k], (U(k, 2), 1.0));
+            Le(limY[k], (U(k, 2), -1.0));
         }
         // The first node near the attitude flown.
         double slack = cfg.StartSlackS;
