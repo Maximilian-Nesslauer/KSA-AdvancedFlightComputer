@@ -68,7 +68,7 @@ internal static class BellyflopCheck
         var model = Model();
         double a0 = 50 * Deg, y0 = 63 * Deg;
         double fall = new BellyflopPlanner().Solve(model, new BellyflopConfig { MissWeight = 0.0, ColdIterations = 1 }, HandOver(0, 0, 5.0, 38_000.0), 0.0, a0, 0, 0, null) is { Plan: { } pr } ? pr.X[pr.Nodes - 1, 0] : 70_000.0;
-        foreach (var (name, down, cross, yaw) in new[] { ("18 km beyond the fall, 10 km beside, banked 63", 18_000.0, 10_000.0, y0), ("18 km beyond, 10 km beside, the other way", 18_000.0, -10_000.0, y0), ("flat fall, 10 km beside, wings level", 0.0, 10_000.0, 0.0) })
+        foreach (var (name, down, cross, yaw) in new[] { ("18 km beyond the fall, 10 km beside, banked 63", 18_000.0, 10_000.0, y0), ("18 km beyond, 10 km beside, the other way", 18_000.0, -10_000.0, y0), ("flat fall, 10 km beside, wings level", 0.0, 10_000.0, 0.0), ("28 km beyond, 20 km beside (harness, 2026-11-23)", 28_000.0, 20_000.0, 0.0) })
         {
             var truth = Model(1.0, 0.85);
             double[] x = HandOver(fall + down, cross, 5.0, 38_000.0);

@@ -411,7 +411,7 @@ public sealed class BellyflopPlanner
         double coneExcess = 0;
         for (int k = 0; k < n; k++)
             if (cone[k]) coneExcess += ConeExcess(cfg, x, k);
-        j += cfg.PenaltyWeight * coneExcess / XS[0];
+        j += cfg.ConeWeight * coneExcess / 1000.0;
         j += cfg.MissWeight * (Math.Abs(x[n - 1, 0]) + Math.Abs(x[n - 1, 1])) / 1000.0;
         double pen = 0;
         for (int k = 0; k < n - 1; k++)
@@ -491,7 +491,7 @@ public sealed class BellyflopPlanner
         c[iMx] = c[iMx + 1] = c[iMy] = c[iMy + 1] = wm;
         c[iZa] = c[iZa + 1] = lam / XS[2];
         for (int k = 0; k < n; k++)
-            c[iC + k] = cone[k] ? lam / XS[0] : 0.0;
+            c[iC + k] = cone[k] ? cfg.ConeWeight / 1000.0 : 0.0;
 
         // ---- Equalities ----
         int nEq = NX + NX * nI + 3;
@@ -635,9 +635,9 @@ public sealed class BellyflopPlanner
         for (int k = 0; k < nI; k++)
             for (int j = 0; j < NX; j++) pen += Math.Abs(v[W(k, j)]) / XS[j];
         pen += (v[iZa] + v[iZa + 1]) / XS[2];
-        for (int k = 0; k < n; k++)
-            if (cone[k]) pen += Math.Max(v[iC + k], 0.0) / XS[0];
         jLin = jl + lam * pen;
+        for (int k = 0; k < n; k++)
+            if (cone[k]) jLin += cfg.ConeWeight / 1000.0 * Math.Max(v[iC + k], 0.0);
         return (xc, uc, sc);
     }
 }

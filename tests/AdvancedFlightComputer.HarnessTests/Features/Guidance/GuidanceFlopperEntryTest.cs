@@ -220,8 +220,9 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
             ambient.SetValue(null, stepAmbient);
             double3 r = craft.Orbit.StateVectors.PositionCci;
             double3 offset = r - siteCci;
-            double height = double3.Dot(offset, up);
-            double ground = (offset - up * height).Length();
+            // Over the site's ground, as the craft's own altitude: the height along the site's vertical is far below it a long way off.
+            double height = r.Length() - siteCci.Length();
+            double ground = (offset - up * double3.Dot(offset, up)).Length();
             double3 vSurface = craft.Orbit.StateVectors.VelocityCci - double3.Cross(home.GetAngularVelocityCci(), r);
 
             // The planner's own estimate (EntryModel.HeatingRate, Sutton-Graves) in the air the sweep measured.

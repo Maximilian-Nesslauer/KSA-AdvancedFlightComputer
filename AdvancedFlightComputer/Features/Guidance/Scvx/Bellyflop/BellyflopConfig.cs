@@ -50,6 +50,8 @@ public sealed class BellyflopConfig
     public double ApproachConeDeg { get; set; } = 15.0;
     public double ApproachConeTopM { get; set; } = 12_000.0;
     public double ApproachConeFloorM { get; set; } = 300.0;
+    /// <summary>Price of being outside the cone, per km: half the miss's, and far under the dynamics' (PenaltyWeight), so a craft already outside it is brought back as it can be, and the plan never bends its dynamics to keep to it.</summary>
+    public double ConeWeight { get; set; } = 500.0;
 
     /// <summary>The share of the pitch-down and bank limits a plan may count on beyond its first MarginAfterS: the next plan, a second later, has the whole limit again, so a plan never spends the authority the craft will need to correct with (2026-11-23: plans sat at the edge of reach and missed by 0.5 km at the end).</summary>
     public double LimitMargin { get; set; } = 0.75;
@@ -58,8 +60,8 @@ public sealed class BellyflopConfig
     /// <summary>Price of the change of each angle between nodes, per deg^2.</summary>
     public double RateWeight { get; set; } = 0.01;
 
-    /// <summary>Exact-penalty price of the dynamics defects and the terminal altitude, per scaled unit.</summary>
-    public double PenaltyWeight { get; set; } = 1e3;
+    /// <summary>Exact-penalty price of the dynamics defects and the terminal altitude, per scaled unit (100 per metre of position): far above the miss (1 per metre) and the cone, so the plan never closes a miss by bending its dynamics. At 1e3 a metre of defect cost a metre of miss, and plans for a site out of reach were refused with defects matching their misses (harness, 2026-11-23).</summary>
+    public double PenaltyWeight { get; set; } = 1e4;
 
     /// <summary>A whisper of distance from the reference, for a unique step.</summary>
     public double ProximalWeight { get; set; } = 1e-4;
