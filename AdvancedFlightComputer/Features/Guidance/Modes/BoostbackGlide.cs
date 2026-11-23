@@ -279,14 +279,10 @@ public static partial class GuidanceWindow
         if (noLift)
             _s.GlideIntCcf = double3.Zero;
 
-        // STEER IN ANY AIR AT ALL. A dispersion is cheapest to fix early, while there is the most time for a small push to grow into a large shift; up high the lift asked for simply exceeds what the thin air gives, so the command sits at the AoA limit and does what it can. Only above the atmosphere, where no angle buys anything, is there nothing to do.
+        // STEER IN ANY AIR AT ALL. Above the atmosphere, still run the impact prediction below so GlideTgo and miss readouts stay live for entry handoff gates instead of sticking at NaN.
         double q = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * speed * speed;
         _s.GlideQ = q;
-        if (!(q > 0.0))
-        {
-            HoldPlannedGlide(aero, "ABOVE ATMOSPHERE. HOLDING PLANNED GLIDE.");
-            return;
-        }
+        bool aboveAtmosphere = !(q > 0.0);
 
         // THE MISS, AND WHAT LIFT DOES TO IT, from one velocity Jacobian of the coast prediction - the same object the burn steers on. Aimed at the site's own radius, as UpdateSteering does, so the miss is distance along the ground and not a difference of terrain heights.
         double siteRadius = parent.MeanRadius + SiteTerrainHeight(parent);
@@ -343,6 +339,12 @@ public static partial class GuidanceWindow
         // THE PID, as the rate the impact should move at: (Kp miss + Ki integral + Kd rate) / tgo, back towards the site. With the Jacobian scaling like the time to go, the lift this asks for is the zero-effort-miss law's Kp miss / tgo^2.
         double tgo = Math.Max(nom.TimeOfFlight.V, GlideMinTgo);
         _s.GlideTgo = tgo;
+
+        if (aboveAtmosphere)
+        {
+            HoldPlannedGlide(aero, "ABOVE ATMOSPHERE. HOLDING PLANNED GLIDE.");
+            return;
+        }
 
         if (noLift)
         {

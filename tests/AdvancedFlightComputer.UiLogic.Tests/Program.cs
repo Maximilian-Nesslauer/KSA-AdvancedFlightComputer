@@ -61,6 +61,7 @@ internal static partial class Program
         LandingLegRules();
         SiteSlopeRules();
         IdleEngineParkingRules();
+        AscentEscapeGuardRules();
         BurnTurnChecks();
         PrintfTexts();
         LandingSiteParseRules();
