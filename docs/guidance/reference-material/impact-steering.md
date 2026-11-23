@@ -2,7 +2,7 @@
 
 What `ImpactPredictor.VelocityJacobian` and `ImpactSteering.Correction` actually compute, and how the pseudo-inverse law compares with using the Jacobian alone for instantaneous greedy guidance.
 
-All numbers below are measured by `Scvx.Console --impact` on a boostback-shaped reference arc: 90 km altitude, $v_0 = (-350,\ 1500,\ 0)$ m/s, KSA-Earth gravity and atmosphere, an F9-class booster held retrograde.
+All numbers below are measured by `dotnet run --project tests/AdvancedFlightComputer.Guidance.Tests/Scvx -- --impact` on a boostback-shaped reference arc: 90 km altitude, $v_0 = (-350,\ 1500,\ 0)$ m/s, KSA-Earth gravity and atmosphere, an F9-class booster held retrograde.
 
 ---
 
@@ -443,7 +443,7 @@ The first two bullets of section 6 turned out to be the whole story, and they we
 
 The difference is not academic. On the reference arc the impulsive correction points **33 deg below the horizon** and the finite-burn optimum points **25 deg above** it, for 18.3% less propellant - and everything below the horizon is not merely dear but *infeasible* for the vehicle, which runs the tanks dry with tens of kilometres still to go. The nose-down answer was an artefact of pretending a 48-second burn is an impulse.
 
-`Guidance/Boostback.cs` flies the plan on a **receding horizon**: re-solve from the live state every 2 s and fly the head of the freshest plan.
+`AdvancedFlightComputer/Features/Guidance/Modes/Boostback.cs` flies the plan on a **receding horizon**: re-solve from the live state every 2 s and fly the head of the freshest plan.
 
 **And then hands back.** The impulsive law's error scales with burn *duration*, so over the last five seconds it is very nearly exact - and unlike the plan it is cheap enough to re-solve at 10 Hz, so handing over keeps the loop *closed* through a window the plan would have to fly open. At T-2 s the command freezes and the rest runs on sensed dV against the dV owed at the freeze. Against an engine 3% down on thrust, `--shoot` measures:
 
@@ -470,5 +470,5 @@ So the impulsive law did not go away. It answers a question the shot does not - 
 | `AdvancedFlightComputer/Features/Guidance/Numerics/Flight/ImpactSteering.cs` | `Correction`, `FreeDirection` - both laws |
 | `AdvancedFlightComputer/Features/Guidance/Numerics/Flight/PoweredBurn.cs` | `BoostbackShooter` - the burn that actually flies |
 | `AdvancedFlightComputer/Features/Guidance/Modes/Boostback.cs` | the four-phase machine and the receding horizon |
-| `tests/AdvancedFlightComputer.Guidance.Tests/ImpactCheck.cs` | `--impact`, every number in section 1-section 6 |
-| `tests/AdvancedFlightComputer.Guidance.Tests/ShootCheck.cs` | `--shoot`, every number in section 7 |
+| `tests/AdvancedFlightComputer.Guidance.Tests/Scvx/ImpactCheck.cs` | `--impact`, every number in section 1-section 6 |
+| `tests/AdvancedFlightComputer.Guidance.Tests/Scvx/ShootCheck.cs` | `--shoot`, every number in section 7 |

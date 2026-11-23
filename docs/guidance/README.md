@@ -3,7 +3,6 @@
 Guidance is part of AFC under `AdvancedFlightComputer/Features/Guidance/`.
 `GuidanceFeature` registers three patch blocks. The diagnostics block owns the hook the AFC menu draws from, the driver block owns the per-vehicle step, the worker hooks and the guidance pages of the AFC console, and the save block owns the save record postfix of the RCS hold of a landing burn.
 Every guidance write to a craft goes through the ownership described in [../control-ownership.md](../control-ownership.md).
-Single-craft ascent has been flown in the game from this tree. The other modes have not.
 
 | Path | Purpose |
 | --- | --- |
@@ -15,7 +14,7 @@ Single-craft ascent has been flown in the game from this tree. The other modes h
 | `AdvancedFlightComputer/Features/Guidance/Numerics` | Game-independent numerical primitives and flight models. |
 | `AdvancedFlightComputer/Features/Guidance/Conic` | Game-independent conic programs and the Clarabel and SCS bindings every solver uses. |
 | `AdvancedFlightComputer/Features/Guidance/Gfold` | Game-independent G-FOLD solver. |
-| `AdvancedFlightComputer/Features/Guidance/Scvx` | Game-independent successive-convexification solvers: the six degree of freedom landing in `SixDof`, the convex ascent in `Ascent`. |
+| `AdvancedFlightComputer/Features/Guidance/Scvx` | Game-independent successive-convexification solvers: 6-DOF touchdown in `SixDof`, 3-DOF atmospheric entry in `ThreeDof`, and convex ascent in `Ascent`. |
 | `tests/AdvancedFlightComputer.Guidance.Tests` | Console checks and Python reference fixtures, no game needed. |
 | `tests/AdvancedFlightComputer.UiLogic.Tests` | Console checks of the pure console rules (stop, commit, status, setting tiers), no game needed. |
 | `tests/AdvancedFlightComputer.HarnessTests` | The HeadlessHarness test mod, runs inside the real game. |

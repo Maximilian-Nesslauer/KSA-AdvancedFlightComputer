@@ -257,7 +257,7 @@ They use a regularised minimum-norm solve with a saturation cascade, which has a
 
 - **Fins and RCS share one programme.** The attitude controller gives the fins' programme the RCS thrusters as extra **backup columns**: each thruster's full-duty torque, bounded 0...1, priced by its propellant. A degree of fin costs about a thousandth of a newton metre of shortfall, the best thruster 0.02 per newton metre. So the fins take every axis they can, the RCS takes what they cannot, and only then does any demand go unmet. Roll included: a fixed "fins first, roll last" order had left roll to the RCS where the fins could have taken it.
 - **The RCS is then solved again on its own** for what the fins will really give short of the demand, $\boldsymbol\tau - \boldsymbol\tau_\text{fins}$. The joint programme's duties are not flown; they only shape what the fins take.
-- **The gimbals are separate.** On main the attitude controller flies a craft with its engine off and never uses them. Touchdown guidance commands the gimbals and the RCS each with the plan's own torque, and its attitude feedback ([`AttitudeFeedback6Dof`](#where-the-controller-is-used)) shares its correction between them in proportion to the room each has left.
+- **The gimbals are separate.** In the current build the attitude controller flies a craft with its engine off and never uses them. Touchdown guidance commands the gimbals and the RCS each with the plan's own torque, and its attitude feedback ([`AttitudeFeedback6Dof`](#where-the-controller-is-used)) shares its correction between them in proportion to the room each has left.
 
 ### Characterise: reach per axis each way
 

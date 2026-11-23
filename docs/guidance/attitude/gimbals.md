@@ -2,7 +2,7 @@
 
 `KsaTvcAllocator` turns a body torque in newton metres into a deflection for every engine gimbal.
 Touchdown guidance flies its plan's torque through it, together with its attitude feedback's share.
-The attitude controller on main does not use it: it flies a craft whose engine is off.
+In the current build the attitude controller does not use it: it flies a craft whose engine is off.
 
 The stock flight computer has its own allocation (`TvcAllocation.Solve`), but it takes a normalised demand per axis, not newton metres.
 A 6-DOF plan needs to command a torque it trusts and to know what the gimbals can give, so AFC has its own.

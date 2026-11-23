@@ -1,6 +1,9 @@
 # 6-DOF SCvx - from the algorithm to a thing that flies
 
-This directory is the **bridge** between a successive-convexification solver and a rocket in Kitten Space Agency. The maths is documented elsewhere; what follows is everything that had to be true *besides* the maths, most of it learned by flying it and finding out.
+!!! note "Historical development notes"
+    These notes record engineering lessons from bringing the 6-DOF SCvx bridge into flight (initially around v0.16.0). For the current problem formulation and flight behavior, see [Touchdown (6-DOF)](scvx/touchdown.md) and [Touchdown on the craft](scvx-bridge.md).
+
+`AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/` is the **bridge** between a successive-convexification solver and a rocket in Kitten Space Agency. The maths is documented elsewhere; what follows is everything that had to be true *besides* the maths, most of it learned by flying it and finding out.
 
 | Layer | Where | Job |
 |---|---|---|
@@ -359,7 +362,7 @@ Every one of these exists because a symptom could not be attributed from the out
 | `--path`, `--gates`, `--defect` | Constraints bind; node transitions carry; defect gate sanity |
 | `--spiral` | Reproduce a logged engage state offline |
 
-**Flight telemetry** (`SixDofLog` -> `tools/readlog.py`) writes `-cycle.csv`, `-plan.csv` and `-events.log`.
+**Flight telemetry** (`SixDofLog`) writes `-cycle.csv`, `-plan.csv` and `-events.log`.
 
 !!! note
     The plan snapshots earn their place.

@@ -1,7 +1,7 @@
 # Native solver build
 
 Guidance builds Clarabel and SCS from the sources in `third_party/`.
-Clarabel serves the G-FOLD planner, and SCS serves the six degree of freedom solver.
+Clarabel serves the G-FOLD planner and convex ascent, and SCS serves the 3-DOF entry and 6-DOF touchdown solvers.
 
 | Runtime | Clarabel | SCS |
 | --- | --- | --- |
@@ -28,8 +28,8 @@ Windows also needs the Visual Studio C++ build tools and Windows SDK for Rust's 
 Linux needs a GNU linker.
 macOS needs the Xcode Command Line Tools.
 
-The check builds both native libraries and eight game-free managed projects, then checks native layouts and exports against the C# bindings in the Conic assembly.
-It runs each Scvx check (`--fd`, `--aero`, `--impact`, `--sub-scs`, `--loop`, `--ascent`, `--ascent-glimit`, `--cold-shift`, `--hermite`), the Gfold checks (the default `81 120` run, `--clarabel-smoke`, `--realtime`, `--terminal-braking`, `--accel-limit`) and `Worker.Tests`, stopping on failure.
+The check builds both native libraries and nine game-free managed projects, then checks native layouts and exports against the C# bindings in the Conic assembly.
+It runs each Scvx check (`--fd`, `--aero`, `--impact`, `--sub-scs`, `--loop`, `--ascent`, `--ascent-glimit`, `--ascent-qceiling`, `--cold-shift`, `--hermite`, `--slope`, `--3dof`, `--3dof-model`, `--3dof-ksa`), the Gfold checks (the default `81 120` run, `--clarabel-smoke`, `--realtime`, `--terminal-braking`, `--accel-limit`), `Worker.Tests`, and `UiLogic.Tests`, stopping on failure.
 The default `Gfold 81 120` run checks its plan against the boundary conditions and the dynamics. It only prints its fuel comparison and does not check it.
 
 To build a single library with tools already on PATH, run:

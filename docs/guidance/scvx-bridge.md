@@ -163,4 +163,4 @@ The last few metres are the worst case for this solver and the easiest for a sim
 
 `tests/AdvancedFlightComputer.Guidance.Tests/Scvx` runs the solver headless against a JAX reference implementation and a set of behavioural checks - closed-loop MPC with injected dispersions, path-constraint enforcement, node-ladder transitions, defect behaviour against range, and solve-time distributions. `dotnet run --project tests/AdvancedFlightComputer.Guidance.Tests/Scvx -c Release -- --help` lists them.
 
-In flight, `SixDofLog` writes per-cycle telemetry, periodic whole-plan snapshots and an event log; `tools/readlog.py` summarises a run.
+In flight, `SixDofLog` writes per-cycle telemetry (`-cycle.csv`), periodic whole-plan snapshots (`-plan.csv`) and an event log (`-events.log`).

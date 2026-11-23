@@ -16,11 +16,13 @@ Every feature lives in its own folder under `AdvancedFlightComputer/Features/`.
 | `Flyby` | Aims a transfer at a chosen flyby periapsis instead of the body centre. |
 | `HyperbolicTargets` | Lets the planners target bodies on unbound orbits, such as interstellar comets. |
 | `MissionPlanner` | The lunar launch planning behind **THEN** on **LAUNCH**: the launch plane and window. |
+| `Burns` | Burn turn-warp checks and pointing warnings on planned stock burns. |
 | `RcsTranslation` | Flies a planned burn with RCS thrusters only. |
 | `RcsTorque` | Shares an attitude torque out among the RCS thrusters. |
 | `AeroControl` | Shares an attitude torque out among the control surfaces (fins). |
 | `AutoStage` | Automatic staging, the spent-stage drop and the staging delays. |
 | `AutoRemove` | Removes the last finished burn from the plan. |
+| `LandingSites` | Loads named landing sites from `AfcLandingSites.toml` across enabled mods. |
 | `Guidance` | Powered guidance: ascent, boostback, entry and landing. See [AFC guidance](../guidance/README.md). |
 
 Every write AFC makes to a craft's controls goes through one set of rules, described in [Control ownership](../control-ownership.md).

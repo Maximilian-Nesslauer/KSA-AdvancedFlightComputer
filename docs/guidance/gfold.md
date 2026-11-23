@@ -1,6 +1,6 @@
-# gfold
+# G-FOLD
 
-G-FOLD (convex powered-descent guidance, Acikmese/Blackmore) in C#, intended as the terminal-guidance trajectory generator for the KSA mod (`../ksamod`). The mod consumes this as compiled artifacts only - `Gfold.Core.dll` + `clarabel_c.dll` dropped next to the mod DLL - so none of the optimization machinery leaks into the mod project.
+G-FOLD (convex powered-descent guidance, Acikmese/Blackmore) in C#, used as the airless point-mass fallback trajectory generator in AFC. The game-facing mod consumes it as compiled game-independent assemblies (`AdvancedFlightComputer.Guidance.Gfold.dll` + `AdvancedFlightComputer.Guidance.Conic.dll` + `clarabel_c.dll`), keeping the optimization machinery decoupled from KSA.
 
 ## Mathematics
 
@@ -187,7 +187,7 @@ Our equality constraints are our initial and terminal conditions, as well as the
 
 **The equalities `A, b`.** `A` has one column per entry of `x` and one **row per scalar equation**; `b` is the right-hand side. A row is mostly zeros - only the variables that appear in that equation are nonzero. Each entry in the equality-constraints table contributes its rows: a *vector* condition expands to three (one per x/y/z component), the dynamics links couple node `n` to `n+1`.
 
-For example, "initial position $`\mathbf{r}_0 = \mathbf{r}_\text{init}`$" is three rows; the first (`GfoldPlanner.cs:245`) is
+For example, "initial position $`\mathbf{r}_0 = \mathbf{r}_\text{init}`$" is three rows; the first (in `GfoldPlanner.cs`) is
 
 ```csharp
 A.Add(row, IX(0, 0), 1); b[row] = r0[0];   // 1 * x[IX(0,0)] = r0[0]
@@ -197,13 +197,13 @@ A.Add(row, IX(0, 0), 1); b[row] = r0[0];   // 1 * x[IX(0,0)] = r0[0]
 
 **The inequalities `G, h` and cone sizes.** These use $`G x + s = h`$, i.e. $`s = h - G x`$, with `s` required to stay in its cone (`>= 0` for linear, $`s_0 \ge \lVert(s_1,\dots)\rVert`$ for a cone). So for each row: **`h` holds the constant part** of the quantity you want `s` to equal, and **`G` holds the *negated* coefficients** of the variables (because of the minus sign).
 
-*Linear example - ground, $`r_{x,n} \ge 0`$.* Altitude is the variable `x[IX(n,0)]`; we want the slack to be that altitude (`s >= 0`). Constant part is `0`, the coefficient `+1` negates to `-1` (`GfoldPlanner.cs:363`):
+*Linear example - ground, $`r_{x,n} \ge 0`$.* Altitude is the variable `x[IX(n,0)]`; we want the slack to be that altitude (`s >= 0`). Constant part is `0`, the coefficient `+1` negates to `-1` (in `GfoldPlanner.cs`):
 
 ```csharp
 G.Add(row, IX(n, 0), -1); h[row] = 0;      // s = 0 - (-1)*r_x = r_x >= 0
 ```
 
-*Cone example - velocity cap, $`\lVert \mathbf{v}_n \rVert \le V_\text{max}`$.* A second-order cone of size 4: we want `s = (V_max, v_x, v_y, v_z)`, so that $`s_0 \ge \lVert(s_1,s_2,s_3)\rVert`$ reads $`V_\text{max} \ge \lVert\mathbf{v}_n\rVert`$. Row 0 is the constant bound (no variables); rows 1-3 pull in the velocity components (`GfoldPlanner.cs:384`):
+*Cone example - velocity cap, $`\lVert \mathbf{v}_n \rVert \le V_\text{max}`$.* A second-order cone of size 4: we want `s = (V_max, v_x, v_y, v_z)`, so that $`s_0 \ge \lVert(s_1,s_2,s_3)\rVert`$ reads $`V_\text{max} \ge \lVert\mathbf{v}_n\rVert`$. Row 0 is the constant bound (no variables); rows 1-3 pull in the velocity components (in `GfoldPlanner.cs`):
 
 ```csharp
 h[row++] = vMax;                            // s0 = V_max
@@ -413,31 +413,31 @@ For **P3** instead: add a 56th column for `t`, change the objective to `c[55] = 
 
 ## Layout
 
-- `clarabel/` - vendored Clarabel sources (oxfordcontrol/Clarabel.cpp plus its Clarabel.rs submodule). Apache-2.0.
-- `build-clarabel.ps1` - builds `native/clarabel_c.dll` with cargo. Needs a Rust toolchain; no CMake (see the script for why).
-- `native/` - build output (gitignored). Rebuild with the script.
-- `Gfold.Core/` - the managed library, now split between `Features/Guidance/Gfold` (the planner) and `Features/Guidance/Conic` (the solver side, shared with the 6-DOF solver and the convex ascent): `ClarabelSolver.Solve(ConicProblem)` (standard conic form: min c'x s.t. Ax=b, Gx+s=h, s in R+^l x SOC(q...)), `SparseCcs` triplet->CCS builder, P/Invoke bindings with pinned-array lifetime management.
-- `Gfold.Console/` - runs the P3 -> P4 flow on the reference "Numerical Example 1" case, verifies the result physically (dynamics replay, bounds), writes CSVs. `--check <csv>` audits any trajectory against the constraint set; `--frame` times a solve at the shape the mod flies; `--clarabel-smoke` and `--clarabel-layout` check the binding.
-- `python_ref/` - CVXPY/Clarabel replica of the original Python for cross-validation (`gfold_ref.py [tf] [N] [--scaled] [--feascheck csv]`).
+- `third_party/clarabel/` - vendored Clarabel sources (oxfordcontrol/Clarabel.cpp plus its Clarabel.rs submodule). Apache-2.0.
+- `build/build-clarabel.ps1` - builds `clarabel_c` (`build/native/<rid>/`) with cargo. Needs a Rust toolchain; no CMake (see [native-build.md](native-build.md)).
+- `build/native/<rid>/` - native build output (gitignored). Rebuild with the build scripts.
+- `AdvancedFlightComputer/Features/Guidance/Gfold/` & `Conic/` - the managed libraries (`AdvancedFlightComputer.Guidance.Gfold` for the planner and `AdvancedFlightComputer.Guidance.Conic` for the solver side, shared with the 3-DOF/6-DOF solvers and convex ascent): `ClarabelSolver.Solve(ConicProblem)` (standard conic form: min c'x s.t. Ax=b, Gx+s=h, s in R+^l x SOC(q...)), `SparseCcs` triplet->CCS builder, P/Invoke bindings with pinned-array lifetime management.
+- `tests/AdvancedFlightComputer.Guidance.Tests/Gfold/` - runs the P3 -> P4 flow on the reference "Numerical Example 1" case, verifies the result physically (dynamics replay, bounds), writes CSVs. `--check <csv>` audits any trajectory against the constraint set; `--frame` times a solve at the shape the mod flies; `--clarabel-smoke` and `--clarabel-layout` check the binding.
+- `tests/AdvancedFlightComputer.Guidance.Tests/Gfold/python_ref/` - CVXPY/Clarabel replica of the original Python for cross-validation (`gfold_ref.py [tf] [N] [--scaled] [--feascheck csv]`).
 
 ## Build notes
 
-Clarabel is a Rust crate exposing a C ABI, so `native/clarabel_c.dll` is built with cargo (`build-clarabel.ps1`) and is **not checked in** - it is the one native dependency that cannot be built with the portable C compiler the rest of the tree uses. SCS is built by `../scvx/build-scs.ps1` with `zig cc`.
+Clarabel is a Rust crate exposing a C ABI, so `clarabel_c` is built with cargo (`build/build-clarabel.ps1`) and is **not checked in** - it is the one native dependency that cannot be built with the portable C compiler the rest of the tree uses. SCS is built by `build/build-scs.ps1` with `zig cc`.
 
-Interop notes worth knowing: Clarabel's CSC indices are `uintptr_t` (64-bit) where SCS uses 32-bit ints, and its `time_limit` of `0` means *zero seconds*, not "no limit" - infinity is the value for none. Both are documented at their call sites, and `--clarabel-layout` prints the marshalled struct offsets for checking against `clarabel/include/c/*.h`.
+Interop notes worth knowing: Clarabel's CSC indices are `uintptr_t` (64-bit) where SCS uses 32-bit ints, and its `time_limit` of `0` means *zero seconds*, not "no limit" - infinity is the value for none. Both are documented at their call sites, and `--clarabel-layout` prints the marshalled struct offsets for checking against `third_party/clarabel/include/c/*.h`.
 
 ## Solver backends: Clarabel and SCS
 
-The assembled problem (`ConicProblem`) is solver-neutral, and `GfoldPlanner.Backend` runs it. Clarabel is permissively licensed, which is what let the project move to MIT - the ECOS backend that preceded it was GPLv3 and forced the whole work to be GPLv3. (An SCS backend was carried alongside it for a while as a cross-check; it has since been removed. Scvx.Core still uses SCS for the 6-DOF subproblem.)
+The assembled problem (`ConicProblem`) is solver-neutral, and `GfoldPlanner.Backend` runs it. Clarabel is permissively licensed, which is what let the project move to MIT - the ECOS backend that preceded it was GPLv3 and forced the whole work to be GPLv3. (An SCS backend was carried alongside it for a while as a cross-check; it has since been removed. `AdvancedFlightComputer.Guidance.Scvx` uses Clarabel for convex ascent and SCS for the 3-DOF entry and 6-DOF touchdown subproblems.)
 
 `ClarabelSolver` wants the equalities and the cone rows stacked into one matrix with a leading zero cone, which `SparseCcs.VStack` does. That stack is the one step of the conversion that can be silently wrong - CCS is column-major, so a vertical stack interleaves within every column rather than concatenating - and it is checked against a dense reference at the top of `--clarabel-smoke`.
 
-`ClarabelSolver` is a static function with no state. G-FOLD **always cold starts**: every call is a new plan, and the successive solves inside `SearchMinFuel` are different times of flight probed by a golden section, related by nothing but their order in the caller's cache. (Scvx.Core's `ScsWorkspace` is stateful for the opposite reason - an SCvx iteration *is* a perturbation of the last one.)
+`ClarabelSolver` is a static function with no state. G-FOLD **always cold starts**: every call is a new plan, and the successive solves inside `SearchMinFuel` are different times of flight probed by a golden section, related by nothing but their order in the caller's cache. (`ScsWorkspace` in `Conic` is stateful for the opposite reason - an SCvx iteration *is* a perturbation of the last one.)
 
 ### Running the frame-budget check
 
-```
-dotnet run --project gfold/Gfold.Console -- --frame
+```powershell
+dotnet run --project tests/AdvancedFlightComputer.Guidance.Tests/Gfold -- --frame
 ```
 
 Times both in-flight call shapes at the size the mod actually solves: the cadence solve (one `SolveMinFuel` at the remaining flight time) and the fallback (`SearchMinFuel`, tens of solves, the one that can stall a frame). It also exercises the time-limit guard, which must come back inside its budget *and* report itself unusable - a time-limited iterate is not a solution, and a run that reported both Optimal and usable would mean the caller flies a half-converged plan.
@@ -473,8 +473,8 @@ The licence chain for an MIT release: Clarabel Apache-2.0, its AMD BSD-3 and QDL
 
 `clarabel_c.dll` is **not checked in** - unlike scs.dll it needs a Rust toolchain, so it is built on demand:
 
-```
-pwsh gfold/build-clarabel.ps1
+```powershell
+./build/build-clarabel.ps1
 ```
 
 Cargo alone; no CMake. Clarabel.cpp's README asks for CMake, but that layer only builds the optional C++/Eigen interface and the tests - the C ABI comes from the `rust_wrapper` crate, which already declares `crate-type = ["cdylib"]`.
