@@ -79,6 +79,12 @@ if (args.Contains("--6dof-thrust-moment"))
 if (args.Contains("--6dof-aero"))
     return SixDofAeroCheck.Run(verbose);
 
+if (args.Contains("--rcs-refusal"))
+    return RcsRefusalCheck.Run();
+
+if (args.Contains("--phase-plane"))
+    return PhasePlaneCheck.Run();
+
 if (args.Contains("--orbital-entry-gains"))
     return OrbitalEntryCheck.SweepGains();
 

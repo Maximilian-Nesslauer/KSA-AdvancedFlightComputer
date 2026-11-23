@@ -227,8 +227,9 @@ internal static class KsaRcsTorqueControl
     /// <summary>
     /// Fire this craft's RCS for a torque, N m, in vehicle assembly axes, from now until the next command or <see cref="Release"/>. The frame (<paramref name="ax"/>, <paramref name="ay"/>, <paramref name="az"/>) is the one <paramref name="priority"/> weights the axes in: where the demand is out of reach, the axis with the smallest weight gives way first. Main thread; call it every step the torque is wanted.
     /// </summary>
+    /// <param name="jetMapFallback">Where the programme gives under a tenth of the demand about its largest axis, fire as the stock flight computer's jet selection does instead: on each axis asked for, the thrusters that turn it the asked way, spill and all (JetMapDuties). For pulses that must land, as the phase plane's.</param>
     internal static Report Command(Vehicle vehicle, double3 torqueAsmb,
-                                   double3 ax, double3 ay, double3 az, ReadOnlySpan<double> priority)
+                                   double3 ax, double3 ay, double3 az, ReadOnlySpan<double> priority, bool jetMapFallback = false)
     {
         if (vehicle == null)
             return default;
@@ -251,6 +252,16 @@ internal static class KsaRcsTorqueControl
         RcsTorqueAllocator.Result r;
         using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Rcs.Allocate"))
             r = alloc.Allocate(dx, dy, dz, priority, duty);
+        // A demand the programme gave nothing of (unsolved, or under a tenth of it about its largest axis): its inputs, once a session, to rebuild offline (2026-11-22: a craft's y torque asked alone was never given).
+        double asked = Math.Max(Math.Abs(dx), Math.Max(Math.Abs(dy), Math.Abs(dz)));
+        double gotten = !r.Solved ? 0.0
+            : Math.Abs(dx) >= asked ? r.TorqueX * Math.Sign(dx) : Math.Abs(dy) >= asked ? r.TorqueY * Math.Sign(dy) : r.TorqueZ * Math.Sign(dz);
+        if (asked > 1000.0 && gotten < 0.1 * asked)
+        {
+            DumpRefusal(vehicle, alloc, dx, dy, dz, priority, r.Solved);
+            if (jetMapFallback)
+                r = JetMapDuties(alloc, dx, dy, dz, duty);
+        }
         if (!r.Solved)
         {
             Publish(slot, null);
@@ -266,6 +277,64 @@ internal static class KsaRcsTorqueControl
             new double3(r.TorqueX, r.TorqueY, r.TorqueZ), new double3(r.ForceX, r.ForceY, r.ForceZ),
             r.FlowKgS, r.ShortfallNm, r.Firing, alloc.Count);
         return slot.Last;
+    }
+
+    /// <summary>The share of an axis's strongest thruster a thruster must turn it by to be fired for it by JetMapDuties.</summary>
+    private const double JetMapShare = 0.1;
+
+    /// <summary>
+    /// The stock flight computer's way of picking jets, over the allocator's columns: on each axis asked for, every thruster that turns it the asked way by at least JetMapShare of the strongest, at the one duty that gives the axis its demand between them (capped at full), whatever else they turn. Duties into <paramref name="duty"/>, and what they give.
+    /// </summary>
+    private static RcsTorqueAllocator.Result JetMapDuties(RcsTorqueAllocator alloc, double dx, double dy, double dz, double[] duty)
+    {
+        Array.Clear(duty);
+        int n = alloc.Count;
+        double[] demand = { dx, dy, dz };
+        for (int axis = 0; axis < 3; axis++)
+        {
+            double want = demand[axis];
+            if (Math.Abs(want) < 1.0)
+                continue;
+            double strongest = 0.0;
+            for (int i = 0; i < n; i++)
+                if (alloc.Flow[i] > 0.0 && alloc.Torque[3 * i + axis] * Math.Sign(want) > strongest)
+                    strongest = alloc.Torque[3 * i + axis] * Math.Sign(want);
+            if (!(strongest > 0.0))
+                continue;
+            double sum = 0.0;
+            for (int i = 0; i < n; i++)
+                if (alloc.Flow[i] > 0.0 && alloc.Torque[3 * i + axis] * Math.Sign(want) >= JetMapShare * strongest)
+                    sum += alloc.Torque[3 * i + axis] * Math.Sign(want);
+            double d = Math.Min(Math.Abs(want) / sum, 1.0);
+            for (int i = 0; i < n; i++)
+                if (alloc.Flow[i] > 0.0 && alloc.Torque[3 * i + axis] * Math.Sign(want) >= JetMapShare * strongest)
+                    duty[i] = Math.Min(duty[i] + d, 1.0);
+        }
+        double tx = 0, ty = 0, tz = 0, fx = 0, fy = 0, fz = 0, flow = 0;
+        int firing = 0;
+        for (int i = 0; i < n; i++)
+        {
+            if (!(duty[i] > 0.0))
+                continue;
+            firing++;
+            tx += alloc.Torque[3 * i] * duty[i]; ty += alloc.Torque[3 * i + 1] * duty[i]; tz += alloc.Torque[3 * i + 2] * duty[i];
+            fx += alloc.Force[3 * i] * duty[i]; fy += alloc.Force[3 * i + 1] * duty[i]; fz += alloc.Force[3 * i + 2] * duty[i];
+            flow += alloc.Flow[i] * duty[i];
+        }
+        return new RcsTorqueAllocator.Result(true, tx, ty, tz, fx, fy, fz, flow,
+            Math.Sqrt((dx - tx) * (dx - tx) + (dy - ty) * (dy - ty) + (dz - tz) * (dz - tz)), firing);
+    }
+
+    private static void DumpRefusal(Vehicle vehicle, RcsTorqueAllocator alloc, double dx, double dy, double dz, ReadOnlySpan<double> priority, bool solved)
+    {
+        var text = new System.Text.StringBuilder();
+        text.Append(System.FormattableString.Invariant($"[AFC] RCS refused a torque on '{vehicle.Id}' ({(solved ? "solved, gave under a tenth" : "unsolved")}): demand {dx:F0} {dy:F0} {dz:F0} N m, priority"));
+        foreach (double p in priority)
+            text.Append(System.FormattableString.Invariant($" {p:G4}"));
+        text.Append(System.FormattableString.Invariant($"; {alloc.Count} thrusters, torque x y z N m / flow kg/s:"));
+        for (int i = 0; i < alloc.Count; i++)
+            text.Append(System.FormattableString.Invariant($" [{alloc.Torque[3 * i]:G6} {alloc.Torque[3 * i + 1]:G6} {alloc.Torque[3 * i + 2]:G6} / {alloc.Flow[i]:G6}]"));
+        LogHelper.WarnOnce($"rcs-refusal-{vehicle.Id}-{(solved ? "solved" : "unsolved")}", text.ToString());
     }
 
     /// <summary>Stop firing for this craft. The worker writes nothing more, so stock's own command (none, unless the player fires RCS) stands from the next step.</summary>

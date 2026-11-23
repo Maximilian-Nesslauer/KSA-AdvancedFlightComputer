@@ -13,6 +13,7 @@
     <Compile Include="../../../AdvancedFlightComputer/Features/RcsTranslation/RcsLpSolver.cs" Link="RcsLpSolver.cs" />
     <Compile Include="../../../AdvancedFlightComputer/Features/RcsTorque/RcsTorqueAllocator.cs" Link="RcsTorqueAllocator.cs" />
     <Compile Include="../../../AdvancedFlightComputer/Features/AeroControl/AeroTorqueAllocator.cs" Link="AeroTorqueAllocator.cs" />
+    <Compile Include="../../../AdvancedFlightComputer/Features/RcsTorque/PhasePlaneRcs.cs" Link="PhasePlaneRcs.cs" />
     <Using Include="AdvancedFlightComputer.Features.Guidance" />
   </ItemGroup>
 </Project>

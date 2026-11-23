@@ -80,7 +80,7 @@ public static partial class GuidanceWindow
         {
             EntryConfig c = OrbitalEntryConfig();
             string setup = FormattableString.Invariant(
-                $"limits: q {c.DynamicPressureMax / 1000:F1} kPa, load {c.LoadFactorMax:F2} g, heating {c.HeatingRateMax / 1000:F0} kW/m2 (nose {_s.OrbitalEntryNoseRadiusM:F2} m); bank plan {c.BankMinDeg:F0}-{c.BankMaxDeg:F0}, tracker to {c.OverbankDeg:F0}, reversal band {c.ReversalBandDeg:F1} deg, corridor margin {c.CorridorWeight:F2}, roll {c.RollRateDegS:F1} deg/s; RCS {(_s.OrbitalEntryUseRcs ? "on" : "off")}; hand-over {c.HandoverAltitude / 1000:F1} km Mach {c.HandoverMach:F2}; start drag {c.StartDrag:F2}; re-solve {_s.OrbitalEntryResolveS:F2} s; site {_s.SiteLatDeg:F4} {_s.SiteLonDeg:F4}; mass {vehicle.TotalMass:F0} kg");
+                $"limits: q {c.DynamicPressureMax / 1000:F1} kPa, load {c.LoadFactorMax:F2} g, heating {c.HeatingRateMax / 1000:F0} kW/m2 (nose {_s.OrbitalEntryNoseRadiusM:F2} m); bank plan {c.BankMinDeg:F0}-{c.BankMaxDeg:F0}, tracker to {c.OverbankDeg:F0}, reversal band {c.ReversalBandDeg:F1} deg, corridor margin {c.CorridorWeight:F2}, roll {c.RollRateDegS:F1} deg/s; RCS {(_s.OrbitalEntryUseRcs ? FormattableString.Invariant($"on, phase plane band {_s.OrbitalEntryRcsDeadbandDeg:F1} deg") : "off")}; hand-over {c.HandoverAltitude / 1000:F1} km Mach {c.HandoverMach:F2}; start drag {c.StartDrag:F2}; re-solve {_s.OrbitalEntryResolveS:F2} s; site {_s.SiteLatDeg:F4} {_s.SiteLonDeg:F4}; mass {vehicle.TotalMass:F0} kg");
             if (OrbitalEntryLog.Start(st, vehicle.Id, (parent as Astronomical)?.Id ?? "", setup))
                 GuidanceLog.Info(vehicle, "Orbital entry log: " + OrbitalEntryLog.Path);
         }
@@ -433,9 +433,9 @@ public static partial class GuidanceWindow
         v.Add(o.Side); v.Add(o.Reversing ? 1 : 0); v.Add(o.Overbanked ? 1 : 0); v.Add(o.LiftUpLimit ? 1 : 0); v.Add(o.LiftDownLimit ? 1 : 0);
         v.Add(st.AlphaDeg); v.Add(st.AlphaFlownDeg); v.Add(a.ErrorDeg); v.Add(a.RateErrorDegS); v.Add(st.AttitudeOwn ? 1 : 0); v.Add(a.AirKnown ? 1 : 0);
         v.Add(a.DemandNm.X); v.Add(a.DemandNm.Y); v.Add(a.DemandNm.Z); v.Add(a.AirNm.X); v.Add(a.AirNm.Y); v.Add(a.AirNm.Z);
-        v.Add(a.SurfacesNm.X); v.Add(a.SurfacesNm.Y); v.Add(a.SurfacesNm.Z); v.Add(a.RcsNm.X); v.Add(a.RcsNm.Y); v.Add(a.RcsNm.Z); v.Add(a.RcsFlowKgS);
+        v.Add(a.SurfacesNm.X); v.Add(a.SurfacesNm.Y); v.Add(a.SurfacesNm.Z); v.Add(a.RcsNm.X); v.Add(a.RcsNm.Y); v.Add(a.RcsNm.Z); v.Add(a.RcsAskedNm.X); v.Add(a.RcsAskedNm.Y); v.Add(a.RcsAskedNm.Z); v.Add(a.RcsFlowKgS);
         const double toDeg = 180.0 / Math.PI;
-        v.Add(a.SpareAccelRadS2.X * toDeg); v.Add(a.SpareAccelRadS2.Y * toDeg); v.Add(a.SpareAccelRadS2.Z * toDeg); v.Add(a.AirAxisAccelRadS2 * toDeg); v.Add(a.Saturated ? 1 : 0);
+        v.Add(a.SpareAccelRadS2.X * toDeg); v.Add(a.SpareAccelRadS2.Y * toDeg); v.Add(a.SpareAccelRadS2.Z * toDeg); v.Add(a.AirAxisAccelRadS2 * toDeg); v.Add(a.Saturated ? 1 : 0); v.Add(a.RcsAxes); v.Add(a.RcsFiring);
         v.Add(a.FinCommandDeg?.Length ?? 0);
         for (int i = 0; i < 4; i++) v.Add(a.FinCommandDeg != null && i < a.FinCommandDeg.Length ? a.FinCommandDeg[i] : double.NaN);
         for (int i = 0; i < 4; i++) v.Add(a.FinNowDeg != null && i < a.FinNowDeg.Length ? a.FinNowDeg[i] : double.NaN);

@@ -310,6 +310,8 @@ internal static class GuidanceSettingSpecs
     public static readonly BoolSpec OrbitalEntryUseRcs = new("OrbitalEntryUseRcs", "ENTRY RCS", P, true,
         "Let OWN ATTITUDE fire the RCS during orbital entry. Off steers on the flaps alone, which give nothing in air too thin for them (under 50 Pa).");
 
+    public static readonly SettingSpec OrbitalEntryRcsDeadbandDeg = new("OrbitalEntryRcsDeadbandDeg", "RCS DEAD BAND", "deg", P, 1.0, 0.0, 20.0, "%.1f",
+        "The width of the band the RCS holds an axis in, as the stock flight computer's attitude dead band (Balanced 1 deg): it coasts across it, firing one small pulse at each edge. On axes the flaps fly, the RCS watches a band three times wider and fires only when the flaps are losing. Wider saves propellant and lets the attitude wander more.");
     public static readonly SettingSpec OrbitalEntryTrackOmega = new("OrbitalEntryTrackOmega", "DRAG TRACKING", "rad/s", P, 0.03, 0.01, 2.0, "%.3f",
         "Natural frequency of the drag and sink-rate loop that holds the plan's drag: higher pulls the drag onto the plan's faster, at the cost of more bank activity.");
     public static readonly SettingSpec OrbitalEntryMeasureSmoothS = new("OrbitalEntryMeasureSmoothS", "DRAG FILTER", "s", P, 4.0, 0.0, 30.0, "%.1f",
@@ -339,7 +341,7 @@ internal static class GuidanceSettingSpecs
         OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach,
         OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
         OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryReversalBandDeg, OrbitalEntryRollRateDegS, OrbitalEntryTrackRollRateDegS,
-        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryTrackOmega, OrbitalEntryGainDragFloor, OrbitalEntryMeasureSmoothS, OrbitalEntryCorridorWeight, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
+        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryRcsDeadbandDeg, OrbitalEntryTrackOmega, OrbitalEntryGainDragFloor, OrbitalEntryMeasureSmoothS, OrbitalEntryCorridorWeight, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
     };
     public static readonly BoolSpec[] OrbitalEntryBools = { OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude, OrbitalEntryUseRcs };
 
@@ -483,7 +485,7 @@ internal static class GuidanceSettingSpecs
         OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach,
         OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
         OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryReversalBandDeg, OrbitalEntryRollRateDegS, OrbitalEntryTrackRollRateDegS,
-        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryTrackOmega, OrbitalEntryGainDragFloor, OrbitalEntryMeasureSmoothS, OrbitalEntryCorridorWeight, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
+        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryRcsDeadbandDeg, OrbitalEntryTrackOmega, OrbitalEntryGainDragFloor, OrbitalEntryMeasureSmoothS, OrbitalEntryCorridorWeight, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
     };
 
     public static readonly BoolSpec[] AllBools =

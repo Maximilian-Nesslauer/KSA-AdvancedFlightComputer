@@ -166,17 +166,21 @@ internal static class RcsLpSolver
         foreach (double value in x)
             if (!double.IsFinite(value)) return false;
         // Check the original units because a small scaled residual can hide a large unmet demand.
+        // The tolerance also scales with the row's largest coefficient, the unit the tableau solved it in (ScaleRows): a row asked for zero (an axis held still while another fires) is otherwise held to a millionth of the few terms that touch it, and round-off of a part in 1e10 to 1e8 of its scale failed the check. A millionth of the row's scale is still nothing a thruster can feel: 0.05 N m on a 51 kN m thruster row. Offline, 1566 of 3735 reachable pure-axis demands on the belly flop's 48 thrusters came back unsolved that way, and in flight its y pulses were refused (2026-11-22).
         for (int r = 0; r < rows; r++)
         {
             double sum = 0.0;
             double magnitude = 0.0;
+            double scale = Math.Abs(b[r]);
             for (int i = 0; i < n; i++)
             {
-                double term = columns[i * rows + r] * x[i];
+                double coefficient = columns[i * rows + r];
+                double term = coefficient * x[i];
                 sum += term;
                 magnitude += Math.Abs(term);
+                scale = Math.Max(scale, Math.Abs(coefficient));
             }
-            double tolerance = 1e-10 + 1e-6 * Math.Max(Math.Abs(b[r]), magnitude);
+            double tolerance = 1e-10 + 1e-6 * Math.Max(Math.Abs(b[r]), magnitude) + 1e-6 * scale;
             if (!double.IsFinite(sum) || !double.IsFinite(magnitude) || Math.Abs(sum - b[r]) > tolerance)
                 return false;
         }

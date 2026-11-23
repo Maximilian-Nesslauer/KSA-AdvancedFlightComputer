@@ -2228,13 +2228,14 @@ public static partial class GuidanceWindow
         else if (OrbitalEntryLive)
         {
             double entryCapture = Math.Max(10.0, _s.OrbitalEntryRollRateDegS);
-            // Authority-aware: the square-root capture and conditional integral (AttitudeController's AUTHORITY-AWARE CAPTURE), and the flaps given the demand lagged over half the loop's time constant, the RCS the fast rest (SURFACE SMOOTHING).
+            // Authority-aware: the square-root capture and conditional integral (AttitudeController's AUTHORITY-AWARE CAPTURE). Each axis flown by the flaps or by the RCS on the stock flight computer's phase plane, whichever has the authority (PHASE-PLANE RCS), or by the flaps alone with ENTRY RCS off.
             settings = settings with
             {
                 CaptureRateDegS = entryCapture, RollCaptureRateDegS = entryCapture,
-                AuthorityCapture = true, SurfaceSmoothS = 0.5 / Math.Max(settings.BandwidthRadS, 0.1),
-                // ENTRY RCS off: the flaps alone, the whole demand each step within their reach.
+                AuthorityCapture = true,
                 UseRcs = _s.OrbitalEntryUseRcs,
+                PhasePlaneRcs = true,
+                RcsAngleBandDeg = _s.OrbitalEntryRcsDeadbandDeg,
             };
         }
         KsaAeroSweep.Result aero = OrbitalEntryLive ? _s.OrbitalEntry.Aero : _s.Aero;
