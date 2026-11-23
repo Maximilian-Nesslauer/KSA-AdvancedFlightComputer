@@ -44,7 +44,7 @@ internal static class FormRules
     public static bool FlightNoticeShows(CraftSituation where, LandWay way) => where switch
     {
         CraftSituation.Ground or CraftSituation.Escaping => false,
-        CraftSituation.Orbit => way == LandWay.FromOrbit,
+        CraftSituation.Orbit => way is LandWay.FromOrbit or LandWay.Entry,
         _ => true,
     };
 

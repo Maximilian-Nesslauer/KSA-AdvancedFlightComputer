@@ -18,6 +18,7 @@ internal static partial class AfcConsole
     // Read once to move a saved booster page to LAUNCH or LAND > BOOSTBACK, and dropped on the next save.
     private const string KeyLegacyBoosterStep = "console_recover_step";
     internal const string KeyLandWay = "console_land_way";
+    internal const string KeyEntryMethod = "console_entry_method";
     internal const string KeyTuneSet = "console_tune_set";
     internal const string KeyTuneLanding = "console_tune_landing";
     internal const string KeyTuneDiagnostics = "console_tune_diagnostics";
@@ -33,6 +34,8 @@ internal static partial class AfcConsole
     internal static bool DrawerOpen;
     internal static ConsolePage Page = ConsolePage.Launch;
     internal static LandWay LandWay = LandWay.FromOrbit;
+    /// <summary>The METHOD of LAND > ENTRY.</summary>
+    internal static EntryMethod EntryMethod = EntryMethod.Orbital;
     internal static TuneSet TuneSet = TuneSet.Ascent;
     internal static TuneLanding TuneLanding = TuneLanding.Approach;
     internal static TuneDiagnostics TuneDiagnostics = TuneDiagnostics.Ascent;
@@ -89,6 +92,8 @@ internal static partial class AfcConsole
         CraftActivity a = Frame.Activity;
         if (page == ConsolePage.Land && FlightView.FlyingWay(in a) is LandWay way)
             LandWay = way;
+        if (page == ConsolePage.Land && EntryMethods.Of(a.RegisteredModeLive) is EntryMethod method && LandWay == LandWay.Entry)
+            EntryMethod = method;
     }
 
     internal static void Close()
@@ -205,6 +210,7 @@ internal static partial class AfcConsole
         Wide = UiConfig.GetBool(KeyWide, false);
         string savedPage = UiConfig.GetString(KeyPage, "");
         LandWay = ConsolePages.EnumFromKey(UiConfig.GetString(KeyLandWay, ""), LandWay.FromOrbit);
+        EntryMethod = ConsolePages.EnumFromKey(UiConfig.GetString(KeyEntryMethod, ""), EntryMethod.Orbital);
         // With no saved step, the legacy key opens LAUNCH, the page of the stage sites.
         if (ConsolePages.ResolveLegacy(savedPage, UiConfig.GetString(KeyLegacyBoosterStep, "BEFORELAUNCH"), out ConsolePage legacy, out LandWay? legacyWay))
         {
@@ -225,6 +231,7 @@ internal static partial class AfcConsole
         UiConfig.Set(KeyWide, Wide);
         UiConfig.Remove(KeyLegacyBoosterStep);
         UiConfig.Set(KeyLandWay, ConsolePages.EnumKey(LandWay));
+        UiConfig.Set(KeyEntryMethod, ConsolePages.EnumKey(EntryMethod));
         UiConfig.Set(KeyTuneSet, ConsolePages.EnumKey(TuneSet));
         UiConfig.Set(KeyTuneLanding, ConsolePages.EnumKey(TuneLanding));
         UiConfig.Set(KeyTuneDiagnostics, ConsolePages.EnumKey(TuneDiagnostics));
@@ -287,6 +294,7 @@ internal static partial class AfcConsole
         _drawFaults = 0;
         Page = ConsolePage.Launch;
         LandWay = LandWay.FromOrbit;
+        EntryMethod = EntryMethod.Orbital;
         TuneSet = TuneSet.Ascent;
         TuneLanding = TuneLanding.Approach;
         TuneDiagnostics = TuneDiagnostics.Ascent;
@@ -496,7 +504,7 @@ internal static partial class AfcConsole
                 || (Page == ConsolePage.Tune && TuneSet == TuneSet.Diag
                     && TuneDiagnostics is TuneDiagnostics.Boostback or TuneDiagnostics.Aero),
             GuidanceWindow.GuidancePage.Deorbit => Page == ConsolePage.Land && LandWay == LandWay.FromOrbit,
-            GuidanceWindow.GuidancePage.Land => Page == ConsolePage.Land && LandWay == LandWay.FromHere,
+            GuidanceWindow.GuidancePage.Land => Page == ConsolePage.Land && LandWay is LandWay.FromHere or LandWay.Entry,
             GuidanceWindow.GuidancePage.Hover => Page == ConsolePage.Land && LandWay == LandWay.Hover,
             _ => false,
         };

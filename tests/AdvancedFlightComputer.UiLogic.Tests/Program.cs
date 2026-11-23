@@ -281,7 +281,8 @@ internal static partial class Program
         Check("the press of the mode that failed tries again", PageText.FailureOf("G-FOLD: NO TRAJECTORY", GuidanceModeId.GfoldHere));
         Check("the press of another mode starts that mode", !PageText.FailureOf("G-FOLD: NO TRAJECTORY", GuidanceModeId.SixDofHere));
         Check("touchdown has its own failures", PageText.FailureOf("TOUCHDOWN: NO PLAN", GuidanceModeId.SixDofHere) && !PageText.FailureOf("TOUCHDOWN: NO PLAN", GuidanceModeId.GfoldHere));
-        Check("entry has its own failures", PageText.FailureOf("NO ENTRY PLAN", GuidanceModeId.EntryHere));
+        Check("entry has its own failures", PageText.FailureOf("NO GLIDE + BURN PLAN", GuidanceModeId.EntryHere));
+        Check("orbital entry has its own failures", PageText.FailureOf("ORBITAL ENTRY REFUSED: NO ATMOSPHERE.", GuidanceModeId.OrbitalEntry) && !PageText.FailureOf("NO GLIDE + BURN PLAN", GuidanceModeId.OrbitalEntry));
         Check("a failure of AFC counts for every verb", PageText.FailureOf("GUIDANCE FAULT (REPEATED)", GuidanceModeId.Hover));
         var fall = new CommitGates(false, false, "", "", false, Where: CraftSituation.FallingNoAir);
         CommitView retry = CommitResolver.Resolve(GuidanceModeId.GfoldHere, new CraftActivity(), fall with { PageFact = PageText.TriesAgain, PageFactCalm = true });
@@ -362,13 +363,13 @@ internal static partial class Program
         Check("the site has one precision", FlightView.LandReads(LandWay.FromHere, false, -3.005, -23.415) == "SITE -3.005, -23.415" && PageText.NoSiteAnswer("TOUCHDOWN", 0.674, 23.473).Contains("0.674, 23.473"));
         Check("the pick has one name", PageText.PickSite == "PICK SITE" && PageText.PickSiteTip.StartsWith("The next click"));
         Check("the climb has plain names", PageText.ClimbLabels[0] == "SOLVED" && PageText.ClimbLabels[1] == "GRAVITY TURN" && !PageText.ClimbCards[0].Contains("convex plan") && !PageText.ClimbCards[1].Contains("pitch program"));
-        Check("the head and the idle chain share their words", GuidanceModes.BoostbackPhasesFor(false)[0] == "SETTLE" && GuidanceModes.BoostbackPhasesFor(true)[^1] == "ENTRY"
-            && string.Join(">", LandChain.For(LandWay.Boostback, LandSolver.Entry, CraftSituation.FallingAir, true, true, false).Take(5).Select(c => c.Text.ToUpperInvariant())) == "SETTLE>SLEW>BURN>GLIDE>ENTRY");
+        Check("the head and the idle chain share their words", GuidanceModes.BoostbackPhasesFor(false)[0] == "SETTLE" && GuidanceModes.BoostbackPhasesFor(true)[^1] == "GLIDE + BURN"
+            && string.Join(">", LandChain.For(LandWay.Boostback, LandSolver.Entry, CraftSituation.FallingAir, true, true, false).Take(5).Select(c => c.Text.ToUpperInvariant())) == "SETTLE>SLEW>BURN>GLIDE>GLIDE + BURN");
         Check("a G-FOLD descent reads the hover", GuidanceModes.GfoldPhasesFor(true).Contains("HOVER") && !GuidanceModes.GfoldPhasesFor(false).Contains("HOVER") && GuidanceModes.GfoldPhasesFor(false).Contains("LANDING BURN"));
         foreach (string jargon in new[] { "COLD SOLVE", "CONVERGING", "CONVEX" })
             Check("no jargon in the phases: " + jargon, !GuidanceModes.AscentPhases.Concat(GuidanceModes.DeorbitPhases).Concat(GuidanceModes.GfoldPhases).Concat(GuidanceModes.SixDofPhases).Any(p => p.Contains(jargon)));
         Check("a switch has one name", GuidanceSettingSpecs.AutoStage.Label == "AFC MAY USE ENGINES" && PageText.MayOffTip.Contains("AFC MAY USE ENGINES"));
-        Check("the hand-over rows say who takes what", GuidanceSettingSpecs.ThreeDofFromGlide.Label == "ENTRY ON GLIDE" && GuidanceSettingSpecs.ThreeDofSixDofHandover.Label == "TOUCHDOWN FOR BURN END" && GuidanceSettingSpecs.GfoldHoverHandoffAltM.Label == "HOVER FROM");
+        Check("the hand-over rows say who takes what", GuidanceSettingSpecs.ThreeDofFromGlide.Label == "GLIDE + BURN ON GLIDE" && GuidanceSettingSpecs.ThreeDofSixDofHandover.Label == "TOUCHDOWN FOR BURN END" && GuidanceSettingSpecs.GfoldHoverHandoffAltM.Label == "HOVER FROM");
         Check("the height says what it measures", GuidanceSettingSpecs.VehicleHeightM.Label == "COM ABOVE LEGS" && GuidanceSettingSpecs.VehicleHeightAuto.Label == "MEASURE COM ABOVE LEGS");
         Check("the tuning points are no nodes", GuidanceSettingSpecs.GfoldNodes.Label == "SOLVER POINTS" && GuidanceSettingSpecs.SixDofNodes.Label == "SOLVER POINTS");
         Check("the verbs are the mode names", new[] { CommitResolver.GfoldVerb, EntryGuidance.CommitVerb }.All(v => v.Length > 0 && !v.StartsWith("START ", StringComparison.Ordinal)));
@@ -576,7 +577,7 @@ internal static partial class Program
         Check("a miss has its word", PlanWords.Miss(0.3) == PlanWords.OnTarget && PlanWords.Miss(5.0) == PlanWords.OffTarget && !PlanWords.Miss(double.NaN).Shows);
         Check("a craft held only later is yours", PlanWords.Yours("WINDOW").Text == "MANUAL UNTIL WINDOW");
 
-        Check("the glide leads to entry when it hands over", GuidanceModes.PhaseChain(GuidanceModes.BoostbackPhasesFor(true), "GLIDE", s => s.Length, 100f).Contains("[ GLIDE ] > ENTRY"));
+        Check("the glide leads to entry when it hands over", GuidanceModes.PhaseChain(GuidanceModes.BoostbackPhasesFor(true), "GLIDE", s => s.Length, 100f).Contains("[ GLIDE ] > GLIDE + BURN"));
         Check("and ends when it does not", GuidanceModes.PhaseChain(GuidanceModes.BoostbackPhasesFor(false), "GLIDE", s => s.Length, 100f).Contains("[ GLIDE ] > ENDED"));
         Check("entry with no plan is in its glide", Array.IndexOf(EntryGuidance.Phases, "PLANNING") < 0 && Array.IndexOf(EntryGuidance.Phases, "GLIDE") >= 0);
 
@@ -588,7 +589,7 @@ internal static partial class Program
         Check("what happened and the time stay", FailureBand.RowLine(in band, Chars, 30f * 10.9f) == "G-FOLD FAILED. IMPACT T-31 s");
         var touchdownBand = new BandFacts("TOUCHDOWN: NO PLAN", band.Engine, band.Who, 57.0);
         Check("the name of the mode gets shorter so that the time fits", FailureBand.RowLine(in touchdownBand, Chars, 42f * 10.9f) == "TOUCHDOWN: NO PLAN. MANUAL. IMPACT T-57 s", FailureBand.RowLine(in touchdownBand, Chars, 42f * 10.9f));
-        Check("a failure with a short name keeps it", FailureBand.ShortWhat("NO ENTRY PLAN") == "NO ENTRY PLAN");
+        Check("a failure with a short name keeps it", FailureBand.ShortWhat("NO GLIDE + BURN PLAN") == "NO GLIDE + BURN PLAN");
 
         Check("a height near the ground has its tenth", Fmt.Height(8.34) == "8.3 m");
         Check("a height has one rule", Fmt.Height(8985.0) == "8985 m" && Fmt.Height(12400.0) == "12.4 km");
@@ -1316,6 +1317,13 @@ internal static partial class Program
         AllOf("LandGfoldExpert", GuidanceSettingSpecs.LandGfoldExpert, UiTier.Expert);
         AllOf("LandEntryExpert", GuidanceSettingSpecs.LandEntryExpert, UiTier.Expert);
         AllOf("LandEntryExpertBools", GuidanceSettingSpecs.LandEntryExpertBools, UiTier.Expert);
+        AllOf("LandOrbitalEntryPlayer", GuidanceSettingSpecs.LandOrbitalEntryPlayer, UiTier.Player);
+        AllOf("LandOrbitalHandOvers", GuidanceSettingSpecs.LandOrbitalHandOvers, UiTier.Player);
+        AllOf("LandOrbitalHandOverBools", GuidanceSettingSpecs.LandOrbitalHandOverBools, UiTier.Player);
+        AllOf("LandDeorbitOnlyBools", GuidanceSettingSpecs.LandDeorbitOnlyBools, UiTier.Player);
+        AllOf("LandOrbitalEntryExpert", GuidanceSettingSpecs.LandOrbitalEntryExpert, UiTier.Expert);
+        AllOf("LandOrbitalEntryExpertBools", GuidanceSettingSpecs.LandOrbitalEntryExpertBools, UiTier.Expert);
+        AllOf("TuningOrbitalEntry", GuidanceSettingSpecs.TuningOrbitalEntry, UiTier.Tuning);
         AllOf("LandTouchdownExpert", GuidanceSettingSpecs.LandTouchdownExpert, UiTier.Expert);
         AllOf("HoverExpert", GuidanceSettingSpecs.HoverExpert, UiTier.Expert);
         AllOf("TuningAscent", GuidanceSettingSpecs.TuningAscent, UiTier.Tuning);
@@ -1361,7 +1369,7 @@ internal static partial class Program
         {
             GuidanceSettingSpecs.LaunchExpert, GuidanceSettingSpecs.LandBoostbackExpert, GuidanceSettingSpecs.LandFromOrbitExpert,
             GuidanceSettingSpecs.LandEntryExpert, GuidanceSettingSpecs.LandTouchdownExpert, GuidanceSettingSpecs.LandGfoldExpert,
-            GuidanceSettingSpecs.HoverExpert,
+            GuidanceSettingSpecs.HoverExpert, GuidanceSettingSpecs.LandOrbitalEntryExpert,
         };
         BoolSpec[][] expertBoolArrays =
         {
@@ -1523,8 +1531,9 @@ internal static partial class Program
         {
             GuidanceSettingSpecs.LaunchExpert, GuidanceSettingSpecs.LandBoostbackExpert, GuidanceSettingSpecs.LandFromOrbitExpert,
             GuidanceSettingSpecs.LandEntryExpert, GuidanceSettingSpecs.LandTouchdownExpert, GuidanceSettingSpecs.HoverExpert,
+            GuidanceSettingSpecs.LandOrbitalEntryExpert,
         };
-        BoolSpec[][] foldBools = { GuidanceSettingSpecs.LaunchExpertBools, GuidanceSettingSpecs.LandFromOrbitExpertBools };
+        BoolSpec[][] foldBools = { GuidanceSettingSpecs.LaunchExpertBools, GuidanceSettingSpecs.LandFromOrbitExpertBools, GuidanceSettingSpecs.LandOrbitalEntryExpertBools };
         foreach (SettingSpec s in GuidanceSettingSpecs.AllDoubles)
         {
             if (s.Tier == UiTier.Expert)
@@ -1694,11 +1703,11 @@ internal static partial class Program
             ConsolePages.ResolveLegacy("RECOVER", "", out ConsolePage barePage, out LandWay? bareWay)
             && barePage == ConsolePage.Land && bareWay == LandWay.Boostback);
         Check("a current key is no old booster key", !ConsolePages.ResolveLegacy("LAND", "BOOSTBACK", out _, out _));
-        Check("land ways in display order", LandWays.DisplayOrder.Length == 4 && LandWays.DisplayOrder.Distinct().Count() == 4
+        Check("land ways in display order", LandWays.DisplayOrder.Length == 5 && LandWays.DisplayOrder.Distinct().Count() == 5
             && LandWays.DisplayOrder[0] == LandWay.FromOrbit && LandWays.DisplayOrder[1] == LandWay.Boostback
-            && LandWays.DisplayOrder[2] == LandWay.FromHere && LandWays.DisplayOrder[3] == LandWay.Hover);
+            && LandWays.DisplayOrder[2] == LandWay.Entry && LandWays.DisplayOrder[3] == LandWay.FromHere && LandWays.DisplayOrder[4] == LandWay.Hover);
         Check("every land way is in the row", Enum.GetValues<LandWay>().All(w => LandWays.DisplayIndex(w) >= 0));
-        Check("land way labels", LandWays.Labels.SequenceEqual(new[] { "DEORBIT", "BOOSTBACK", "LAND NOW", "HOVER" }));
+        Check("land way labels", LandWays.Labels.SequenceEqual(new[] { "DEORBIT", "BOOSTBACK", "ENTRY", "LAND NOW", "HOVER" }));
         Check("the old land way keys stay", ConsolePages.EnumKey(LandWay.FromOrbit) == "FROMORBIT"
             && ConsolePages.EnumKey(LandWay.FromHere) == "FROMHERE" && ConsolePages.EnumKey(LandWay.Hover) == "HOVER");
         Check("boostback way key round trip",
@@ -2483,6 +2492,7 @@ internal static partial class Program
         Check("entry guidance is not built in", GuidanceModes.Of(GuidanceModeId.EntryHere) == null);
         // Entry guidance arrives through the registry, as GuidanceWindow.EnsureAfcModes registers it on the game side.
         GuidanceModes.Register(EntryGuidance.Descriptor());
+        GuidanceModes.Register(OrbitalEntryGuidance.Descriptor());
         foreach (GuidanceModeId id in Enum.GetValues<GuidanceModeId>())
             Check("every mode id is registered " + id, GuidanceModes.Of(id) != null);
         GuidanceModeDescriptor? gravity = GuidanceModes.Of(GuidanceModeId.AscentGravityTurn);
@@ -2589,10 +2599,80 @@ internal static partial class Program
 
         RegisteredModeRules();
         EntryGuidanceRules();
+        EntryWayRules();
         GuidanceModes.ResetToBuiltIns();
         Check("reset brings back the unavailable slot", GuidanceModes.Of(GuidanceModeId.AscentGravityTurn)?.Available == false
-            && GuidanceModes.ByStopOrder.Length == Enum.GetValues<GuidanceModeId>().Length - 1);
+            && GuidanceModes.ByStopOrder.Length == Enum.GetValues<GuidanceModeId>().Length - 2);
         Check("reset drops the registered entry guidance until it registers again", GuidanceModes.Of(GuidanceModeId.EntryHere) == null);
+    }
+
+    // LAND > ENTRY: ORBITAL ENTRY and GLIDE + BURN behind one METHOD row, each a registered mode that starts from where the craft is.
+    private static void EntryWayRules()
+    {
+        GuidanceModes.Register(EntryGuidance.Descriptor());
+        GuidanceModes.Register(OrbitalEntryGuidance.Descriptor());
+        Check("ENTRY commits orbital entry", ConsolePages.ModeIdFor(ConsolePage.Land, LandWay.Entry, LandSolver.Touchdown, AscentChoice.CatsUpfg, EntryMethod.Orbital) == GuidanceModeId.OrbitalEntry);
+        Check("ENTRY commits GLIDE + BURN whatever LAND NOW chose", ConsolePages.ModeIdFor(ConsolePage.Land, LandWay.Entry, LandSolver.Touchdown, AscentChoice.CatsUpfg, EntryMethod.GlideBurn) == GuidanceModeId.EntryHere);
+        Check("LAND NOW is unchanged", ConsolePages.ModeIdFor(ConsolePage.Land, LandWay.FromHere, LandSolver.Entry, AscentChoice.CatsUpfg, EntryMethod.Orbital) == GuidanceModeId.EntryHere
+            && ConsolePages.ModeIdFor(ConsolePage.Land, LandWay.FromHere, LandSolver.Touchdown, AscentChoice.CatsUpfg, EntryMethod.GlideBurn) == GuidanceModeId.SixDofHere);
+        Check("the way keys stay", ConsolePages.EnumKey(LandWay.Entry) == "ENTRY" && ConsolePages.EnumFromKey("FROMHERE", LandWay.Entry) == LandWay.FromHere);
+        Check("the method round trips", ConsolePages.EnumFromKey(ConsolePages.EnumKey(EntryMethod.GlideBurn), EntryMethod.Orbital) == EntryMethod.GlideBurn);
+        Check("the methods have a label and a card each", EntryMethods.Labels.Length == Enum.GetValues<EntryMethod>().Length && EntryMethods.Cards.Length == EntryMethods.Labels.Length
+            && EntryMethods.Labels.SequenceEqual(new[] { "ORBITAL ENTRY", "GLIDE + BURN" }));
+        Check("the method follows what flies", EntryMethods.Of(GuidanceModeId.OrbitalEntry) == EntryMethod.Orbital && EntryMethods.Of(GuidanceModeId.EntryHere) == EntryMethod.GlideBurn && EntryMethods.Of(GuidanceModeId.SixDofHere) == null);
+
+        var orbit = new CommitGates(false, false, "", "", false, Where: CraftSituation.Orbit, HasAir: true);
+        var falling = new CommitGates(false, false, "", "", false, Where: CraftSituation.FallingAir, HasAir: true);
+        var airless = new CommitGates(false, false, "", "", false, Where: CraftSituation.FallingNoAir, HasAir: false);
+        var ground = new CommitGates(false, false, "", "", false, Where: CraftSituation.Ground, HasAir: true);
+        CommitView v = CommitResolver.Resolve(GuidanceModeId.OrbitalEntry, new CraftActivity(), orbit);
+        Check("orbital entry starts from orbit", v.Enabled && v.Verb == "ORBITAL ENTRY" && v.Fit.Fits && !v.NeedsTakeOver);
+        Check("orbital entry starts from a fall through air", CommitResolver.Resolve(GuidanceModeId.OrbitalEntry, new CraftActivity(), falling).Fit.Fits);
+        Check("orbital entry needs air", !CommitResolver.Resolve(GuidanceModeId.OrbitalEntry, new CraftActivity(), airless).Fit.Fits);
+        Check("orbital entry needs a flight", !CommitResolver.Resolve(GuidanceModeId.OrbitalEntry, new CraftActivity(), ground).Fit.Fits);
+        Check("GLIDE + BURN starts from any fall through air", CommitResolver.Resolve(GuidanceModeId.EntryHere, new CraftActivity(), falling).Fit.Fits);
+        Check("GLIDE + BURN needs the deorbit first", !CommitResolver.Resolve(GuidanceModeId.EntryHere, new CraftActivity(), orbit).Fit.Fits);
+        Check("the ENTRY tab says when it cannot fly", SituationVerbs.WayNow(LandWay.Entry, CraftSituation.Ground, true, false).Length > 0
+            && SituationVerbs.WayNow(LandWay.Entry, CraftSituation.Orbit, true, false).Length == 0);
+
+        CraftActivity flying = new() { RegisteredModeLive = GuidanceModeId.OrbitalEntry, RegisteredStopOutcome = "ATTITUDE FREE" };
+        Check("orbital entry stops as Registered", StopResolver.Resolve(flying) == StopTarget.Registered && StopResolver.Label(StopTarget.Registered, flying) == "STOP ORBITAL ENTRY");
+        Check("orbital entry lives on LAND > ENTRY", ConsolePages.PageOf(StopTarget.Registered, false, GuidanceModeId.OrbitalEntry) == ConsolePage.Land
+            && FlightView.FlyingWay(flying) == LandWay.Entry && FlightView.PickHolds(LandWay.Entry, flying));
+        Check("GLIDE + BURN still flies on LAND NOW", FlightView.FlyingWay(new CraftActivity { RegisteredModeLive = GuidanceModeId.EntryHere }) == LandWay.FromHere);
+        Check("the ENTRY page flies with its method", FlightView.PageFlies(ConsolePage.Land, LandWay.Entry, LandSolver.Touchdown, AscentChoice.CatsUpfg, flying, false, EntryMethod.Orbital)
+            && !FlightView.PageFlies(ConsolePage.Land, LandWay.Entry, LandSolver.Touchdown, AscentChoice.CatsUpfg, flying, false, EntryMethod.GlideBurn));
+        v = CommitResolver.Resolve(GuidanceModeId.EntryHere, flying, falling);
+        Check("GLIDE + BURN takes orbital entry over after asking", v.Enabled && v.NeedsTakeOver);
+        v = CommitResolver.Resolve(GuidanceModeId.OrbitalEntry, new CraftActivity { RegisteredModeLive = GuidanceModeId.EntryHere }, falling);
+        Check("orbital entry takes GLIDE + BURN over after asking", v.Enabled && v.NeedsTakeOver);
+        v = CommitResolver.Resolve(GuidanceModeId.OrbitalEntry, flying, falling);
+        Check("orbital entry refuses while it flies", !v.Enabled && v.Live && v.Reason == "AFC: ORBITAL ENTRY");
+        Check("orbital entry is ahead of the deorbit and behind GLIDE + BURN in the stop",
+            OrbitalEntryGuidance.StopOrder > EntryGuidance.StopOrder && OrbitalEntryGuidance.StopOrder < 40
+            && GuidanceModes.ByStopOrder.Select(m => m.StopOrder).Distinct().Count() == GuidanceModes.ByStopOrder.Length);
+        foreach (OrbitalEntryStage stage in Enum.GetValues<OrbitalEntryStage>())
+        {
+            (string outcome, string detail) = OrbitalEntryGuidance.StopText(stage);
+            Check("orbital entry stop text " + stage, outcome.Length > 0 && outcome.Length <= 30 && detail.EndsWith('.'));
+        }
+        Check("orbital entry phases end in bellyflop", OrbitalEntryGuidance.Phases[^1] == "BELLYFLOP");
+
+        ChainStep[] chain = LandChain.ForEntry(EntryMethod.Orbital, true, true, true);
+        Check("orbital entry chain ends in impact, no burn yet", string.Join(" > ", chain.Select(c => c.Text)) == "SWEEP > ENTRY > BELLYFLOP > NO LANDING BURN YET > IMPACT" && LandChain.EndsInImpact(chain));
+        chain = LandChain.ForEntry(EntryMethod.Orbital, true, false, true);
+        Check("orbital entry without bellyflop holds", chain.Any(c => c.Text == "HOLD") && chain.All(c => c.Text != "BELLYFLOP"));
+        chain = LandChain.ForEntry(EntryMethod.GlideBurn, true, true, true);
+        Check("GLIDE + BURN on ENTRY is the chain of LAND NOW", string.Join(" > ", chain.Select(c => c.Text)) == "GLIDE > LANDING BURN > TOUCHDOWN");
+        Check("orbital entry with no air ends in impact", LandChain.EndsInImpact(LandChain.ForEntry(EntryMethod.Orbital, false, true, true)));
+        Check("orbital entry's plan line", FlightView.LandPlanLine(LandWay.Entry, LandSolver.Entry, false, true, EntryMethod.Orbital) == FlightView.OrbitalEntryPlanLine
+            && FlightView.LandPlanLine(LandWay.Entry, LandSolver.Entry, false, true, EntryMethod.GlideBurn).StartsWith("Entry reads"));
+        Check("orbital entry tells the orbit notice", FormRules.FlightNoticeShows(CraftSituation.Orbit, LandWay.Entry));
+        Check("the TUNE part of orbital entry is in the landing count", GuidanceSettingSpecs.TuningOrbitalEntry.All(s => Array.IndexOf(GuidanceSettingSpecs.TuningLanding, s) >= 0));
+        Check("the DEORBIT ONLY aim stays with DEORBIT", Array.IndexOf(GuidanceSettingSpecs.LandFromOrbitExpert, GuidanceSettingSpecs.OrbitalEntryAimFraction) >= 0
+            && Array.IndexOf(GuidanceSettingSpecs.LandDeorbitOnlyBools, GuidanceSettingSpecs.OrbitalEntryAimDeorbit) >= 0);
+        Check("the hand-over of orbital entry says its values", PageText.OrbitalHandOversLabel(3.0, 30.0, true) == "HANDOVER: MACH 3 OR 30 km, BELLYFLOP"
+            && PageText.OrbitalHandOversLabel(2.5, 25.0, false).EndsWith("HOLD ATTITUDE"));
     }
 
     // Entry guidance through the registry: it outranks the boostback whose glide it takes over, touchdown guidance outranks it when it takes the burn, and the stop says what Disengage3Dof does to the engine in each stage.
@@ -2613,7 +2693,7 @@ internal static partial class Program
         CraftActivity glide = Entry(EntryStage.Glide);
         CraftActivity burn = Entry(EntryStage.Burn);
         Check("entry guidance stops as Registered", StopResolver.Resolve(glide) == StopTarget.Registered);
-        Check("entry stop label", StopResolver.Label(StopTarget.Registered, glide) == "STOP ENTRY");
+        Check("entry stop label", StopResolver.Label(StopTarget.Registered, glide) == "STOP GLIDE + BURN");
         Check("entry in the glide has nothing to cut", StopResolver.OutcomeShort(StopTarget.Registered, glide) == "ENGINE OFF");
         Check("entry in the burn keeps the engine", StopResolver.OutcomeShort(StopTarget.Registered, burn) == "ENGINE LIT");
         Check("the card of an entry stop says who flies", StopResolver.EngineOutcome(StopTarget.Registered, burn) == "Engine stays lit at the last throttle. AFC stops steering."
@@ -2636,16 +2716,16 @@ internal static partial class Program
             GuidanceModes.PhaseChain(EntryGuidance.Phases, "LANDING BURN", text => text.Length, 100f).Contains("GLIDE > [ LANDING BURN ] > TOUCHDOWN"));
 
         CommitView v = CommitResolver.Resolve(GuidanceModeId.EntryHere, new CraftActivity(), open);
-        Check("entry commit verb", v.Enabled && v.Verb == "ENTRY" && !v.NeedsTakeOver);
+        Check("entry commit verb", v.Enabled && v.Verb == "GLIDE + BURN" && !v.NeedsTakeOver);
         v = CommitResolver.Resolve(GuidanceModeId.EntryHere, glide, open);
-        Check("entry refuses while it flies", !v.Enabled && v.Live && v.Reason == "AFC: ENTRY GUIDANCE");
+        Check("entry refuses while it flies", !v.Enabled && v.Live && v.Reason == "AFC: GLIDE + BURN");
         v = CommitResolver.Resolve(GuidanceModeId.EntryHere, new CraftActivity { BoostbackLive = true }, open);
         Check("entry over a boostback asks first", v.Enabled && v.NeedsTakeOver);
         v = CommitResolver.Resolve(GuidanceModeId.EntryHere, new CraftActivity { SixDofEngaged = true }, open);
         Check("entry over touchdown guidance asks first", v.Enabled && v.NeedsTakeOver);
         Check("take-over names entry guidance",
             CommitResolver.TakeOverMessage(StopTarget.Registered, "LAND NOW", GuidanceModeId.EntryHere)
-            == "LAND NOW ENDS ENTRY GUIDANCE. CONTINUE?");
+            == "LAND NOW ENDS GLIDE + BURN. CONTINUE?");
         Check("take-over names touchdown guidance",
             CommitResolver.TakeOverMessage(StopTarget.SixDof, "G-FOLD")
             == "G-FOLD ENDS TOUCHDOWN. CONTINUE?");
@@ -2761,7 +2841,7 @@ internal static partial class Program
         chain = LandChain.For(LandWay.FromHere, LandSolver.Entry, CraftSituation.FallingNoAir, false, true, true);
         Check("entry with no air has no plan", chain[^1] == new ChainStep("IMPACT", Danger: true));
         chain = LandChain.For(LandWay.Boostback, LandSolver.Entry, CraftSituation.CoastingUp, true, true, true);
-        Check("a boostback glide goes to entry", string.Join(" > ", chain.Select(c => c.Text)) == "SETTLE > SLEW > BURN > GLIDE > ENTRY > LANDING BURN > TOUCHDOWN");
+        Check("a boostback glide goes to entry", string.Join(" > ", chain.Select(c => c.Text)) == "SETTLE > SLEW > BURN > GLIDE > GLIDE + BURN > LANDING BURN > TOUCHDOWN");
         chain = LandChain.For(LandWay.Boostback, LandSolver.Entry, CraftSituation.CoastingUp, true, false, true);
         Check("a boostback alone ends in the impact", string.Join(" > ", chain.Select(c => c.Text)) == "SETTLE > SLEW > BURN > GLIDE > IMPACT" && chain[^1].Danger);
         chain = LandChain.For(LandWay.Boostback, LandSolver.Entry, CraftSituation.CoastingUp, false, true, true);
@@ -2833,8 +2913,8 @@ internal static partial class Program
         Check("G-FOLD with too much thrust has its one sentence in the footer", !LandVerdict.Notes(LandSolver.Gfold, twr2 with { TwrAtCraftMin = 1.5 }, true).Any());
         Check("entry has no note of its own", !LandVerdict.Notes(LandSolver.Entry, twr2, false).Any());
 
-        Check("the hand-overs say their values", PageText.HandOversLabel(true, 45.0, true, 5.0) == "HANDOVER: ENTRY AT IMPACT T-45 s, TOUCHDOWN LAST 5 s");
-        Check("the hand-overs say when they are off", PageText.HandOversLabel(false, 45.0, false, 5.0) == "HANDOVER: ENTRY OFF, TOUCHDOWN OFF");
+        Check("the hand-overs say their values", PageText.HandOversLabel(true, 45.0, true, 5.0) == "HANDOVER: GLIDE + BURN AT IMPACT T-45 s, TOUCHDOWN LAST 5 s");
+        Check("the hand-overs say when they are off", PageText.HandOversLabel(false, 45.0, false, 5.0) == "HANDOVER: GLIDE + BURN OFF, TOUCHDOWN OFF");
         Check("the pick button keeps its size", PageText.PickSite.Length <= PageText.PickArmed.Length);
 
         Span<float> columns = stackalloc float[3];
@@ -2859,7 +2939,7 @@ internal static partial class Program
         Check("entry is not held by a deorbit", !LandSolvers.LockedByDeorbit(LandSolver.Entry));
         Check("touchdown and G-FOLD are held by a deorbit",
             LandSolvers.LockedByDeorbit(LandSolver.Touchdown) && LandSolvers.LockedByDeorbit(LandSolver.Gfold));
-        Check("one SOLVER row in solver order", LandSolvers.Labels.SequenceEqual(new[] { "ENTRY", "TOUCHDOWN", "G-FOLD" })
+        Check("one SOLVER row in solver order", LandSolvers.Labels.SequenceEqual(new[] { "GLIDE + BURN", "TOUCHDOWN", "G-FOLD" })
             && Enum.GetValues<LandSolver>().All(s => LandSolvers.Labels[(int)s] == LandSolvers.Label(s)));
         foreach (LandSolver s in Enum.GetValues<LandSolver>())
         {

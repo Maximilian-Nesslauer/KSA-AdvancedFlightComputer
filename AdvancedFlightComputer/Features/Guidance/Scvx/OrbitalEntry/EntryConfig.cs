@@ -72,6 +72,9 @@ public sealed class EntryConfig
     /// <summary>Half-width of the hand-over altitude box, m.</summary>
     public double HandoverAltitudeTol { get; set; } = 3_000.0;
 
+    /// <summary>The range to go to the site at the hand-over, m: what the terminal descent after it covers (bellyflop's predicted glide to the ground). Zero aims the hand-over itself at the site.</summary>
+    public double TerminalRangeM { get; set; }
+
     // ---- Solver ----
 
     public int Nodes { get; set; } = 60;

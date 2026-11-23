@@ -11,43 +11,26 @@ using Brutal.Numerics;
 using KSA;
 
 /// <summary>
-/// ENTRY TRAJ: orbital entry guidance's own window, after the Shuttle's ENTRY TRAJ pages.
+/// ENTRY TRAJ: orbital entry guidance's picture, after the Shuttle's ENTRY TRAJ pages. It is the picture of LAND > ENTRY > ORBITAL ENTRY (DrawOrbitalEntryPicture), and pops out into a window of its own while the entry flies, display only: the commit, the stop and the settings are the console's.
 ///
 ///  TOP: range to go across, speed down the page (fast at the top), so the craft's bug moves down and to the left as it slows and closes. The plan is the nominal line. Either side of it are the corridor's edges, recomputed with every plan: the HIGH-ENERGY line, the range left if the craft flew the most drag its limits allow from that speed on, and the LOW-ENERGY line, the range left on the equilibrium glide at the lateral-reserve bank. A bug left of the high-energy line is too close to stop short of the target; right of the low-energy line, too far to reach it. Five trailers mark the bug every 30 s.
 ///  BOTTOM: drag against speed. The plan's reference drag, the corridor (the most drag the limits allow, the least the craft can hold), and the drag measured from the game's own aero force, with the current drag and reference marked as on the Shuttle's drag scale.
-///  It shows while orbital entry guidance is engaged, and while the craft is on a path into the air above the hand-over, so the player can engage it.
+///  The window shows while orbital entry guidance flies, until it is closed; a new start of the entry, or POP OUT on the picture, opens it again.
 /// </summary>
 public static partial class GuidanceWindow
 {
     private const string EntryTrajId = "afc-entry-traj";
     private static bool _entryTrajClosed;
-    private static bool _entryTrajParams;
-
-    /// <summary>Whether the craft is on its way into the air from above: periapsis inside the atmosphere, still faster than the hand-over.</summary>
-    private static bool OnEntryPath(Vehicle vehicle, IParentBody parent)
-    {
-        var atm = parent?.GetPhysicalAtmosphere();
-        if (atm == null || !(atm.Height > 0.0))
-            return false;
-        Orbit orbit = vehicle.Orbit;
-        double3 r = orbit.StateVectors.PositionCci;
-        double alt = r.Length() - parent.MeanRadius;
-        double v = (orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r)).Length();
-        double pe = orbit.Periapsis - parent.MeanRadius;
-        return alt > _s.OrbitalEntryHandoverAltKm * 1000.0 + 5000.0 && pe < atm.Height && v > 1500.0;
-    }
 
     private static void DrawEntryTrajWindow(Vehicle vehicle, IParentBody parent)
     {
         using var _perf = new AdvancedFlightComputer.Core.PerfTracker.Scope("Ui.EntryTraj");
         var st = _s.OrbitalEntry;
-        bool live = OrbitalEntryLive || st.EngagePending;
-        if (!live && !(OnEntryPath(vehicle, parent) && !_entryTrajClosed))
-        {
-            if (!OnEntryPath(vehicle, parent))
-                _entryTrajClosed = false;
+        // Closed for this entry only: the next one, also one that DEORBIT ONLY starts by itself, opens it again.
+        if (!OrbitalEntryLive)
+            _entryTrajClosed = false;
+        if (!OrbitalEntryLive || _entryTrajClosed)
             return;
-        }
 
         ConsoleStyle.EnsureInitialized();
         float s = ImGuiHelper.InterfaceScale;
@@ -58,7 +41,7 @@ public static partial class GuidanceWindow
             return;
         try
         {
-            if (!open && !live)
+            if (!open)
                 _entryTrajClosed = true;
             ConsoleLayout layout = ConsoleStyle.CurrentLayout;
             float pad = 8f * s;
@@ -72,69 +55,56 @@ public static partial class GuidanceWindow
                 ImGui.Text("Make the window larger.");
                 return;
             }
-            ImDrawListPtr dl = ImGui.GetWindowDrawList();
             float line = ImGui.GetFontSize() + 3f * s;
 
-            // ---- buttons, top right; the status wraps in the width left of them ----
-            float buttonsW = 180f * s;
-            ImGui.SetCursorScreenPos(new float2(max.X - buttonsW + 10f * s, min.Y));
-            if (ImGui.SmallButton(_entryTrajParams ? "PLOTS##afc-oe-params"u8 : "PARAMS##afc-oe-params"u8))
-                _entryTrajParams = !_entryTrajParams;
-            ImGui.SameLine();
-            if (live)
-            {
-                if (ImGui.SmallButton("STOP##afc-oe-stop"u8))
-                    st.StopPending = true;
-            }
-            else if (ImGui.SmallButton("ENGAGE##afc-oe-engage"u8))
-                st.EngagePending = true;
-
-            string status = st.Status.Length > 0 ? st.Status : (live ? "" : "ON AN ENTRY PATH. ENGAGE TO FLY IT.");
+            // ---- the status, wrapped over the width ----
             ImGui.SetCursorScreenPos(min);
-            ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + Math.Max(40f, width - buttonsW));
+            ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + Math.Max(40f, width));
             ImGui.PushStyleColor(ImGuiCol.Text, st.StatusWarn ? Palette.Warn.Solid : Palette.Text.Solid);
-            ImGui.TextWrapped(status.Replace("%", "%%"));
+            ImGui.TextWrapped(st.Status.Replace("%", "%%"));
             ImGui.PopStyleColor();
             ImGui.PopTextWrapPos();
             float y = Math.Max(ImGui.GetCursorScreenPos().Y, min.Y + line) + 4f * s;
-
-            if (_entryTrajParams)
-            {
-                DrawEntryParams(new float2(min.X, y), new float2(width, max.Y - y), line);
-                return;
-            }
-
-            // ---- readouts at the bottom: two columns where the width allows, one where it does not ----
-            EntryPlan plan = st.Plan;
-            string[] read = EntryReadouts(st, plan);
-            bool twoColumns = width >= 560f * s;
-            int rows = twoColumns ? (read.Length + 1) / 2 : read.Length;
-            float readH = rows * line + 4f * s;
-            float plotsTop = y, plotsBottom = max.Y - readH - pad;
-            float plotsH = plotsBottom - plotsTop;
-            if (plotsH >= 140f * s)
-            {
-                DrawTrajPlot(dl, st, plan, new float2(min.X, plotsTop), new float2(max.X, plotsBottom), s);
-            }
-            else
-            {
-                ImGui.SetCursorScreenPos(new float2(min.X, plotsTop));
-                ImGui.Text("Make the window taller to see the plots.");
-            }
-            float ry = max.Y - readH + 2f * s;
-            for (int i = 0; i < read.Length; i++)
-            {
-                int col = twoColumns ? i / rows : 0, row = twoColumns ? i % rows : i;
-                ImColor8 c = col == 0 ? Palette.Text.Solid : Palette.Dim.Solid;
-                float x = min.X + col * width * 0.5f;
-                dl.AddText(new float2(x, ry + row * line), c, Fit(read[i], twoColumns ? width * 0.5f - 6f * s : width));
-            }
+            DrawEntryTrajBody(ImGui.GetWindowDrawList(), st, new float2(min.X, y), max, line, s);
         }
         finally
         {
             ConsoleStyle.EndWindow();
         }
     }
+
+    /// <summary>The plots over the readouts, in the box from <paramref name="min"/> to <paramref name="max"/>: two columns of readouts where the width allows, one where it does not, and the plots in what is left above them.</summary>
+    private static void DrawEntryTrajBody(ImDrawListPtr dl, OrbitalEntryState st, float2 min, float2 max, float line, float s)
+    {
+        float width = max.X - min.X;
+        EntryPlan plan = st.Plan;
+        string[] read = EntryReadouts(st, plan);
+        bool twoColumns = width >= 560f * s;
+        int rows = twoColumns ? (read.Length + 1) / 2 : read.Length;
+        float readH = rows * line + 4f * s;
+        float plotsTop = min.Y, plotsBottom = max.Y - readH - 8f * s;
+        if (plotsBottom - plotsTop >= 140f * s)
+            DrawTrajPlot(dl, st, plan, new float2(min.X, plotsTop), new float2(max.X, plotsBottom), s);
+        else
+            dl.AddText(new float2(min.X, plotsTop), Palette.Dim.Solid, "Make the picture taller to see the plots.");
+        float ry = max.Y - readH + 2f * s;
+        for (int i = 0; i < read.Length; i++)
+        {
+            int col = twoColumns ? i / rows : 0, row = twoColumns ? i % rows : i;
+            ImColor8 c = col == 0 ? Palette.Text.Solid : Palette.Dim.Solid;
+            float x = min.X + col * width * 0.5f;
+            dl.AddText(new float2(x, ry + row * line), c, Fit(read[i], twoColumns ? width * 0.5f - 6f * s : width));
+        }
+    }
+
+    /// <summary>The ENTRY TRAJ plot inside a console picture frame, the pop-out window's drawing. The readouts stand under the picture as rows of the form (DrawOrbitalEntryContent), so the plot keeps the height.</summary>
+    private static void DrawEntryTrajInFrame(in PictureFrame f)
+        => DrawTrajPlot(f.Dl, _s.OrbitalEntry, _s.OrbitalEntry.Plan, f.Min, f.Max, ImGuiHelper.InterfaceScale);
+
+    /// <summary>POP OUT on the picture: the ENTRY TRAJ window again, after it was closed.</summary>
+    private static bool EntryTrajWindowShown => OrbitalEntryLive && !_entryTrajClosed;
+
+    private static void ToggleEntryTrajWindow() => _entryTrajClosed = !_entryTrajClosed;
 
     /// <summary>The text cut to what fits in the width, with an ellipsis.</summary>
     private static string Fit(string text, float width)
@@ -448,51 +418,6 @@ public static partial class GuidanceWindow
             plan != null ? FormattableString.Invariant($"MISS {plan.TerminalRangeErrorM / 1000:F1} km  DEFECT {plan.MaxDefect:F3}") : "NO PLAN YET",
             FormattableString.Invariant($"REVERSALS {st.Reversals}  {st.Phase.ToString().ToUpperInvariant()}"),
         };
-    }
-
-    // ---------------------------------------------------------------- parameters
-
-    /// <summary>The parameter rows in a scrolling region of their own, so a short window still reaches every one.</summary>
-    private static void DrawEntryParams(float2 at, float2 size, float line)
-    {
-        float s = ImGuiHelper.InterfaceScale;
-        float fieldW = 90f * s;
-        ConsoleStyle.BeginBody("afc-oe-params-body".AsSpan(), at, new float2(size.X, Math.Max(size.Y, line)), ImGuiWindowFlags.None);
-        try
-        {
-            float width = size.X - 16f * s;
-            foreach (var spec in AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs.OrbitalEntryDoubles)
-            {
-                if (!SettingAccess.TryGetDouble(_s, spec.Key, out double v))
-                    continue;
-                ImGui.Text(spec.Unit.Length > 0 ? spec.Label + " (" + spec.Unit + ")" : spec.Label);
-                if (ImGui.IsItemHovered())
-                    ConsoleUi.Tooltip(spec.Help.AsSpan());
-                ImGui.SameLine(Math.Max(width - fieldW, 160f * s));
-                ImGui.SetNextItemWidth(fieldW);
-                if (ImGui.InputDouble("##oe-" + spec.Key, ref v, 0.0, 0.0, spec.Format, ImGuiInputTextFlags.CharsDecimal))
-                    SettingAccess.SetDouble(_s, spec.Key, Math.Clamp(v, spec.Min, spec.Max));
-            }
-            foreach (var spec in AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs.OrbitalEntryBools)
-            {
-                if (!SettingAccess.TryGetBool(_s, spec.Key, out bool v))
-                    continue;
-                ImGui.Text(spec.Label);
-                if (ImGui.IsItemHovered())
-                    ConsoleUi.Tooltip(spec.Help.AsSpan());
-                ImGui.SameLine(Math.Max(width - fieldW, 160f * s));
-                if (ImGui.SmallButton((v ? "ON##oe-" : "OFF##oe-") + spec.Key))
-                    SettingAccess.SetBool(_s, spec.Key, !v);
-            }
-            ImGui.Spacing();
-            ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + Math.Max(40f, width));
-            ImGui.TextWrapped("Limits, smoothing and the angle of attack apply from the next re-solve; the belly axis and the trim at the next engage.");
-            ImGui.PopTextWrapPos();
-        }
-        finally
-        {
-            ConsoleStyle.EndBody();
-        }
     }
 
     // ---------------------------------------------------------------- bits

@@ -3,6 +3,7 @@
 namespace AdvancedFlightComputer.Features.Guidance;
 
 using System.Collections.Generic;
+using AdvancedFlightComputer.Guidance.Scvx.Bellyflop;
 using AdvancedFlightComputer.Guidance.Scvx.OrbitalEntry;
 using Brutal.Numerics;
 
@@ -36,6 +37,9 @@ public sealed class OrbitalEntryState
     public EntryTrim Trim;
     public string BellyAxisName = "";
     public int BellyIndex = -1;
+
+    // ---- bellyflop: the terminal descent from the hand-over (docs/guidance/bellyflop-design.md) ----
+    public readonly BellyflopState Bellyflop = new();
 
     // ---- planning ----
     public Ksa3DofWorker Worker;
@@ -102,6 +106,7 @@ public sealed class OrbitalEntryState
 
     public void Reset()
     {
+        Bellyflop.Reset();
         Worker?.Dispose();
         Worker = null;
         Plan = null;
@@ -137,5 +142,42 @@ public sealed class OrbitalEntryState
         TrajLayout = null;
         DragErrorF = double.NaN;
         PrevNoseCci = PrevRollRefCci = TargetRateCci = default;
+    }
+}
+
+/// <summary>
+/// Bellyflop's part of an orbital entry: solved in the background from BELLYFLOP FROM MACH on its own worker, flown from the hand-over. The step reads only what the worker published.
+/// </summary>
+public sealed class BellyflopState
+{
+    public Ksa3DofWorker Worker;
+    public readonly BellyflopPlanner Planner = new();
+    public volatile BellyflopPlan Plan;
+    public volatile BellyflopPlanner.Result Pending;
+    /// <summary>The model the published plan was solved with, for the attitude: it carries the bearing yaw is referenced to.</summary>
+    public volatile BellyflopModel Model;
+    public double NextSolveAt = double.NegativeInfinity;
+    public int Solves, Refusals;
+    public string LastRefusal = "";
+    /// <summary>The yaw reference, horizontal in the site frame: the bearing to the site, followed until bellyflop takes over and held from then.</summary>
+    public double3 BearingLocal;
+    /// <summary>The range to go the entry leaves for bellyflop at the hand-over, m: the predicted belly-first fall (EntryConfig.TerminalRangeM).</summary>
+    public double TerminalRangeM;
+    /// <summary>Pitch, bank and yaw flown now, deg (the airflow on the belly), for the log and the status.</summary>
+    public double PitchDeg = double.NaN, BankDeg = double.NaN, YawDeg = double.NaN;
+
+    public void Reset()
+    {
+        Worker?.Dispose();
+        Worker = null;
+        Plan = null;
+        Pending = null;
+        Model = null;
+        NextSolveAt = double.NegativeInfinity;
+        Solves = Refusals = 0;
+        LastRefusal = "";
+        BearingLocal = default;
+        TerminalRangeM = 0;
+        PitchDeg = BankDeg = YawDeg = double.NaN;
     }
 }

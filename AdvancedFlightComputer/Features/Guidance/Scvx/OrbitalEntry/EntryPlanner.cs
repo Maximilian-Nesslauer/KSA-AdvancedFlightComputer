@@ -48,6 +48,8 @@ public sealed class EntryPlanner
         double[] x0 = x0In.ToArray();
         double ef = FinalEnergy(model, cfg);
         if (e0 >= ef) return new Result { Why = "past the hand-over energy" };
+        // The range to go at the hand-over: what the terminal descent after it covers (bellyflop's glide), so the entry aims at the ground through it. Zero aims the hand-over itself at the site.
+        double sT = cfg.TerminalRangeM / r0m;
 
         int n = Math.Max(cfg.Nodes, 8);
         double[] e = Grid(e0, ef, x0[IR], cfg, r0m, n);
@@ -72,7 +74,7 @@ public sealed class EntryPlanner
         }
         else
         {
-            ColdSeed(dyn, cfg, e, x0, cosMin, cosMax, u, x);
+            ColdSeed(dyn, cfg, e, x0, cosMin, cosMax, sT, u, x);
         }
         ClampToBounds(dyn, e, x, u, cosMin, cosMax);
         Shoot(dyn, cfg, e, x0, u, x);
@@ -82,6 +84,7 @@ public sealed class EntryPlanner
         CorridorAt(dyn, cfg, e, floor, cosMin, out double[] sShort, out double[] sLong);
         double widest = 0;
         for (int k = 0; k < n; k++) widest = Math.Max(widest, 0.5 * (sLong[k] - sShort[k]));
+        for (int k = 0; k < n; k++) { sShort[k] += sT; sLong[k] += sT; }
         var corridor = new CorridorMargin(sShort, sLong, Math.Max(0.25 * widest, 50_000.0 / r0m));
         double qRef = 0;
         for (int k = 0; k < n; k++) qRef += c[k] * dyn.HeatPerEnergy(e[k], x[k, IR]);
@@ -108,11 +111,11 @@ public sealed class EntryPlanner
             maxDefect = MaxScaledDefect(lin, xs, n);
             // Done once the plan is well inside the gate and the steps have become small: the rest of the iterations would only polish it.
             if (iter > 0 && maxDefect <= 0.25 * cfg.GateDefect && lastStep < 0.02
-                && Math.Abs(x[n - 1, IS]) * r0m <= 0.25 * cfg.GateRangeM)
+                && Math.Abs(x[n - 1, IS] - sT) * r0m <= 0.25 * cfg.GateRangeM)
                 break;
-            double jRef = Merit(dyn, cfg, e, x, u, lin.Defect, c, qRef, floor, rfMin, rfMax, xs, uPrev, corridor);
+            double jRef = Merit(dyn, cfg, e, x, u, lin.Defect, c, qRef, floor, rfMin, rfMax, sT, xs, uPrev, corridor);
 
-            var sub = BuildAndSolve(dyn, cfg, e, x0, x, u, lin, c, qRef, floor, rfMin, rfMax,
+            var sub = BuildAndSolve(dyn, cfg, e, x0, x, u, lin, c, qRef, floor, rfMin, rfMax, sT,
                                     cosMin, cosMax, rollRate, xs, eta, uPrev, corridor, out double jLin);
             if (sub == null)
             {
@@ -124,7 +127,7 @@ public sealed class EntryPlanner
 
             var defC = new double[n - 1, NX];
             Defects(dyn, cfg, e, xc, uc, defC);
-            double jCand = Merit(dyn, cfg, e, xc, uc, defC, c, qRef, floor, rfMin, rfMax, xs, uPrev, corridor);
+            double jCand = Merit(dyn, cfg, e, xc, uc, defC, c, qRef, floor, rfMin, rfMax, sT, xs, uPrev, corridor);
 
             double predicted = jRef - jLin;
             double actual = jRef - jCand;
@@ -151,7 +154,7 @@ public sealed class EntryPlanner
 
         Linearise(dyn, cfg, e, x, u, lin);
         maxDefect = MaxScaledDefect(lin, xs, n);
-        double rangeErr = x[n - 1, IS] * r0m;
+        double rangeErr = (x[n - 1, IS] - sT) * r0m;
         bool ok = maxDefect <= cfg.GateDefect && Math.Abs(rangeErr) <= cfg.GateRangeM;
 
         var plan = Publish(dyn, cfg, e, x, u, floor, cosMin, ok, iter, maxDefect, rangeErr,
@@ -187,13 +190,13 @@ public sealed class EntryPlanner
     }
 
     static void ColdSeed(EntryDynamics dyn, EntryConfig cfg, double[] e, double[] x0,
-                         double cosMin, double cosMax, double[] u, double[,] x)
+                         double cosMin, double cosMax, double sT, double[] u, double[,] x)
     {
         int n = e.Length;
         double FinalRange(double lambda)
         {
             ShootConstantBank(dyn, cfg, e, x0, lambda, u, x);
-            return x[n - 1, IS];
+            return x[n - 1, IS] - sT;
         }
         double lo = cosMax, hi = cosMin;     // more lift flies further, leaving less range to go
         double fLo = FinalRange(lo), fHi = FinalRange(hi);
@@ -379,7 +382,7 @@ public sealed class EntryPlanner
 
     /// <summary>The true cost of a trajectory: heat, smoothness and exact penalties on what it violates.</summary>
     static double Merit(EntryDynamics dyn, EntryConfig cfg, double[] e, double[,] x, double[] u, double[,] def,
-                        double[] c, double qRef, double[] floor, double rfMin, double rfMax, double[] xs, double[]? uPrev, CorridorMargin corridor)
+                        double[] c, double qRef, double[] floor, double rfMin, double rfMax, double sT, double[] xs, double[]? uPrev, CorridorMargin corridor)
     {
         int n = e.Length;
         double heat = 0;
@@ -388,7 +391,7 @@ public sealed class EntryPlanner
         double pen = 0;
         for (int k = 0; k < n - 1; k++)
             for (int i = 0; i < NX; i++) pen += Math.Abs(def[k, i]) / xs[i];
-        pen += SlackPenalty(x, floor, rfMin, rfMax, xs, n);
+        pen += SlackPenalty(x, floor, rfMin, rfMax, sT, xs, n);
         return j + cfg.PenaltyWeight * pen;
     }
 
@@ -467,11 +470,11 @@ public sealed class EntryPlanner
         return j;
     }
 
-    static double SlackPenalty(double[,] x, double[] floor, double rfMin, double rfMax, double[] xs, int n)
+    static double SlackPenalty(double[,] x, double[] floor, double rfMin, double rfMax, double sT, double[] xs, int n)
     {
         double pen = 0;
         for (int k = 0; k < n; k++) pen += Math.Max(0, floor[k] - x[k, IR]) / xs[IR];
-        pen += Math.Abs(x[n - 1, IS]) / xs[IS];
+        pen += Math.Abs(x[n - 1, IS] - sT) / xs[IS];
         double rN = x[n - 1, IR];
         pen += (Math.Max(0, rN - rfMax) + Math.Max(0, rfMin - rN)) / xs[IR];
         return pen;
@@ -484,7 +487,7 @@ public sealed class EntryPlanner
     /// </summary>
     static (double[,], double[])? BuildAndSolve(
         EntryDynamics dyn, EntryConfig cfg, double[] e, double[] x0, double[,] xr, double[] ur, Linearisation lin,
-        double[] c, double qRef, double[] floor, double rfMin, double rfMax,
+        double[] c, double qRef, double[] floor, double rfMin, double rfMax, double sT,
         double cosMin, double cosMax, double rollRate, double[] xs, double eta, double[]? uPrev, CorridorMargin corridor, out double jLin)
     {
         jLin = double.PositiveInfinity;
@@ -608,7 +611,7 @@ public sealed class EntryPlanner
         A.Add(row, X(n - 1, IS), 1.0);
         A.Add(row, iSp, -1.0);
         A.Add(row, iSm, 1.0);
-        b[row++] = 0.0;
+        b[row++] = sT;
 
         // ---- Inequalities G v <= h ----
         var gRows = new List<(int Col, double Val)[]>();
@@ -694,7 +697,7 @@ public sealed class EntryPlanner
         double pen = 0;
         for (int k = 0; k < nI; k++)
             for (int j = 0; j < NX; j++) pen += Math.Abs(v[W(k, j)]) / xs[j];
-        pen += SlackPenalty(xc, floor, rfMin, rfMax, xs, n);
+        pen += SlackPenalty(xc, floor, rfMin, rfMax, sT, xs, n);
         jLin = jl + cfg.PenaltyWeight * pen;
         return (xc, uc);
     }
@@ -740,6 +743,8 @@ public sealed class EntryPlanner
             shortM[k] = shortM[k + 1] + 0.5 * h * (invDMax[k] + invDMax[k + 1]) * r0;
             longM[k] = longM[k + 1] + 0.5 * h * (invDMin[k] + invDMin[k + 1]) * r0;
         }
+        // Ranges to the site: the terminal descent's range beyond the hand-over added.
+        for (int k = 0; k < n; k++) { shortM[k] += cfg.TerminalRangeM; longM[k] += cfg.TerminalRangeM; }
         return new EntryPlan
         {
             E = (double[])e.Clone(), R = R, Gamma = Gm, S = S, U = U,

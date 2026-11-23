@@ -28,6 +28,7 @@ internal static class LandChain
                     steps.AddRange([new ChainStep(SituationText.IsFalling(where) ? StockBurnIfNeeded : StockBurn, Stock: true), new ChainStep("COAST"), new ChainStep("BRAKING BURN")]);
                 AddPoweredEnd(steps, solver, hoverFlies);
                 break;
+            case LandWay.Entry:
             case LandWay.FromHere when solver == LandSolver.Entry:
                 if (!hasAir)
                 {
@@ -55,6 +56,24 @@ internal static class LandChain
                 break;
         }
         return steps.ToArray();
+    }
+
+    public const string NoLandingBurn = "NO LANDING BURN YET";
+
+    /// <summary>
+    /// The chain of LAND > ENTRY. GLIDE + BURN is the glide and landing burn of LAND NOW. ORBITAL ENTRY flies the entry to its hand-over, then BELLYFLOP where it is on, or holds the entry attitude; neither has a landing burn yet, so the chain ends in impact.
+    /// </summary>
+    public static ChainStep[] ForEntry(EntryMethod method, bool hasAir, bool bellyflop, bool touchdownTakesBurn)
+    {
+        if (method == EntryMethod.GlideBurn)
+            return For(LandWay.Entry, LandSolver.Entry, CraftSituation.Unknown, hasAir, false, touchdownTakesBurn);
+        if (!hasAir)
+            return [new ChainStep("NO AIR", Warn: true), new ChainStep(Impact, Danger: true)];
+        return
+        [
+            new ChainStep("SWEEP"), new ChainStep("ENTRY"), new ChainStep(bellyflop ? "BELLYFLOP" : "HOLD"),
+            new ChainStep(NoLandingBurn, Warn: true), new ChainStep(Impact, Danger: true),
+        ];
     }
 
     private static void AddPoweredEnd(List<ChainStep> steps, LandSolver solver, bool hoverFlies)

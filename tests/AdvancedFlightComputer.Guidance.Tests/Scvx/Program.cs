@@ -79,6 +79,9 @@ if (args.Contains("--6dof-thrust-moment"))
 if (args.Contains("--6dof-aero"))
     return SixDofAeroCheck.Run(verbose);
 
+if (args.Contains("--bellyflop"))
+    return BellyflopCheck.Run(verbose);
+
 if (args.Contains("--rcs-refusal"))
     return RcsRefusalCheck.Run();
 

@@ -10,8 +10,9 @@ internal static class PageText
     public static string WayCard(LandWay way) => way switch
     {
         LandWay.FromOrbit => "Orbit to site. STOCK AUTO flies the deorbit burn, then AFC lands with TOUCHDOWN.",
-        LandWay.Boostback => "Spent booster to its site. AFC slews and aims the fall, ENTRY can take the glide.",
-        LandWay.FromHere => "From the current position with ENTRY or TOUCHDOWN.",
+        LandWay.Boostback => "Spent booster to its site. AFC slews and aims the fall, GLIDE + BURN can take the glide.",
+        LandWay.Entry => "Through the air to the site, engine off: ORBITAL ENTRY from orbit, or GLIDE + BURN from any fall through air.",
+        LandWay.FromHere => "From the current position with GLIDE + BURN or TOUCHDOWN.",
         _ => "AFC stops the drift and sinks to the ground. NUDGE moves the touchdown point.",
     };
 
@@ -73,6 +74,7 @@ internal static class PageText
         GuidanceModeId.DeorbitLand => "Needs orbit and a set site.",
         GuidanceModeId.Boostback => "Needs a set stage site.",
         GuidanceModeId.EntryHere => "Needs a fall through air and a set site.",
+        GuidanceModeId.OrbitalEntry => "Needs a body with air and a set site.",
         GuidanceModeId.SixDofHere => "Needs a descent and a set site.",
         GuidanceModeId.GfoldHere => "Needs a descent over an airless body and a set site.",
         GuidanceModeId.Hover => "Needs a position near the ground.",
@@ -367,7 +369,8 @@ internal static class PageText
     public static readonly string[] TuneLandingCards =
     {
         "Flight from orbit to the start of the descent.",
-        "Glide and landing burn of ENTRY.",
+        "Entry tracking and bellyflop of ORBITAL ENTRY.",
+        "Glide and landing burn of GLIDE + BURN.",
         "Powered descent of TOUCHDOWN.",
         "Powered descent of G-FOLD.",
         "Hover to touchdown.",
@@ -756,6 +759,8 @@ internal static class PageText
                 return f.Falling
                     ? (f.Solver.Length > 0 ? "Lands with " + f.Solver + ", with a stock burn first if needed." : "Lands, with a stock burn first if needed.")
                     : (f.Solver.Length > 0 ? "Burns out of orbit, then lands with " + f.Solver + "." : "Burns out of orbit, then lands.");
+            case GuidanceModeId.OrbitalEntry:
+                return "Flies the entry to the hand-over, then BELLYFLOP where it is on. No landing burn yet.";
             case GuidanceModeId.EntryHere:
                 return "Glides engine off, then flies the landing burn."
                        + (f.HandToTouchdown && double.IsFinite(f.TouchdownLastS)
@@ -786,7 +791,7 @@ internal static class PageText
         string running = InSentence(from);
         return mode switch
         {
-            GuidanceModeId.GfoldHere or GuidanceModeId.SixDofHere or GuidanceModeId.EntryHere or GuidanceModeId.Hover or GuidanceModeId.Boostback or GuidanceModeId.DeorbitLand
+            GuidanceModeId.GfoldHere or GuidanceModeId.SixDofHere or GuidanceModeId.EntryHere or GuidanceModeId.OrbitalEntry or GuidanceModeId.Hover or GuidanceModeId.Boostback or GuidanceModeId.DeorbitLand
                 => "Replaces " + running + " with " + SituationVerbs.VerbName(mode) + ".",
             GuidanceModeId.AscentUpfg or GuidanceModeId.AscentGravityTurn => "Replaces " + running + " with LAUNCH.",
             _ => "Ends " + running + ".",
@@ -806,7 +811,8 @@ internal static class PageText
         {
             GuidanceModeId.GfoldHere => "G-FOLD",
             GuidanceModeId.SixDofHere => "TOUCHDOWN",
-            GuidanceModeId.EntryHere => "ENTRY",
+            GuidanceModeId.EntryHere => "GLIDE + BURN",
+            GuidanceModeId.OrbitalEntry => "ORBITAL ENTRY",
             GuidanceModeId.Hover => "HOVER",
             GuidanceModeId.Boostback => "BOOSTBACK",
             GuidanceModeId.DeorbitLand => "LANDING",
@@ -1261,9 +1267,9 @@ internal static class PageText
 
     public static string HandOversLabel(bool entryTakesGlide, double glideAtS, bool touchdownTakesBurn, double burnLastS, double glideAtKpa = 0.0)
     {
-        string glide = !entryTakesGlide ? "ENTRY OFF"
-            : glideAtKpa > 0.0 ? string.Create(Inv, $"ENTRY AT {glideAtKpa:0.##} kPa")
-            : string.Create(Inv, $"ENTRY AT IMPACT T-{glideAtS:F0} s");
+        string glide = !entryTakesGlide ? "GLIDE + BURN OFF"
+            : glideAtKpa > 0.0 ? string.Create(Inv, $"GLIDE + BURN AT {glideAtKpa:0.##} kPa")
+            : string.Create(Inv, $"GLIDE + BURN AT IMPACT T-{glideAtS:F0} s");
         string burn = touchdownTakesBurn ? string.Create(Inv, $"TOUCHDOWN LAST {burnLastS:F0} s") : "TOUCHDOWN OFF";
         return "HANDOVER: " + glide + ", " + burn;
     }
@@ -1277,10 +1283,24 @@ internal static class PageText
 
     public const string HoverHandOverTip = "Height where G-FOLD hands over to the hover, if the craft can hover there.";
 
+    /// <summary>The HAND-OVERS fold of ORBITAL ENTRY: where the entry ends, and what flies after it.</summary>
+    public static string OrbitalHandOversLabel(double handoverMach, double handoverKm, bool bellyflop)
+        => string.Create(Inv, $"HANDOVER: MACH {handoverMach:0.#} OR {handoverKm:0.#} km, ") + (bellyflop ? "BELLYFLOP" : "HOLD ATTITUDE");
+
+    public const string OrbitalHandOversTip = "Where orbital entry ends, and whether BELLYFLOP flies the fall to the site from there.";
+
+    public const string OrbitalEntryIdle = "The entry plan and the craft on it show here once ORBITAL ENTRY flies.";
+
+    public const string OrbitalEntryFirstPlan = "Measuring the craft belly first, then the first entry plan.";
+
+    public const string PopOut = "POP OUT";
+
+    public const string PopOutTip = "The same picture in a window of its own, to keep beside the flight.";
+
     public const string NoHandOversLabel = "HANDOVER: NONE";
 
     public static string NoHandOversTip(LandSolver solver) => solver == LandSolver.Entry
-        ? "No air, no ENTRY plan. Nothing to hand over."
+        ? "No air, no GLIDE + BURN plan. Nothing to hand over."
         : LandSolvers.Label(solver) + " flies to the ground. Nothing to hand over.";
 
     public const string BoostbackTakesCraft = "Takes the craft, also on the pad. No stage can fly home.";

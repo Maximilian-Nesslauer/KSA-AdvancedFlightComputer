@@ -822,6 +822,12 @@ public static partial class GuidanceWindow
             return;
         }
 
+        if (way == LandWay.Entry && Ui.Console.AfcConsole.EntryMethod == EntryMethod.Orbital)
+        {
+            DrawOrbitalEntryPicture(height, sentence);
+            return;
+        }
+
         CraftSituation where = Ui.Console.ConsoleFrame.ReadFacts(vehicle).Where;
         switch (way)
         {
@@ -937,6 +943,25 @@ public static partial class GuidanceWindow
         ConsoleUi.NoteShape("AfcHoverFar", far ? 1 : 0);
         if (far)
             ConsoleUi.Warning(PageText.HoverFarAbove.AsSpan());
+    }
+
+    /// <summary>ORBITAL ENTRY's picture: the ENTRY TRAJ plot of its plan and the craft on it, with POP OUT for the same picture in a window of its own.</summary>
+    private static void DrawOrbitalEntryPicture(float height, bool sentence)
+    {
+        var st = _s.OrbitalEntry;
+        bool live = OrbitalEntryLive;
+        if (!Picture.Shows("AfcEntryPic", live && st.Plan != null && st.Plan.Count >= 2))
+        {
+            if (sentence)
+                Picture.EmptyState(live || st.EngagePending ? PageText.OrbitalEntryFirstPlan : PageText.OrbitalEntryIdle);
+            return;
+        }
+        int noView = 0;
+        if (Picture.Header("ENTRY TRAJ", default, ref noView, "AfcEntryPicHead",
+                new[] { PageText.PopOut }, new[] { EntryTrajWindowShown }, new[] { PageText.PopOutTip }) == 0)
+            ToggleEntryTrajWindow();
+        using PictureScope pic = Picture.Open(height);
+        DrawEntryTrajInFrame(in pic.Frame);
     }
 
     private static bool PlotShowsTouchdown => LandSolverRoute == LandSolver.Touchdown || _s.Active;

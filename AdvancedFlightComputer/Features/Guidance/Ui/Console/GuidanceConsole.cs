@@ -394,6 +394,7 @@ public static partial class GuidanceWindow
         AddStatusLine(lines, _s.BoostbackSeverity, _s.BoostbackStatus);
         AddStatusLine(lines, _s.LandingSeverity, _s.LandingStatus);
         AddEntryStatusLines(lines);
+        AddOrbitalEntryStatusLines(lines);
         AddStatusLine(lines, _s.ErrorSeverity, _s.Error);
         AddStatusLine(lines, NoThrustLasts() ? Severity.Warning : _s.StatusSeverity, _s.Status);
         AddStatusLine(lines, Severity.Warning, ProbePowerPlanWarning(vehicle));
@@ -533,7 +534,7 @@ public static partial class GuidanceWindow
         // Step3Dof never plans on a body with no air, so this one needs no wait.
         bool noAir = EntryHasNoAir(_s);
         if (noAir)
-            failures.Add(new CraftFailure("NO ENTRY PLAN", EntryGuidance.NoAirText));
+            failures.Add(new CraftFailure("NO GLIDE + BURN PLAN", EntryGuidance.NoAirText));
         string detail = "";
         string noPlan = noAir ? "" : NoPlanNow(out detail);
         if (problems.NoPlan.Lasts(noPlan, now, realMs))
@@ -547,7 +548,7 @@ public static partial class GuidanceWindow
         if (ThreeDofLive && _s.ThreeDofPlan == null)
         {
             detail = _s.ThreeDofStatus;
-            return "NO ENTRY PLAN";
+            return "NO GLIDE + BURN PLAN";
         }
         if (_s.Active && (_s.Guidance == null || !_s.Guidance.HasPlan))
         {

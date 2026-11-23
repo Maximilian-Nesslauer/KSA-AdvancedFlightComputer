@@ -2,7 +2,7 @@ using System;
 
 namespace AdvancedFlightComputer.Features.Ui.Logic;
 
-internal enum GuidanceModeId { AscentUpfg, AscentGravityTurn, Boostback, DeorbitLand, GfoldHere, SixDofHere, Hover, EntryHere }
+internal enum GuidanceModeId { AscentUpfg, AscentGravityTurn, Boostback, DeorbitLand, GfoldHere, SixDofHere, Hover, EntryHere, OrbitalEntry }
 
 /// <summary>
 /// Facts about the craft that can refuse a commit before it is clicked, or change its verb. An empty
@@ -88,9 +88,9 @@ internal static class CommitResolver
         bool takeOver = enabled && !hoverRefused && ((StopResolver.IsGuidance(running) && !SameMode(mode, running, in a))
             || ReplacesLandingWay(mode, in a));
         VerbFit fit = !enabled ? VerbFit.Yes
-            : a.AscentRunning && mode is GuidanceModeId.Boostback or GuidanceModeId.DeorbitLand or GuidanceModeId.GfoldHere or GuidanceModeId.SixDofHere or GuidanceModeId.EntryHere or GuidanceModeId.Hover
+            : a.AscentRunning && mode is GuidanceModeId.Boostback or GuidanceModeId.DeorbitLand or GuidanceModeId.GfoldHere or GuidanceModeId.SixDofHere or GuidanceModeId.EntryHere or GuidanceModeId.OrbitalEntry or GuidanceModeId.Hover
                 ? (pressEnds && takeOver ? SituationVerbs.AscentFliesEndsFit : SituationVerbs.AscentFliesLandFit)
-            : a.DeorbitChainLive && mode is GuidanceModeId.Boostback or GuidanceModeId.GfoldHere or GuidanceModeId.SixDofHere or GuidanceModeId.EntryHere or GuidanceModeId.Hover
+            : a.DeorbitChainLive && mode is GuidanceModeId.Boostback or GuidanceModeId.GfoldHere or GuidanceModeId.SixDofHere or GuidanceModeId.EntryHere or GuidanceModeId.OrbitalEntry or GuidanceModeId.Hover
                 ? SituationVerbs.DeorbitFliesFitFor(mode, in g)
                 : SituationVerbs.For(mode, in g);
         if (enabled && fit.Fits && g.PageFact.Length > 0)

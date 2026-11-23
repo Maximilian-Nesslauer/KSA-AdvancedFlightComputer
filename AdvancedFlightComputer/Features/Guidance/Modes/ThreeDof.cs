@@ -73,6 +73,7 @@ public static partial class GuidanceWindow
         _s.SixDofCoastScaleState = null;
         _s.LandingGroupWaiting = false;
         _s.LandingGroupRefusal = "";
+        _s.ThreeDofAeroWaiting = false;
         if (!vehicle.IsControllable)
             return RefuseEntry(vehicle, vehicle.NoControlTooltip.ToString());
         IParentBody parent = vehicle.Orbit?.Parent;
@@ -102,7 +103,15 @@ public static partial class GuidanceWindow
         KsaAeroSweep.Result aero = _s.Aero;
         if (aero?.Table == null || aero.Atmosphere == null
             || _s.AeroStale(LiveBoxExtents(vehicle), KsaAeroSweep.LiveMeshHash(vehicle), parent))
+        {
+            // A sweep that runs (started just now on a craft with none, as after a reload) is waited for: the request stays pending, and the engage runs again when the sweep is in. A sweep that failed refuses.
+            if (_s.AeroJob != null)
+            {
+                _s.ThreeDofAeroWaiting = true;
+                return false;
+            }
             return RefuseEntry(vehicle, "AERO MODEL UNAVAILABLE.");
+        }
         double3 site = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         KsaFrameBridge.SiteFrame engageFrame = KsaFrameBridge.BuildSiteFrame(site);
         KsaPointMassModel model = Ksa3DofSetup.BuildModel(vehicle, parent, engageFrame, aero, out string refusal, ReturnRollRefLocal(vehicle, parent, engageFrame));

@@ -48,7 +48,7 @@ public static partial class GuidanceWindow
         bool boostbackUi = PageShown(GuidancePage.Boostback) || BoostbackLive;
         bool landingUi = PageShown(GuidancePage.Land) || PageShown(GuidancePage.Hover) || LandingMachineLive
             || _s.LandingPhase == LandingPhase.TerminalHover || _s.Active || _s.EngagePending;
-        bool descentUi = landingUi || PageShown(GuidancePage.Deorbit) || DescentLive || EntryLive(_s);
+        bool descentUi = landingUi || PageShown(GuidancePage.Deorbit) || DescentLive || EntryLive(_s) || OrbitalEntryLive;
 
         // World-space overlays, each its own full-screen window, drawn after the console so they layer correctly. Each also does nothing unless its own toggle is on.
         if (ascentUi)
@@ -65,7 +65,7 @@ public static partial class GuidanceWindow
         if (descentUi || boostbackUi)
             DrawLandingSiteMarker(viewport, parent);
 
-        // Orbital entry's own window, the Shuttle-style ENTRY TRAJ page: while it flies, or while the craft is on a path into the air.
+        // Orbital entry's pop-out of the ENTRY TRAJ picture of LAND > ENTRY: while it flies, until closed.
         DrawEntryTrajWindow(vehicle, parent);
 
         // Clickable retargeting: while armed, a world click sets the new landing site.

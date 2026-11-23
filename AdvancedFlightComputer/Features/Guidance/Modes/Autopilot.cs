@@ -1273,7 +1273,7 @@ public static partial class GuidanceWindow
         {
             _s.ThreeDofEngagePending = false;
             bool engaged = Engage3Dof(vehicle, SimNow());
-            if (_s.LandingGroupWaiting)
+            if (_s.LandingGroupWaiting || _s.ThreeDofAeroWaiting)
                 _s.ThreeDofEngagePending = true;
             else
                 FinishLandingGroupReplan(vehicle, engaged);

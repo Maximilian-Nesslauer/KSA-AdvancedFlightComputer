@@ -159,7 +159,7 @@ public static partial class GuidanceWindow
                     if (_s.GlideStatus.Length > 0 && !(_s.GlideStatus == GlideNoLiftStatus && AeroLiftNote(vehicle.Orbit?.Parent).Length > 0))
                         GaugeRowText(P, "", _s.GlideStatus, warn);
                     if (_s.ThreeDofFromGlide && !double.IsFinite(_s.GlideTgo))
-                        GaugeRowText(P, "ENTRY GUIDANCE", "WAITING: IMPACT PREDICTION", dim);
+                        GaugeRowText(P, EntryMethods.GlideBurnLabel, "WAITING: IMPACT PREDICTION", dim);
                     break;
                 }
             }

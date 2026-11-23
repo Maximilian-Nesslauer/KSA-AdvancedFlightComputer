@@ -19,12 +19,12 @@ using KSA;
 /// </summary>
 public static partial class GuidanceWindow
 {
-    public enum OrbitalEntryPhase { Idle, Sweeping, Entry, Holding }
+    public enum OrbitalEntryPhase { Idle, Sweeping, Entry, Holding, Bellyflop }
 
-    internal static bool OrbitalEntryLive => _s.OrbitalEntry.Phase is OrbitalEntryPhase.Sweeping or OrbitalEntryPhase.Entry or OrbitalEntryPhase.Holding;
+    internal static bool OrbitalEntryLive => _s.OrbitalEntry.Phase is OrbitalEntryPhase.Sweeping or OrbitalEntryPhase.Entry or OrbitalEntryPhase.Holding or OrbitalEntryPhase.Bellyflop;
 
     private static bool OrbitalEntryLiveFor(VehicleAutopilotState s)
-        => s.OrbitalEntry.Phase is OrbitalEntryPhase.Sweeping or OrbitalEntryPhase.Entry or OrbitalEntryPhase.Holding;
+        => s.OrbitalEntry.Phase is OrbitalEntryPhase.Sweeping or OrbitalEntryPhase.Entry or OrbitalEntryPhase.Holding or OrbitalEntryPhase.Bellyflop;
 
     private static readonly EntryPlanner _entryPlanner = new();
 
@@ -284,6 +284,12 @@ public static partial class GuidanceWindow
         if (st.Phase == OrbitalEntryPhase.Entry && e < ef && now >= st.NextSolveAt && st.Worker != null && !st.Worker.Busy)
         {
             using var _queue = new AdvancedFlightComputer.Core.PerfTracker.Scope("Entry.QueueSolve");
+            // BELLYFLOP: the entry aims at the ground through bellyflop's predicted fall from the hand-over.
+            if (_s.OrbitalEntryBellyflop)
+            {
+                UpdateBellyflopRangeTarget(vehicle, parent, st);
+                cfg.TerminalRangeM = st.Bellyflop.TerminalRangeM;
+            }
             QueueOrbitalEntrySolve(vehicle, parent, st, cfg, nominal, e, rMag, vMag, gamma, rangeRad, drag, now);
         }
 
@@ -292,12 +298,21 @@ public static partial class GuidanceWindow
         {
             st.Phase = OrbitalEntryPhase.Holding;
             GuidanceLog.Info(vehicle, FormattableString.Invariant(
-                $"Orbital entry hand-over: Mach {mach:F2} at {alt / 1000:F1} km, {st.RangeM / 1000:F1} km to go, {st.CrossrangeM / 1000:F1} km across."));
+                $"Orbital entry hand-over: Mach {mach:F2} at {alt / 1000:F1} km, {st.RangeM / 1000:F1} km to go, {st.CrossrangeM / 1000:F1} km across{(_s.OrbitalEntryBellyflop ? FormattableString.Invariant($" (bellyflop's fall {st.Bellyflop.TerminalRangeM / 1000:F1} km)") : "")}."));
         }
+
+        // ---- bellyflop: solving in the background, taking over at the hand-over ----
+        using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Entry.Bellyflop"))
+            StepBellyflop(vehicle, parent, st, mach, now);
 
         // ---- bank ----
         double bankDeg;
-        if (st.Phase == OrbitalEntryPhase.Holding)
+        if (st.Phase == OrbitalEntryPhase.Bellyflop)
+        {
+            // Bellyflop flies the craft: no bank, no tracker. Its status is its own (StepBellyflop).
+            bankDeg = 0.0;
+        }
+        else if (st.Phase == OrbitalEntryPhase.Holding)
         {
             // Wings level, still at the trim angle: the hand-over keeps the entry attitude.
             double step = cfg.RollRateDegS * dt;
@@ -366,6 +381,12 @@ public static partial class GuidanceWindow
         double3 lift = Math.Cos(sigma) * liftUp + Math.Sin(sigma) * right;
         double3 nose = Math.Cos(alpha) * vHat + Math.Sin(alpha) * lift;
         double3 belly = Math.Sin(alpha) * vHat - Math.Cos(alpha) * lift;
+        // Under bellyflop, its plan's pitch, bank and yaw at the craft's state.
+        if (st.Phase == OrbitalEntryPhase.Bellyflop && BellyflopAttitude(vehicle, parent, st, now, out double3 bfNose, out double3 bfBelly))
+        {
+            nose = bfNose;
+            belly = bfBelly;
+        }
         st.RollRefCci = st.BellyIndex switch
         {
             0 => double3.Cross(-belly, nose),     // belly is body -Z: body z = -belly, y = z x x
@@ -436,6 +457,9 @@ public static partial class GuidanceWindow
         v.Add(a.SurfacesNm.X); v.Add(a.SurfacesNm.Y); v.Add(a.SurfacesNm.Z); v.Add(a.RcsNm.X); v.Add(a.RcsNm.Y); v.Add(a.RcsNm.Z); v.Add(a.RcsAskedNm.X); v.Add(a.RcsAskedNm.Y); v.Add(a.RcsAskedNm.Z); v.Add(a.RcsFlowKgS);
         const double toDeg = 180.0 / Math.PI;
         v.Add(a.SpareAccelRadS2.X * toDeg); v.Add(a.SpareAccelRadS2.Y * toDeg); v.Add(a.SpareAccelRadS2.Z * toDeg); v.Add(a.AirAxisAccelRadS2 * toDeg); v.Add(a.Saturated ? 1 : 0); v.Add(a.RcsAxes); v.Add(a.RcsFiring);
+        var bfp = st.Bellyflop.Plan;
+        v.Add(st.Bellyflop.PitchDeg); v.Add(st.Bellyflop.BankDeg); v.Add(st.Bellyflop.YawDeg);
+        v.Add(bfp?.MissM ?? double.NaN); v.Add(bfp != null ? bfp.EndTime - now : double.NaN); v.Add(st.Bellyflop.TerminalRangeM / 1000.0);
         v.Add(a.FinCommandDeg?.Length ?? 0);
         for (int i = 0; i < 4; i++) v.Add(a.FinCommandDeg != null && i < a.FinCommandDeg.Length ? a.FinCommandDeg[i] : double.NaN);
         for (int i = 0; i < 4; i++) v.Add(a.FinNowDeg != null && i < a.FinNowDeg.Length ? a.FinNowDeg[i] : double.NaN);

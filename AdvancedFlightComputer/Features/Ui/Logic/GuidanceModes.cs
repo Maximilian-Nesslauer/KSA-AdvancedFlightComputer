@@ -55,7 +55,7 @@ internal static class GuidanceModes
 
     public static readonly string[] BoostbackPhases = { "SETTLE", "SLEW", "BURN", "GLIDE", "ENDED" };
 
-    private static readonly string[] BoostbackToEntryPhases = { "SETTLE", "SLEW", "BURN", "GLIDE", "ENTRY" };
+    private static readonly string[] BoostbackToEntryPhases = { "SETTLE", "SLEW", "BURN", "GLIDE", EntryMethods.GlideBurnLabel };
 
     public static IReadOnlyList<string> BoostbackPhasesFor(bool entryFollows) => entryFollows ? BoostbackToEntryPhases : BoostbackPhases;
 

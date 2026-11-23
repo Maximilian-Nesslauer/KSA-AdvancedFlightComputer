@@ -1600,6 +1600,8 @@ public sealed class VehicleAutopilotState
 
     /// <summary>The page's Engage, consumed by the next step (draw-time writes do not reach the sim), and the sim time of the last step.</summary>
     public bool ThreeDofEngagePending;
+    /// <summary>The last engage of entry guidance waits for the aero sweep it started, so the request stays pending (a reloaded craft has no sweep yet).</summary>
+    public bool ThreeDofAeroWaiting;
 
     /// <summary>The console's BOOSTBACK commit, taken by the next guidance step, because the aero sweep it forces must run where no worker steps the vehicle.</summary>
     public bool BoostbackEngagePending;
@@ -1790,8 +1792,16 @@ public sealed class VehicleAutopilotState
     /// <summary>Roll rate the tracker slews at and the plan leaves room for, deg/s.</summary>
     public double OrbitalEntryRollRateDegS = 5.0;
     /// <summary>Hand-over altitude, km, and Mach (airspeed over the sea-level speed of sound, as the aero tables use).</summary>
-    public double OrbitalEntryHandoverAltKm = 25.0;
-    public double OrbitalEntryHandoverMach = 2.0;
+    public double OrbitalEntryHandoverAltKm = 30.0;
+    public double OrbitalEntryHandoverMach = 3.0;
+    /// <summary>Fly the terminal descent from the hand-over with bellyflop (docs/guidance/bellyflop-design.md): the entry aims at the ground through its predicted fall.</summary>
+    public bool OrbitalEntryBellyflop = true;
+    /// <summary>The Mach bellyflop starts solving from, in the background.</summary>
+    public double OrbitalEntryBellyflopArmMach = 4.0;
+    /// <summary>Bellyflop's largest pitch and bank from belly-first, deg.</summary>
+    public double OrbitalEntryBellyflopAngleMaxDeg = 20.0;
+    /// <summary>Seconds between bellyflop's re-solves.</summary>
+    public double OrbitalEntryBellyflopResolveS = 1.0;
     /// <summary>Drag at which the tracker takes hold, m/s^2. Above it the craft holds its entry attitude lift-up.</summary>
     public double OrbitalEntryStartDragMs2 = 0.02;
     /// <summary>Take hold as soon as the craft is below the top of the air.</summary>

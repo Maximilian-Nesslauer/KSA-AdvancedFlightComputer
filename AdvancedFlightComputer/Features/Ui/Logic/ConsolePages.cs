@@ -5,9 +5,12 @@ namespace AdvancedFlightComputer.Features.Ui.Logic;
 internal enum ConsolePage { Launch, Land, Orbit, Transfer, Rcs, Staging, Tune }
 
 /// <summary>The ways of the LAND page. The saved keys are the enum names, so a new way goes at the end; the WAY row draws them in <see cref="LandWays.DisplayOrder"/>.</summary>
-internal enum LandWay { FromOrbit, FromHere, Hover, Boostback }
+internal enum LandWay { FromOrbit, FromHere, Hover, Boostback, Entry }
+/// <summary>The METHOD of LAND > ENTRY: orbital entry guidance (with bellyflop as its last phase) or the glide and landing burn of the 3-DOF. The saved key is the enum name.</summary>
+internal enum EntryMethod { Orbital, GlideBurn }
 internal enum TuneSet { Afc, Ascent, Recover, Landing, Diag }
-internal enum TuneLanding { Approach, Entry, SixDof, Gfold, Hover }
+/// <summary>The parts of TUNE > LANDING, in the order of their tabs. The saved key is the enum name, so the order may change.</summary>
+internal enum TuneLanding { Approach, OrbitalEntry, Entry, SixDof, Gfold, Hover }
 internal enum TuneDiagnostics { Ascent, Boostback, Aero, Atmosphere, Gfold, Log, FlightPlan }
 internal enum AscentChoice { CatsUpfg, GravityTurn }
 
@@ -108,8 +111,8 @@ internal static class ConsolePages
         _ => "DIAG",
     };
 
-    /// <summary>The guidance mode the footer of a page commits, or null for a page that commits no guidance mode.</summary>
-    public static GuidanceModeId? ModeIdFor(ConsolePage page, LandWay way, LandSolver solver, AscentChoice ascent)
+    /// <summary>The guidance mode the footer of a page commits, or null for a page that commits no guidance mode. LAND > ENTRY commits the mode of its METHOD.</summary>
+    public static GuidanceModeId? ModeIdFor(ConsolePage page, LandWay way, LandSolver solver, AscentChoice ascent, EntryMethod entry = EntryMethod.Orbital)
         => page switch
         {
             ConsolePage.Launch => ascent == AscentChoice.GravityTurn ? GuidanceModeId.AscentGravityTurn : GuidanceModeId.AscentUpfg,
@@ -117,6 +120,7 @@ internal static class ConsolePages
             {
                 LandWay.FromOrbit => GuidanceModeId.DeorbitLand,
                 LandWay.Boostback => GuidanceModeId.Boostback,
+                LandWay.Entry => entry == EntryMethod.GlideBurn ? GuidanceModeId.EntryHere : GuidanceModeId.OrbitalEntry,
                 LandWay.FromHere => solver switch
                 {
                     LandSolver.Entry => GuidanceModeId.EntryHere,
@@ -164,12 +168,13 @@ internal static class ConsolePages
 /// <summary>The WAY row of the LAND page: the ways from high energy down to the ground, each one phase lower than the one before it.</summary>
 internal static class LandWays
 {
-    public static readonly LandWay[] DisplayOrder = { LandWay.FromOrbit, LandWay.Boostback, LandWay.FromHere, LandWay.Hover };
+    public static readonly LandWay[] DisplayOrder = { LandWay.FromOrbit, LandWay.Boostback, LandWay.Entry, LandWay.FromHere, LandWay.Hover };
 
     public static string Label(LandWay way) => way switch
     {
         LandWay.FromOrbit => "DEORBIT",
         LandWay.Boostback => "BOOSTBACK",
+        LandWay.Entry => "ENTRY",
         LandWay.FromHere => "LAND NOW",
         _ => "HOVER",
     };
