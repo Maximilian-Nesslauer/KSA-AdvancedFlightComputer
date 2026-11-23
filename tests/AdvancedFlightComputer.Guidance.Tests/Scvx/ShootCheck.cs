@@ -423,6 +423,82 @@ internal static class ShootCheck
                   $"5 Hz with the same 2 s tail: {fastLongTail:F0} m against {impulsive:F0} m");
         }
 
+        // Planetary rotation during a 30 s equatorial burn and Dual derivative accuracy against central finite differences.
+        {
+            double[] eqX0 = { R + 90000.0, 0.0, 0.0, -250.0, 1400.0, 0.0 };
+            BoostbackShooter.Frame eqFrame = BoostbackShooter.Frame.FromState(eqX0);
+            const double burnS = 30.0;
+            const double pitchRad = 15.0 * Math.PI / 180.0;
+            const double eps = 1e-4;
+            var vacSys = sys;
+            vacSys.ReferenceArea = 0.0;
+
+            ShotResult adVac = BoostbackShooter.ShootAt(
+                in vacSys, in eqFrame, eqX0, Mass0,
+                new Dual(pitchRad), default, default, default,
+                Dual.Seed(burnS), target, in opt, scratch, nodes: 16);
+            ShotResult pPlus = BoostbackShooter.ShootAt(
+                in vacSys, in eqFrame, eqX0, Mass0,
+                new Dual(pitchRad), default, default, default,
+                new Dual(burnS + eps), target, in opt, scratch, nodes: 16);
+            ShotResult pMinus = BoostbackShooter.ShootAt(
+                in vacSys, in eqFrame, eqX0, Mass0,
+                new Dual(pitchRad), default, default, default,
+                new Dual(burnS - eps), target, in opt, scratch, nodes: 16);
+
+            double fdFx = (pPlus.Fx.V - pMinus.Fx.V) / (2.0 * eps);
+            double fdFy = (pPlus.Fy.V - pMinus.Fy.V) / (2.0 * eps);
+            double relErrFx = Math.Abs(adVac.Fx.D - fdFx) / Math.Max(Math.Abs(fdFx), 1.0);
+            double relErrFy = Math.Abs(adVac.Fy.D - fdFy) / Math.Max(Math.Abs(fdFy), 1.0);
+
+            // Compare ShootAt directly against manual burn integration plus ImpactPredictor rotated by -OmegaZ * burnS.
+            var bp = new BurnParameters { PitchDeg = 15.0, Duration = burnS };
+            PoweredBurnSystem manualSys = BoostbackShooter.WithSteering(in vacSys, in eqFrame, in bp);
+            Span<Dual> ma = stackalloc Dual[PoweredBurnSystem.N];
+            Span<Dual> mb = stackalloc Dual[PoweredBurnSystem.N];
+            Span<Dual> mwork = stackalloc Dual[Rk4.ScratchPerState * PoweredBurnSystem.N];
+            for (int i = 0; i < 6; i++) ma[i] = new Dual(eqX0[i]);
+            ma[6] = new Dual(Mass0);
+            var mh = new Dual(burnS / 16.0);
+            var mt = new Dual(0.0);
+            bool mInA = true;
+            for (int step = 0; step < 16; step++)
+            {
+                if (mInA) Rk4.Step(in manualSys, mt, ma, mh, mb, mwork);
+                else Rk4.Step(in manualSys, mt, mb, mh, ma, mwork);
+                mInA = !mInA;
+                mt += mh;
+            }
+            Span<Dual> mend = mInA ? ma : mb;
+            var mcoast = new DragCoastSystem
+            {
+                Mu = vacSys.Mu, OmegaZ = vacSys.OmegaZ, MeanRadius = vacSys.MeanRadius,
+                AreaOverMass = 0.0, Alpha = 0.0,
+                Table = vacSys.Table, Atmosphere = vacSys.Atmosphere,
+            };
+            Span<Dual> mcs = stackalloc Dual[ImpactPredictor.N];
+            for (int i = 0; i < 6; i++) mcs[i] = mend[i];
+            ImpactPrediction mp = ImpactPredictor.Predict(in mcoast, mcs, in opt, cscratch, default);
+            double unrotShift = Math.Sqrt(
+                Math.Pow(adVac.Fx.V - mp.Fx.V, 2) +
+                Math.Pow(adVac.Fy.V - mp.Fy.V, 2) +
+                Math.Pow(adVac.Fz.V - mp.Fz.V, 2));
+            double cB = Math.Cos(-Omega * burnS), sB = Math.Sin(-Omega * burnS);
+            double refFx = cB * mp.Fx.V - sB * mp.Fy.V;
+            double refFy = sB * mp.Fx.V + cB * mp.Fy.V;
+            double rotErr = Math.Sqrt(
+                Math.Pow(adVac.Fx.V - refFx, 2) +
+                Math.Pow(adVac.Fy.V - refFy, 2) +
+                Math.Pow(adVac.Fz.V - mp.Fz.V, 2));
+
+            Check("equatorial 30 s burn rotates impact by -OmegaZ * duration",
+                  adVac.Valid && mp.Hit && unrotShift > 13000.0 && rotErr < 1e-6,
+                  $"shift {unrotShift:F1} m, rotated error {rotErr:E2} m");
+            Check("d(Fx, Fy)/d(duration) matches central finite differences in vacuum",
+                  adVac.Valid && pPlus.Valid && pMinus.Valid && relErrFx < 1e-6 && relErrFy < 1e-6,
+                  $"rel err Fx={relErrFx:E2}, Fy={relErrFy:E2}");
+        }
+
         Console.WriteLine();
         Console.WriteLine(fails == 0 ? "SHOOT: all checks passed" : $"SHOOT: {fails} check(s) FAILED");
         return fails == 0 ? 0 : 1;
@@ -496,8 +572,17 @@ internal static class ShootCheck
 
             if (!frozen)
             {
+                // Rotate the t=0 ground-frame target into the current epoch t = burnFlown,
+                // matching how live flight converts the site from CCF to CCI on each cycle.
+                double cRot = Math.Cos(truth.OmegaZ * burnFlown), sRot = Math.Sin(truth.OmegaZ * burnFlown);
+                double[] targetNow =
+                [
+                    cRot * target[0] - sRot * target[1],
+                    sRot * target[0] + cRot * target[1],
+                    target[2],
+                ];
                 BoostbackShooter.SolveResult sol = BoostbackShooter.Solve(
-                    in model, state, mass, target, in guess, in opt, scratch,
+                    in model, state, mass, targetNow, in guess, in opt, scratch,
                     minPitchDeg: 0.0, searchRates: false,
                     maxSweeps: have ? 4 : 10,
                     initialPitchStepDeg: have ? 2.0 : 8.0,
@@ -621,11 +706,14 @@ internal static class ShootCheck
                     double[] hitF = { nom.Fx.V, nom.Fy.V, nom.Fz.V };
                     double hlen = Math.Sqrt(hitF[0] * hitF[0] + hitF[1] * hitF[1] + hitF[2] * hitF[2]);
                     if (!(hlen > 0.0)) break;
+                    double cRotT = Math.Cos(truth.OmegaZ * burnFlown), sRotT = Math.Sin(truth.OmegaZ * burnFlown);
+                    double txNow = cRotT * target[0] - sRotT * target[1];
+                    double tyNow = sRotT * target[0] + cRotT * target[1];
+                    miss[0] = hitF[0] - txNow;
+                    miss[1] = hitF[1] - tyNow;
+                    miss[2] = hitF[2] - target[2];
                     for (int i = 0; i < 3; i++)
-                    {
-                        miss[i] = hitF[i] - target[i];
                         nrm[i] = hitF[i] / hlen;
-                    }
                     if (!ImpactSteering.Correction(dG, miss, nrm, ImpactSteering.DefaultLambda,
                                                    dv, greedy))
                         break;
@@ -680,7 +768,11 @@ internal static class ShootCheck
         if (!p.Hit)
             return double.PositiveInfinity;
 
-        double dx = p.Fx.V - target[0], dy = p.Fy.V - target[1], dz = p.Fz.V - target[2];
+        // Rotate the cutoff-epoch co-rotating impact back by -OmegaZ * burnFlown into the t=0 ground frame.
+        double cEnd = Math.Cos(-truth.OmegaZ * burnFlown), sEnd = Math.Sin(-truth.OmegaZ * burnFlown);
+        double fx0 = cEnd * p.Fx.V - sEnd * p.Fy.V;
+        double fy0 = sEnd * p.Fx.V + cEnd * p.Fy.V;
+        double dx = fx0 - target[0], dy = fy0 - target[1], dz = p.Fz.V - target[2];
         return Math.Sqrt(dx * dx + dy * dy + dz * dz);
     }
 

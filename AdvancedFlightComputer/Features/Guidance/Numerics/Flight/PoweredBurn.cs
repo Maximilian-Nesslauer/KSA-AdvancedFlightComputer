@@ -529,10 +529,17 @@ public static class BoostbackShooter
         }
 
         result.Valid = true;
-        result.Fx = p.Fx; result.Fy = p.Fy; result.Fz = p.Fz;
-        result.MissX = p.Fx - target[0];
-        result.MissY = p.Fy - target[1];
-        result.MissZ = p.Fz - target[2];
+        // ImpactPredictor rotates the inertial impact point back by -OmegaZ * t_coast into cutoff-epoch CCF.
+        // Rotate back by -OmegaZ * duration in Dual arithmetic so comparison against the ignition-epoch target
+        // and d(Miss)/d(duration) include planetary rotation during the powered burn.
+        Dual thetaBurn = new Dual(-sys.OmegaZ) * duration;
+        Dual cb = Dual.Cos(thetaBurn), sb = Dual.Sin(thetaBurn);
+        result.Fx = cb * p.Fx - sb * p.Fy;
+        result.Fy = sb * p.Fx + cb * p.Fy;
+        result.Fz = p.Fz;
+        result.MissX = result.Fx - target[0];
+        result.MissY = result.Fy - target[1];
+        result.MissZ = result.Fz - target[2];
         result.CoastTime = p.TimeOfFlight.V;
         result.PropellantUsed = new Dual(mass0) - end[6];
 
