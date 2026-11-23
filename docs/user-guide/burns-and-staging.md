@@ -26,16 +26,9 @@ AFC also checks before the burn that the craft can aim it, and shows a warning o
 
 ## Automatic Staging
 
-<table>
-  <tr>
-    <th align="center">Stock</th>
-    <th align="center">With AdvancedFlightComputer</th>
-  </tr>
-  <tr valign="top">
-    <td><img src="../../images/AutoStage_stock.png" alt="Stock engine gauge panel" width="420" /></td>
-    <td><img src="../../images/AutoStage_button.png" alt="Engine gauge panel with AUTOSTAGE toggle" width="420" /></td>
-  </tr>
-</table>
+| Stock | With AdvancedFlightComputer |
+| :---: | :---: |
+| ![Stock engine gauge panel](../images/AutoStage_stock.png) | ![Engine gauge panel with AUTOSTAGE toggle](../images/AutoStage_button.png) |
 
 Activates the next sequence whenever the active engines run out of propellant, and drops burnt-out boosters while the rest of the stage keeps firing. Works during auto-burns (continues the burn instead of aborting) and manual burns. Do not install the standalone AutoStage mod next to AdvancedFlightComputer, because two stagers on one burnout would activate two sequences. The settings written by AutoStage are imported on the first load.
 

@@ -125,7 +125,7 @@ plus a prograde condition $(\mathbf r_f\times\mathbf v_f)\cdot\mathbf n(\varphi)
 | Constraint | Continuous form | In the subproblem | Code |
 | --- | --- | --- | --- |
 | [Lift-off direction](#lift-off-direction) | $\mathbf u(0)\parallel\hat{\mathbf e}_{\text{up}}$ | two linear rows | `AscentSubproblem.Solve` |
-| [Pad roll](#pad-roll-for-a-solid-launch) | vertical to $t_{\text{clear}} + 10$ s; $\lvert\dot{\hat{\mathbf u}}\rvert \le 5$ °/s in stage 1 | linear rows; one cone per interval | `AscentCase` |
+| [Pad roll](#pad-roll-for-a-solid-launch) | vertical to $t_{\text{clear}} + 10$ s; $\lvert\dot{\hat{\mathbf u}}\rvert \le 5$ deg/s in stage 1 | linear rows; one cone per interval | `AscentCase` |
 | [Dynamics](#dynamics-and-staging-links) | $\dot{\mathbf x} = \mathbf f$ | linearised trapezoid with virtual control | `AscentSubproblem.Solve` |
 | [Staging links](#dynamics-and-staging-links) | $\mathbf r,\mathbf v$ continuous, $m^+ = m^- - m_{\text{dry}} - R$ | linear equalities, exact | `AscentSubproblem.Solve` |
 | [Propellant](#propellant) | each load burned exactly, the last at most | linear rows, exact | `AscentCase.Loads` |
@@ -160,7 +160,7 @@ A solid first stage cannot throttle to wait for a roll, so with FORCE ROLL on a 
 $$
 \mathbf u(t)\parallel\hat{\mathbf e}_{\text{up}}(t)\quad\text{for } t \le t_{\text{clear}} + 10\text{ s},
 \qquad
-\big\lVert\dot{\hat{\mathbf u}}\big\rVert \le 5\ \text{°/s}\quad\text{in stage 1}.
+\big\lVert\dot{\hat{\mathbf u}}\big\rVert \le 5^\circ/\text{s}\quad\text{in stage 1}.
 $$
 
 $t_{\text{clear}}$ is the time to climb 50 m straight up from rest at the floor throttle, and $\hat{\mathbf e}_{\text{up}}(t)$ is the pad's zenith turning with the body. The vertical part is two linear rows per node, up to the first node at or after the deadline. The rate limit becomes a cone on each first-stage interval:
@@ -211,7 +211,7 @@ $$
 \hat{\bar{\mathbf u}}_k\cdot\mathbf u_k \ge \theta_{\min},
 $$
 
-which implies the floor, so it is conservative. With the ceiling it leaves a spherical cap. At a 99 % floor the thrust can turn $\arccos 0.99 = 8.1°$ per iteration; at 100 % the cap would close to a point and the direction could never move from the seed's.
+which implies the floor, so it is conservative. With the ceiling it leaves a spherical cap. At a 99 % floor the thrust can turn $\arccos 0.99 = 8.1^\circ$ per iteration; at 100 % the cap would close to a point and the direction could never move from the seed's.
 
 The floor $\theta_{\min}$ of each stage:
 
@@ -273,11 +273,11 @@ $$
 \qquad s^{q\alpha}_k \ge 0 .
 $$
 
-This is the planner's only angle-of-attack limit. It has no attitude-rate limit outside the [pad roll](#pad-roll-for-a-solid-launch): the [smoothing term](#objective) damps the node-to-node turn, and the flight's own 5 °/s command slew limit guards the rest.
+This is the planner's only angle-of-attack limit. It has no attitude-rate limit outside the [pad roll](#pad-roll-for-a-solid-launch): the [smoothing term](#objective) damps the node-to-node turn, and the flight's own 5 deg/s command slew limit guards the rest.
 
 ### Thrust with the airflow
 
-$\sin\alpha$ returns to zero at $180°$, so without this a stack that cannot throttle could meet the $q$ limit by firing against the airflow to bleed off speed. At the active nodes the thrust stays within $90°$ of the reference airflow:
+$\sin\alpha$ returns to zero at $180^\circ$, so without this a stack that cannot throttle could meet the $q$ limit by firing against the airflow to bleed off speed. At the active nodes the thrust stays within $90^\circ$ of the reference airflow:
 
 $$
 -\hat{\bar{\mathbf v}}_{\text{rel},k}\cdot\mathbf u_k \le s^{\text{pro}}_k,\qquad s^{\text{pro}}_k \ge 0 .
@@ -400,7 +400,7 @@ A stall is not always a failure. When the stalled reference passes every gate an
 
 The seed is a gravity turn flown through the same dynamics by RK4, 20 sub-steps per interval, so its defects are small from the first iteration. The vehicle rises vertically at its seed throttle. At 130 m/s air-relative (`PitchOverSpeed`) its air-relative velocity is turned by the kick angle toward downrange, as in the script. From then on it follows $\mathbf v_{\text{rel}}$, with the thrust projected into the target plane. Lower stages burn their loads, at full throttle or at the throttle the acceleration limit leaves. The last stage burns until the orbital energy reaches the target's (`SeedEnergyCutoff`), not for a fixed 80 % of its load.
 
-The kick is searched: a log-spaced scan of 25 angles from 0.25° to 30°, slid up to four times when the best lands on an edge, then a golden section to $10^{-3}$°. A kick is scored on the insertion altitude and plane miss plus the path violation. The path term counts only what the best-behaved seed does not already have, so a vehicle that cannot meet $q_{\max}$ at full throttle is not driven to fly straight up. Seeds that blow up, fall 50 km below the mean radius or end retrograde are discarded. The lowest peak $q$ any seed flew is kept: it is close to the least this vehicle can manage, and the max-q retry uses it.
+The kick is searched: a log-spaced scan of 25 angles from 0.25 deg to 30 deg, slid up to four times when the best lands on an edge, then a golden section to $10^{-3}$ deg. A kick is scored on the insertion altitude and plane miss plus the path violation. The path term counts only what the best-behaved seed does not already have, so a vehicle that cannot meet $q_{\max}$ at full throttle is not driven to fly straight up. Seeds that blow up, fall 50 km below the mean radius or end retrograde are discarded. The lowest peak $q$ any seed flew is kept: it is close to the least this vehicle can manage, and the max-q retry uses it.
 
 A plan of the same stages can stand in for the seed. Its throttle is raised to this problem's floor and its burn times clamped into this problem's bounds, or the first subproblem could be infeasible.
 

@@ -249,7 +249,7 @@ $-J^{\top}m$ *is* the direction that maximises the reduction in miss - but only 
 
 $$
 \left.\frac{\mathrm{d}}{\mathrm{d}\epsilon}\right|_{\epsilon=0}
-\tfrac12\bigl\lVert m + J(\epsilon\, u)\bigr\rVert^{2} = \epsilon\, u^{\top} J^{\top} m ,
+\tfrac12\bigl\lVert m + J(\epsilon\, u)\bigr\rVert^{2} = u^{\top} J^{\top} m ,
 $$
 
 minimised over unit $u$ by $u = -J^{\top}m / \lVert J^{\top}m\rVert$. Guidance does not apply an infinitesimal $\Delta v$, and two separate things break the hope of one shot.

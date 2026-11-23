@@ -15,7 +15,7 @@ Who may write which control, and how AFC hands the craft back, is on [Vehicle co
 
 ```mermaid
 flowchart LR
-    tgt([Target attitude<br/>and turning rate]) --> law[Attitude controller<br/>torque demand τ]
+    tgt([Target attitude<br/>and turning rate]) --> law[Attitude controller<br/>torque demand tau]
     air([Aero tables<br/>air moment]) --> law
     plan([Touchdown plan<br/>torques + feedback]) --> gim
     plan --> rcs
@@ -40,10 +40,10 @@ The same symbols are used on all four pages:
 | $\boldsymbol{\tau}$ | the torque demand | N m |
 | $\mathbf{u}$ | the commands of one actuator family | depends on the family |
 | $B$ | the effectiveness: torque per unit command, one column per command | N m per unit |
-| $I$ | the inertia, diagonal in the model axes (`Ksa6DofSetup.Inertia`) | kg m² |
+| $I$ | the inertia, diagonal in the model axes (`Ksa6DofSetup.Inertia`) | kg m^2 |
 | $\boldsymbol{\omega}$ | the body rate | rad/s |
 | $\boldsymbol{\theta}$ | the attitude error, a small rotation from the body onto the target | rad |
-| $\omega_n$, $\zeta$ | the loop's natural frequency and damping ratio | rad/s, – |
+| $\omega_n$, $\zeta$ | the loop's natural frequency and damping ratio | rad/s, - |
 
 ## The control law
 
@@ -72,8 +72,8 @@ $$
 
 Here $\phi$ is the angle and $\mathbf{n}$ the axis of the rotation onto the target.
 For small errors $\boldsymbol{\theta}$ is the rotation vector itself.
-For large ones it saturates: its length peaks at 90° and falls back to zero for a target exactly behind.
-The reported error is $\arcsin(\min(|\boldsymbol{\theta}|, 1))$, so it never reads more than 90°.
+For large ones it saturates: its length peaks at 90 deg and falls back to zero for a target exactly behind.
+The reported error is $\arcsin(\min(|\boldsymbol{\theta}|, 1))$, so it never reads more than 90 deg.
 
 The error is split into a **roll** part along $z$ and a **pointing** part across it:
 
@@ -92,7 +92,7 @@ $$
 \widetilde{\Delta\boldsymbol{\omega}}_{k} = \widetilde{\Delta\boldsymbol{\omega}}_{k-1} + \frac{\Delta t}{T_f + \Delta t}\big(\Delta\boldsymbol{\omega}_k - \widetilde{\Delta\boldsymbol{\omega}}_{k-1}\big)
 $$
 
-$\Delta t$ is the simulation time since the last step, clamped to 0…0.2 s.
+$\Delta t$ is the simulation time since the last step, clamped to 0...0.2 s.
 The first step after an engage starts the filter on the raw value.
 On the flown booster the raw rate error carried 0.5 deg/s of wobble, about 10 kN m of demand jittering through its inertia, and the fins chased it.
 
@@ -109,14 +109,14 @@ $$
 $$
 
 So a large error is closed at a set rate rather than at the actuators' full torque.
-With the defaults the cap binds above about 8° of error.
-One cap on the whole vector starved the pointing: a booster 73° off in roll and 5° off in pointing closed the pointing at 0.3 deg/s, and the roll took 18 s.
+With the defaults the cap binds above about 8 deg of error.
+One cap on the whole vector starved the pointing: a booster 73 deg off in roll and 5 deg off in pointing closed the pointing at 0.3 deg/s, and the roll took 18 s.
 
 ### Integral
 
 The integral learns the part of the air's moment that the feed-forward misses (17 % on one flight), so the error settles instead of standing at a degree.
 
-- The pointing error is integrated only while $|\boldsymbol{\theta}_\text{point}| < \theta_\text{int}$, and the roll error only while $|\boldsymbol{\theta}_\text{roll}| < \theta_\text{int}$ (`IntegralWithinDeg`, 3°).
+- The pointing error is integrated only while $|\boldsymbol{\theta}_\text{point}| < \theta_\text{int}$, and the roll error only while $|\boldsymbol{\theta}_\text{roll}| < \theta_\text{int}$ (`IntegralWithinDeg`, 3 deg).
 - The integral's length is capped at 8 deg s (`IntegralMaxDegS`).
 - Its gain is $k_i\,\omega_n^2$ with $k_i$ = `IntegralPerS`, 0.1 /s.
 
@@ -135,7 +135,7 @@ $$
 - $k$ is the game's moment limiter per pascal (`BodyAero6Dof.MomentLimiterPerPa`), measured on the craft. The integrator divides the air's whole moment by $1 + kq$, so the prediction does too.
 
 The angles are engine first: with $\hat{\mathbf u}$ the craft's velocity through the air in body axes, $\alpha = \operatorname{atan2}(u_z, -u_x)$ and $\beta = \operatorname{atan2}(u_y, -u_x)$.
-There is no feed-forward below 50 Pa, below 1 m/s, nose first, or outside $|\alpha|, |\beta| \le 20°$, the edge of the tables.
+There is no feed-forward below 50 Pa, below 1 m/s, nose first, or outside $|\alpha|, |\beta| \le 20^\circ$, the edge of the tables.
 The report's `AirKnown` says which.
 
 The feed-forward cancels the air's moment before any error builds.
@@ -151,7 +151,7 @@ The deadband is **off by default** (`DeadbandDeg` 0).
 When it is on, the feedback stands down while the error is under half the deadband and the rate error under `RateDeadbandDegS` (0.5 deg/s).
 It comes back once the error passes the whole deadband or the rate error passes twice that rate.
 Only the feed-forward and the integral fly in between.
-It is off because each return of the feedback kicked: in the harness a 0.5° deadband cost 50 kg of RCS propellant holding a tilt that cost 46 kg without one, and 1° cost 234 kg.
+It is off because each return of the feedback kicked: in the harness a 0.5 deg deadband cost 50 kg of RCS propellant holding a tilt that cost 46 kg without one, and 1 deg cost 234 kg.
 
 ### Settings
 
@@ -170,13 +170,13 @@ It is off because each return of the feedback kicked: in the harness a 0.5° dea
 | `IntegralMaxDegS` | 8.0 | the integral's cap, deg s |
 
 <!-- viz: attitude-controller 620 -->
-*Start the craft 73° off in roll and 5° off in pointing, switch the split capture cap on and off, and change the feed-forward's error to watch the integral take up the rest.*
+*Start the craft 73 deg off in roll and 5 deg off in pointing, switch the split capture cap on and off, and change the feed-forward's error to watch the integral take up the rest.*
 
 ### What you see in flight
 
 - A large error closes at a steady 5 deg/s, pointing and roll at the same time, rather than with a burst of RCS.
 - On a glide the craft holds within a fraction of a degree after a few seconds, once the integral has learned what the tables miss.
-- When the feed-forward has no table (too little air, or more than 20° off engine first), the craft holds on feedback alone and sits with a small standing error until the integral catches up.
+- When the feed-forward has no table (too little air, or more than 20 deg off engine first), the craft holds on feedback alone and sits with a small standing error until the integral catches up.
 
 ## The common torque-allocation problem
 
@@ -255,7 +255,7 @@ They use a regularised minimum-norm solve with a saturation cascade, which has a
 
 ### How families are combined
 
-- **Fins and RCS share one programme.** The attitude controller gives the fins' programme the RCS thrusters as extra **backup columns**: each thruster's full-duty torque, bounded 0…1, priced by its propellant. A degree of fin costs about a thousandth of a newton metre of shortfall, the best thruster 0.02 per newton metre. So the fins take every axis they can, the RCS takes what they cannot, and only then does any demand go unmet. Roll included: a fixed "fins first, roll last" order had left roll to the RCS where the fins could have taken it.
+- **Fins and RCS share one programme.** The attitude controller gives the fins' programme the RCS thrusters as extra **backup columns**: each thruster's full-duty torque, bounded 0...1, priced by its propellant. A degree of fin costs about a thousandth of a newton metre of shortfall, the best thruster 0.02 per newton metre. So the fins take every axis they can, the RCS takes what they cannot, and only then does any demand go unmet. Roll included: a fixed "fins first, roll last" order had left roll to the RCS where the fins could have taken it.
 - **The RCS is then solved again on its own** for what the fins will really give short of the demand, $\boldsymbol\tau - \boldsymbol\tau_\text{fins}$. The joint programme's duties are not flown; they only shape what the fins take.
 - **The gimbals are separate.** On main the attitude controller flies a craft with its engine off and never uses them. Touchdown guidance commands the gimbals and the RCS each with the plan's own torque, and its attitude feedback ([`AttitudeFeedback6Dof`](#where-the-controller-is-used)) shares its correction between them in proportion to the room each has left.
 
@@ -269,7 +269,7 @@ $$
 
 with a tiny command cost so that a tie goes to the cheaper pattern.
 It then allocates half of that reach and reports what each newton metre costs there: the propellant for the RCS, the side force for the RCS and the fins.
-That gives six numbers per family, +x, −x, +y, −y, +z, −z, and planners use them: touchdown guidance builds its RCS model from the RCS's six (`Ksa6DofSetup.RcsModel`).
+That gives six numbers per family, +x, -x, +y, -y, +z, -z, and planners use them: touchdown guidance builds its RCS model from the RCS's six (`Ksa6DofSetup.RcsModel`).
 For the gimbals the equivalent is asking the allocator for far more torque than it has and reading back what it gives (`Ksa6DofSetup.TorqueAlong`).
 
 ## Where the controller is used

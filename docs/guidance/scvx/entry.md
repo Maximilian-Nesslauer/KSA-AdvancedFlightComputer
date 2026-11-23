@@ -35,7 +35,7 @@ $$
 * $\kappa$: the **throttle fraction**, not newtons. Thrust depends on the throttle and on the back pressure, so a fraction keeps the throttle box a box.
 * $\sigma_G,\sigma_B$: the glide and burn durations (s).
 
-**Attitude is the control.** The body axis $\mathbf b$ sets the thrust direction and the angle of attack. The angle of attack is measured **retrograde-first**, as the angle between the tail $-\mathbf b$ and the airflow, so it is zero when the booster flies engine-first into the wind. With $\hat{\mathbf v} = \mathbf v/\sqrt{\lVert\mathbf v\rVert^2+\varepsilon^2}$ and $\varepsilon^2 = 10^{-4}$ m²/s², the body axis projected across the airflow is
+**Attitude is the control.** The body axis $\mathbf b$ sets the thrust direction and the angle of attack. The angle of attack is measured **retrograde-first**, as the angle between the tail $-\mathbf b$ and the airflow, so it is zero when the booster flies engine-first into the wind. With $\hat{\mathbf v} = \mathbf v/\sqrt{\lVert\mathbf v\rVert^2+\varepsilon^2}$ and $\varepsilon^2 = 10^{-4}$ m^2/s^2, the body axis projected across the airflow is
 
 $$
 \mathbf p(\mathbf v,\mathbf b) = \mathbf b - (\mathbf b\cdot\hat{\mathbf v})\,\hat{\mathbf v},
@@ -81,7 +81,7 @@ $$
 q = \tfrac12\,\rho(h)\,\lVert\mathbf v\rVert^2 .
 $$
 
-The coefficients come from the game's own forces, sampled by `KsaAeroSweep` over Mach and angle of attack. Between breakpoints they are C² cubic splines, so the linearisation sees smooth slopes. Mach is held inside each table's grid, because past the last breakpoint the fit's end slope has been seen to flip the sign of the lift.
+The coefficients come from the game's own forces, sampled by `KsaAeroSweep` over Mach and angle of attack. Between breakpoints they are C^2 cubic splines, so the linearisation sees smooth slopes. Mach is held inside each table's grid, because past the last breakpoint the fit's end slope has been seen to flip the sign of the lift.
 
 **Whole-sphere tables.** Drag runs along $-\hat{\mathbf v}$ and lift along $-\mathbf p$:
 
@@ -93,7 +93,7 @@ $$
 k = \frac{C_L}{\sin\alpha}.
 $$
 
-A positive $C_L$ lifts towards the side the engine end is tilted to. The engine end's tilt off the airflow is $-\mathbf p$, so the lift is along $-\mathbf p$. The lift is written through $k$, not as $C_L$ times a unit vector, so it has no direction singularity at $\alpha=0$ and keeps its slope there: a seed flown at exactly $\alpha=0$ still sees what a tilt would buy. At $\alpha=0$ the ratio is 0/0, so the value at the first non-zero breakpoint (1° on the sweep's grid) stands in for it.
+A positive $C_L$ lifts towards the side the engine end is tilted to. The engine end's tilt off the airflow is $-\mathbf p$, so the lift is along $-\mathbf p$. The lift is written through $k$, not as $C_L$ times a unit vector, so it has no direction singularity at $\alpha=0$ and keeps its slope there: a seed flown at exactly $\alpha=0$ still sees what a tilt would buy. At $\alpha=0$ the ratio is 0/0, so the value at the first non-zero breakpoint (1 deg on the sweep's grid) stands in for it.
 
 **The corner at zero.** KSA's drag grows with $\lvert\sin\alpha\rvert$, which has a corner exactly where a booster flies. The tables are therefore read at a rounded angle $\tilde\alpha$, whose $\lVert\mathbf p\rVert$ is replaced by
 
@@ -104,7 +104,7 @@ $$
 
 This is exact at zero and smooth everywhere. Only the lookup argument is rounded; the lift's direction comes from $\mathbf p$ itself.
 
-**Body-axis table.** When the sweep has a body-axis table and the roll is held, the model reads it instead wherever the craft is within 30° of engine-first (`BodyAeroMaxTiltRad`). The body axes follow from $\mathbf b$ and the held wing direction. The table gives the body-axis force coefficients $(C_x,C_y,C_z)(M,\alpha,\beta)$. The force $\mathbf F = qS(C_x\hat{\mathbf x}_b + C_y\hat{\mathbf y}_b + C_z\hat{\mathbf z}_b)$ is split into its part along the airflow, scaled by $s_D$, and its part across it, scaled by $s_L$.
+**Body-axis table.** When the sweep has a body-axis table and the roll is held, the model reads it instead wherever the craft is within 30 deg of engine-first (`BodyAeroMaxTiltRad`). The body axes follow from $\mathbf b$ and the held wing direction. The table gives the body-axis force coefficients $(C_x,C_y,C_z)(M,\alpha,\beta)$. The force $\mathbf F = qS(C_x\hat{\mathbf x}_b + C_y\hat{\mathbf y}_b + C_z\hat{\mathbf z}_b)$ is split into its part along the airflow, scaled by $s_D$, and its part across it, scaled by $s_L$.
 
 **Learned corrections.** In the glide the engine is off, so the measured non-gravitational acceleration is the aerodynamic force alone. `AeroScaleEstimator` learns a drag scale $s_D$ from it and a cross-flow force coefficient $\mathbf C_\perp$ (an offset, not a ratio). Under thrust it freezes those and learns a thrust scale $s_T$. All three are low-passed and clamped, and handed to the next solve:
 
@@ -270,7 +270,7 @@ The limit bounds $\lVert\mathbf p\rVert$ rather than $\cos\alpha$, because $\mat
 When `QAlphaMax` is set, the radius becomes $\min\big(\sin\alpha_{\max},\ (q\alpha)_{\max}/\bar q_k\big)$, with $\bar q_k$ read at the reference. It is off in flight.
 
 !!! note "Planned glide angle"
-    The boostback plans its glide at 2.5° (`GlideNominalAoaDeg`), with the lift up the trajectory. That angle is **not** a constraint here. It only sets the tilt that the cold seed's glide is flown at. The problem itself may use any angle up to 7.5°.
+    The boostback plans its glide at 2.5 deg (`GlideNominalAoaDeg`), with the lift up the trajectory. That angle is **not** a constraint here. It only sets the tilt that the cold seed's glide is flown at. The problem itself may use any angle up to 7.5 deg.
 
 ### Retrograde
 
@@ -302,7 +302,7 @@ $$
 \lVert\mathbf b_{k+1}-\mathbf b_k\rVert \le \omega_{\max}\,\sigma\,\Delta\tau + s_{\omega,k}.
 $$
 
-The interval length is affine in the variable $\sigma$, so this is an **exact** second-order cone, with no linearisation. $\omega_{\max}$ is 10°/s, or 0.8 of the flight computer's own rate limit if that is lower (`PlanRateMax`).
+The interval length is affine in the variable $\sigma$, so this is an **exact** second-order cone, with no linearisation. $\omega_{\max}$ is 10 deg/s, or 0.8 of the flight computer's own rate limit if that is lower (`PlanRateMax`).
 
 **Fixed glide attitude.** On a craft with no RCS to turn it with the engine off, and with `ThreeDofTurnAccelDegS2` at 0, the glide's cones get a zero head and no slack: $\mathbf b_{k+1} = \mathbf b_k$ through the glide (`GlideAttitudeFixed`).
 
@@ -394,9 +394,9 @@ These are this solver's settings for the [common machinery](index.md), and the t
 
 **Cone solver.** The subproblem runs in SCS to $\epsilon_{\text{abs}} = \epsilon_{\text{rel}} = 10^{-4}$ (`RealTimeEps`). It is warm-started from the previous solution across iterations and across receding-horizon cycles, and reset on a cold start and on the first burn-only solve. The structure is built once and refilled in place each iteration. Columns are scaled to physical units, and rows are then equilibrated, with every row of a cone sharing one scale. See [scaling](index.md#scaling) and [the cone program](index.md#the-cone-program).
 
-**Scaling sized to the problem left.** `Scaling` = `EverySolve`. Before every solve, the length scales are set per axis: the horizontal range to the aim point (at least a tenth of the height, and at least 30 m) for $x$ and $y$, and the height for $z$. One scale for all three axes left a 2 km cross-range to be resolved in 30 km units, and that cold solve stopped converging. The speed scale is the larger of the speed and $\sqrt{gh}$, and the mass scale is the present mass. The duration scale is set twice and is never resized with the time left. The cold solve uses the seed's whole duration, clamped to 30–60 s. From the first published plan on, it uses that plan's burn time, clamped to 5–30 s. A duration scale sized from the time left let the ignition time wander two seconds either way between cycles.
+**Scaling sized to the problem left.** `Scaling` = `EverySolve`. Before every solve, the length scales are set per axis: the horizontal range to the aim point (at least a tenth of the height, and at least 30 m) for $x$ and $y$, and the height for $z$. One scale for all three axes left a 2 km cross-range to be resolved in 30 km units, and that cold solve stopped converging. The speed scale is the larger of the speed and $\sqrt{gh}$, and the mass scale is the present mass. The duration scale is set twice and is never resized with the time left. The cold solve uses the seed's whole duration, clamped to 30-60 s. From the first published plan on, it uses that plan's burn time, clamped to 5-30 s. A duration scale sized from the time left let the ignition time wander two seconds either way between cycles.
 
-**Fixed node counts.** There are always 12 glide intervals and 17 burn intervals, wherever entry guidance takes over. From 37 km each glide interval is about 8 s long; the intervals shrink back to the sizes flown for months as the horizon closes. More intervals cost 0.7–0.9 s per re-solve up high.
+**Fixed node counts.** There are always 12 glide intervals and 17 burn intervals, wherever entry guidance takes over. From 37 km each glide interval is about 8 s long; the intervals shrink back to the sizes flown for months as the horizon closes. More intervals cost 0.7-0.9 s per re-solve up high.
 
 **Cold ADMM cap on retry.** A cold solve gets 20 000 ADMM iterations per subproblem (`ColdAdmmCap`) and up to 150 SCvx iterations (`ColdIterations`), run two at a time on the worker. A warm cycle gets 2 000 (`WarmAdmmCap`), with one escalated retry at 8 000 (`EscalatedAdmmCap`) for a subproblem that only ran out of iterations. While the glide left is longer than 40 s (`LongGlideS`), that retry gets the cold cap instead. With 8 s intervals the subproblem is harder, and warm re-solves that hit the 8 000 cap were refused 20 at a time.
 

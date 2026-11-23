@@ -32,4 +32,4 @@ One window holds every AFC feature. One row of tabs follows the order of a missi
 
 ![LAND page: a G-FOLD landing on Luna](../images/console/gfold-landing.jpg)
 
-The other pages are **BURNS** (how the next burn is flown, with RCS or the main engine), **STAGING** (AutoStage and the staging delays) and **TUNE** (the tuning values and the preferences). See [AFC Console](console.md#afc-console) for the details.
+The other pages are **BURNS** (how the next burn is flown, with RCS or the main engine), **STAGING** (AutoStage and the staging delays) and **TUNE** (the tuning values and the preferences). See [AFC Console](console.md) for the details.

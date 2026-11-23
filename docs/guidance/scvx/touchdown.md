@@ -89,7 +89,7 @@ $$
 - $\Delta\mathbf C_{F,i}$ and $\Delta\mathbf C_{M,i}$ are what fin $i$ adds at its deflection, interpolated between the swept deflections.
 - $\Delta\mathbf c$ moves the moment from the centre of mass the sweep saw to the one the craft has now. $\mathbf F_{\text{body}}$ is the table force in body axes.
 - $k_{\text{lim}}$ copies the game's moment limiter, which divides the air's moment by $1 + k_{\text{lim}}\bar q$. It is measured in flight.
-- $w = w_{\text{tilt}}\,w_{\text{speed}}$ fades the tables out where they mean nothing. Both factors are smoothsteps: $w_{\text{speed}}$ from 0 at 5 m/s to 1 at 15 m/s, and $w_{\text{tilt}}$ from 1 at 20° off engine-first to 0 at 28°, where the tables end.
+- $w = w_{\text{tilt}}\,w_{\text{speed}}$ fades the tables out where they mean nothing. Both factors are smoothsteps: $w_{\text{speed}}$ from 0 at 5 m/s to 1 at 15 m/s, and $w_{\text{tilt}}$ from 1 at 20 deg off engine-first to 0 at 28 deg, where the tables end.
 - $\mathbf F_{\text{pm}}$ is the point-mass drag and lift on the thrust axis $\mathbf b$ from the 3-DOF tables. It carries the share $(1-w)$ the body tables fade out of. It has no moment.
 
 The fade keeps the force and its slopes continuous, so the solver never meets a jump.
@@ -261,7 +261,7 @@ $$
 
 An exact second-order cone of constant radius at every node, with no reference in it. It is exact to the same degree as the unit-norm tangent plane. The tangent of $R_{33}$ that it replaced has a zero gradient for an upright craft, so the linearised row could not see the limit.
 
-$\theta_{\max}$ is 120° (`SixDofTiltDeg`). It is widened to at least the tilt at hand-over plus 5°, up to 175°. The cone includes node 0, which is pinned to the measured state, so a limit below the present tilt would be infeasible.
+$\theta_{\max}$ is 120 deg (`SixDofTiltDeg`). It is widened to at least the tilt at hand-over plus 5 deg, up to 175 deg. The cone includes node 0, which is pinned to the measured state, so a limit below the present tilt would be infeasible.
 
 ### Ground floor
 
@@ -280,7 +280,7 @@ $$
 \qquad s^{\text{gs}}_k \ge 0,\qquad k \ge 1 .
 $$
 
-A second-order cone from node 1, soft with an L1 slack. $\gamma$ is 10° (`SixDofGlideSlopeDeg`). $e_k$ is an entry allowance for a craft handed over outside the cone. With $e_0$ the metres it starts outside and $s = k/(N-1)$,
+A second-order cone from node 1, soft with an L1 slack. $\gamma$ is 10 deg (`SixDofGlideSlopeDeg`). $e_k$ is an entry allowance for a craft handed over outside the cone. With $e_0$ the metres it starts outside and $s = k/(N-1)$,
 
 $$
 e_k = e_0\big((1-s)^2 + s\,(1-s)^4\big),
@@ -310,7 +310,7 @@ $$
 \lVert\boldsymbol\omega_k\rVert \le \omega_{\max} + s^{\omega}_k,\qquad s^{\omega}_k \ge 0,\qquad k \ge 1 .
 $$
 
-A second-order cone from node 1 on the whole body rate, roll included, soft with an L1 slack. $\omega_{\max}$ is 15°/s (`SixDofRateMaxDegS`). With RCS the craft can turn hard, and nothing else in the objective stops the cheapest plan from doing so.
+A second-order cone from node 1 on the whole body rate, roll included, soft with an L1 slack. $\omega_{\max}$ is 15 deg/s (`SixDofRateMaxDegS`). With RCS the craft can turn hard, and nothing else in the objective stops the cheapest plan from doing so.
 
 ### Durations
 
@@ -382,7 +382,7 @@ The `Scvx6DofConfig` defaults mirror the Python reference (`6dof.py`), so the of
 
 Three choices in the weights matter:
 
-- **Rate, not magnitude.** The smoothing prices the change of each control between nodes, not its size. $W_{\Delta u}$ is the only term that keeps the control profile continuous. Without it the minimum-fuel answer jumps its thrust direction by about 19° between nodes.
+- **Rate, not magnitude.** The smoothing prices the change of each control between nodes, not its size. $W_{\Delta u}$ is the only term that keeps the control profile continuous. Without it the minimum-fuel answer jumps its thrust direction by about 19 deg between nodes.
 - **Small regularisers.** $W_{\Delta u}$ and $W_\omega$ both get cheaper as the burn gets longer. At the Python values they were 121 % of the fuel term and pinned $\sigma$ at its upper bound. In flight they are a small share of fuel, and the proximal term restores the conditioning they gave.
 - **The RCS price** makes the split between gimbals and RCS unique, and leans on the gimbals, which cost no propellant. Without it the split was nearly free, and SCS needed several times the iterations.
 
@@ -501,7 +501,7 @@ $$
 \hat{\mathbf a} \leftarrow \hat{\mathbf a} + \frac{\Delta t}{2\ \text{s}}\Big(\mathbf a_{\text{meas}} - \big(\tfrac{T_{\text{del}}}{m}\mathbf b + \mathbf g + \mathbf F_{\text{aero}}/m\big) - \hat{\mathbf a}\Big),
 $$
 
-a low-pass filter with a time constant of about 2 s, clamped to 5 m/s² per axis, and adds it to the plan's gravity. $T_{\text{del}}$ is the thrust the last throttle delivers, read off the engines' own curve. The model's aero force is taken off first, so the bias holds only what the model misses. It is on by default (`SixDofBiasEnabled`).
+a low-pass filter with a time constant of about 2 s, clamped to 5 m/s^2 per axis, and adds it to the plan's gravity. $T_{\text{del}}$ is the thrust the last throttle delivers, read off the engines' own curve. The model's aero force is taken off first, so the bias holds only what the model misses. It is on by default (`SixDofBiasEnabled`).
 
 ### Proximal term
 
@@ -523,7 +523,7 @@ The solver's convergence test divides each defect by its state scale. The flight
 | --- | --- |
 | position | 1 m (`MaxDefectM`) |
 | velocity | 0.5 m/s |
-| attitude | 1°, as $\sin(0.5°)$ per quaternion component |
+| attitude | 1 deg, as $\sin(0.5^\circ)$ per quaternion component |
 | body rate | 0.01 rad/s |
 | mass | $10^{-3}$ of the mass |
 

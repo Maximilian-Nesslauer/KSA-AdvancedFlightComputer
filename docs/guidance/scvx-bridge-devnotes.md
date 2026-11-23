@@ -65,10 +65,10 @@ X[k+1] = X[k] + 0.5*dtau*sigma*(g_k + g_k+1) + Wv[k]
 
 where `Wv` is **virtual control** - a slack variable, penalised by `RhoVc`, *never constrained to zero*. Until SCvx converges, `Wv != 0` and **the trajectory does not obey the dynamics**: the state teleports between nodes on fictitious forces. No thrust can reproduce it.
 
-> [!WARNING]
-> A plan that has not converged is not merely *suboptimal*, it is **unflyable**.
-> The vehicle chases a trajectory no force can produce, saturates thrust, and falls further behind every cycle.
-> Gate on the **defect**, not on the solver status.
+!!! warning
+    A plan that has not converged is not merely *suboptimal*, it is **unflyable**.
+    The vehicle chases a trajectory no force can produce, saturates thrust, and falls further behind every cycle.
+    Gate on the **defect**, not on the solver status.
 
 `Ksa6DofGuidance.Finish()` refuses any plan whose defect exceeds `MaxDefectM` and keeps the previous one, saying why.
 
@@ -86,10 +86,10 @@ Equalities, the positive orthant and the SOC blocks all stack into **one** matri
 
 The solver works on `x~ = x/scale`, and **the trust region is in those units**.
 
-> [!IMPORTANT]
-> `TrustRegionMax = 0.1` with `XScale = 300 m` means the solver may move ~30 m of altitude per iteration, regardless of how far away the target is.
-> Engage from 3 km with a scale sized for 300 m and the problem is 10x larger while the step stays fixed.
-> The iteration budget simply cannot walk there.
+!!! info "Important"
+    `TrustRegionMax = 0.1` with `XScale = 300 m` means the solver may move ~30 m of altitude per iteration, regardless of how far away the target is.
+    Engage from 3 km with a scale sized for 300 m and the problem is 10x larger while the step stays fixed.
+    The iteration budget simply cannot walk there.
 
 This presented as **"cold solve failed"**, and looked exactly like a constraint or seed problem. It was neither - the problem was perfectly feasible. Relaxing tilt, throttle and terminal constraints did nothing, which was the clue: *if loosening every constraint does not help, the solver is not being blocked, it is being out-walked.* `Ksa6DofSetup` now sizes `XScale` per-axis from the actual `x0 -> xf` extent.
 
@@ -127,11 +127,11 @@ Fix: slerp attitude from the measured state, spin rates down from measured, and 
 
 A hard constraint that node 0 *already violates* makes the problem infeasible **by construction** - no plan at all, precisely when one is most needed.
 
-> [!CAUTION]
-> The sharper trap is two constraints *together*.
-> Outside a glideslope cone and too low, the only way back inside is to **climb**, which a climb-rate constraint forbids.
-> Hard versions of both can trap the vehicle in a region with no feasible exit.
-> Soft versions cannot.
+!!! danger "Caution"
+    The sharper trap is two constraints *together*.
+    Outside a glideslope cone and too low, the only way back inside is to **climb**, which a climb-rate constraint forbids.
+    Hard versions of both can trap the vehicle in a region with no feasible exit.
+    Soft versions cannot.
 
 So the glideslope (a SOC per node) and the climb-rate limit (one linear row per node) both **start at node 1** *and* carry a **penalised slack**.
 
@@ -143,9 +143,9 @@ L1 is an **exact** penalty: above a finite weight the solution is identical to t
 
 ## 4. Reading the answer back out
 
-> [!IMPORTANT]
-> `solver.ReferenceX` is the SCvx **reference**. It only advances on an **accepted** step.
-> It is *not* the subproblem's answer.
+!!! info "Important"
+    `solver.ReferenceX` is the SCvx **reference**. It only advances on an **accepted** step.
+    It is *not* the subproblem's answer.
 
 The subproblem does pin node 0 to `x0`, so any *solved* step has node 0 at the vehicle. But `Reseed` sets the reference to the previous plan shifted forward, whose node 0 is the old plan's node `shift` - **not** the vehicle. A cycle where the ratio test accepts nothing hands back a plan anchored an interval away, and the controls get read at the wrong point on it.
 
@@ -244,9 +244,9 @@ One ADMM iteration costs ~2.8x more at N=80 than at N=30, so a fixed budget is a
 
 At 1e-5 roughly **half** of all solves overran the 40 ms budget and were truncated; at 1e-4, under a tenth do. p50 went 36.5 -> 12.7 ms, p90 251 -> 25.6 ms, with an identical trajectory.
 
-> [!TIP]
-> **Measure the distribution, not the mean.** At N=80 the mean was 82 ms while p50 was 36 ms and the max was 964 ms.
-> "Fast with periodic hitches" and "uniformly slow" have the same mean and need completely different fixes.
+!!! tip
+    **Measure the distribution, not the mean.** At N=80 the mean was 82 ms while p50 was 36 ms and the max was 964 ms.
+    "Fast with periodic hitches" and "uniformly slow" have the same mean and need completely different fixes.
 
 ### A truncated iterate poisons the warm start
 
@@ -278,10 +278,10 @@ Hold node **spacing** roughly constant, not node count: collocation error grows 
 
 ## 7. Model error: what MPC cannot fix
 
-> [!IMPORTANT]
-> MPC re-anchors the **state** every cycle but keeps planning with the same **model**.
-> A persistent force it does not know about is met identically on every replan.
-> The plan promises to arrive, the vehicle falls short, and the next plan promises again.
+!!! info "Important"
+    MPC re-anchors the **state** every cycle but keeps planning with the same **model**.
+    A persistent force it does not know about is met identically on every replan.
+    The plan promises to arrive, the vehicle falls short, and the next plan promises again.
 
 This is the single most important idea in this codebase. Every symptom below was originally misdiagnosed as a solver or tuning problem.
 
@@ -335,10 +335,10 @@ A lone `%)` is an invalid conversion specifier reading a vararg that was never p
 
 Zero was not a harmless answer. `EngineController.ComputeActivePerformance` returns `VacuumData` when pressure <= 0, so both the planner's `Tmax` and the throttle divisor silently became **vacuum thrust**.
 
-> [!TIP]
-> **Validate the computed result, not the container.** When a game API's semantics matter, decompile it.
-> `Vehicle.ComputeActiveThrust` sounds like a measurement, but it actually reports a full-throttle *capability*.
-> `RocketCore.ComputeConditions(1f)` is hardcoded in the call path.
+!!! tip
+    **Validate the computed result, not the container.** When a game API's semantics matter, decompile it.
+    `Vehicle.ComputeActiveThrust` sounds like a measurement, but it actually reports a full-throttle *capability*.
+    `RocketCore.ComputeConditions(1f)` is hardcoded in the call path.
 
 `AtmosphereReference` and `EngineController.Cores` are both nullable; `?.` on the parent alone does not protect the chain.
 
@@ -361,10 +361,10 @@ Every one of these exists because a symptom could not be attributed from the out
 
 **Flight telemetry** (`SixDofLog` -> `tools/readlog.py`) writes `-cycle.csv`, `-plan.csv` and `-events.log`.
 
-> [!NOTE]
-> The plan snapshots earn their place.
-> A cycle row only records where the vehicle *got to*, so on its own it can never distinguish "the plan is a loop and the vehicle followed it" from "the plan was straight and the vehicle diverged".
-> Those have opposite causes.
+!!! note
+    The plan snapshots earn their place.
+    A cycle row only records where the vehicle *got to*, so on its own it can never distinguish "the plan is a loop and the vehicle followed it" from "the plan was straight and the vehicle diverged".
+    Those have opposite causes.
 
 Two rules the logger must obey: **nothing may throw** (see section 8) and **nothing may stall** (buffer, flush on an interval). Smoke-test it under a comma-decimal culture - that caught event timestamps written as `13,00`.
 

@@ -34,7 +34,7 @@ B_{:,c} = \frac{\boldsymbol\tau_i(+h\,\hat{\mathbf e}_c) - \boldsymbol\tau_i(-h\
 \qquad h = 0.5
 $$
 
-The step is half the range: large enough to beat float noise, small enough that the slope error at a 10° gimbal is under 0.2 %.
+The step is half the range: large enough to beat float noise, small enough that the slope error at a 10 deg gimbal is under 0.2 %.
 
 The swing of the thrust point matters.
 It moves by the nozzle's length times the deflection while the full thrust acts on it, which is the same order as the side force, and the two together act on the arm to the **pivot**: the nozzle's length cancels.
@@ -53,7 +53,7 @@ $$
 \qquad \lambda = 10^{-6}\,\operatorname{tr}(BB^\mathsf{T})
 $$
 
-$BB^\mathsf{T}$ is only 3×3, so this is cheap enough for every control step.
+$BB^\mathsf{T}$ is only 3x3, so this is cheap enough for every control step.
 Minimum norm spreads effort across the gimbals in proportion to their effectiveness: the verniers take roll and the main engine pitch and yaw, with no setting per craft.
 The small $\lambda$ keeps an axis with no authority at all, such as roll on a single central engine, from making the inverse blow up; an unreachable torque then gives a small command, not a huge one.
 
@@ -78,7 +78,7 @@ Then `KsaTvcAllocator.Redistribute` carries on (a cascaded generalised inverse):
 4. Repeat.
 
 Without this the smallest actuator set the whole craft's torque.
-On one landing on one engine of three, the main gimbal sat at a third of its travel while a 70° vernier was at its stop, the allocation delivered 51–69 % of the demand for the last 1.5 s, and the craft touched down at 4.5 m/s sideways.
+On one landing on one engine of three, the main gimbal sat at a third of its travel while a 70 deg vernier was at its stop, the allocation delivered 51-69 % of the demand for the last 1.5 s, and the craft touched down at 4.5 m/s sideways.
 
 The result (`TvcAllocationResult`) reports the torque and side force the linear model says the commands give, the saturation scale, and the share of the weak axis that fitted.
 
@@ -86,7 +86,7 @@ The result (`TvcAllocationResult`) reports the torque and side force the linear 
 
 A landing on part of a stage's engines can put the thrust off the centre of mass.
 `KsaThrustMoment.Rest` measures the engines' moment with every gimbal at rest, at the same thrust as `Data.MaximumThrust`, so it is on the gimbals' scale; moment over force is the moment per newton at any throttle.
-One engine of a ring 0.8 m out on a 10 m arm needs about 4.6° of a 6° gimbal just to hold it.
+One engine of a ring 0.8 m out on a 10 m arm needs about 4.6 deg of a 6 deg gimbal just to hold it.
 
 The rest moment per newton, $\mathbf m$ (`Ksa6DofSetup.ThrustMomentPerNewton`), sets two things.
 
@@ -129,7 +129,7 @@ The cone's width $\theta_\text{eff}$ is what the allocator really delivers, not 
 2. With the trim off the axis, ask again with the coupled roll named (`CoupledLateralTorqueLimit`). The width becomes the larger of the zero-roll width and that capability less the trim, never past the hardware's range beyond the trim.
 3. Shrink it to the plan's share, $\tan\theta_\text{eff} \to (1 - \text{margin})\tan\theta_\text{eff}$, so the attitude feedback has room (`SixDofTorqueMargin`, 20 %).
 
-Centred on zero, one 10° engine of three needed 324 % of the cone just for its trim: every plan asked for a deflection the craft could not have.
+Centred on zero, one 10 deg engine of three needed 324 % of the cone just for its trim: every plan asked for a deflection the craft could not have.
 
 ## How it fits the common problem
 
