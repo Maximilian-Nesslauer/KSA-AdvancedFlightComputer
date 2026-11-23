@@ -138,8 +138,8 @@ $nativeCheckBase = @(
 )
 # Fixed counts catch removed bindings that the layout and export checks would no longer see.
 # Review binding changes before updating these values.
-$expectedClarabelChecks = 62
-$expectedClarabelExports = 5
+$expectedClarabelChecks = 63
+$expectedClarabelExports = 9
 $expectedScsChecks = 73
 $expectedScsExports = 6
 Invoke-Checked -FilePath "dotnet" -ArgumentList ($nativeCheckBase + @("clarabel", $conicAssembly,"--rid", $RuntimeIdentifier, "--zig", $ZigExe, "--expect-checks", $expectedClarabelChecks, "--expect-exports", $expectedClarabelExports)) -FailureMessage "The Clarabel ABI check failed."
