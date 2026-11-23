@@ -102,8 +102,12 @@ public sealed class EntryConfig
     /// <summary>Weight of the heat-load objective (normalised by the seed's).</summary>
     public double HeatWeight { get; set; } = 1.0;
 
-    /// <summary>Exact-penalty weight on virtual control and slacks.</summary>
+    /// <summary>Exact-penalty weight on the dynamics' virtual control.</summary>
     public double PenaltyWeight { get; set; } = 1_000.0;
+
+    /// <summary>The terminal range's and hand-over box's slacks, as a share of PenaltyWeight, and the altitude floors' (the heating, dynamic-pressure and load limits): below the dynamics, so a target or a limit the craft cannot meet is missed as little as it can be, and the plan never bends its dynamics to it. At one price for all, a 700 kW/m^2 heating floor the flopper could not loft to had every plan refused from the heating peak on, and the entry flew a stale plan past the site (harness, 2026-11-23).</summary>
+    public double TargetShare { get; set; } = 1.0;
+    public double FloorShare { get; set; } = 0.1;
 
     /// <summary>Proximal weight on moving from the reference, per scaled unit squared.</summary>
     public double ProximalWeight { get; set; } = 1e-3;

@@ -391,7 +391,7 @@ public sealed class EntryPlanner
         double pen = 0;
         for (int k = 0; k < n - 1; k++)
             for (int i = 0; i < NX; i++) pen += Math.Abs(def[k, i]) / xs[i];
-        pen += SlackPenalty(x, floor, rfMin, rfMax, sT, xs, n);
+        pen += SlackPenalty(cfg, x, floor, rfMin, rfMax, sT, xs, n);
         return j + cfg.PenaltyWeight * pen;
     }
 
@@ -470,13 +470,14 @@ public sealed class EntryPlanner
         return j;
     }
 
-    static double SlackPenalty(double[,] x, double[] floor, double rfMin, double rfMax, double sT, double[] xs, int n)
+    /// <summary>The slacks' penalty, in PenaltyWeight units: the floors at FloorShare, the terminal range and box at TargetShare.</summary>
+    static double SlackPenalty(EntryConfig cfg, double[,] x, double[] floor, double rfMin, double rfMax, double sT, double[] xs, int n)
     {
         double pen = 0;
-        for (int k = 0; k < n; k++) pen += Math.Max(0, floor[k] - x[k, IR]) / xs[IR];
-        pen += Math.Abs(x[n - 1, IS] - sT) / xs[IS];
+        for (int k = 0; k < n; k++) pen += cfg.FloorShare * Math.Max(0, floor[k] - x[k, IR]) / xs[IR];
+        pen += cfg.TargetShare * Math.Abs(x[n - 1, IS] - sT) / xs[IS];
         double rN = x[n - 1, IR];
-        pen += (Math.Max(0, rN - rfMax) + Math.Max(0, rfMin - rN)) / xs[IR];
+        pen += cfg.TargetShare * (Math.Max(0, rN - rfMax) + Math.Max(0, rfMin - rN)) / xs[IR];
         return pen;
     }
 
@@ -579,10 +580,10 @@ public sealed class EntryPlanner
         double lam = cfg.PenaltyWeight;
         for (int k = 0; k < nI; k++)
             for (int j = 0; j < NX; j++) cvec[T(k, j)] = lam / xs[j];
-        for (int k = 0; k < n; k++) cvec[iF + k] = lam / xs[IR];
-        cvec[iSp] = lam / xs[IS];
-        cvec[iSm] = lam / xs[IS];
-        cvec[iRr] = lam / xs[IR];
+        for (int k = 0; k < n; k++) cvec[iF + k] = cfg.FloorShare * lam / xs[IR];
+        cvec[iSp] = cfg.TargetShare * lam / xs[IS];
+        cvec[iSm] = cfg.TargetShare * lam / xs[IS];
+        cvec[iRr] = cfg.TargetShare * lam / xs[IR];
 
         // ---- Equalities ----
         int nEq = NX + NX * nI + 1;
@@ -697,7 +698,7 @@ public sealed class EntryPlanner
         double pen = 0;
         for (int k = 0; k < nI; k++)
             for (int j = 0; j < NX; j++) pen += Math.Abs(v[W(k, j)]) / xs[j];
-        pen += SlackPenalty(xc, floor, rfMin, rfMax, sT, xs, n);
+        pen += SlackPenalty(cfg, xc, floor, rfMin, rfMax, sT, xs, n);
         jLin = jl + cfg.PenaltyWeight * pen;
         return (xc, uc);
     }
