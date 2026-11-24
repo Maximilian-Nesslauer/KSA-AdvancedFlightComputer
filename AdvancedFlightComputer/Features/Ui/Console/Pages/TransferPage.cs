@@ -493,6 +493,8 @@ internal static class TransferPage
     private static readonly double3[] _arc = new double3[ArcSamples + 1];
 
     private static OrbitalTransfers.PorkChopEntry? _estimateOf;
+    private static PatchedConic? _arcPatch;
+    private static double _arcT0, _arcT1;
 
     private static void DrawTransferSketch(in PictureFrame f, Vehicle source)
     {
@@ -537,6 +539,7 @@ internal static class TransferPage
         for (int i = 0; i <= ArcSamples; i++)
             _arc[i] = path.GetStateVectorsAt(new UniverseTime(from + (to - from) * i / ArcSamples)).PositionCci;
         _estimateOf = entry;
+        _arcPatch = null;
         return ArcSamples + 1;
     }
 
@@ -551,9 +554,14 @@ internal static class TransferPage
             double t0 = Math.Max(from, patch.StartTime.Seconds()), t1 = Math.Min(to, patch.EndTime.Seconds());
             if (!(t1 > t0))
                 continue;
+            if (ReferenceEquals(_arcPatch, patch) && _arcT0 == t0 && _arcT1 == t1)
+                return ArcSamples + 1;
             for (int i = 0; i <= ArcSamples; i++)
                 _arc[i] = patch.Orbit.GetStateVectorsAt(new UniverseTime(t0 + (t1 - t0) * i / ArcSamples)).PositionCci;
             _estimateOf = null;
+            _arcPatch = patch;
+            _arcT0 = t0;
+            _arcT1 = t1;
             return ArcSamples + 1;
         }
         return 0;
@@ -968,6 +976,7 @@ internal static class TransferPage
     public static void Reset()
     {
         _estimateOf = null;
+        _arcPatch = null;
         TransferSession.PageVisible = false;
         _setTarget = false;
         _fuelFact = "";

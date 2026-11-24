@@ -52,5 +52,20 @@ public sealed class SettingSpecDefaultsTest : AfcTest
         SettingAccess.ResetToDefaults(edited, GuidanceSettingSpecs.TuningBoostback);
         t.Check("a reset clears the change",
             SettingAccess.CountChanged(edited, GuidanceSettingSpecs.TuningBoostback) == 0);
+
+        // Compiled SettingAccess delegates round-trip int fields (with rounding), bool fields, and reject missing keys.
+        SettingAccess.SetDouble(edited, GuidanceSettingSpecs.GfoldNodes.Key, 41.6);
+        t.Check("int setting rounds and reads back through compiled delegate",
+            SettingAccess.TryGetDouble(edited, GuidanceSettingSpecs.GfoldNodes.Key, out double nodes) && nodes == 42.0,
+            $"nodes={nodes}");
+        bool flipped = !GuidanceSettingSpecs.SixDofFixedTime.Default;
+        SettingAccess.SetBool(edited, GuidanceSettingSpecs.SixDofFixedTime.Key, flipped);
+        t.Check("bool setting round-trips through compiled delegate",
+            SettingAccess.TryGetBool(edited, GuidanceSettingSpecs.SixDofFixedTime.Key, out bool fixedTime) && fixedTime == flipped);
+        t.Check("missing setting returns false without throwing",
+            !SettingAccess.TryGetDouble(edited, "NonExistentSettingField", out double missingD)
+            && double.IsNaN(missingD)
+            && !SettingAccess.TryGetBool(edited, "NonExistentSettingField", out bool missingB)
+            && !missingB);
     }
 }

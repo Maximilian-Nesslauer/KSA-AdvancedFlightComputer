@@ -105,8 +105,45 @@ internal static class ConsoleUi
     // Plain ImGui.TextWrapped wraps at the edge of the body, past the stock scrollbar gutter.
     private static void PushWrapAtEdge() => ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + Math.Max(1f, ConsoleStyle.ContentAvailWidth()));
 
+    private static readonly SentenceWrap.SpanMeasure MeasureTextSpan = static span => ImGui.CalcTextSize(span).X;
+
+    private struct BreakCacheEntry
+    {
+        public string? Text;
+        public int WidthTenths;
+        public int FontSizeTenths;
+        public string Broken;
+    }
+
+    private static readonly BreakCacheEntry[] _breakCache = new BreakCacheEntry[4];
+    private static int _breakCacheNext;
+
     /// <summary>A sentence with a line end at each break for a row of <paramref name="width"/> in the font pushed now (SentenceWrap), so no decimal breaks and no word stands alone.</summary>
-    public static string BreakSentence(string text, float width) => SentenceWrap.Break(text, Math.Max(1f, width - 1f), MeasureText);
+    public static string BreakSentence(string text, float width)
+    {
+        if (text.Length == 0)
+            return text;
+        float clamped = Math.Max(1f, width - 1f);
+        int widthKey = (int)MathF.Round(clamped * 10f);
+        int fontKey = (int)MathF.Round(ImGui.GetFontSize() * 10f);
+        for (int i = 0; i < _breakCache.Length; i++)
+        {
+            ref readonly BreakCacheEntry entry = ref _breakCache[i];
+            if (entry.WidthTenths == widthKey && entry.FontSizeTenths == fontKey
+                && string.Equals(entry.Text, text, StringComparison.Ordinal))
+                return entry.Broken;
+        }
+        string broken = SentenceWrap.Break(text, clamped, MeasureTextSpan);
+        _breakCache[_breakCacheNext] = new BreakCacheEntry
+        {
+            Text = text,
+            WidthTenths = widthKey,
+            FontSizeTenths = fontKey,
+            Broken = broken,
+        };
+        _breakCacheNext = (_breakCacheNext + 1) & 3;
+        return broken;
+    }
 
     public static void Sentence(ReadOnlySpan<char> text, in float4 ink)
     {
