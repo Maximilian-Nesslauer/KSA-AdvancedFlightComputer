@@ -311,7 +311,7 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
                     break;
             }
             if (touchdown && (craft.Situation.HasAnyContact() || (!double.IsNaN(touchdownAt) && !touchdownFlies) || height < 0.0
-                              || (double.IsNaN(touchdownAt) && height <= 50.0 && vSurface.Length() < 1.0)))
+                              || (double.IsNaN(touchdownAt) && (height < 1.0 || (height <= 50.0 && vSurface.Length() < 1.0)))))
             {
                 (landMiss, landSpeed, landed) = (ground, vSurface.Length(), craft.Situation.HasAnyContact());
                 t.Info($"  t {sim,6:F1}  {(landed ? "CONTACT" : "TOUCHDOWN ENDED")} {height:F1} m up, {ground:F1} m from the site at {landSpeed:F1} m/s");
