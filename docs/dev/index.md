@@ -49,15 +49,18 @@ flowchart TD
     hover --> ground
 ```
 
-| Solver | Where it is written up |
+| Solver / subsystem | Where it is written up |
 | --- | --- |
 | What all three SCvx planners share (Clarabel persistent workspace, shared atmosphere & engine tables) | [Successive convexification](../guidance/scvx/index.md) |
-| Convex ascent (SCvx), ballistic coast, UPFG and proportional energy cutoff | [Convex ascent](../guidance/scvx/ascent.md) |
+| Convex ascent (SCvx), ballistic coast, UPFG and proportional energy cutoff | [Convex ascent](../guidance/scvx/ascent.md) and [UPFG & ascent hand-over](../guidance/upfg.md) |
+| Boostback state machine, glide steering and returnable-stage reserve | [Boostback & reserve](../guidance/boostback.md) and [Impact steering](../guidance/reference-material/impact-steering.md) |
 | Entry guidance, 3-DOF AL-SCvx (glide and burn) | [Entry (3-DOF)](../guidance/scvx/entry.md) |
 | Touchdown guidance, 6-DOF SCvx (two-grid `vc-rv`, async `InitCold`, 2-term aero) | [Touchdown (6-DOF)](../guidance/scvx/touchdown.md), [on the craft](../guidance/scvx-bridge.md) and the [dev notes](../guidance/scvx-bridge-devnotes.md) |
 | G-FOLD, the point-mass landing (node-0 bounds, free terminal thrust) | [G-FOLD](../guidance/gfold.md) |
-| Impact prediction and boostback steering (powered-burn planetary rotation) | [Impact steering](../guidance/reference-material/impact-steering.md) |
 | The attitude controller ($SO(3)$ axis-angle) and the gimbal (circular-cone), RCS and fin mixers | [Attitude control](../guidance/attitude/index.md) |
+| AutoStage, spent-stage drop, fairing release and staging delays | [AutoStage architecture](autostage.md) |
+| Quick-tools, multi-pass splitting, flyby targeting, lunar launch and turn-warp | [Maneuvers and transfers](maneuvers-and-transfers.md) |
+| AFC console shell, pure UI logic (`Ui/Logic`) and test suites (`tests/`) | [Console and testing](console-and-testing.md) |
 
 ## Guidance subsystems and shared physics contract
 
@@ -70,12 +73,4 @@ All seven guidance subsystems (`AscentScvx`, `UPFG`, `Boostback`, `3-DOF Entry`,
 
 ## Still to write
 
-These parts have no page yet. Each one will follow the same layers: what it is for, a diagram, something to try, the maths, then where the code is.
-
-- UPFG and the hand-over from the convex ascent
-- Boostback and the returnable-stage reserve
-- Landing engine groups and the landing legs
-- AutoStage and the spent-stage drop
-- Multi-pass burns, flyby targeting and the mission planner
-- The AFC console: pages, commits and the stop
-- The HeadlessHarness tests in `tests/AdvancedFlightComputer.HarnessTests`
+- Landing engine groups, idle engine parking, and landing-leg deployment timing
