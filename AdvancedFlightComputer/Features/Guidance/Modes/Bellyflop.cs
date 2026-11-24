@@ -55,14 +55,28 @@ public static partial class GuidanceWindow
         // Holding BellyflopAimPitchDeg rather than falling flat: bellyflop can glide far beyond its flat fall and go only a little short of it, so the site is aimed inside its reach, not at the short edge.
         BellyflopConfig bcfg = BellyflopConfigNow();
         double range = BellyflopPlanner.FallRange(model, bcfg, altitude, p.SpeedMs[last], p.Gamma[last], alphaBelly, BellyflopAimPitchDeg * Math.PI / 180.0);
+        // The fall ends BELLYFLOP AIM SHORT before the site, so the entry leaves that much more.
+        double aimShort = BellyflopAimShortM();
         if (double.IsFinite(range) && range > 0)
-            bf.TerminalRangeM = range;
+            bf.TerminalRangeM = range + aimShort;
         // The reach band: the fall held at the reserve's share of the pitch limits each way, nose down (short) and nose up (long). Turns and sideslip reach a little shorter still, so the short edge is a safe one.
         double share = Math.Clamp(bcfg.LimitMargin, 0.1, 1.0);
         double shortM = BellyflopPlanner.FallRange(model, bcfg, altitude, p.SpeedMs[last], p.Gamma[last], alphaBelly, -share * bcfg.AngleMaxDeg * Math.PI / 180.0);
         double longM = BellyflopPlanner.FallRange(model, bcfg, altitude, p.SpeedMs[last], p.Gamma[last], alphaBelly, share * bcfg.PitchUpMaxDeg * Math.PI / 180.0);
         if (double.IsFinite(shortM) && double.IsFinite(longM) && longM > shortM && shortM > 0)
-            (bf.TerminalShortM, bf.TerminalLongM) = (Math.Min(shortM, bf.TerminalRangeM), Math.Max(longM, bf.TerminalRangeM));
+            (bf.TerminalShortM, bf.TerminalLongM) = (Math.Min(shortM + aimShort, bf.TerminalRangeM), Math.Max(longM + aimShort, bf.TerminalRangeM));
+    }
+
+    /// <summary>BELLYFLOP AIM SHORT, m, never negative.</summary>
+    private static double BellyflopAimShortM() => Math.Max(_s.OrbitalEntryBellyflopAimUprangeM, 0.0);
+
+    /// <summary>
+    /// The state as the planner sees it: from the aim point, BELLYFLOP AIM SHORT short of the site along the bearing, rather than from the site. The plan's miss, cone and crossrange are all about the aim point; the status still reads the distance to the site.
+    /// </summary>
+    private static double[] BellyflopAimState(double[] x, double3 bearing)
+    {
+        double d = BellyflopAimShortM();
+        return [x[0] + d * bearing.X, x[1] + d * bearing.Y, x[2], x[3], x[4], x[5]];
     }
 
     /// <summary>The pitch the entry's aim assumes bellyflop holds after the hand-over, deg: a fall a little longer than flat, so the site sits inside bellyflop's reach with room to go short.</summary>
@@ -184,13 +198,14 @@ public static partial class GuidanceWindow
                 bf.Warm = null;
             }
             BellyflopModel solveModel = model;
+            double[] xAim = BellyflopAimState(x, bf.BearingLocal);
             BellyflopPlan flownPlan = flying ? bf.Plan : null;
             double a0 = aNow, b0 = bNow, p0 = pNow;
             bf.NextSolveAt = now + Math.Max(_s.OrbitalEntryBellyflopResolveS, 0.25);
             bf.Worker.TryRun(bf, ct =>
             {
-                var r = bf.Planner.Solve(solveModel, cfg, x, now, a0, b0, p0, warm);
-                bf.PendingFlownMissM = flownPlan != null ? BellyflopPlanner.ShotMiss(solveModel, cfg, x, now, a0, b0, p0, flownPlan) : double.PositiveInfinity;
+                var r = bf.Planner.Solve(solveModel, cfg, xAim, now, a0, b0, p0, warm);
+                bf.PendingFlownMissM = flownPlan != null ? BellyflopPlanner.ShotMiss(solveModel, cfg, xAim, now, a0, b0, p0, flownPlan) : double.PositiveInfinity;
                 bf.PendingModel = solveModel;
                 bf.Pending = r;
             });
@@ -211,7 +226,7 @@ public static partial class GuidanceWindow
             double toGo = Math.Sqrt(x[0] * x[0] + x[1] * x[1]);
             string warn = bf.Refusals > 0 && bf.LastRefusal.Length > 0 ? " (LAST SOLVE REFUSED: " + bf.LastRefusal.ToUpperInvariant() + ")" : "";
             st.SetStatus(FormattableString.Invariant(
-                $"BELLYFLOP: {toGo / 1000:F1} KM TO GO AT {x14[2] / 1000:F1} KM, PLAN LANDS {plan?.MissM ?? double.NaN:F0} M FROM THE SITE IN {(plan != null ? plan.EndTime - now : double.NaN):F0} s. PITCH {bf.PitchDeg:F0}, BANK {bf.BankDeg:F0}, YAW {bf.YawDeg:F0} DEG.") + warn,
+                $"BELLYFLOP: {toGo / 1000:F1} KM TO GO AT {x14[2] / 1000:F1} KM, PLAN LANDS {plan?.MissM ?? double.NaN:F0} M FROM ITS AIM IN {(plan != null ? plan.EndTime - now : double.NaN):F0} s. PITCH {bf.PitchDeg:F0}, BANK {bf.BankDeg:F0}, YAW {bf.YawDeg:F0} DEG.") + warn,
                 warn: plan == null || warn.Length > 0);
         }
     }

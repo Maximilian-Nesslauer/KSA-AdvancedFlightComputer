@@ -291,6 +291,8 @@ internal static class GuidanceSettingSpecs
         "Airspeed over the sea-level speed of sound at the hand-over, as the aero tables measure Mach: where orbital entry guidance's plan ends. BELLYFLOP takes over at its first plan that reaches the site, from BELLYFLOP FROM MACH on, and the entry holds its attitude here until one comes.");
     public static readonly SettingSpec OrbitalEntryBellyflopArmMach = new("OrbitalEntryBellyflopArmMach", "BELLYFLOP FROM MACH", "", P, 10.0, 0.5, 20.0, "%.1f",
         "Bellyflop starts solving in the background from this Mach and takes over at its first plan that reaches the site. Its belly-first tables reach Mach 8; above it, it plans with their Mach 8 values.");
+    public static readonly SettingSpec OrbitalEntryBellyflopAimUprangeM = new("OrbitalEntryBellyflopAimUprangeM", "BELLYFLOP AIM SHORT", "m", P, 200.0, 0.0, 5000.0, "%.0f",
+        "How far short of the site, along the bearing to it, bellyflop aims its fall: the ground the flip and landing burn cover after it, so they end on the site rather than past it. A fixed distance for now; the entry's aim takes it into account.");
     public static readonly SettingSpec OrbitalEntryBellyflopAngleMaxDeg = new("OrbitalEntryBellyflopAngleMaxDeg", "BELLYFLOP PITCH DOWN", "deg", E, 20.0, 2.0, 45.0, "%.0f",
         "Bellyflop's largest pitch nose down past belly-first: the airflow's angle on the belly towards the tail.");
     public static readonly SettingSpec OrbitalEntryBellyflopPitchUpDeg = new("OrbitalEntryBellyflopPitchUpDeg", "BELLYFLOP PITCH UP", "deg", E, 55.0, 2.0, 80.0, "%.0f",
@@ -350,7 +352,7 @@ internal static class GuidanceSettingSpecs
     /// <summary>The limits of the orbital entry plan, on LAND > ENTRY > ORBITAL ENTRY.</summary>
     public static readonly SettingSpec[] LandOrbitalEntryPlayer = { OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2 };
     /// <summary>The HAND-OVERS of orbital entry: where it ends, and bellyflop after it.</summary>
-    public static readonly SettingSpec[] LandOrbitalHandOvers = { OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach, OrbitalEntryBellyflopArmMach };
+    public static readonly SettingSpec[] LandOrbitalHandOvers = { OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach, OrbitalEntryBellyflopArmMach, OrbitalEntryBellyflopAimUprangeM };
     public static readonly BoolSpec[] LandOrbitalHandOverBools = { OrbitalEntryBellyflop };
     /// <summary>What DEORBIT ONLY does after its entry burn, under AFTER DEORBIT.</summary>
     public static readonly BoolSpec[] LandDeorbitOnlyBools = { OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit };
@@ -510,7 +512,7 @@ internal static class GuidanceSettingSpecs
         ThreeDofBurnCeiling, ThreeDofTrackKp, ThreeDofTrackKd, ThreeDofTrackTiltDeg, ThreeDofRcsDeadbandDeg,
         TermTouchdownRate, TermConstAltM, TermQuadK, TermMaxDescRate, TermMaxTiltDeg, TermNudgeStep,
         TermKpV, TermKiV, TermKdV, TermKpL, TermKiL, TermKdL,
-        OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach, OrbitalEntryBellyflopArmMach, OrbitalEntryBellyflopAngleMaxDeg, OrbitalEntryBellyflopPitchUpDeg, OrbitalEntryBellyflopBankMaxDeg, OrbitalEntryBellyflopResolveS,
+        OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach, OrbitalEntryBellyflopArmMach, OrbitalEntryBellyflopAimUprangeM, OrbitalEntryBellyflopAngleMaxDeg, OrbitalEntryBellyflopPitchUpDeg, OrbitalEntryBellyflopBankMaxDeg, OrbitalEntryBellyflopResolveS,
         OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
         OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryReversalBandDeg, OrbitalEntryRollRateDegS, OrbitalEntryTrackRollRateDegS,
         OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryRcsDeadbandDeg, OrbitalEntryTrackOmega, OrbitalEntryGainDragFloor, OrbitalEntryMeasureSmoothS, OrbitalEntryCorridorWeight, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,

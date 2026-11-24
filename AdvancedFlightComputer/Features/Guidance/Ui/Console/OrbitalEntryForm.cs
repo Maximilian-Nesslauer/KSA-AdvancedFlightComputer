@@ -61,7 +61,7 @@ public static partial class GuidanceWindow
             var bf = st.Bellyflop;
             GaugeRowText("BELLYFLOP", FormattableString.Invariant($"PITCH {bf.PitchDeg:F0}, BANK {bf.BankDeg:F0}, YAW {bf.YawDeg:F0} deg"));
             if (bf.Plan is { } fall)
-                GaugeRowText("PLAN LANDS", Fmt.Distance(fall.MissM) + " FROM THE SITE");
+                GaugeRowText("PLAN LANDS", Fmt.Distance(fall.MissM) + " FROM ITS AIM");
             return;
         }
         if (st.Phase == OrbitalEntryPhase.Sweeping)
@@ -84,7 +84,10 @@ public static partial class GuidanceWindow
         using (new ImGuiDisabledScope(_s.OrbitalEntry.Phase == OrbitalEntryPhase.Bellyflop))
             GaugeRowCheck(Specs.OrbitalEntryBellyflop, ref _s.OrbitalEntryBellyflop);
         using (new ImGuiDisabledScope(!_s.OrbitalEntryBellyflop))
+        {
             GaugeRow(Specs.OrbitalEntryBellyflopArmMach, ref _s.OrbitalEntryBellyflopArmMach);
+            GaugeRow(Specs.OrbitalEntryBellyflopAimUprangeM, ref _s.OrbitalEntryBellyflopAimUprangeM);
+        }
     }
 
     /// <summary>GNC > ATTITUDE of ORBITAL ENTRY: the angle of attack it flies, the belly that faces the air, and what turns the craft.</summary>

@@ -1785,6 +1785,9 @@ public sealed class VehicleAutopilotState
     public double OrbitalEntryGMax = 2.5;
     /// <summary>Stagnation heating limit of the entry plan, kW/m^2 (Sutton-Graves on OrbitalEntryNoseRadiusM). 0 is off.</summary>
     public double OrbitalEntryHeatMaxKWm2 = 440.0;
+
+    /// <summary>How far short of the site, along the bearing to it, bellyflop aims its fall, m: the ground the flip and landing burn will cover after it.</summary>
+    public double OrbitalEntryBellyflopAimUprangeM = 200.0;
     /// <summary>Nose radius for the heating estimate, m.</summary>
     public double OrbitalEntryNoseRadiusM = 1.0;
     /// <summary>Smallest bank the plan uses, deg: side lift kept for the roll reversals.</summary>

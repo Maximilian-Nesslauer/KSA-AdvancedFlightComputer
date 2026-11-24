@@ -9,14 +9,14 @@ internal static class BellyflopCheck
     const double Mu = 3.986004418e14, R = 6_371_000.0, Omega = 7.2921159e-5, Lat = 28.6 * Deg;
     const double CN0 = 6.0;
 
-    static BellyflopModel Model(double densityScale = 1.0, double forceScale = 1.0) => new()
+    static BellyflopModel Model(double densityScale = 1.0, double forceScale = 1.0, double bearingX = 1.0, double bearingY = 0.0, bool spin = true) => new()
     {
         Mu = Mu, BodyRadius = R,
-        OmegaX = 0.0, OmegaY = Omega * Math.Cos(Lat), OmegaZ = Omega * Math.Sin(Lat),
+        OmegaX = 0.0, OmegaY = spin ? Omega * Math.Cos(Lat) : 0.0, OmegaZ = spin ? Omega * Math.Sin(Lat) : 0.0,
         Density = h => 1.225 * Math.Exp(-Math.Max(h, 0.0) / 7200.0),
         SpeedOfSound = 340.0, Mass = 70_000.0, ReferenceArea = 64.0,
         Coefficients = FlatPlate,
-        BearingX = 1.0, BearingY = 0.0,
+        BearingX = bearingX, BearingY = bearingY,
         DensityScale = densityScale, ForceScale = forceScale,
     };
 
@@ -54,6 +54,7 @@ internal static class BellyflopCheck
         bad += RunFrom(5.0, 38_000.0, glide: true);
         Console.WriteLine(" as flown 2026-11-23 (taken over at Mach 4.85, 10 km across, the entry banked 63 deg), force 15 % weak:");
         bad += FlightLike();
+        bad += BearingCheck();
         Console.WriteLine(bad == 0 ? "PASS bellyflop" : $"FAIL bellyflop ({bad})");
         return bad == 0 ? 0 : 1;
     }
@@ -123,6 +124,28 @@ internal static class BellyflopCheck
                 $"  {(ok ? "ok  " : "FAIL")} {name}: lands {miss,5:F0} m off after {t:F0} s; {solves} solves, {refused} refused; off the site {at.GetValueOrDefault(12, double.NaN) / 1000:F2} / {at.GetValueOrDefault(8, double.NaN) / 1000:F2} / {at.GetValueOrDefault(4, double.NaN) / 1000:F2} km at 12 / 8 / 4 km up; yaw {yaw30 / Deg:F0} deg at 30 s; across {cross30 / 1000:F1} / {cross60 / 1000:F1} / {cross120 / 1000:F1} km at 30 / 60 / 120 s"));
         }
         return bad;
+    }
+
+    /// <summary>
+    /// The same fall flown along +x and along +y, on a still body: the plan must not care which way the site frame is turned. The crossrange term priced the frame's y axis, not the bearing's, until 2026-11-24; every other check flies along +x, where the two are one.
+    /// </summary>
+    static int BearingCheck()
+    {
+        var cfg = new BellyflopConfig();
+        double[] xa = HandOver(0, 0, 4.0, 32_000.0);
+        double fall = new BellyflopPlanner().Solve(Model(spin: false), new BellyflopConfig { MissWeight = 0.0, ColdIterations = 1 }, xa, 0.0, 50 * Deg, 0, 0, null) is { Plan: { } pr } ? pr.X[pr.Nodes - 1, 0] : 40_000.0;
+        double[] x = HandOver(fall + 3000.0, 6000.0, 4.0, 32_000.0);
+        double[] xr = [-x[1], x[0], x[2], -x[4], x[3], x[5]];   // turned 90 deg about the vertical
+        var a = new BellyflopPlanner().Solve(Model(spin: false), cfg, x, 0.0, 50 * Deg, 0, 0, null).Plan;
+        var b = new BellyflopPlanner().Solve(Model(bearingX: 0.0, bearingY: 1.0, spin: false), cfg, xr, 0.0, 50 * Deg, 0, 0, null).Plan;
+        if (a == null || b == null) { Console.WriteLine("  FAIL bearing: no plan"); return 1; }
+        int mid = a.Nodes / 2;
+        // b's +y is a's +x, and b's -x is a's +y.
+        double crossA = a.X[mid, 1], crossB = -b.X[mid, 0];
+        bool ok = a.Converged && b.Converged && Math.Abs(crossA - crossB) < 50 && Math.Abs(a.Sigma - b.Sigma) < 1.0;
+        Console.WriteLine(FormattableString.Invariant(
+            $"  {(ok ? "ok  " : "FAIL")} bearing along +x and +y, 3 km beyond, 6 km beside: across {crossA / 1000:F2} / {crossB / 1000:F2} km halfway, {a.Sigma:F1} / {b.Sigma:F1} s"));
+        return ok ? 0 : 1;
     }
 
     static int RunFrom(double mach, double altitude, bool glide)

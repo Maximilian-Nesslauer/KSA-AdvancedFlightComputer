@@ -412,13 +412,16 @@ public sealed class BellyflopPlanner
         return perKm / 1000.0;
     }
 
-    /// <summary>The crossrange term: CrossWeight per km of the mean |y| over the nodes.</summary>
-    static double CrossCost(BellyflopConfig cfg, double[,] x, int n)
+    /// <summary>The crossrange term: CrossWeight per km of the mean distance off the vertical plane through the site along the model's bearing, over the nodes. The site frame is not turned to the bearing: until 2026-11-24 this priced the frame's y axis, the bearing's only in the offline checks, which fly along x.</summary>
+    static double CrossCost(BellyflopModel model, BellyflopConfig cfg, double[,] x, int n)
     {
         double s = 0;
-        for (int k = 1; k < n; k++) s += Math.Abs(x[k, 1]);
+        for (int k = 1; k < n; k++) s += Math.Abs(Cross(model, x[k, 0], x[k, 1]));
         return cfg.CrossWeight / 1000.0 * s / n;
     }
+
+    /// <summary>The horizontal offset across the bearing, m, + to its left.</summary>
+    static double Cross(BellyflopModel model, double px, double py) => -model.BearingY * px + model.BearingX * py;
 
     /// <summary>How far a node is outside the approach cone, m, on the octagon the subproblem uses.</summary>
     static double ConeExcess(BellyflopConfig cfg, double[,] x, int k)
@@ -454,7 +457,7 @@ public sealed class BellyflopPlanner
             if (cone[k]) coneExcess += ConeExcess(cfg, x, k);
         j += ConeNodePrice(cfg, cone) * coneExcess;
         j += cfg.MissWeight * (Math.Abs(x[n - 1, 0]) + Math.Abs(x[n - 1, 1])) / 1000.0;
-        j += CrossCost(cfg, x, n);
+        j += CrossCost(model, cfg, x, n);
         double pen = 0;
         for (int k = 0; k < n - 1; k++)
             for (int i = 0; i < NX; i++) pen += Math.Abs(def[k, i]) / XS[i];
@@ -643,8 +646,8 @@ public sealed class BellyflopPlanner
         {
             Le(0, (iL + k, -1.0));
             if (k == 0) continue;
-            Le(0, (X(k, 1), 1.0), (iL + k, -1.0));
-            Le(0, (X(k, 1), -1.0), (iL + k, -1.0));
+            Le(0, (X(k, 0), -model.BearingY), (X(k, 1), model.BearingX), (iL + k, -1.0));
+            Le(0, (X(k, 0), model.BearingY), (X(k, 1), -model.BearingX), (iL + k, -1.0));
         }
         Le(cfg.SigmaMax, (iS, 1.0));
         Le(-cfg.SigmaMin, (iS, -1.0));
