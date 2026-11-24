@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **RCS LP's final check: the round-off allowance scales with the firing too.** The allowance added for the belly flop's 48 thrusters (a millionth of the row's largest coefficient) let large coefficients alone pass a demand no firing meets, and a tiny infeasible problem came back solved: `afc-rcs-lp-solver` failed 2 of 49 checks. It is now a millionth of the row's largest coefficient times the largest firing (`RcsLpSolver.SatisfiesConstraints`), still 0.05 N m on a 51 kN m row at full firing; `--rcs-refusal` still solves all 3472 reachable demands. The flopper harness test also ends when the craft stands still in CCI, an impact the game did not report headless, instead of running to the watchdog.
+
 - **PLAN RCS AND FLAPS 0.75** (was 0.5). With the landing group carried through from bellyflop, a Starship landing on its centre sea-level Raptor (0.74-2.07 MN, its floor under its weight) lit at 510 m, flipped under power and touched down at 1.6 m/s, 1.9 m from the target, with no refused re-solve (flight, 2026-11-24): the late coast flip had been the three-engine floor's doing, and the share's margin is less needed.
 
 - **Bellyflop hands touchdown the landing group chosen on LAND.** Before touchdown's standby starts, the chosen group's engines are switched on as GLIDE + BURN does at its engage (PrepareSelectedLandingEngines), bellyflop flying on meanwhile; a group that cannot be confirmed is logged and touchdown plans on the engines active then. ORBITAL ENTRY never applied the group, so a Starship's touchdown planned on all three sea-level Raptors, whose 39 % floor is 2.3 times its weight: it could only light at about 100 m, with no time to flip under power (2026-11-24).

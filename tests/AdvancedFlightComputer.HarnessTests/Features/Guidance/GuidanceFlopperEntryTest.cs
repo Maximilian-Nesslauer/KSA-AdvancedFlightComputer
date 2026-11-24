@@ -35,6 +35,8 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
     private const double TimeoutS = 2400.0;
     private const double EngageWaitS = 60.0;
     private const double EndHeightM = 100.0;
+    /// <summary>How long the craft may stand still in CCI before the flight is taken as ended by an impact the game did not report, s of sim time.</summary>
+    private const double FrozenEndS = 2.0;
 
     private static double Env(string name, double fallback)
         => double.TryParse(Environment.GetEnvironmentVariable(name), NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : fallback;
@@ -208,6 +210,9 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
         double touchdownAt = double.NaN, touchdownAlt = double.NaN, touchdownRange = double.NaN;
         double landMiss = double.NaN, landSpeed = double.NaN, nextTouchdownSample = 0.0;
         bool landed = false;
+        // A craft standing still in CCI (FrozenEndS).
+        double3 lastR = default;
+        double frozenS = 0.0, frozenGround = double.NaN, frozenHeight = double.NaN;
 
         while (sim < TimeoutS)
         {
@@ -241,6 +246,20 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
             double height = r.Length() - siteCci.Length();
             double ground = (offset - up * double3.Dot(offset, up)).Length();
             double3 vSurface = craft.Orbit.StateVectors.VelocityCci - double3.Cross(home.GetAngularVelocityCci(), r);
+
+            // A craft that strikes the ground headless can freeze where it struck, with no contact and no exception: it then stands still in CCI while the site turns away from it at the ground's speed, and a run went on to the watchdog (2026-11-24).
+            // Where it stopped is read on the first still step: the site keeps turning away while it stands.
+            frozenS = sim > StepS && (r - lastR).Length() < 0.01 ? frozenS + StepS : 0.0;
+            lastR = r;
+            if (frozenS == StepS)
+                (frozenGround, frozenHeight) = (ground, height);
+            if (frozenS >= FrozenEndS)
+            {
+                t.Info($"  t {sim,6:F1}  IMPACT: the craft stopped moving {frozenHeight:F0} m up, {frozenGround:F0} m from the site");
+                if (touchdown)
+                    (landMiss, landSpeed, landed) = (frozenGround, double.NaN, false);
+                break;
+            }
 
             // The planner's own estimate (EntryModel.HeatingRate, Sutton-Graves) in the air the sweep measured.
             if (st.Aero?.Atmosphere is { } atm && st.SpeedMs > 100.0)
