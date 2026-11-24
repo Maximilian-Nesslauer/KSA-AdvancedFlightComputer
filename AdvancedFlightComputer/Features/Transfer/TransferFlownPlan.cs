@@ -15,8 +15,8 @@ namespace AdvancedFlightComputer.Features.Transfer;
 /// </summary>
 internal static class TransferFlownPlan
 {
-    // The phase buffer size stock uses for the same comparison.
-    private static readonly FiniteBurnPhase[] _phases = new FiniteBurnPhase[16];
+    // Start with the 16-phase buffer stock uses and grow if a vehicle has more phases so SequenceEqual stays valid.
+    private static FiniteBurnPhase[] _phases = new FiniteBurnPhase[16];
     private static int _phaseCount;
     private static Vehicle? _source;
     private static UniverseTime _start, _transit;
@@ -85,8 +85,10 @@ internal static class TransferFlownPlan
         _start = data.Start;
         _transit = data.Transit;
         _instantDvVlf = data.TransferDvVlf;
-        _phaseCount = Math.Min(phases.Length, _phases.Length);
-        phases.Slice(0, _phaseCount).CopyTo(_phases);
+        if (phases.Length > _phases.Length)
+            _phases = new FiniteBurnPhase[phases.Length];
+        _phaseCount = phases.Length;
+        phases.CopyTo(_phases);
         _dvVlf = _instantDvVlf;
         _plan?.ReleaseCachedPoints();
         _plan = null;

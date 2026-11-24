@@ -242,7 +242,7 @@ internal static partial class OrbitToolsPanel
     /// <summary>The markers of the orbit preview, drawn after the console window has ended so they do not nest inside it.</summary>
     internal static void DrawAfterWindow(IGameViewport viewport)
     {
-        if (_showOrbitPreview && _lastSource != null)
+        if (_showOrbitPreview && PreviewVisible && _lastSource != null)
         {
             if (MultiPassUI.HasMultiPassPreview)
                 MultiPassUI.RenderMarkers(viewport, _lastSource);

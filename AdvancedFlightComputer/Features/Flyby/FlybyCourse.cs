@@ -119,13 +119,18 @@ internal static class FlybyCourse
     {
         Burn node = _node!;
         double now = Universe.GetElapsedSeconds();
-        bool planned = vehicle.FlightComputer.BurnPlan.TryGetBurn(node);
+        FlightComputer fc = vehicle.FlightComputer;
+        bool planned = fc.BurnPlan.TryGetBurn(node);
         _nodeSeen |= planned;
         if (!planned)
             _stepsWithoutNode++;
         bool gone = !planned && (_nodeSeen || _stepsWithoutNode >= NodeArrivalSteps);
         bool changed = Math.Abs(node.ImpulseTime.Seconds() - _nodeTime) > 0.001 || (node.DeltaVVlf - _nodeDv).Length() > 0.001;
-        if (gone || changed || now > _nodeTime + BurnOverdueS)
+        bool loaded = fc.Burn is { } active && StockBurnIdentity.IsLoaded(active, node);
+        bool underway = loaded && fc.BurnMode == FlightComputerBurnMode.Auto;
+        double burnDuration = loaded ? Math.Max(0.0, fc.Burn!.BurnDuration) : 0.0;
+        bool overdue = !underway && now > _nodeTime + burnDuration + BurnOverdueS;
+        if (gone || changed || overdue)
             Reset();
     }
 

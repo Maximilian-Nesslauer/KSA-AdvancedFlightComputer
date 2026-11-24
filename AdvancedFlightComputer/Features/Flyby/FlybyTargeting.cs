@@ -310,6 +310,7 @@ internal static partial class FlybyTargeting
             if (!(vRelCaLen > 0.0)) return null;
 
             UniverseTime soiTime = caTime - soiTarget / vRelCaLen;
+            if (soiTime < start) soiTime = start;
             double vSoi = (transfer.GetStateVectorsAt(soiTime).VelocityCci
                            - targetOrbit.GetStateVectorsAt(soiTime).VelocityCci).Length();
             double b = ImpactParameterForPeriapsis(vSoi, rpRadius, muTarget, soiTarget);
@@ -337,6 +338,7 @@ internal static partial class FlybyTargeting
 
         // Each pass measures the departure of the pass before it, and the last pass only measures. A departure that measures worse than the best one, or that leaves the SOI, is dropped for the best one.
         double bScale = 1.0;
+        double bestBScale = 1.0;
         double3 bestDeparture = vDeparture;
         double bestError = double.PositiveInfinity;
         for (int pass = 0; pass <= PeriapsisCorrections; pass++)
@@ -353,6 +355,7 @@ internal static partial class FlybyTargeting
             }
             bestError = error;
             bestDeparture = vDeparture;
+            bestBScale = bScale;
             if (error <= PeriapsisRelTolerance * rpRadius || pass == PeriapsisCorrections)
                 break;
             double bAchieved = ImpactParameterForPeriapsis(lastVSoi, achieved, muTarget, soiTarget);
@@ -367,7 +370,7 @@ internal static partial class FlybyTargeting
         double3 departureDelta = vDeparture - departure.VelocityCci;
         if (!IsFinite(departureDelta)) return null;
         return new OffsetSolve(
-            departureDelta, lastTransit, lastB, lastVSoi, lastOffsetDir, lastCaTime);
+            departureDelta, lastTransit, bestBScale * lastB, lastVSoi, lastOffsetDir, lastCaTime);
     }
 
     /// <summary>Periapsis about the target of the patched conic that
@@ -481,6 +484,13 @@ internal static partial class FlybyTargeting
         UniverseTime toBurnTa = source.Orbit.GetTimeFromPeTo(impulse.BurnTrueAnomaly);
         UniverseTime toCurrentTa = source.Orbit.GetTimeFromPeTo(sv.TrueAnomaly);
         UniverseTime burnTime = start + (toBurnTa - toCurrentTa);
+        double period = source.Orbit.Period;
+        if (period > 0.0 && double.IsFinite(period))
+        {
+            UniverseTime now = Universe.GetElapsedTime();
+            while (burnTime < now)
+                burnTime += period;
+        }
 
         double3 dvVlf = ToVlf(source.Orbit.GetStateVectorsAt(burnTime), dvCci);
         double plannerVInf = s.DepartureDeltaCci.Length();
