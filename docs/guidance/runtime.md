@@ -72,6 +72,22 @@ A new guidance mode adds a `GuidanceModeId` value and calls `GuidanceWindow.Regi
 
 Entry guidance is the first of AFC's own modes on the registry (`Ui/Console/EntryMode.cs`, descriptor `EntryGuidance.Descriptor`, id `GuidanceModeId.EntryHere`). `GuidanceWindow.EnsureAfcModes` registers it on the first read of the registry after a load or a reset, so a reset never leaves a flying entry guidance without its stop. Its live check reads `ThreeDofPhase` and `ThreeDofEngagePending` of the craft, because a boostback glide engages it with no commit (`StepBoostback`). Its stop order, 15, puts it ahead of the boostback whose glide it takes over and behind touchdown guidance, which takes its burn. Two optional hooks serve it: `Readout` gives the head the time to ignition or the burn left and the landing numbers, and `StopText` gives the stop outcome of the stage it is in, because `Disengage3Dof` leaves a lit landing burn running and cuts the engine in the glide (`EntryGuidance.StopText`). Its commit sets `AutoStage` and `ThreeDofEngagePending`, and the next step engages it ahead of the control claim. During a deorbit that stock AUTO flies, the commit first ends that landing with `AbortLanding`, which cuts the engine, because `StepStockDeorbit` returns before the request is read and the request would otherwise wait for the end of the deorbit. Its DIAG view is the `Diagnostics` hook.
 
+## Safety invariants and mode guards
+
+Every guidance mode enforces seven core invariants:
+
+1. **Orbital escape cutoff:** Closed-loop and terminal ascent cut thrust immediately on any bound target orbit if $E_{\text{now}} \ge 0$ (or $E_{\text{now}} > 0.25\,E_{\text{target}}$ when $E_{\text{target}} < -0.05\,\mu/r$).
+2. **Physical feasibility gate:** Only plans whose node-0 controls obey hardware limits ($T \in [T_{\min}, T_{\max}]$, $\lVert\mathbf u_{\text{gimbal}}\rVert_2 \le 1$) and whose nonlinear collocation defects pass SI physical gates are published and flown.
+3. **Hover-aware climb-cut guard:** A hoverable lander ($\text{minTwr} \le 0.90\text{--}0.95$) flying a live plan absorbs brief upward gusts via throttle modulation instead of cutting and relighting.
+4. **Deterministic compute budget:** Conic IPM solves run off the main simulation thread (`Ksa6DofJob.InitCold` async) with bounded iteration budgets, backed by an emergency `TerminalBraking` / G-FOLD suicide-burn backstop if a plan drops.
+5. **Non-sticky transient error recovery:** In `Modes/Boostback.cs`, stale `_s.AeroError` is cleared as soon as `_s.Aero?.Table != null` (strictly preserving the `KsaAeroSweep.RebuildingError` sentinel while a mesh rebuild is active) so transient aero failures never latch a mode permanently disabled.
+6. **Vacuum and dynamic-pressure continuity:** In `Modes/BoostbackGlide.cs`, climb/coast attitude is unified by dynamic pressure ($q < 10$ Pa holds planned orientation), and `ImpactPredictor` updates `_s.GlideTgo` monotonically *before* returning on `aboveAtmosphere = !(q > 0)` so `ThreeDofEngageTgoS` never freezes on `NaN`.
+7. **Single control arbiter:** All attitude, engine, TVC, fin and RCS writes route through `Core/VehicleCommandSink.cs` with explicit ownership acquisition and restoration.
+
+### Consolidated return chain and shared model snapshot
+
+The return chain consolidates into `Boostback (PoweredBurn) -> Entry (3-DOF Clarabel AL-SCvx) -> Terminal (6-DOF Clarabel two-grid 25 -> 15)`, reading a single per-cycle immutable `GuidanceModelSnapshot` (altitude-varying `SampledAtmosphere`, `BodyAeroTable`, `SurfaceTable`, closed-form 2-term `MomentLimiter`, rotational damping $(C_{lp}, C_{mq}, C_{nr})$, shared `EngineThrustTable(u, P)`, and off-centre `ThrustMoment`) alongside a bounded online disturbance observer. Long high-warp orbital coasts should remain on rails whenever possible because off-rails CCI Velocity Verlet integration accumulates a 1-step gravity-lag along-track acceleration ($\mathbf a_{\text{err}} \approx \Delta t\,(\mu/r^3)\mathbf v$).
+
 ## Dependencies
 
 At run time the mod needs the StarMap loader, which also supplies Harmony. The guidance feature ships the four numerical assemblies (`Numerics`, `Conic`, `Gfold`, `Scvx`) next to the mod DLL together with the native solvers `clarabel_c.dll` and `scs.dll`. The build refuses a deploy or a Release package when a native is missing, see [README.md](README.md) and [native-build.md](native-build.md).

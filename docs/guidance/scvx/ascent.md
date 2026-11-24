@@ -80,15 +80,18 @@ Separations are instantaneous. The last node of one stage and the first node of 
 - Coast dynamics apply zero thrust, $\dot m = 0$, nose-first relative airflow ($\alpha = 0$), and pin $\mathbf u_k = \mathbf 0$ by equality rows; smoothing, $q\alpha$, prograde and thrust-ceiling cones are omitted while $q \le q_{\max}$, mass floor and ground floor stay active.
 - Adjacent burn stages relax $\sigma_{\min}$ to $\min(\sigma_{\min,i}, 1.0 / t_u)$ to permit short circularisation burns.
 - For `LiquidCarriesOver` pre-coast burns, `ApoapsisCutoff` integrates up to 95 % of combined propellant until Keplerian $r_a \ge R_{\text{target}}$ or $\varepsilon \ge \varepsilon_{\text{target}}$, and `CoastDurationSeed` computes the analytical Keplerian coast time to $R_{\text{target}}$ (or apoapsis $\pi$):
-  $$
-  \varepsilon = \tfrac12 v^2 - \frac{1}{r},\quad a = -\frac{1}{2\varepsilon},\quad
-  e\cos E_0 = 1 - \frac{r}{a},\quad e\sin E_0 = \frac{\mathbf r\cdot\mathbf v}{\sqrt{a}},\quad M_0 = E_0 - e\sin E_0,
-  $$
-  $$
-  E_t = \begin{cases} \arccos\!\left(\dfrac{1 - R_{\text{target}}/a}{e}\right), & r_a > R_{\text{target}} \land r < R_{\text{target}} \\ \pi, & \text{otherwise} \end{cases},
-  \qquad
-  \Delta t = \operatorname{clamp}\!\big((M_t - M_0)\,a\sqrt{a},\ \sigma_{\min},\ \sigma_{\max}\big).
-  $$
+
+    $$
+    \varepsilon = \tfrac12 v^2 - \frac{1}{r},\quad a = -\frac{1}{2\varepsilon},\quad
+    e\cos E_0 = 1 - \frac{r}{a},\quad e\sin E_0 = \frac{\mathbf r\cdot\mathbf v}{\sqrt{a}},\quad M_0 = E_0 - e\sin E_0,
+    $$
+
+    $$
+    E_t = \begin{cases} \arccos\!\left(\dfrac{1 - R_{\text{target}}/a}{e}\right), & r_a > R_{\text{target}} \land r < R_{\text{target}} \\ \pi, & \text{otherwise} \end{cases},
+    \qquad
+    \Delta t = \operatorname{clamp}\!\big((M_t - M_0)\,a\sqrt{a},\ \sigma_{\min},\ \sigma_{\max}\big).
+    $$
+
 - In flight, coast stages pair with `AscentPhase.Coast` and apoapsis circularisation in `Modes/Ascent.cs` with time/phase-indexed stage lookup in `ConvexAscentProfile`.
 
 Which durations are free:
@@ -459,19 +462,23 @@ After hand-over from the open-loop convex ascent profile, `UpfgGuidance` closes 
 ### UPFG singularity guards and sensed velocity
 
 - **Non-gravitational sensed velocity:** Each cycle subtracts trapezoidal gravity from velocity change before updating velocity-to-go:
-  $$
-  \Delta\mathbf v_{\text{sensed}} = (\mathbf v - \mathbf v_{\text{prev}}) - \tfrac12(\mathbf g_{\text{prev}} + \mathbf g_{\text{curr}})\,\Delta t,
-  \qquad
-  \mathbf v_{\text{go}} \leftarrow \mathbf v_{\text{go}} - \Delta\mathbf v_{\text{sensed}}.
-  $$
+
+    $$
+    \Delta\mathbf v_{\text{sensed}} = (\mathbf v - \mathbf v_{\text{prev}}) - \tfrac12(\mathbf g_{\text{prev}} + \mathbf g_{\text{curr}})\,\Delta t,
+    \qquad
+    \mathbf v_{\text{go}} \leftarrow \mathbf v_{\text{go}} - \Delta\mathbf v_{\text{sensed}}.
+    $$
+
 - **Radial range-to-go and denominator guards:** When $|\hat{\boldsymbol\lambda}\cdot\hat{\mathbf i}_z| < 0.15$, radial range-to-go clamps to $\operatorname{clamp}(\hat{\mathbf i}_z\cdot\mathbf r_{\text{go}}, -|S|, |S|)$ and clears `Converged = false` instead of dividing by a near-zero projection:
-  $$
-  r_{\text{go},z} = \begin{cases}
-  \dfrac{S - \hat{\boldsymbol\lambda}\cdot\mathbf r_{\text{go},xy}}{\hat{\boldsymbol\lambda}\cdot\hat{\mathbf i}_z}, & |\hat{\boldsymbol\lambda}\cdot\hat{\mathbf i}_z| \ge 0.15 \\[6pt]
-  \operatorname{clamp}(\hat{\mathbf i}_z\cdot\mathbf r_{\text{go}},\ -|S|,\ |S|), & |\hat{\boldsymbol\lambda}\cdot\hat{\mathbf i}_z| < 0.15
-  \end{cases}
-  $$
-  Denominator guards protect $\lambda_{\text{de}} = Q - SJ/L$ ($|\lambda_{\text{de}}| > 10^{-6}$), $\dot\phi = -\phi L / J$ ($|J| > 10^{-9}$) and the turning term in $\mathbf r_{\text{thrust}}$ ($\lVert\dot{\boldsymbol\lambda}\rVert > 10^{-12}$). `Converged` is cleared on any singularity, non-finite value or divergence.
+
+    $$
+    r_{\text{go},z} = \begin{cases}
+    \dfrac{S - \hat{\boldsymbol\lambda}\cdot\mathbf r_{\text{go},xy}}{\hat{\boldsymbol\lambda}\cdot\hat{\mathbf i}_z}, & |\hat{\boldsymbol\lambda}\cdot\hat{\mathbf i}_z| \ge 0.15 \\[6pt]
+    \operatorname{clamp}(\hat{\mathbf i}_z\cdot\mathbf r_{\text{go}},\ -|S|,\ |S|), & |\hat{\boldsymbol\lambda}\cdot\hat{\mathbf i}_z| < 0.15
+    \end{cases}
+    $$
+
+    Denominator guards protect $\lambda_{\text{de}} = Q - SJ/L$ ($|\lambda_{\text{de}}| > 10^{-6}$), $\dot\phi = -\phi L / J$ ($|J| > 10^{-9}$) and the turning term in $\mathbf r_{\text{thrust}}$ ($\lVert\dot{\boldsymbol\lambda}\rVert > 10^{-12}$). `Converged` is cleared on any singularity, non-finite value or divergence.
 
 ### Orbital escape cutoff invariant
 

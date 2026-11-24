@@ -148,7 +148,7 @@ Our equality constraints are our initial and terminal conditions, as well as the
 | Initial mass | $`z_0 = \ln m_\text{wet}`$ | Log-mass begins at the wet mass |
 | Terminal position | $`r_{x,N-1} = r_{f,x}`$ (P3); $`\quad \mathbf{r}_{N-1} = \mathbf{r}_f`$ (P4) | P3 pins altitude only (floats the landing point); P4 pins the full point |
 | Endpoint thrust direction | $`\mathbf{u}_0 = \sigma_0\,\hat{\mathbf{e}}, \quad \mathbf{u}_{N-1} = \sigma_{N-1}\,\hat{\mathbf{e}}, \quad \hat{\mathbf{e}} = (1,0,0)`$ | Thrust vertical at the endpoints (initial dropped in free-initial-thrust mode) |
-| Terminal thrust slack | $`\sigma_{N-1} = 0`$ | Thrust magnitude goes to zero at touchdown |
+| Terminal thrust slack | $`\sigma_{N-1} = 0`$ (reference mode only) | Pinned in `GfoldOptions.Reference`; **unpinned** in `GfoldOptions.RealTime` / `Descent` (`FreeTerminalThrust = true`) so low-TWR landers flare smoothly |
 | Velocity dynamics | $`\mathbf{v}_{n+1} = \mathbf{v}_n + \tfrac{1}{2}(\mathbf{a}_n + \mathbf{a}_{n+1})\,\Delta t, \quad \mathbf{a} = \mathbf{u} + \mathbf{g}`$ | Trapezoidal link for $`\mathbf{v}`$ (thrust accel + gravity) |
 | Position dynamics | $`\mathbf{r}_{n+1} = \mathbf{r}_n + \tfrac{1}{2}(\mathbf{v}_n + \mathbf{v}_{n+1})\,\Delta t`$ | Trapezoidal integral of $`\mathbf{v}`$ |
 | Mass dynamics | $`z_{n+1} = z_n - \tfrac{\alpha\,\Delta t}{2}(\sigma_n + \sigma_{n+1})`$ | Log-mass decreases with integrated thrust magnitude $`\sigma`$ |
@@ -159,8 +159,9 @@ Our equality constraints are our initial and terminal conditions, as well as the
 | --- | --- | --- | --- |
 | Thrust magnitude | $`\lVert \mathbf{u}_n \rVert \le \sigma_n`$ | SOC | Lossless convexification: slack $`\sigma`$ bounds the thrust acceleration |
 | Thrust pointing | $`\hat{\mathbf{e}}_1^\top \mathbf{u}_n \ge \sigma_n \cos\theta`$ | linear | Thrust stays within angle $`\theta`$ of vertical |
-| Thrust upper bound | $`\sigma_n \le \mu_{2,n}\,(1 - (z_n - z_{0,n}))`$ | linear | Throttle ceiling $`\rho_2 e^{-z}`$, linearized about $`z_{0,n}`$, $`\ \mu_{2,n} = \rho_2 e^{-z_{0,n}}`$ |
+| Thrust upper bound | $`\sigma_n \le \mu_{2,n}\,(1 - (z_n - z_{0,n}))`$ | linear | Throttle ceiling $`\rho_2 e^{-z}`$, linearized about $`z_{0,n}`$, $`\ \mu_{2,n} = \rho_2 e^{-z_{0,n}}`$ (`n = 1..N-1` when `FreeTerminalThrust`) |
 | Thrust lower bound | $`\sigma_n \ge \mu_{1,n}\,(1 - w + \tfrac{1}{2}w^2), \ w = z_n - z_{0,n}`$ | SOC | Throttle floor $`\rho_1 e^{-z}`$, 2nd-order cut as a rotated cone (optional) |
+| Node-0 exact thrust bounds | $`\sigma_0 \le R_2/m_\text{wet}`$, $`\sigma_0 \ge R_1/m_\text{wet}`$ | linear | Exact non-Taylor bounds at $`n = 0`$ (`EnforceNode0Bounds = true` in flight) |
 | Log-mass box | $`z_{0,n} \le z_n \le z_{1,n}`$ | linear | Mass stays in the reachable envelope, keeping the linearization tight |
 | Glideslope | $`\lVert (\mathbf{r}_n - \mathbf{r}_f)_{yz} \rVert \le \cot\gamma_{gs}\,(r_{x,n} - r_{f,x})`$ | SOC | Stay above the approach cone toward the pad |
 | Velocity cap | $`\lVert \mathbf{v}_n \rVert \le V_\text{max}`$ | SOC | Speed stays below $`V_\text{max}`$ |
@@ -410,6 +411,14 @@ For **P3** instead: add a 56th column for `t`, change the objective to `c[55] = 
 
 - Acikmese & Ploen, *Convex Programming Approach to Powered Descent Guidance for Mars Landing*, JGCD, 2007 ([PDF](reference-material/reference/_Convexprogramming_pdgforMarslanding.pdf)) - log-mass change of variables, discretization, and the Taylor-linearized throttle bounds (eqs. 34-36).
 - Acikmese, Carson & Blackmore, *Lossless Convexification of Nonconvex Control Bound and Pointing Constraints of the Soft Landing Optimal Control Problem*, IEEE TCST, 2013 ([PDF](reference-material/reference/gfold.pdf)) - the lossless-convexification proof for the thrust bounds and pointing constraint.
+
+#### Flight Endpoint Options (`EnforceNode0Bounds` and `FreeTerminalThrust`)
+
+In `GfoldOptions.RealTime` and `GfoldOptions.Descent`, two endpoint refinements keep the active flight command physically feasible and bounce-free (`GfoldOptions.Reference` leaves both `false` for textbook regression):
+
+- **Exact node-0 thrust bounds (`EnforceNode0Bounds = true`):** Because initial mass is fixed by equality ($`z_0 = \ln m_{\text{wet}}`$), node $`n = 0`$ (the exact control sample `KsaGfold.FirstControl` flown by the vehicle) obeys exact linear bounds $`\lVert\mathbf u_0\rVert_2 \le \sigma_0 \le R_2 / m_{\text{wet}}`$, plus $`\sigma_0 \ge R_1 / m_{\text{wet}}`$ when `EnforceLowerThrust` is active. When `AccelMax` is also active, the node-0 acceleration ceiling clamps from below at $`\max(a_{\max}, R_1 / m_{\text{wet}})`$ to prevent artificial infeasibility. This prevents mass-conservation slack from dumping an unphysical thrust spike into interval 0.
+- **Free terminal thrust (`FreeTerminalThrust = true`):** Under trapezoidal velocity integration $`\mathbf v_{N-1} - \mathbf v_{N-2} = \tfrac{\Delta t}{2}(\mathbf u_{N-2} + \mathbf u_{N-1}) + \mathbf g\,\Delta t`$, pinning $`\sigma_{N-1} = 0`$ forces $`\mathbf u_{N-2} \ge 2\lVert\mathbf g\rVert`$, making landers with terminal TWR below 2 infeasible or forcing a climb bounce. Unpinning $`\sigma_{N-1}`$ while retaining upright alignment $`\mathbf u_{N-1} = \sigma_{N-1}\,\hat{\mathbf e}_x`$ (with standard throttle bounds extended to $`n = N - 1`$, or $`\sigma_{N-1} \ge 0`$ when `EnforceLowerThrust` is off) yields smooth, fuel-optimal flares down to $`\text{TWR} > 1`$. The penultimate $`2g`$ `AccelMax` relief applies only when `!FreeTerminalThrust`.
+- **Model scope:** `KsaGfold` is a flat, constant-gravity, non-rotating, frozen-altitude-$`I_{sp}`$, airless planner suited for short terminal descents and fast cold seeding of 6-DOF SCvx.
 
 ## Layout
 

@@ -352,17 +352,16 @@ $$
 \begin{aligned}
 J_{\text{sub}} ={}& -\frac{m_{N-1}}{m_0}
 + W_{\Delta u}\sum_{k}\sum_j \Big(\frac{u_{k+1,j}-u_{k,j}}{u_{s,j}}\Big)^2
-+ W_\omega\sum_k \lVert\boldsymbol\omega_k\rVert^2
-+ W_c\sum_{k=1}^{K-1} \lVert\boldsymbol\omega_k\rVert^2 \\
-&+ W_{\text{rcs}}\sum_k\sum_a \Big(\frac{\tau_{\text{rcs},a,k}}{u_{s,a}}\Big)^2
-+ W_{\text{fin}}\sum_k\sum_i \Big(\frac{\delta_{i,k}}{u_{s,i}}\Big)^2
-+ W_{\text{prox}}\sum_k \big\lVert(\mathbf x_k - \bar{\mathbf x}_k)\oslash\mathbf x_s\big\rVert^2
-+ \rho_{vc}\sum_k \big\lVert\boldsymbol\nu_k\oslash\boldsymbol\nu_s\big\rVert^2 \\
-&+ W_{\text{gs}}\sum_k \frac{s^{\text{gs}}_k}{L}
-+ W_{vz}\sum_k \frac{s^{vz}_k}{V}
-+ W_r\,\frac{\mathbf 1^\top(\mathbf s^{r+}+\mathbf s^{r-})}{250\ \text{m}}
-+ W_v\,\frac{\mathbf 1^\top(\mathbf s^{v+}+\mathbf s^{v-})}{100\ \text{m/s}}
-+ W_a\sum_k \frac{s^a_k}{T_{\max}}
++ W_\omega\sum_k \lVert\boldsymbol\omega_k\rVert^2 \\
+&+ W_c\sum_{k=1}^{K-1} \lVert\boldsymbol\omega_k\rVert^2
++ W_{\text{rcs}}\sum_k\sum_a \Big(\frac{\tau_{\text{rcs},a,k}}{u_{s,a}}\Big)^2
++ W_{\text{fin}}\sum_k\sum_i \Big(\frac{\delta_{i,k}}{u_{s,i}}\Big)^2 \\
+&+ \rho_{vc}\sum_k \big\lVert\boldsymbol\nu_k\oslash\boldsymbol\nu_s\big\rVert^2
++ W_{\text{gs}}\sum_k \frac{s^{\text{gs}}_k}{L}
++ W_{vz}\sum_k \frac{s^{vz}_k}{V} \\
+&+ W_r\,\frac{\mathbf 1^\top(\mathbf s^{r+}+\mathbf s^{r-})}{250\ \text{m}}
++ W_v\,\frac{\mathbf 1^\top(\mathbf s^{v+}+\mathbf s^{v-})}{100\ \text{m/s}} \\
+&+ W_a\sum_k \frac{s^a_k}{T_{\max}}
 + W_{\omega\max}\sum_k \frac{s^\omega_k}{1\ \text{rad/s}} .
 \end{aligned}
 $$
@@ -376,7 +375,7 @@ $\mathbf x_s$ and $u_{s,j}$ are the [scales](#scaling-and-the-cone-program), $L$
 | Coast turning $W_c$ | `CoastRateWeight` | 0 | the fuel of 1 m/s for turning at 0.05 rad/s through the coast: $\alpha / \big((K-1)\cdot 0.05^2\big)$ |
 | RCS torque $W_{\text{rcs}}$ | `RcsWeight` | 0 | 0.1 (`SixDofRcsWeight`) |
 | Fin deflection $W_{\text{fin}}$ | `FinWeight` | $10^{-3}$ | $10^{-3}$ |
-| Proximal $W_{\text{prox}}$ | `ProximalWeight` | 0 | 0.05 (`SixDofProximal`) |
+| Proximal $W_{\text{prox}}$ | `ProximalWeight` | 0 | 0 (disabled under Clarabel to avoid merit distortion) |
 | Virtual control $\rho_{vc}$ | `RhoVc` | $10^5$ | $10^5$ |
 | Glide-slope slack $W_{\text{gs}}$ | `GlideSlopeWeight` | $10^4$ | $10^4$ |
 | Climb-rate slack $W_{vz}$ | `VzWeight` | $10^4$ | $10^4$ |
@@ -390,7 +389,7 @@ The `Scvx6DofConfig` defaults mirror the Python reference (`6dof.py`), so the of
 Three choices in the weights matter:
 
 - **Rate, not magnitude.** The smoothing prices the change of each control between nodes, not its size. $W_{\Delta u}$ is the only term that keeps the control profile continuous. Without it the minimum-fuel answer jumps its thrust direction by about 19 deg between nodes.
-- **Small regularisers.** $W_{\Delta u}$ and $W_\omega$ both get cheaper as the burn gets longer. At the Python values they were 121 % of the fuel term and pinned $\sigma$ at its upper bound. In flight they are a small share of fuel, and the proximal term restores the conditioning they gave.
+- **Small regularisers.** $W_{\Delta u}$ and $W_\omega$ both get cheaper as the burn gets longer. At the Python values they were 121 % of the fuel term and pinned $\sigma$ at its upper bound. In flight they are kept a small share of fuel; Clarabel's direct $LDL^\top$ solver stays well-conditioned without needing a proximal distortion term.
 - **The RCS price** makes the split between gimbals and RCS unique, and leans on the gimbals, which cost no propellant. Without it the split was nearly free, and SCS needed several times the iterations.
 
 ## What this solver does differently
@@ -543,10 +542,12 @@ At the transition, the reference trajectory is resampled onto the new grid so th
 There is no planned hand-off to a hover controller: the plan itself ends at first contact. Outside the plan, the mode enforces strict safety guards:
 
 - **Hover-aware climb cut.** Cuts the engine only when:
-  $$
-  \text{cut} \iff \big(\text{minTwr} > \texttt{SixDofHoverMaxMinTwr} \land v_z \ge 0\big) \;\lor\; \big(\text{noLivePlan} \land v_z > \texttt{SixDofClimbCutMs}\big),
-  $$
-  with `SixDofHoverMaxMinTwr` in $[0.90, 0.95]$ and `noLivePlan` true when the last published plan is absent or expired. Hoverable landers flying an active plan therefore absorb brief upward gusts via throttle modulation instead of cutting and relighting.
+
+    $$
+    \text{cut} \iff \big(\text{minTwr} > \texttt{SixDofHoverMaxMinTwr} \land v_z \ge 0\big) \;\lor\; \big(\text{noLivePlan} \land v_z > \texttt{SixDofClimbCutMs}\big),
+    $$
+
+    with `SixDofHoverMaxMinTwr` in $[0.90, 0.95]$ and `noLivePlan` true when the last published plan is absent or expired. Hoverable landers flying an active plan therefore absorb brief upward gusts via throttle modulation instead of cutting and relighting.
 - **Plan end without contact.** Within 1 m of the plan's end height with no contact, a craft that can hover sinks to contact on its engine. One that cannot drops with the engine off when the drop ends below 3 m/s, and otherwise flies the no-plan law. One relight is allowed.
 - **Unpowered-impact emergency backstop.** Whenever 3-DOF or 6-DOF drops its active plan and altitude reaches $h \le h_{\text{stop,margin}}$, an emergency `TerminalBraking` / G-FOLD suicide-burn backstop engages so propellant-bearing craft never impact unpowered. Below `SixDofLostPlanGateM` (50-120 m), a hoverable craft hands over to terminal hover while higher-altitude plan loss is caught by G-FOLD / `TerminalBraking`.
 

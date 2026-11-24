@@ -12,7 +12,7 @@ Every guidance write to a craft goes through the ownership described in [../cont
 | `AdvancedFlightComputer/Features/Guidance/Upfg` | Ascent guidance. |
 | `AdvancedFlightComputer/Features/Guidance/Ui` | The guidance pages of the AFC console, their tier kit and the world overlays. The console itself is in `AdvancedFlightComputer/Features/Ui`, drawn from the loader's after-GUI hook. |
 | `AdvancedFlightComputer/Features/Guidance/Numerics` | Game-independent numerical primitives and flight models. |
-| `AdvancedFlightComputer/Features/Guidance/Conic` | Game-independent conic programs and the Clarabel and SCS bindings every solver uses. |
+| `AdvancedFlightComputer/Features/Guidance/Conic` | Game-independent conic programs, frozen-sparsity `CcsAssembler`, persistent `ClarabelWorkspace` (`IScvxConicWorkspace`), and optional `ScsWorkspace` bindings. |
 | `AdvancedFlightComputer/Features/Guidance/Gfold` | Game-independent G-FOLD solver. |
 | `AdvancedFlightComputer/Features/Guidance/Scvx` | Game-independent successive-convexification solvers: 6-DOF touchdown in `SixDof`, 3-DOF atmospheric entry in `ThreeDof`, and convex ascent in `Ascent`. |
 | `tests/AdvancedFlightComputer.Guidance.Tests` | Console checks and Python reference fixtures, no game needed. |

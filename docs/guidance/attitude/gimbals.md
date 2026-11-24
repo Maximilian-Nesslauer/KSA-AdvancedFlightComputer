@@ -67,18 +67,27 @@ So any axis whose capability is under a quarter of the strongest's (`WeakAxisSha
 It is clamped to its capability and allocated **last**, in the travel the other two leave: the largest share of its own solution that keeps every gimbal inside its range.
 This is the gimbals' form of the common problem's axis priorities.
 
-### Redistribution at the stops
+### Circular-cone travel and redistribution at the stops
 
-If any command exceeds 1, the whole strong-axis solution is first scaled to the first gimbal at its stop, which keeps the torque's direction.
-Then `KsaTvcAllocator.Redistribute` carries on (a cascaded generalised inverse):
+For $n$ gimbals with paired command columns $(c_0 = 2i,\ c_1 = 2i + 1)$, each gimbal's physical travel is a **circular cone** rather than an independent square box:
 
-1. Hold every gimbal axis at its stop.
-2. Solve the part of the strong axes' demand still missing on the gimbal axes left free, with the same regularised inverse.
-3. Move the free axes along that solution until the next one reaches a stop or the demand is met.
-4. Repeat.
+$$
+\sqrt{u_{c_0}^2 + u_{c_1}^2} \le 1 .
+$$
 
-Without this the smallest actuator set the whole craft's torque.
-On one landing on one engine of three, the main gimbal sat at a third of its travel while a 70 deg vernier was at its stop, the allocation delivered 51-69 % of the demand for the last 1.5 s, and the craft touched down at 4.5 m/s sideways.
+`KsaTvcAllocator` enforces this circular cone consistently across all four stages:
+
+1. **Strong-axis peak:** $\text{peak} = \max_i \sqrt{u_{c_0}^2 + u_{c_1}^2}$; if $\text{peak} > 1$, the strong-axis solution scales to the first gimbal on its circular stop, preserving torque direction.
+2. **Per-gimbal redistribution (`KsaTvcAllocator.Redistribute`):** The active set `held` is indexed **per gimbal** (`Span<bool>` of length $n$), marking `held[i] = true` once $\sqrt{u_{c_0}^2 + u_{c_1}^2} \ge 1 - 10^{-9}$. Each pass solves the remaining strong-axis demand on all free gimbals (both axes per free gimbal in the Gram matrix) and advances along the exact quadratic ray-circle step until the next gimbal hits its circular stop or the demand is met.
+3. **Weak-axis ray-circle intersection:** In the remaining room $\lVert\mathbf u_i + s\,\mathbf u_{r,i}\rVert_2 \le 1$, each gimbal's allowable share $s_{\lim}$ solves the quadratic $a s^2 + b s + c = 0$ with $a = u_{r0}^2 + u_{r1}^2$, $b = 2(u_0 u_{r0} + u_1 u_{r1})$, $c = u_0^2 + u_1^2 - 1$:
+
+    $$
+    s_{\lim} = \max\!\left(0,\ \frac{-b + \sqrt{\max(0,\ b^2 - 4ac)}}{2a}\right).
+    $$
+
+4. **`AxisCapability`:** Computes peak deflection norm per gimbal pair $\sqrt{u_{c_0}^2 + u_{c_1}^2}$.
+
+KSA's critically damped 2nd-order `GimbalAxis` is rate-capped at $\dot u_{\max} = \frac{1}{5e}\omega_n \delta_{\max} \approx 0.073576\,\omega_n\delta_{\max}$, which sets the 1-step rate-reachable gimbal torque passed to downstream actuators.
 
 The result (`TvcAllocationResult`) reports the torque and side force the linear model says the commands give, the saturation scale, and the share of the weak axis that fitted.
 

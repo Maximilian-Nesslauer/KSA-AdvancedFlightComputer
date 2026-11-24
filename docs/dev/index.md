@@ -51,13 +51,22 @@ flowchart TD
 
 | Solver | Where it is written up |
 | --- | --- |
-| What all three SCvx planners share | [Successive convexification](../guidance/scvx/index.md) |
-| Convex ascent (SCvx) | [Convex ascent](../guidance/scvx/ascent.md) |
-| Entry guidance, 3-DOF SCvx (glide and burn) | [Entry (3-DOF)](../guidance/scvx/entry.md) |
-| Touchdown guidance, 6-DOF SCvx | [Touchdown (6-DOF)](../guidance/scvx/touchdown.md), [on the craft](../guidance/scvx-bridge.md) and the [dev notes](../guidance/scvx-bridge-devnotes.md) |
-| G-FOLD, the point-mass landing | [G-FOLD](../guidance/gfold.md) |
-| Impact prediction and boostback steering | [Impact steering](../guidance/reference-material/impact-steering.md) |
-| The attitude controller and the gimbal, RCS and fin mixers | [Attitude control](../guidance/attitude/index.md) |
+| What all three SCvx planners share (Clarabel persistent workspace, shared atmosphere & engine tables) | [Successive convexification](../guidance/scvx/index.md) |
+| Convex ascent (SCvx), ballistic coast, UPFG and proportional energy cutoff | [Convex ascent](../guidance/scvx/ascent.md) |
+| Entry guidance, 3-DOF AL-SCvx (glide and burn) | [Entry (3-DOF)](../guidance/scvx/entry.md) |
+| Touchdown guidance, 6-DOF SCvx (two-grid `vc-rv`, async `InitCold`, 2-term aero) | [Touchdown (6-DOF)](../guidance/scvx/touchdown.md), [on the craft](../guidance/scvx-bridge.md) and the [dev notes](../guidance/scvx-bridge-devnotes.md) |
+| G-FOLD, the point-mass landing (node-0 bounds, free terminal thrust) | [G-FOLD](../guidance/gfold.md) |
+| Impact prediction and boostback steering (powered-burn planetary rotation) | [Impact steering](../guidance/reference-material/impact-steering.md) |
+| The attitude controller ($SO(3)$ axis-angle) and the gimbal (circular-cone), RCS and fin mixers | [Attitude control](../guidance/attitude/index.md) |
+
+## Guidance subsystems and shared physics contract
+
+All seven guidance subsystems (`AscentScvx`, `UPFG`, `Boostback`, `3-DOF Entry`, `G-FOLD`, `6-DOF Touchdown`, `Attitude & Allocators`) operate across three coordinate conventions - body-centred inertial (CCI) for ascent/UPFG/boostback, rotating Z-up `SiteFrame` for 3-DOF/6-DOF landings, and flat X-up `KsaGfold.Frame` for G-FOLD - while sharing one consistent physics snapshot (`GuidanceModelSnapshot`):
+
+- **Altitude-varying atmosphere (`SampledAtmosphere`):** Speed of sound $a(h)$, dynamic viscosity $\mu(h)$ and Reynolds number $\operatorname{Re}(h)$ across all atmospheric planners.
+- **Aero fidelity:** Exact closed-form mass-varying 2-term `MomentLimiter` and rotational aerodynamic damping $(C_{lp}, C_{mq}, C_{nr})$ shared across 6-DOF touchdown and attitude/fin control.
+- **Engine back-pressure parity:** Differentiable 2D cubic B-spline `EngineThrustTable(u, P)` shared across 3-DOF entry and 6-DOF touchdown.
+- **Conic solver & control arbiter:** Persistent `ClarabelWorkspace` + frozen-sparsity `CcsAssembler` across all SCvx solvers (SCS behind a switch), and single-owner actuator writes through `Core/VehicleCommandSink.cs`.
 
 ## Still to write
 

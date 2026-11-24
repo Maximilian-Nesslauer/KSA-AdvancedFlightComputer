@@ -64,16 +64,23 @@ $I\mathbf{v}$ means the diagonal inertia applied to each model-axis component of
 
 ### Attitude error
 
-The error is built from the target's three axes as the body sees them, $\mathbf{t}_i$, against the body's own axes $\mathbf{e}_i$:
+Given the target body basis vectors $(\mathbf{t}_0, \mathbf{t}_1, \mathbf{t}_2)$ transformed into current body axes, `AttitudeController` computes the **exact $SO(3)$ axis-angle error**:
 
 $$
-\boldsymbol{\theta} = \tfrac12 \sum_{i=1}^{3} \mathbf{e}_i \times \mathbf{t}_i = \sin\phi\;\mathbf{n}
+\boldsymbol{\theta}_{\sin} = \tfrac12 \sum_{i=0}^{2} \hat{\mathbf{e}}_i \times \mathbf{t}_i,
+\qquad
+\sin\phi = \lVert\boldsymbol{\theta}_{\sin}\rVert_2,
+\qquad
+\cos\phi = \operatorname{clamp}\!\left(\frac{t_{0x} + t_{1y} + t_{2z} - 1}{2},\ -1,\ 1\right),
 $$
 
-Here $\phi$ is the angle and $\mathbf{n}$ the axis of the rotation onto the target.
-For small errors $\boldsymbol{\theta}$ is the rotation vector itself.
-For large ones it saturates: its length peaks at 90 deg and falls back to zero for a target exactly behind.
-The reported error is $\arcsin(\min(|\boldsymbol{\theta}|, 1))$, so it never reads more than 90 deg.
+$$
+\phi = \operatorname{atan2}(\sin\phi,\ \cos\phi),
+\qquad
+\boldsymbol{\theta} = \begin{cases} \dfrac{\phi}{\sin\phi}\,\boldsymbol{\theta}_{\sin}, & \sin\phi > 10^{-12} \\ \mathbf{0}, & \text{otherwise} \end{cases}
+$$
+
+Using the exact axis-angle vector $\boldsymbol{\theta} = \phi\,\mathbf{n}$ instead of $\sin\phi\,\mathbf{n}$ keeps restoring torque monotonic all the way to $180^\circ$ (such as during a boostback flip) and reports exact angle $\text{errorDeg} = \lVert\boldsymbol{\theta}\rVert_2 \cdot 180/\pi$.
 
 The error is split into a **pointing** part across $z$ and a **roll** part along $z$:
 
@@ -83,12 +90,12 @@ $$
 \boldsymbol{\theta}_\text{roll} = \begin{cases} \mathbf{0}, & \text{if }\texttt{RollFree}, \\ \phi_\text{roll}\,\hat{\mathbf z}, & \text{otherwise.} \end{cases}
 $$
 
-Here $\phi_\text{roll} \in [-\pi, \pi]$ is the true signed roll angle (`RollAngle`, computed via $\operatorname{atan2}$ on a reference vector perpendicular to $\hat{\mathbf z}$), rather than $\sin\phi$, so a 180 deg heads-down roll does not stall.
+Here $\phi_\text{roll} \in [-\pi, \pi]$ is the true signed roll angle (`RollAngle`, computed via $\operatorname{atan2}$ on a reference vector perpendicular to $\hat{\mathbf z}$), so a 180 deg heads-down roll never stalls.
 
 ### Rate error and its filter
 
 The rate error is the target's turning rate, moved into body axes, less the body rate: $\Delta\boldsymbol{\omega} = \boldsymbol{\omega}_\text{target} - \boldsymbol{\omega}$.
-It passes through a first-order lag of time constant $T_f$ (`RateFilterS`, 0.2 s):
+Because KSA's `BodyRates` are noiseless `float64` values, `RateFilterS` is kept at $0$ (or $\le 0.04$ s) to preserve phase margin on aerodynamically unstable boosters. When $T_f > 0$, a first-order lag applies:
 
 $$
 \widetilde{\Delta\boldsymbol{\omega}}_{k} = \widetilde{\Delta\boldsymbol{\omega}}_{k-1} + \frac{\Delta t}{T_f + \Delta t}\big(\Delta\boldsymbol{\omega}_k - \widetilde{\Delta\boldsymbol{\omega}}_{k-1}\big)
@@ -121,6 +128,7 @@ One cap on the whole vector starved the pointing: a booster 73 deg off in roll a
 The integral learns the part of the air's moment that the feed-forward misses (17 % on one flight), so the error settles instead of standing at a degree.
 
 - The pointing error is integrated only while $|\boldsymbol{\theta}_\text{point}| < \theta_\text{int}$, and the roll error only while $|\boldsymbol{\theta}_\text{roll}| < \theta_\text{int}$ (`IntegralWithinDeg`, 3 deg).
+- **Conditional anti-windup:** Integration runs only on axes where the actuators are not saturated ($|\tau_{\text{achieved},a} - \tau_{\text{demand},a}| < \varepsilon$).
 - The integral's length is capped at 8 deg s (`IntegralMaxDegS`).
 - Its gain is $k_i\,\omega_n^2$ with $k_i$ = `IntegralPerS`, 0.1 /s.
 
@@ -128,15 +136,15 @@ It keeps acting inside the deadband.
 
 ### Air-moment feed-forward
 
-`AttitudeController.TryAirMoment` reads the aero sweep's body moment table at the Mach number, $\alpha$ and $\beta$ flown now:
+`AttitudeController.TryAirMoment` reads the aero sweep's body moment table at the local Mach number (from `vehicle.PhysicsEnvironment.SpeedOfSound`, fallback `aero.Atmosphere.Mach(speed)`), $\alpha$ and $\beta$ flown now:
 
 $$
-\mathbf{M}_\text{air} = \frac{q S L\,\mathbf{C}_M(\text{Mach},\alpha,\beta) + (\mathbf r_\text{sweep} - \mathbf r_\text{now}) \times q S\,\mathbf{C}_F(\text{Mach},\alpha,\beta)}{1 + k\,q}
+\mathbf{M}_\text{air} = \frac{q S L\,\mathbf{C}_M(\text{Mach},\alpha,\beta) + (\mathbf r_\text{sweep} - \mathbf r_\text{now}) \times q S\,\mathbf{C}_F(\text{Mach},\alpha,\beta)}{1 + q\!\left(k_{\text{stiff}} + \dfrac{k_{\text{damp}}}{v}\right)}
 $$
 
 - $q$ is the dynamic pressure, $S$ and $L$ the reference area and length, $\mathbf{C}_M$ and $\mathbf{C}_F$ the moment and force coefficients.
 - The second term moves the moment from the centre of mass the sweep saw to the present one.
-- $k$ is the game's moment limiter per pascal (`BodyAero6Dof.MomentLimiterPerPa`), measured on the craft. The integrator divides the air's whole moment by $1 + kq$, so the prediction does too.
+- The denominator is KSA's exact closed-form 2-term moment limiter (`KsaAeroSweep.TryComputeMomentLimiterClosedForm`, zero filter lag), matching the live integrator as propellant mass changes.
 
 With $\hat{\mathbf u}$ the craft's velocity through the air in **KSA body axes** ($+x$ along nose/thrust, $-x$ engine first), engine-first flight reads the body tables at $\alpha = \operatorname{atan2}(u_z, -u_x)$ and $\beta = \operatorname{atan2}(u_y, -u_x)$ up to `KsaAeroSweep.BodyAngleMaxDeg` (20 deg). When the sweep provides nose-first tables (`NoseBodyAero` and `NoseBodyMoment`), nose-first flight ($u_x > 0$) reads them at $\alpha = \operatorname{atan2}(u_z, u_x)$ and $\beta = \operatorname{atan2}(u_y, u_x)$ up to `KsaAeroSweep.NoseAngleMaxDeg` (20 deg).
 There is no feed-forward below 50 Pa, below 1 m/s, nose first without nose-first tables, or outside $|\alpha|, |\beta| \le 20^\circ$, the edge of the tables.
@@ -268,7 +276,7 @@ They use a regularised minimum-norm solve with a saturation cascade, which has a
 
 - **Fins and RCS share one programme.** The attitude controller gives the fins' programme the RCS thrusters as extra **backup columns**: each thruster's full-duty torque, bounded 0...1, priced by its propellant. A degree of fin costs about a thousandth of a newton metre of shortfall, the best thruster 0.02 per newton metre. So the fins take every axis they can, the RCS takes what they cannot, and only then does any demand go unmet. Roll included: a fixed "fins first, roll last" order had left roll to the RCS where the fins could have taken it.
 - **The RCS is then solved again on its own** for what the fins will really give short of the demand, $\boldsymbol\tau - \boldsymbol\tau_\text{fins}$. The joint programme's duties are not flown; they only shape what the fins take.
-- **Gimbals take torque first when `UseGimbals` is set.** During ascent (`AscentOwnAttitude`), `AttitudeController` predicts and commands gimbal torque first (`KsaGimbalControl.PredictLsq` / `SetLsq`), then passes the remainder $\boldsymbol\tau - \boldsymbol\tau_\text{gimbals}$ to fins (if `AscentAeroControl` is on) and RCS. Glides with the engine off leave `UseGimbals = false`. Touchdown guidance commands gimbals and RCS each with the plan's own torque, and its attitude feedback ([`AttitudeFeedback6Dof`](#where-the-controller-is-used)) shares its correction between them in proportion to the room each has left.
+- **Gimbals take torque first when `UseGimbals` is set.** During ascent (`AscentOwnAttitude`), `AttitudeController` commands the gimbals first and subtracts the **1-step rate-reachable gimbal torque** ($\lVert\mathbf u_{\text{achieved}} - \mathbf u_{\text{prev}}\rVert \le \dot u_{\max}\Delta t$) rather than steady-state `PredictLsq` when forming the residual torque for downstream fins (if `AscentAeroControl` is on) and RCS, consuming `AeroTorqueAllocator`'s joint Fin+RCS allocation without duplicate RCS allocation. Glides with the engine off leave `UseGimbals = false`. Touchdown guidance commands gimbals and RCS each with the plan's own torque, and its attitude feedback ([`AttitudeFeedback6Dof`](#where-the-controller-is-used)) shares its correction between them in proportion to the room each has left.
 
 ### Characterise: reach per axis each way
 

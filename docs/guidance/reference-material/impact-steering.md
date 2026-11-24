@@ -439,7 +439,19 @@ So: $J$ is the deliverable. `ImpactSteering` is a reference implementation and t
 
 The first two bullets of section 6 turned out to be the whole story, and they were fixed by changing the question rather than by improving the answer.
 
-`BoostbackShooter` describes a burn by five numbers - pitch, yaw, pitch rate, yaw rate, duration - flown as a **linear tangent law** $\hat{i}_F(\tau) = \widehat{\lambda + \dot\lambda\,\tau}$ through the real powered arc, mass depletion and all, then coasting retrograde to the ground. Two of the five are driven to hit the site (duration -> downrange, yaw -> crossrange); the other three are optimised for propellant. So the burn *has* a duration, and the cost being minimised is propellant rather than $\lVert\Delta v\rVert$.
+`BoostbackShooter` describes a burn by five numbers - pitch, yaw, pitch rate, yaw rate, duration - flown as a **linear tangent law** $\hat{i}_F(\tau) = \widehat{\lambda + \dot\lambda\,\tau}$ through the real powered arc (16 fixed RK4 steps in CCI with local `Atmosphere.Mach(speed, alt)`), mass depletion and all, then coasting retrograde to the ground. Two of the five are driven to hit the site (duration -> downrange, yaw -> crossrange); the other three are optimised for propellant. So the burn *has* a duration, and the cost being minimised is propellant rather than $\lVert\Delta v\rVert$.
+
+**Planetary rotation during the powered burn.** `ImpactPredictor.Predict` rotates the inertial coast impact $\mathbf F$ by $-\Omega_z t_{\text{coast}}$ into cutoff-epoch CCF. To compare against the ignition-epoch CCF target $\mathbf r_{\text{target}}$ (aligned with CCI at $t = 0$), `BoostbackShooter.Shoot` applies an additional rotation by $\theta_{\text{burn}} = -\Omega_z t_{\text{burn}}$ in `Dual` arithmetic:
+
+$$
+\theta_{\text{burn}} = -\Omega_z\,t_{\text{burn}}, \qquad
+\begin{bmatrix} F_x' \\ F_y' \\ F_z' \end{bmatrix} =
+\begin{bmatrix} \cos\theta_{\text{burn}} & -\sin\theta_{\text{burn}} & 0 \\ \sin\theta_{\text{burn}} & \cos\theta_{\text{burn}} & 0 \\ 0 & 0 & 1 \end{bmatrix}
+\begin{bmatrix} F_x \\ F_y \\ F_z \end{bmatrix}, \qquad
+\mathbf e_{\text{miss}} = \mathbf F' - \mathbf r_{\text{target}}.
+$$
+
+This aligns predicted impact and target on rotating planets to sub-millimetre precision and injects the exact rotational sensitivity $\partial(\mathbf R_z(-\Omega_z t_{\text{burn}})\mathbf F)/\partial t_{\text{burn}}$ into the $2\times 2$ inner Newton Jacobian over $(\text{yaw}, t_{\text{burn}})$. Both cutoff mass ratio $A_{\text{ref}}/m(t_{\text{burn}}) \in \mathbb D$ (carrying $\partial(A_{\text{ref}}/m)/\partial t_{\text{burn}} = +(A_{\text{ref}}/m^2)\dot m$) and total elapsed rotation $\psi_{\text{turn}} = \Omega_z(t + t_{\text{burn}}) \in \mathbb D$ propagate as `Dual` values continuously across cutoff. In closed-loop flight, the $t=0$ ground-frame target is rotated forward by $+\Omega_z t_{\text{flown}}$ into the live epoch before each solve.
 
 The difference is not academic. On the reference arc the impulsive correction points **33 deg below the horizon** and the finite-burn optimum points **25 deg above** it, for 18.3% less propellant - and everything below the horizon is not merely dear but *infeasible* for the vehicle, which runs the tanks dry with tens of kilometres still to go. The nose-down answer was an artefact of pretending a 48-second burn is an impulse.
 

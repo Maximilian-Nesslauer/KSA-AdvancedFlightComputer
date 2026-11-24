@@ -45,23 +45,37 @@ For each fin, alone, the sweep:
 
 Each deflection's table is a cubic B-spline over (Mach, $\alpha$, $\beta$), like the body table (`BodyAeroTable`).
 A fin is swept with the body angles because it is panels of the craft's mesh like any other, shielded by the body and the other fins as the flow turns: what it does depends on $\alpha$ and $\beta$, not only on its own angle.
+During the sweep, `KsaAeroSweep.SamplingFlow.Prepare(u)` tracks `_lastFlowDir` and issues the cache-busting `_flow.Update(+u)` only when $\mathbf d_{\text{last}}\cdot(-\mathbf u) \ge \cos(1^\circ)$ before calling `_flow.Update(-u)`, preventing stale shielding caches without redundant backwards solves.
+The sweep also captures speed-invariant **rotational aerodynamic damping** $(C_{lp}, C_{mq}, C_{nr})$ via four `ForceProbe.WrenchWithRates` probes at $\mathbf u_{\text{retro}} = (-1, 0, 0)$, $v_{\text{damp}} = 100$ m/s and $\omega_{\text{damp}} = 0.10$ rad/s:
+
+$$
+C_{lp,mq,nr} = \max\!\left(0,\ -\frac{M_i(\omega_i) - M_i(0)}{\tfrac12\rho_{\text{SL}}\,v_{\text{damp}}\,\omega_{\text{damp}}}\right),
+$$
+
+together with the geometry stiffness and damping bounds $(K_{\text{sub}}, C_{\text{sub}})$ measured once at $v = 150$ m/s, $\alpha = 5^\circ$ retrograde.
 The fins are swept one at a time and added in flight; the interference between two deflected fins is left out.
 
 ## From tables to torque curves
 
-Each step, `KsaAeroTorqueControl.Measure` reads every fin's tables at the condition flown now and builds one curve per fin.
+Each step, `KsaAeroTorqueControl.Measure` reads every fin's tables at the local Mach number, $\alpha$ and $\beta$ flown now and builds one curve per fin.
 At each swept deflection $\delta_k$:
 
 $$
-\mathbf t_i(\delta_k) = \frac{q S L\,\Delta\mathbf C_{M,i}(\delta_k) + (\mathbf r_\text{sweep} - \mathbf r_\text{now}) \times q S\,\Delta\mathbf C_{F,i}(\delta_k)}{1 + k\,q},
+\mathbf t_i(\delta_k) = \frac{q S L\,\Delta\mathbf C_{M,i}(\delta_k) + (\mathbf r_\text{sweep} - \mathbf r_\text{now}) \times q S\,\Delta\mathbf C_{F,i}(\delta_k)}{D(q, v, \Delta t)},
 \qquad
-\mathbf f_i(\delta_k) = q S\,\Delta\mathbf C_{F,i}(\delta_k)
+\mathbf f_i(\delta_k) = q S\,\Delta\mathbf C_{F,i}(\delta_k),
 $$
 
-with every coefficient read at the Mach number, $\alpha$ and $\beta$ flown.
-The terms are those of the air-moment feed-forward on the [overview](index.md#air-moment-feed-forward): the moment moved to the present centre of mass, and divided by the game's moment limiter $1 + kq$.
+where $D(q, v, \Delta t)$ is KSA's exact closed-form mass-varying 2-term moment limiter (`KsaAeroSweep.TryComputeMomentLimiterClosedForm`):
+
+$$
+D(q, v, \Delta t) = 1 + \lVert I_{\text{asmb}}^{-1}\rVert_\infty\,\Delta t\,q\!\left(\tfrac12\Delta t\,K_{\text{sub}} + \frac{C_{\text{sub}}}{v}\right),
+\qquad
+\lVert I_{\text{asmb}}^{-1}\rVert_\infty = \max_i \sum_j \lvert(I_{\text{asmb}}^{-1})_{ij}\rvert.
+$$
+
 Between swept deflections the curve is straight; past its ends it is held.
-Every curve is zero at rest.
+Every curve is zero at rest. Controllable AoA ceilings are derived directly from measured aerodynamic restoring moment against available actuator authority.
 
 ### Authority limits
 

@@ -99,9 +99,11 @@ A linearised subproblem can be infeasible even when the real problem is not. For
 Naive fixed-penalty L1 virtual control ($w = w^+ - w^-$) without second-order corrections penalises $O(\lVert\Delta\mathbf x\rVert^2)$ nonlinear curvature defects linearly at large $\rho_{vc}$, causing Maratos stalling on cold solves. Each planner therefore uses the penalty suited to its dynamics:
 
 - **Convex ascent** uses a squared, scaled two-norm with $\rho_{vc} = 10^5$:
-  $$
-  J_{\text{sub}} = J + \rho_{vc} \sum_k \big\lVert \boldsymbol\nu_k \oslash \mathbf x_{\text{scale}} \big\rVert_2^2 .
-  $$
+
+    $$
+    J_{\text{sub}} = J + \rho_{vc} \sum_k \big\lVert \boldsymbol\nu_k \oslash \mathbf x_{\text{scale}} \big\rVert_2^2 .
+    $$
+
 - **Entry (3-DOF)** uses pure-dual **Augmented-Lagrangian SCvx (`AL-SCvx`)**, shifting the quadratic stationarity point onto $\mathbf d = \mathbf 0$ via dual multipliers $\boldsymbol\lambda$ (`AlPenaltyGrow = 1.0`) without stiffening the Hessian or inducing Maratos stalling.
 - **Touchdown (6-DOF)** uses a squared two-norm with **warm-ramped position and velocity scaling (`vc-rv`)**: loose on `XScale` during cold Stage 0 so straight-line cold seeds are not trapped in high-fuel local minima, then tightened geometrically to $5\text{ m}$ and $5\text{ m/s}$ over 4 accepted warm solves near touchdown. Because Clarabel's direct $LDL^\top$ KKT solver is insensitive to diagonal $P$ scaling, tight position weights yield sub-centimetre terminal accuracy without conditioning loss.
 
