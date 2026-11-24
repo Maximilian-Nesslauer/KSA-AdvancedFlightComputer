@@ -63,6 +63,7 @@ public static partial class GuidanceWindow
         GuidanceRegion.Reset();
         ResetModeDiagnostics();
         ResetModeHooks();
+        ResetPictureCaches();
     }
 
     #region Reads for the shell

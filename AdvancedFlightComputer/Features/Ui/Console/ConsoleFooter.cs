@@ -302,9 +302,12 @@ internal static class ConsoleFooter
                 : second.Danger ? ConsoleWidgets.DangerButton(second.Verb.AsSpan(), "AfcFooterSecondary".AsSpan(), size)
                 : ConsoleWidgets.Button(second.Verb.AsSpan(), "AfcFooterSecondary".AsSpan(), size);
         ConsoleUi.NoteItem("AfcFooterSecondary");
-        string tip = second.Refusal.Length > 0 ? second.Refusal + (second.Tooltip.Length > 0 ? "\n\n" + second.Tooltip : "") : second.Tooltip;
-        if (tip.Length > 0 && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ConsoleUi.Card(second.Verb, tip);
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+        {
+            string tip = second.Refusal.Length > 0 ? second.Refusal + (second.Tooltip.Length > 0 ? "\n\n" + second.Tooltip : "") : second.Tooltip;
+            if (tip.Length > 0)
+                ConsoleUi.Card(second.Verb, tip);
+        }
         return clicked && second.Enabled && takesClicks ? second.Act : null;
     }
 }

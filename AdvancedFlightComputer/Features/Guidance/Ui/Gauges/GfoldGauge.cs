@@ -419,6 +419,10 @@ public static partial class GuidanceWindow
         ClipLine(dl, a, b, lo, hi, ink, burns ? PlanBurnThick : PlanCoastThick);
     }
 
+    private static float2[] _sixDofPlotPt = Array.Empty<float2>();
+    private static float2[] _sixDofPlotThrust = Array.Empty<float2>();
+    private static double[] _sixDofPlotThrustMag = Array.Empty<double>();
+
     /// <summary>
     /// The 6-DOF plan, in the same side view. Node states are laid out flat, fourteen doubles each with position first - the same buffer the world overlay reads.
     /// </summary>
@@ -435,9 +439,17 @@ public static partial class GuidanceWindow
         if (px == null || px.Length < n * 14)
             return 1;
 
-        var pt = new float2[n];
-        var thrust = new float2[n];
-        var thrustMag = new double[n];
+        if (_sixDofPlotPt.Length < n)
+        {
+            _sixDofPlotPt = new float2[n];
+            _sixDofPlotThrust = new float2[n];
+            _sixDofPlotThrustMag = new double[n];
+        }
+        float2[] pt = _sixDofPlotPt;
+        float2[] thrust = _sixDofPlotThrust;
+        double[] thrustMag = _sixDofPlotThrustMag;
+        Array.Clear(thrust, 0, n);
+        Array.Clear(thrustMag, 0, n);
         double topThrust = 0.0;
         int nu = plan.NU;
         bool haveThrust = pu != null && nu >= Dynamics6Dof.NUBase && pu.Length >= n * nu;

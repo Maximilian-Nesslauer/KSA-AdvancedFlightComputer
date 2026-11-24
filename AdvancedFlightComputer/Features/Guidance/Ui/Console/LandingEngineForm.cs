@@ -20,13 +20,7 @@ public static partial class GuidanceWindow
             || _s.ReturnableStages.Count(other => other.EngineGroupScope == stage.EngineGroupScope) != 1
             || vehicle.Orbit?.Parent is not { } parent)
             return;
-        HashSet<Part> leaving = PartsLeavingWith(vehicle, root, stage.SequenceIndex);
-        // The booster lands nearly empty, and it starts the landing burn with at most the reserve the climb keeps for it.
-        double dry = BoosterShare(vehicle, leaving, stage.SequenceNumber).DryKg;
-        double reserve = PlannedBoosterReserveKg(vehicle, stage.RootId);
-        double loaded = double.IsFinite(reserve) && reserve > 0 ? dry + reserve : double.NaN;
-        DrawLandingEngineGroups(vehicle, root, stage.EngineGroupScope, leaving, parent,
-            KsaEnginePerf.AmbientPressureAt(parent, 0.0), dry, loaded, "WITH RESERVE", openByDefault: true);
+        DrawLandingEngineGroups(vehicle, root, stage.EngineGroupScope, stage, parent, "WITH RESERVE", openByDefault: true);
     }
 
     /// <summary>
@@ -36,16 +30,40 @@ public static partial class GuidanceWindow
     {
         if (vehicle.Parts?.Root is not { } root || vehicle.Orbit?.Parent is not { } parent)
             return;
-        double dry = vehicle.TotalMass - vehicle.PropellantMass;
-        DrawLandingEngineGroups(vehicle, root, LandingEngineGroups.CraftScope, null, parent,
-            KsaEnginePerf.AmbientPressureAt(parent, SiteTerrainHeight(parent)), dry, vehicle.TotalMass, "NOW");
+        DrawLandingEngineGroups(vehicle, root, LandingEngineGroups.CraftScope, null, parent, "NOW");
     }
 
     internal static string LandingEngineFoldId(string scope) => "EngineGroups:" + scope;
 
-    private static void DrawLandingEngineGroups(Vehicle vehicle, Part root, string scope, HashSet<Part>? allowed, IParentBody parent,
-                                                double pressurePa, double dryKg, double loadedKg, string loadedLabel,
-                                                bool openByDefault = false)
+    private static int CountCandidateEngines(Dictionary<string, EngineController?> candidates)
+    {
+        int total = 0;
+        foreach (EngineController? engine in candidates.Values)
+        {
+            if (engine == null || engine.Rockets.Length == 0)
+                continue;
+            bool hasNozzle = false;
+            foreach (Rocket rocket in engine.Rockets)
+            {
+                foreach (RocketNozzle nozzle in rocket.Nozzles)
+                {
+                    if (nozzle.Parent != null)
+                    {
+                        hasNozzle = true;
+                        break;
+                    }
+                }
+                if (hasNozzle)
+                    break;
+            }
+            if (hasNozzle)
+                total++;
+        }
+        return total;
+    }
+
+    private static void DrawLandingEngineGroups(Vehicle vehicle, Part root, string scope, ReturnableStage? stage, IParentBody parent,
+                                                string loadedLabel, bool openByDefault = false)
     {
         if (vehicle.Parts == null)
             return;
@@ -53,16 +71,48 @@ public static partial class GuidanceWindow
         ImGui.PushID(scope.Length > 0 ? scope : "CraftEngineGroups");
         try
         {
-            var candidates = LandingEngineGroups.Controllers(vehicle, root, allowed);
+            HashSet<Part>? allowed = null;
+            Dictionary<string, EngineController?>? candidates = null;
+            string title;
+            if (settings.Chosen is { Engines.Length: > 0 } chosenGroup)
+            {
+                allowed = stage != null ? PartsLeavingWith(vehicle, root, stage.SequenceIndex) : null;
+                candidates = LandingEngineGroups.Controllers(vehicle, root, allowed);
+                int total = CountCandidateEngines(candidates);
+                title = $"{chosenGroup.Name} ({chosenGroup.Engines.Length} OF {total})";
+            }
+            else
+            {
+                title = "AS STAGED";
+            }
+            if (!ConsoleUi.Fold("LANDING ENGINES  " + title, LandingEngineFoldId(scope), openByDefault))
+                return;
+
+            allowed ??= stage != null ? PartsLeavingWith(vehicle, root, stage.SequenceIndex) : null;
+            candidates ??= LandingEngineGroups.Controllers(vehicle, root, allowed);
+            double pressurePa;
+            double dryKg;
+            double loadedKg;
+            if (stage != null)
+            {
+                pressurePa = KsaEnginePerf.AmbientPressureAt(parent, 0.0);
+                // The booster lands nearly empty, and it starts the landing burn with at most the reserve the climb keeps for it.
+                dryKg = BoosterShare(vehicle, allowed!, stage.SequenceNumber).DryKg;
+                double reserve = PlannedBoosterReserveKg(vehicle, stage.RootId);
+                loadedKg = double.IsFinite(reserve) && reserve > 0 ? dryKg + reserve : double.NaN;
+            }
+            else
+            {
+                pressurePa = KsaEnginePerf.AmbientPressureAt(parent, SiteTerrainHeight(parent));
+                dryKg = vehicle.TotalMass - vehicle.PropellantMass;
+                loadedKg = vehicle.TotalMass;
+            }
+
             double radius = parent.MeanRadius;
             var layout = LandingEngineLayout.Build(vehicle, candidates, pressurePa, parent.Mu / (radius * radius), dryKg, loadedKg);
             LandingEngineOption[] options = layout.Suggestions();
             HashSet<string> chosen = settings.Chosen is { } group ? group.Engines.ToHashSet(StringComparer.Ordinal) : [];
             int onPicture = layout.Dots.Count(d => d.AftPlane);
-            string title = chosen.Count == 0 ? "AS STAGED"
-                : $"{settings.Chosen!.Name} ({chosen.Count} OF {layout.Dots.Length})";
-            if (!ConsoleUi.Fold("LANDING ENGINES  " + title, LandingEngineFoldId(scope), openByDefault))
-                return;
             if (settings.Chosen is { } assigned && !LandingEngineGroups.Resolve(assigned, candidates, out _))
                 ConsoleUi.WarningWrapped("An engine of the landing choice is missing from this stage.");
             if (layout.Dots.Length == 0)

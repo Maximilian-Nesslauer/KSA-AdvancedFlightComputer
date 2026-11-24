@@ -14,6 +14,7 @@ public static partial class GuidanceWindow
 {
     // Off by default: it is a debug view, and it draws over the vehicle you are trying to fly.
     private static bool _show6DofOverlay;
+    private static double3[] _sixDofOverlayNodes = Array.Empty<double3>();
 
     private static void Draw6DofOverlay(IGameViewport vp, IParentBody parent)
     {
@@ -51,8 +52,9 @@ public static partial class GuidanceWindow
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##sixdof_overlay");
         using WindowEnd end = default;
 
-        // Materialised up front rather than read through a local function: a Span cannot be captured by one, and projecting each node once is cheaper anyway.
-        var node = new double3[n];
+        if (_sixDofOverlayNodes.Length < n)
+            _sixDofOverlayNodes = new double3[n];
+        double3[] node = _sixDofOverlayNodes;
         for (int k = 0; k < n; k++)
             node[k] = f.PosToCci(new double3(px[k * 14 + 0], px[k * 14 + 1], px[k * 14 + 2]));
 

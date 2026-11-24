@@ -15,7 +15,7 @@ using KSA;
 /// </summary>
 internal static class ViewDemand
 {
-    internal enum Kind { Passes, Aero, Impact }
+    internal enum Kind { Passes, Aero, Impact, Steer }
 
     private const double LifetimeSeconds = 1.0;
     private static readonly Dictionary<(string Id, Kind Kind), DateTime> _marks = new();

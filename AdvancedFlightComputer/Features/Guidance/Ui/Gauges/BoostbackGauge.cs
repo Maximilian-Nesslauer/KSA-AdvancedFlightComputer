@@ -124,6 +124,8 @@ public static partial class GuidanceWindow
                 }
 
                 case BoostbackPhase.Boostback:
+                    if (!TierScope.Show(D))
+                        break;
                     GaugeRowText(D, "DV TO GO", Fmt.Dv(_s.BoostbackDvGo));
                     GaugeRowText(D, "BURN TIME LEFT",
                         double.IsFinite(_s.BoostbackTgo) ? Fmt.TimeFine(_s.BoostbackTgo) : "NO PLAN",
@@ -141,21 +143,24 @@ public static partial class GuidanceWindow
 
                 case BoostbackPhase.Glide:
                 {
-                    // What the PID is driving to zero, what it is commanding, and whether the air lets it.
-                    GaugeRowText(D, "MISS DOWNRANGE", FormattableString.Invariant($"{_s.GlideMissDownM / 1000.0,8:F1} km  (+ LONG)"));
-                    GaugeRowText(D, "MISS CROSSRANGE", FormattableString.Invariant($"{_s.GlideMissCrossM / 1000.0,8:F1} km  (+ LEFT)"));
-                    bool limited = _s.GlideAoaDeg >= Math.Clamp(_s.GlideMaxAoaDeg, 0.0, 60.0) - 1e-6 && _s.GlideAoaDeg > 0.0;
-                    GaugeRowText(D, "AOA COMMAND", FormattableString.Invariant($"{_s.GlideAoaDeg,8:F1} deg"), limited ? warn : live);
-                    double trim = Math.Sqrt(_s.GlideTrimUpDeg * _s.GlideTrimUpDeg + _s.GlideTrimLeftDeg * _s.GlideTrimLeftDeg);
-                    GaugeRowText(D, "AOA FLOWN", FormattableString.Invariant($"{_s.GlideFlownAoaDeg,8:F1} deg   TRIM {trim:F1} deg"), dim);
-                    GaugeRowText(D, "LATERAL ACCEL", FormattableString.Invariant($"{_s.GlideAccelCmd,8:F2} m/s^2")
-                        + (double.IsFinite(_s.GlideTgo) ? FormattableString.Invariant($"   TGO {_s.GlideTgo:F0} s") : ""), dim);
-                    GaugeRowText(D, "Q", FormattableString.Invariant($"{_s.GlideQ / 1000.0,8:F1} kPa"), dim);
-                    GaugeRowText(D, "LIFT", _s.GlideLiftSign > 0 ? "TOWARD ENGINE TILT"
-                        : _s.GlideLiftSign < 0 ? "AWAY FROM ENGINE TILT (BLUNT)"
-                        : "NONE", _s.GlideLiftSign != 0 ? dim : warn);
-                    GaugeRowText(D, "ATTITUDE ERROR",
-                        FormattableString.Invariant($"{vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI,8:F1} deg"), dim);
+                    if (TierScope.Show(D))
+                    {
+                        // What the PID is driving to zero, what it is commanding, and whether the air lets it.
+                        GaugeRowText(D, "MISS DOWNRANGE", FormattableString.Invariant($"{_s.GlideMissDownM / 1000.0,8:F1} km  (+ LONG)"));
+                        GaugeRowText(D, "MISS CROSSRANGE", FormattableString.Invariant($"{_s.GlideMissCrossM / 1000.0,8:F1} km  (+ LEFT)"));
+                        bool limited = _s.GlideAoaDeg >= Math.Clamp(_s.GlideMaxAoaDeg, 0.0, 60.0) - 1e-6 && _s.GlideAoaDeg > 0.0;
+                        GaugeRowText(D, "AOA COMMAND", FormattableString.Invariant($"{_s.GlideAoaDeg,8:F1} deg"), limited ? warn : live);
+                        double trim = Math.Sqrt(_s.GlideTrimUpDeg * _s.GlideTrimUpDeg + _s.GlideTrimLeftDeg * _s.GlideTrimLeftDeg);
+                        GaugeRowText(D, "AOA FLOWN", FormattableString.Invariant($"{_s.GlideFlownAoaDeg,8:F1} deg   TRIM {trim:F1} deg"), dim);
+                        GaugeRowText(D, "LATERAL ACCEL", FormattableString.Invariant($"{_s.GlideAccelCmd,8:F2} m/s^2")
+                            + (double.IsFinite(_s.GlideTgo) ? FormattableString.Invariant($"   TGO {_s.GlideTgo:F0} s") : ""), dim);
+                        GaugeRowText(D, "Q", FormattableString.Invariant($"{_s.GlideQ / 1000.0,8:F1} kPa"), dim);
+                        GaugeRowText(D, "LIFT", _s.GlideLiftSign > 0 ? "TOWARD ENGINE TILT"
+                            : _s.GlideLiftSign < 0 ? "AWAY FROM ENGINE TILT (BLUNT)"
+                            : "NONE", _s.GlideLiftSign != 0 ? dim : warn);
+                        GaugeRowText(D, "ATTITUDE ERROR",
+                            FormattableString.Invariant($"{vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI,8:F1} deg"), dim);
+                    }
                     if (_s.GlideStatus.Length > 0 && !(_s.GlideStatus == GlideNoLiftStatus && AeroLiftNote(vehicle.Orbit?.Parent).Length > 0))
                         GaugeRowText(P, "", _s.GlideStatus, warn);
                     if (_s.ThreeDofFromGlide && !double.IsFinite(_s.GlideTgo))
@@ -166,21 +171,24 @@ public static partial class GuidanceWindow
         }
 
         // THE PLAN. Its own rows because this is what the vehicle is flying, and because the solve time is the number that says whether the cadence is still affordable: it runs on the sim thread, so a plan that starts costing hundreds of milliseconds is a stutter every two seconds and wants moving to the worker thread rather than being left alone.
-        if (_s.BoostbackHasPlan)
+        if (TierScope.Show(D))
         {
-            GaugeRowText(D, "BURN PLAN",
-                FormattableString.Invariant($"PITCH {_s.BoostbackPlan.PitchDeg,8:F1} deg, {_s.BoostbackPlan.Duration:F1} s"));
-            if (Math.Abs(_s.BoostbackPlan.YawDeg) >= 0.05)
-                GaugeRowText(D, "PLAN YAW", FormattableString.Invariant($"{_s.BoostbackPlan.YawDeg,8:F1} deg"), dim);
-            GaugeRowText(D, "PLAN COST",
-                FormattableString.Invariant($"{_s.BoostbackPlanPropellantKg,8:F0} kg   (MISS {_s.BoostbackPlanMissM:F0} m)"), dim);
-            GaugeRowText(D, "SOLVE TIME", FormattableString.Invariant($"{_s.BoostbackPlanSolveMs,8:F1} ms"), dim);
+            if (_s.BoostbackHasPlan)
+            {
+                GaugeRowText(D, "BURN PLAN",
+                    FormattableString.Invariant($"PITCH {_s.BoostbackPlan.PitchDeg,8:F1} deg, {_s.BoostbackPlan.Duration:F1} s"));
+                if (Math.Abs(_s.BoostbackPlan.YawDeg) >= 0.05)
+                    GaugeRowText(D, "PLAN YAW", FormattableString.Invariant($"{_s.BoostbackPlan.YawDeg,8:F1} deg"), dim);
+                GaugeRowText(D, "PLAN COST",
+                    FormattableString.Invariant($"{_s.BoostbackPlanPropellantKg,8:F0} kg   (MISS {_s.BoostbackPlanMissM:F0} m)"), dim);
+                GaugeRowText(D, "SOLVE TIME", FormattableString.Invariant($"{_s.BoostbackPlanSolveMs,8:F1} ms"), dim);
+            }
+            if (_s.BoostbackStatus.Length > 0)
+                GaugeRowText(D, "STATUS", Fmt.Sentence(_s.BoostbackStatus), dim);
+            if (_s.BoostbackPlanError.Length > 0 && BoostbackLive)
+                GaugeRowText(D, "PLAN", _s.BoostbackPlanError
+                    + (_s.BoostbackHasPlan ? " (PREVIOUS PLAN)" : ""), warn);
         }
-        if (_s.BoostbackStatus.Length > 0)
-            GaugeRowText(D, "STATUS", Fmt.Sentence(_s.BoostbackStatus), dim);
-        if (_s.BoostbackPlanError.Length > 0 && BoostbackLive)
-            GaugeRowText(D, "PLAN", _s.BoostbackPlanError
-                + (_s.BoostbackHasPlan ? " (PREVIOUS PLAN)" : ""), warn);
 
         GaugeRow(Specs.BoostbackSlewDegS, ref _s.BoostbackSlewDegS);
 
@@ -245,37 +253,48 @@ public static partial class GuidanceWindow
         }
         else
         {
-            GaugeRowText(D, "IMPACT LAT/LON",
-                FormattableString.Invariant($"{_s.ImpactLatDeg:F3}, {_s.ImpactLonDeg:F3}"));
-            GaugeRowText(D, "TIME TO IMPACT", Fmt.Time(_s.Impact.TimeOfFlight.V));
-            GaugeRowText(D, "IMPACT DOWNRANGE", Fmt.Distance(_s.ImpactDownrangeM));
+            if (TierScope.Show(D))
+            {
+                GaugeRowText(D, "IMPACT LAT/LON",
+                    FormattableString.Invariant($"{_s.ImpactLatDeg:F3}, {_s.ImpactLonDeg:F3}"));
+                GaugeRowText(D, "TIME TO IMPACT", Fmt.Time(_s.Impact.TimeOfFlight.V));
+                GaugeRowText(D, "IMPACT DOWNRANGE", Fmt.Distance(_s.ImpactDownrangeM));
+            }
             GaugeRowText(P, "IMPACT SPEED, NO BURN", Fmt.Speed(ImpactSpeed(_s)));
 
-            double miss = ImpactMissDistance(parent);
-            if (double.IsFinite(miss))
-                GaugeRowText(D, "MISS FROM SITE", Fmt.KmFine(miss / 1000.0));
+            if (TierScope.Show(D))
+            {
+                double miss = ImpactMissDistance(parent);
+                if (double.IsFinite(miss))
+                    GaugeRowText(D, "MISS FROM SITE", Fmt.KmFine(miss / 1000.0));
 
-            GaugeRowText(D, "INTEGRATION", $"{_s.Impact.Steps,8} STEPS");
+                GaugeRowText(D, "INTEGRATION", $"{_s.Impact.Steps,8} STEPS");
+            }
         }
 
         // The steering arrows and the correction behind them. Its own toggle because the Jacobian is three seeded sweeps, about four times the cost of the prediction, and it is only meaningful once there is a site to aim at.
         GaugeRowCheck(D, "STEERING ARROW", "##steerarrow", ref _showSteerArrow);
-        if (_showSteerArrow && _s.HasSteer)
+        if (_showSteerArrow)
+            ViewDemand.Mark(vehicle, ViewDemand.Kind.Steer);
+        if (_showSteerArrow && TierScope.Show(D))
         {
-            GaugeRowText(D, "CORRECTION DV", FormattableString.Invariant($"{_s.SteerDv.Length(),8:F1} m/s"));
-            // How far the greedy direction is from the one that actually nulls the miss. Zero when the miss lies along one of J's singular directions, which is why it reads zero for a purely downrange or purely crossrange miss and grows for anything in between.
-            GaugeRowText(D, "GREEDY OFFSET",
-                FormattableString.Invariant($"{AngleBetweenDeg(_s.SteerDv, _s.SteerGreedy),8:F1} deg"), dim);
+            if (_s.HasSteer)
+            {
+                GaugeRowText(D, "CORRECTION DV", FormattableString.Invariant($"{_s.SteerDv.Length(),8:F1} m/s"));
+                // How far the greedy direction is from the one that actually nulls the miss. Zero when the miss lies along one of J's singular directions, which is why it reads zero for a purely downrange or purely crossrange miss and grows for anything in between.
+                GaugeRowText(D, "GREEDY OFFSET",
+                    FormattableString.Invariant($"{AngleBetweenDeg(_s.SteerDv, _s.SteerGreedy),8:F1} deg"), dim);
 
-            // The shaping split out: how much of the commanded dv is targeting and how much is buying pitch. The pitch itself is in the guidance section, next to the knob that sets it.
-            double shape = _s.SteerShape.Length();
-            if (shape > 0.05)
-                GaugeRowText(D, "SHAPING DV", FormattableString.Invariant($"{shape,8:F1} m/s  (FREE DIRECTION)"), dim);
-            GaugeRowText(D, "COMMANDED DV", FormattableString.Invariant($"{_s.SteerCommand.Length(),8:F1} m/s"));
-        }
-        else if (_showSteerArrow)
-        {
-            GaugeRowText(D, "CORRECTION", "NO SOLUTION", warn);
+                // The shaping split out: how much of the commanded dv is targeting and how much is buying pitch. The pitch itself is in the guidance section, next to the knob that sets it.
+                double shape = _s.SteerShape.Length();
+                if (shape > 0.05)
+                    GaugeRowText(D, "SHAPING DV", FormattableString.Invariant($"{shape,8:F1} m/s  (FREE DIRECTION)"), dim);
+                GaugeRowText(D, "COMMANDED DV", FormattableString.Invariant($"{_s.SteerCommand.Length(),8:F1} m/s"));
+            }
+            else
+            {
+                GaugeRowText(D, "CORRECTION", "NO SOLUTION", warn);
+            }
         }
 
         // The assumption, stated where the numbers are rather than only in the code: it is the model's biggest simplification and the first thing to doubt if a prediction disagrees with what the vehicle does.

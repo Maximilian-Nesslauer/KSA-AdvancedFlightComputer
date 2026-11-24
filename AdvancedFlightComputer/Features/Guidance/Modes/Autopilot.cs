@@ -1502,6 +1502,8 @@ public static partial class GuidanceWindow
             ResampleBoostbackAero(vehicle, parent, force: true);
         if (!BoostbackLive && ViewDemand.Wants(vehicle, ViewDemand.Kind.Impact))
             UpdateImpactPrediction(vehicle, orbit, parent, force: false);
+        if (!BoostbackLive && ViewDemand.Wants(vehicle, ViewDemand.Kind.Steer))
+            UpdateSteering(vehicle, orbit, parent);
         if (ViewDemand.Wants(vehicle, ViewDemand.Kind.Passes))
             RefreshPasses(orbit, parent, parent.Mu, parent.MeanRadius);
 
