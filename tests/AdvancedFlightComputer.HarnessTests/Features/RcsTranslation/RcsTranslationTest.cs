@@ -47,6 +47,8 @@ public sealed class RcsTranslationTest : AfcTest
                     FlyStockEndScenario(t, vehicle, driver, watcher);
                     FlyZeroedTargetScenario(t, vehicle, driver, watcher);
                     FlyCancelRequestScenario(t, vehicle, driver, watcher);
+                    CheckDisabledRcsAndLongBurnLead(t, vehicle, driver);
+                    CheckNonXAlignAndVehicleConfigIdentity(t, vehicle, driver);
                 });
         }
     }
@@ -220,7 +222,9 @@ public sealed class RcsTranslationTest : AfcTest
             return;
         }
         // A slew estimate so long that the lead window is already open at engage makes deferral unobservable. That is a save property, not a bug.
-        double leadSec = RcsExecutor.AlignLeadSeconds(in exec.Estimates);
+        double leadSec = RcsExecutor.ControlLeadSeconds(
+            fc, setup.BurnTarget, in exec.Estimates, exec.ResolvedStrategy,
+            exec.LpSecondsPerImpulse, exec.LpImpulseCapNs);
         if (leadSec >= DeferredLeadSec - 10.0)
         {
             t.Skip($"deferred align: slew estimate " +
@@ -658,6 +662,182 @@ public sealed class RcsTranslationTest : AfcTest
         RcsFlightSupport.CleanupBurns(fc);
     }
 
+    private static void CheckDisabledRcsAndLongBurnLead(TestContext t, Vehicle vehicle, SimDriver driver)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        RcsFlightSupport.CleanupBurns(fc);
+        vehicle.RefillConsumables();
+        fc.BurnMode = FlightComputerBurnMode.Manual;
+        fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+        fc.RCSMode = FlightComputerRCSMode.Disabled;
+        driver.Step(StepSec, 10);
+
+        RcsCapabilitySnapshot cap = RcsCapability.Probe(vehicle);
+        int bestAxis = cap.BestAxis();
+        if (bestAxis < 0)
+        {
+            t.Skip("disabled-rcs/long-burn: no usable translation axis on this save.");
+            return;
+        }
+        RcsAxisGroup bestGroup = cap.Get(bestAxis);
+        double mass = fc.TotalMassPropsBody.Mass;
+        // Size delta-V for at least an 80 s Align burn so 0.5 * duration exceeds AlignLeadMarginSec.
+        double longDvMs = Math.Max(5.0, 80.0 * bestGroup.ForceN / Math.Max(mass, 1.0));
+        double3 axisCci = RcsFlightSupport.AxisDirCci(vehicle, bestAxis);
+        double3 dvDirCci = double3.Cross(axisCci, double3.UnitZ);
+        if (dvDirCci.IsNearlyZero())
+            dvDirCci = double3.Cross(axisCci, double3.UnitY);
+        dvDirCci = dvDirCci.Normalized();
+
+        RcsFlightSupport.BurnSetup? setup =
+            RcsFlightSupport.AddBurn(vehicle, driver, dvDirCci, longDvMs, 400.0);
+        if (setup == null)
+        {
+            t.Fail("disabled-rcs/long-burn", "no flight-plan patch or BurnTarget at the burn time");
+            return;
+        }
+
+        try
+        {
+            // Step once so stock UpdateBurnTarget populates BurnTarget.IgnitionTime before checking RcsWarpPatch.
+            driver.Step(StepSec);
+            cap = RcsCapability.Probe(vehicle);
+            BurnTarget bt = setup.BurnTarget;
+            t.Check("stock zeroes RcsTorqueAuthority while RCS is disabled",
+                fc.RcsTorqueAuthority.LengthSquared() < 1e-12f,
+                $"RcsTorqueAuthority={fc.RcsTorqueAuthority}");
+
+            RcsEstimates est = RcsExecutor.ComputeEstimates(vehicle, bt, in cap);
+            double alignLead = RcsExecutor.AlignLeadSeconds(in est);
+            double fullLead = RcsExecutor.ControlLeadSeconds(fc, bt, in est, RcsAttitudeStrategy.Align);
+            t.Check("disabled RCS keeps Align feasible with positive slew duration",
+                est.Valid && est.AlignFeasible && est.AlignSlewDurationSec > 0.0,
+                $"valid={est.Valid} alignFeasible={est.AlignFeasible} slew={est.AlignSlewDurationSec:F2}s");
+            t.Check("long burn control lead includes half burn duration",
+                est.AlignDurationSec > 60.0
+                && Math.Abs(fullLead - (0.5 * est.AlignDurationSec + alignLead)) < 1e-6
+                && fullLead > alignLead + 30.0,
+                $"alignDur={est.AlignDurationSec:F1}s alignLead={alignLead:F1}s fullLead={fullLead:F1}s");
+
+            RcsExecution exec = new()
+            {
+                SaveId = string.Empty,
+                VehicleId = vehicle.Id,
+                Estimates = est,
+                ResolvedStrategy = RcsAttitudeStrategy.Align,
+                ControlTaken = false,
+            };
+            double controlOpenSec = bt.ImpulsiveInstant.Seconds() - fullLead;
+            t.Check("ControlCommandDue opens at ImpulsiveInstant minus half duration and align lead",
+                !RcsExecutor.ControlCommandDue(fc, exec, bt, controlOpenSec - 1.0)
+                && RcsExecutor.ControlCommandDue(fc, exec, bt, controlOpenSec + 0.1),
+                $"controlOpen={controlOpenSec:F1}s impulsive={bt.ImpulsiveInstant.Seconds():F1}s");
+
+            RcsBurnOptions opts = RcsExecRegistry.GetOrCreate(vehicle.Id)
+                .GetOrCreateOptions(setup.Burn.Time.Seconds(), setup.Burn.DeltaVVlf.Length());
+            opts.Mode = RcsExecutionMode.Rcs;
+            opts.Attitude = RcsAttitudeStrategy.Align;
+            double margin = FlightComputer.IGNITION_TIME_AUTO_WARP_MARGIN;
+            bool adjusted = RcsWarpPatch.TryAdjustMargin(vehicle, bt.IgnitionTime, ref margin);
+            double expectedMargin = Math.Max(
+                FlightComputer.IGNITION_TIME_AUTO_WARP_MARGIN,
+                (bt.IgnitionTime - (bt.ImpulsiveInstant - fullLead)).Seconds());
+            t.Check("RcsWarpPatch stops before centered ignition on long burns with RCS off",
+                adjusted && Math.Abs(margin - expectedMargin) < 1e-3,
+                $"adjusted={adjusted} margin={margin:F3}s expected={expectedMargin:F3}s");
+        }
+        finally
+        {
+            RcsFlightSupport.CleanupBurns(fc);
+            RcsExecRegistry.Remove(vehicle.Id);
+        }
+    }
+
+    private static void CheckNonXAlignAndVehicleConfigIdentity(TestContext t, Vehicle vehicle, SimDriver driver)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        FlightComputerRollMode prevRoll = fc.RollMode;
+        float3 prevErr = fc.ErrorAngles;
+        float prevDeadband = fc.AngleDeadband;
+        float3 prevTurn = fc.AngleTurnaround;
+        FlightComputerRCSMode prevRcs = fc.RCSMode;
+        RcsFlightSupport.CleanupBurns(fc);
+        try
+        {
+            fc.AngleDeadband = 0.02f;
+            fc.AngleTurnaround = new float3(0.02f, 0.02f, 0.02f);
+            fc.ErrorAngles = float3.Zero;
+            fc.RollMode = FlightComputerRollMode.Decoupled;
+            t.Check("OutsideAlignGate ignores decoupled roll for X-axis Align",
+                !RcsExecutor.OutsideAlignGate(fc, checkRoll: false));
+            t.Check("OutsideAlignGate rejects decoupled roll for non-X Align",
+                RcsExecutor.OutsideAlignGate(fc, checkRoll: true));
+
+            fc.RollMode = FlightComputerRollMode.Up;
+            fc.ErrorAngles = new float3(0.5f, 0f, 0f);
+            t.Check("OutsideAlignGate ignores roll error for X-axis Align",
+                !RcsExecutor.OutsideAlignGate(fc, checkRoll: false));
+            t.Check("OutsideAlignGate gates on ErrorAngles.X for non-X Align",
+                RcsExecutor.OutsideAlignGate(fc, checkRoll: true));
+
+            fc.ErrorAngles = float3.Zero;
+            t.Check("OutsideAlignGate passes coupled non-X Align within roll deadband",
+                !RcsExecutor.OutsideAlignGate(fc, checkRoll: true));
+
+            // Synthetic capability whose strongest axis is +Y (index 2).
+            RcsFlightSupport.BurnSetup? setup =
+                RcsFlightSupport.AddBurn(vehicle, driver, double3.UnitX, BurnDvMs, 120.0);
+            if (setup != null)
+            {
+                RcsCapabilitySnapshot yCap = new()
+                {
+                    HasAnyTranslation = true,
+                    Ctrl2Body = RcsCtrlFrame.For(vehicle).Ctrl2Body,
+                    Ax2 = new RcsAxisGroup { ForceN = 200f, MassFlowKgS = 0.1f, MinCorrectingImpulseNs = 1f },
+                    RotationTorqueNm = new float3(5000f, 5000f, 5000f),
+                    RotationMassFlowKgS = new float3(1f, 1f, 1f),
+                };
+                fc.RCSMode = FlightComputerRCSMode.Disabled;
+                fc.RollMode = FlightComputerRollMode.Decoupled;
+                RcsEstimates estDecoupled = RcsExecutor.ComputeEstimates(vehicle, setup.BurnTarget, in yCap);
+                fc.RollMode = FlightComputerRollMode.Up;
+                RcsEstimates estCoupled = RcsExecutor.ComputeEstimates(vehicle, setup.BurnTarget, in yCap);
+                t.Check("non-X Align is infeasible under decoupled roll",
+                    estDecoupled.AlignAxis == 2 && !estDecoupled.AlignFeasible);
+                t.Check("non-X Align is feasible under coupled roll",
+                    estCoupled.AlignAxis == 2 && estCoupled.AlignFeasible);
+            }
+
+            // Worker LP config identity check rejects a replaced VehicleConfigInfo even when thruster count matches.
+            int count = fc.VehicleConfig.Thrusters.Count;
+            RcsWorkerCommand matching = new()
+            {
+                Active = true,
+                LpSecondsPerImpulse = new float[count],
+                VehicleConfig = fc.VehicleConfig,
+            };
+            RcsWorkerCommand stale = new()
+            {
+                Active = true,
+                LpSecondsPerImpulse = new float[count],
+                VehicleConfig = new FlightComputer.VehicleConfigInfo(),
+            };
+            t.Check("LpMatchesConfig accepts matching VehicleConfigInfo reference",
+                RcsComputeControlPatch.LpMatchesConfig(matching, fc));
+            t.Check("LpMatchesConfig rejects replaced VehicleConfigInfo with same thruster count",
+                !RcsComputeControlPatch.LpMatchesConfig(stale, fc));
+        }
+        finally
+        {
+            fc.RollMode = prevRoll;
+            fc.ErrorAngles = prevErr;
+            fc.AngleDeadband = prevDeadband;
+            fc.AngleTurnaround = prevTurn;
+            fc.RCSMode = prevRcs;
+            RcsFlightSupport.CleanupBurns(fc);
+        }
+    }
+
     private static bool AdvanceUntilControlTaken(
         Vehicle vehicle, SimDriver driver, out RcsExecution exec)
     {
@@ -683,7 +863,14 @@ public sealed class RcsTranslationTest : AfcTest
         try
         {
             const double CallerMarginSec = FlightComputer.IGNITION_TIME_AUTO_WARP_MARGIN;
-            double controlLeadSec = RcsExecutor.AlignLeadSeconds(in exec.Estimates);
+            Burn burn = fc.BurnPlan.FindFirstExecutableBurn()!;
+            RcsCapabilitySnapshot liveCap = RcsCapability.Probe(vehicle);
+            RcsEstimates liveEstimates = RcsExecutor.ComputeEstimates(vehicle, bt, in liveCap);
+            double controlLeadSec = RcsExecutor.WarpLeadSeconds(vehicle, fc, bt, burn, in liveEstimates);
+            double expectedHalfDur = 0.5 * RcsExecutor.EstimatedDurationSeconds(in liveEstimates, exec.ResolvedStrategy);
+            t.Check("RCS warp lead includes half duration",
+                Math.Abs(controlLeadSec - (expectedHalfDur + RcsExecutor.AlignLeadSeconds(in liveEstimates))) < 1e-6,
+                $"lead={controlLeadSec:F3}s halfDur={expectedHalfDur:F3}s alignLead={RcsExecutor.AlignLeadSeconds(in liveEstimates):F3}s");
             double expected = Math.Max(CallerMarginSec,
                 (originalIgnition - (bt.ImpulsiveInstant - controlLeadSec)).Seconds());
 

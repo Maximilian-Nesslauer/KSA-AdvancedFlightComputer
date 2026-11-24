@@ -193,7 +193,8 @@ internal static class RcsGaugePanel
         double toIgnition = (bt.IgnitionTime - Universe.GetElapsedTime()).Seconds();
         if (toIgnition > 0.0)
             return FormattableString.Invariant($"T-{toIgnition:F0} S");
-        return exec.ResolvedStrategy == RcsAttitudeStrategy.Align && RcsExecutor.OutsideAlignGate(fc)
+        return exec.ResolvedStrategy == RcsAttitudeStrategy.Align
+            && RcsExecutor.OutsideAlignGate(fc, exec.ResolvedAxis >= 2)
             ? "ALIGNING"
             : "FIRING";
     }

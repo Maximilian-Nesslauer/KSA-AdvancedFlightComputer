@@ -23,7 +23,8 @@ internal static class RcsWarpPatch
     {
         FlightComputer fc = vehicle.FlightComputer;
         BurnTarget? bt = fc.Burn;
-        if (bt == null || endTime != bt.IgnitionTime || !double.IsFinite(simTimeMargin))
+        if (bt == null || endTime != bt.IgnitionTime || endTime.IsSaturated()
+            || bt.ImpulsiveInstant.IsSaturated() || !double.IsFinite(simTimeMargin))
             return false;
 
         Burn? burn = fc.BurnPlan.FindFirstExecutableBurn();
@@ -37,7 +38,8 @@ internal static class RcsWarpPatch
         if (!estimates.Valid)
             return false;
 
-        UniverseTime controlTime = bt.ImpulsiveInstant - RcsExecutor.AlignLeadSeconds(in estimates);
+        double leadSec = RcsExecutor.WarpLeadSeconds(vehicle, fc, bt, burn!, in estimates);
+        UniverseTime controlTime = bt.ImpulsiveInstant - leadSec;
         double requiredMargin = (endTime - controlTime).Seconds();
         if (!double.IsFinite(requiredMargin) || requiredMargin <= simTimeMargin)
             return false;

@@ -21,8 +21,8 @@ internal static class RcsBurnUi
         RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? exec);
         RcsBurnOptions? options = exec?.FindOptions(timeSec, dvMs);
         bool isActiveBurn = exec != null && exec.IsActive
-            && options != null
-            && options.Matches(exec.ActiveBurnTimeSec!.Value, exec.ActiveBurnDvMs!.Value);
+            && (ReferenceEquals(exec.ActiveBurn, burn)
+                || (options != null && options.Matches(exec.ActiveBurnTimeSec!.Value, exec.ActiveBurnDvMs ?? dvMs)));
         RcsExecutionMode resolved = RcsExecutor.ResolveMode(vehicle, options);
 
         ImGui.Separator();
