@@ -29,6 +29,15 @@ public static partial class GuidanceWindow
         GaugeRow(Specs.OrbitalEntryQMaxKPa, ref _s.OrbitalEntryQMaxKPa);
         GaugeRow(Specs.OrbitalEntryGMax, ref _s.OrbitalEntryGMax);
         GaugeRow(Specs.OrbitalEntryHeatMaxKWm2, ref _s.OrbitalEntryHeatMaxKWm2);
+        // What this craft can hold at best, once the entry has its model: a MAX HEATING under it cannot be met.
+        if (TierScope.IsPrimaryPass && OrbitalEntryLive && double.IsFinite(st.HeatFloorKWm2))
+        {
+            string least = FormattableString.Invariant($"{st.HeatFloorKWm2:F0} kW/m^2 AT {st.HeatFloorSpeedMs:F0} m/s");
+            if (_s.OrbitalEntryHeatMaxKWm2 > 0 && _s.OrbitalEntryHeatMaxKWm2 < st.HeatFloorKWm2)
+                GaugeRowText("LEAST HEATING", least + ", OVER THE LIMIT", ConsoleStyle.Danger);
+            else
+                GaugeRowText("LEAST HEATING", least);
+        }
 
         if (GuidanceRegion.Begin("ORBITAL ENTRY PARAMETERS", GuidanceRegion.Tuning))
         {

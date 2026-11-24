@@ -170,6 +170,30 @@ public sealed class EntryDynamics
     }
 
     /// <summary>
+    /// THE LEAST PEAK HEATING this craft can fly, W/m^2, and the speed it peaks at, m/s: the equilibrium glide with the plan's most lift up (L/D cos BankMinDeg), from energy e0 to ef. Nothing the plan flies sinks slower at any energy, and heating rises as the craft flies lower at an energy, so no plan's peak lies below this one. A heating limit under it cannot be held. Zero where the glide never meets the air.
+    /// </summary>
+    public (double PeakWm2, double SpeedMs) LeastPeakHeating(double e0, double ef, EntryConfig cfg)
+    {
+        double cosMin = Math.Cos(cfg.BankMinDeg * Math.PI / 180.0);
+        double rTopAir = 1.0 + Model.AtmosphereTop / R0;
+        // Above circular speed at the top of the air nothing holds the craft down to an equilibrium: start where the glide begins.
+        e0 = Math.Max(e0, 0.5 / rTopAir);
+        double peak = 0.0, peakV = 0.0;
+        if (!(ef > e0))
+            return (peak, peakV);
+        const int n = 400;
+        for (int i = 0; i <= n; i++)
+        {
+            double e = e0 + (ef - e0) * i / n;
+            double r = EquilibriumGlideRadius(e, cosMin, cfg);
+            double v = Speed(e, r) * Vs;
+            double q = Model.HeatingRate(Altitude(r), v);
+            if (q > peak) (peak, peakV) = (q, v);
+        }
+        return (peak, peakV);
+    }
+
+    /// <summary>
     /// Heat load per unit of energy, up to a constant: 1 / (C_D sqrt(rho)). From Q = integral 2 m k / (S C_D sqrt(rho)) dE, in which speed cancels.
     /// </summary>
     public double HeatPerEnergy(double e, double r)

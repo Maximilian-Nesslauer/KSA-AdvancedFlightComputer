@@ -204,10 +204,13 @@ internal static class OrbitalEntryCheck
             heatPeak = Math.Max(heatPeak, model.HeatingRate(p.AltitudeM[k], p.SpeedMs[k]));
         }
         double hf = p.AltitudeM[^1];
-        bool ok = p.Converged && floorWorst < 1_000 && Math.Abs(hf - cfg.HandoverAltitude) < cfg.HandoverAltitudeTol + 500;
+        // The least peak heating the craft can fly (EntryDynamics.LeastPeakHeating) is a bound: no plan may peak under it.
+        var (least, leastV) = new EntryDynamics(model).LeastPeakHeating(start.Value.E, EntryPlanner.FinalEnergy(model, cfg), cfg);
+        bool bound = heatPeak >= 0.97 * least;
+        bool ok = p.Converged && floorWorst < 1_000 && Math.Abs(hf - cfg.HandoverAltitude) < cfg.HandoverAltitudeTol + 500 && bound;
         Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} {v.Name} open loop: {(p.Converged ? "converged" : "refused " + res.Why)}, "
                         + $"{p.Iterations} it, {p.SolveMs:F0} ms, defect {p.MaxDefect:F4}, range err {p.TerminalRangeErrorM / 1000:F2} km, "
-                        + $"floor worst {floorWorst:F0} m, h_f {hf / 1000:F1} km, coast {start.Value.SecondsAhead:F0} s, heating peak {heatPeak / 1000:F0} kW/m^2");
+                        + $"floor worst {floorWorst:F0} m, h_f {hf / 1000:F1} km, coast {start.Value.SecondsAhead:F0} s, heating peak {heatPeak / 1000:F0} kW/m^2 (the least it can fly {least / 1000:F0} at {leastV:F0} m/s{(bound ? "" : ", UNDER THE BOUND")})");
         if (verbose || !ok)
         {
             for (int k = 0; k < p.Count; k += Math.Max(1, p.Count / 12))

@@ -51,6 +51,9 @@ public sealed class OrbitalEntryState
     public double LastSolveMs;
     public double PredictedStartS = double.NaN;
 
+    /// <summary>The least peak heating this craft can fly on this entry, kW/m^2, and the speed it peaks at (EntryDynamics.LeastPeakHeating), refreshed at each re-plan; NaN until the trim is built. A MAX HEATING under it cannot be held.</summary>
+    public double HeatFloorKWm2 = double.NaN, HeatFloorSpeedMs = double.NaN;
+
     // ---- tracking ----
     public EntryTracker Tracker;
     public EntryTracker.Output Last;
@@ -128,6 +131,7 @@ public sealed class OrbitalEntryState
         LastRefusal = "";
         LastSolveMs = 0;
         PredictedStartS = double.NaN;
+        HeatFloorKWm2 = HeatFloorSpeedMs = double.NaN;
         Tracker = null;
         Last = default;
         LastStep = double.NaN;

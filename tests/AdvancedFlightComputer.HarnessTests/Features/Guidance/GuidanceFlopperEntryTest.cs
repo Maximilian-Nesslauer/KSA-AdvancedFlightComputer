@@ -187,7 +187,7 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
         var wall = Stopwatch.StartNew();
         double sim = 0.0, nextSample = 0.0;
         double engagedAt = double.NaN, takeOverMach = double.NaN, takeOverAlt = double.NaN, takeOverRange = double.NaN;
-        double peakLoadG = 0.0, peakLoadBellyflopG = 0.0, peakHeat = 0.0, peakHeatAlt = double.NaN, peakHeatMach = double.NaN, peakQ = 0.0;
+        double peakLoadG = 0.0, peakLoadBellyflopG = 0.0, peakHeat = 0.0, peakHeatAlt = double.NaN, peakHeatMach = double.NaN, peakQ = 0.0, leastHeat = double.NaN;
         double endMiss = double.NaN, endSpeed = double.NaN;
         GuidanceWindow.OrbitalEntryPhase lastPhase = GuidanceWindow.OrbitalEntryPhase.Idle;
         bool ended = false;
@@ -232,6 +232,9 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
                 double heat = 1.7415e-4 * Math.Sqrt(rho / Math.Max(state.OrbitalEntryNoseRadiusM, 0.05)) * Math.Pow(st.SpeedMs, 3);
                 if (heat > peakHeat)
                     (peakHeat, peakHeatAlt, peakHeatMach) = (heat, st.AltitudeM, st.Mach);
+                // The least peak from here on falls as the entry goes; the first, from the top, is the craft's.
+                if (double.IsFinite(st.HeatFloorKWm2) && !(st.HeatFloorKWm2 <= leastHeat))
+                    leastHeat = st.HeatFloorKWm2;
                 peakQ = Math.Max(peakQ, 0.5 * rho * st.SpeedMs * st.SpeedMs);
             }
             if (st.AeroAccelKnown)
@@ -283,6 +286,11 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
         t.Info($"peak aero load {peakLoadG:F2} g ({peakLoadBellyflopG:F2} g under bellyflop), dynamic pressure {peakQ / 1000:F1} kPa; " +
                $"heating {peakHeat / 1000:F0} kW/m2 at most, at Mach {peakHeatMach:F1} and {peakHeatAlt / 1000:F1} km; {sim:F0} s flown, {wall.Elapsed.TotalSeconds:F0} s real");
         t.Check("orbital entry engages", !double.IsNaN(engagedAt), state.OrbitalEntry.Status);
+        // With a heating limit set, the flown peak must stay within 5 % of it (the game's density against the plan's, and the tracker's give).
+        double heatLimit = state.OrbitalEntryHeatMaxKWm2;
+        if (heatLimit > 0)
+            t.Check($"the heating peak holds the {heatLimit:F0} kW/m2 limit", peakHeat / 1000 <= 1.05 * heatLimit,
+                FormattableString.Invariant($"{peakHeat / 1000:F0} kW/m2 flown, {peakHeat / 1000 / heatLimit * 100:F0} % of the limit; the least this craft can fly {leastHeat:F0}"));
         t.Check("bellyflop takes over between Mach 5.5 and 4", takeOverMach is >= 4.0 and <= 5.5,
             double.IsNaN(takeOverMach) ? "it never took over" : FormattableString.Invariant($"Mach {takeOverMach:F2}, {takeOverAlt / 1000:F1} km up, {takeOverRange / 1000:F1} km from the site"));
         if (t.Check($"the flight reaches {EndHeightM:F0} m over the site", ended, $"stopped at {sim:F0} s"))

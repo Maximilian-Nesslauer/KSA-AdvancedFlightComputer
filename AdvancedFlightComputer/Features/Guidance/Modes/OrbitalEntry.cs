@@ -365,6 +365,10 @@ public static partial class GuidanceWindow
                 status = FormattableString.Invariant($"HIGH ENERGY: SITE {(st.RangeShortM - st.RangeM) / 1000:F0} KM SHORT OF THE CORRIDOR. ") + status;
             else if (reach < 0)
                 status = FormattableString.Invariant($"LOW ENERGY: SITE {(st.RangeM - st.RangeLongM) / 1000:F0} KM PAST THE CORRIDOR. ") + status;
+            // A heating limit the craft cannot hold explains the rest, so it goes first.
+            bool heatOut = cfg.HeatingRateMax > 0 && double.IsFinite(st.HeatFloorKWm2) && cfg.HeatingRateMax / 1000.0 < st.HeatFloorKWm2;
+            if (heatOut)
+                status = FormattableString.Invariant($"MAX HEATING {cfg.HeatingRateMax / 1000:F0} CANNOT BE HELD: THIS CRAFT FLIES {st.HeatFloorKWm2:F0} kW/m^2 AT LEAST. ") + status;
             if (st.Plan == null)
                 status = double.IsNaN(st.PredictedStartS) ? "PLANNING THE ENTRY." : FormattableString.Invariant($"PLANNING THE ENTRY. AIR IN {st.PredictedStartS:F0} s.");
             else if (!st.Plan.Converged)
@@ -373,7 +377,7 @@ public static partial class GuidanceWindow
             bool offAttitude = st.Tracker.InAir && Math.Abs(st.AlphaFlownDeg - st.AlphaDeg) > 10.0;
             if (offAttitude)
                 status = FormattableString.Invariant($"ATTITUDE NOT HELD: AoA {st.AlphaFlownDeg:F0} DEG FLOWN, {st.AlphaDeg:F0} ASKED. ") + status;
-            st.SetStatus(status, warn: offAttitude || reach != 0 || outp.Overbanked || outp.LiftUpLimit || outp.LiftDownLimit || (st.Plan != null && !st.Plan.Converged));
+            st.SetStatus(status, warn: offAttitude || heatOut || reach != 0 || outp.Overbanked || outp.LiftUpLimit || outp.LiftDownLimit || (st.Plan != null && !st.Plan.Converged));
         }
 
         // ---- attitude ----
@@ -480,6 +484,7 @@ public static partial class GuidanceWindow
     {
         EntryModel model = nominal.WithScales(st.DensityScale, st.LiftToDragScale);
         double R0 = model.BodyRadius;
+        UpdateHeatFloor(vehicle, st, model, cfg, e);
         double e0;
         double[] x0;
         // The plan starts at the plan start drag: from the state as it is once there, before it from the predicted coast down to it.
@@ -509,6 +514,20 @@ public static partial class GuidanceWindow
         {
             st.Pending = _entryPlanner.Solve(model, cfg, e0, x0, warm);
         });
+    }
+
+    /// <summary>
+    /// The least peak heating this craft can fly from here (EntryDynamics.LeastPeakHeating), for the status line's warning when MAX HEATING lies under it. Logged the first time, and again when it moves by more than 5 %.
+    /// </summary>
+    private static void UpdateHeatFloor(Vehicle vehicle, OrbitalEntryState st, EntryModel model, EntryConfig cfg, double e)
+    {
+        var (peak, speed) = new EntryDynamics(model).LeastPeakHeating(e, EntryPlanner.FinalEnergy(model, cfg), cfg);
+        double kw = peak / 1000.0;
+        bool log = !double.IsFinite(st.HeatFloorKWm2) || Math.Abs(kw - st.HeatFloorKWm2) > 0.05 * Math.Max(st.HeatFloorKWm2, 1.0);
+        if (log)
+            GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                $"Orbital entry: the least peak heating this craft can fly is {kw:F0} kW/m2 at {speed:F0} m/s (equilibrium glide at the plan's least bank, {cfg.BankMinDeg:F0} deg, on a {model.NoseRadius:F2} m nose); MAX HEATING {(cfg.HeatingRateMax > 0 ? FormattableString.Invariant($"{cfg.HeatingRateMax / 1000:F0} kW/m2{(cfg.HeatingRateMax < peak ? ", which cannot be held" : "")}") : "off")}."));
+        (st.HeatFloorKWm2, st.HeatFloorSpeedMs) = (kw, speed);
     }
 
     /// <summary>
