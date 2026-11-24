@@ -225,6 +225,7 @@ public sealed class Mod
         {
             LogHelper.WarnOnce($"afc-console-entry:{ex.GetType().Name}", $"[AFC] AFC console failed: {ex}");
         }
+        ScreenLog.Apply();
         UiConfig.Tick();
     }
 
