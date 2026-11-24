@@ -1400,10 +1400,19 @@ public static partial class GuidanceWindow
             else if (_s.Running)
             {
                 ref ManualControlInputs inputs = ref ManualInputs(vehicle);
-                if (_s.Phase == AscentPhase.Terminal && SimNow() >= _s.CutoffTime)
+                if (_s.Phase == AscentPhase.Terminal && !_s.CutoffDone)
                 {
-                    inputs.EngineOn = false;
-                    _s.CutoffDone = true;
+                    double thr = TerminalCutoffThrottle(vehicle, orbit, parent, _s.Upfg.Throttle, out bool cutNow);
+                    if (cutNow)
+                    {
+                        inputs.EngineOn = false;
+                        _s.CutoffDone = true;
+                    }
+                    else
+                    {
+                        inputs.EngineOn = true;
+                        inputs.EngineThrottle = (float)thr;
+                    }
                 }
                 else if (!_s.CutoffDone)
                 {
@@ -2395,5 +2404,37 @@ public static partial class GuidanceWindow
             return 90.0;
         double c = Math.Clamp(double3.Dot(up, dir) / len, -1.0, 1.0);
         return 90.0 - UpfgTarget.RadToDeg(Math.Acos(c));
+    }
+
+    private static double TerminalCutoffThrottle(Vehicle vehicle, Orbit orbit, IParentBody parent,
+                                                 double baseThrottle, out bool cutNow)
+    {
+        double rem = _s.CutoffTime - SimNow();
+        double speed = Math.Max(Universe.GetSimulationSpeed(), 1.0);
+        double dtStep = Math.Clamp(speed / 60.0, 1.0 / 120.0, 1.0);
+        double minThr = vehicle.GetMinThrottle();
+
+        bool hasOrbit = parent != null && orbit != null && parent.Mu > 0.0;
+        double mu = hasOrbit ? parent!.Mu : 0.0;
+        double bodyRadius = hasOrbit ? parent!.MeanRadius : 0.0;
+        double rMag = 0.0, vMag = 0.0, vDotU = 0.0, fullVacAccel = 0.0;
+        if (hasOrbit && rem <= AscentTerminalCutoff.EnergyGateSeconds)
+        {
+            double3 r = orbit!.StateVectors.PositionCci;
+            double3 v = orbit.StateVectors.VelocityCci;
+            rMag = r.Length();
+            vMag = v.Length();
+            if (rMag > 0.0 && vMag > 1.0)
+            {
+                double3 uDir = _s.CommandDir.Length() > 0.5 ? double3.Normalize(_s.CommandDir) : (v / vMag);
+                vDotU = double3.Dot(v, uDir);
+                double mass = Math.Max(vehicle.TotalMass, 1.0);
+                fullVacAccel = KsaEnginePerf.AtPressure(vehicle, 0.0).thrust / mass;
+            }
+        }
+
+        return AscentTerminalCutoff.Evaluate(
+            rem, dtStep, minThr, baseThrottle, hasOrbit, mu, bodyRadius,
+            _s.PeKm, _s.ApKm, rMag, vMag, vDotU, fullVacAccel, out cutNow);
     }
 }
