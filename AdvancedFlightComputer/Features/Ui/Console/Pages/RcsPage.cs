@@ -47,6 +47,12 @@ internal static class RcsPage
 
     internal static void Reset() => _focus = null;
 
+    internal static void OnVehicleDisposed(Vehicle vehicle)
+    {
+        if (_focus != null && ReferenceEquals(_focus.Vehicle, vehicle))
+            _focus = null;
+    }
+
     public static CommitSpec Draw(in PageContext ctx)
     {
         try

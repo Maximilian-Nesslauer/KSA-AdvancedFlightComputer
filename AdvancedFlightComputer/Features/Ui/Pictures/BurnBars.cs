@@ -40,7 +40,7 @@ internal static class BurnBars
         return stages;
     }
 
-    public static string Draw(Vehicle vehicle, IReadOnlyList<BurnBar> bars, double[]? plannedBefore = null, bool burnFits = true)
+    public static string Draw(Vehicle vehicle, IReadOnlyList<BurnBar> bars, double[]? plannedBefore = null, bool burnFits = true, StageFuel[]? precomputedStages = null)
     {
         LastShortMs = 0.0;
         LastOnBoardMs = double.NaN;
@@ -52,7 +52,7 @@ internal static class BurnBars
         double remainingPower = ProbePower.RemainingSeconds(vehicle);
         float scale = ImGuiHelper.InterfaceScale;
         bool chained = plannedBefore != null;
-        StageFuel[] all = StagesOf(vehicle);
+        StageFuel[] all = precomputedStages ?? StagesOf(vehicle);
         bool known = all.Length > 0;
         StageFuel[] stages = chained ? BurnBudget.After(all, plannedBefore!) : all;
         var dvs = new double[bars.Count];

@@ -69,12 +69,12 @@ internal static class TransferPage
             DrawSelection();
         }
         ctx.ToPicture();
-        DrawPicture(in ctx, source);
+        StageFuel[]? stages = DrawPicture(in ctx, source);
         DrawLegendLine(source);
         DrawSelectionResult(source);
         DrawMissionSupply(source, ctx.Flying);
         CollectBars();
-        _fuelFact = BurnBars.Draw(source, _bars);
+        _fuelFact = BurnBars.Draw(source, _bars, precomputedStages: stages);
         if (ctx.Flying && MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? running))
             MultiPassUI.NoteRunningShort(running, BurnBars.LastShortMs);
         if (HohmannMultiPassUI.Enabled)
@@ -249,13 +249,13 @@ internal static class TransferPage
 
     #region Picture
 
-    private static void DrawPicture(in PageContext ctx, Vehicle source)
+    private static StageFuel[]? DrawPicture(in PageContext ctx, Vehicle source)
     {
         PorkchopRaster? raster = TransferSession.SelectBestRel ? TransferSession.RasterRel : TransferSession.RasterDv;
         if (!Picture.Shows("AfcTransferPic", !TransferSession.Calculating && TransferSession.Calculated && raster != null))
         {
             DrawNoPorkchop(ctx.Flying, ctx.Frame.Situation.Where);
-            return;
+            return null;
         }
 
         DrawHeader();
@@ -279,6 +279,7 @@ internal static class TransferPage
         // A page that flies has a limit under the stock burn panel, so its plot gives way like every other picture.
         float wanted = ctx.Flying ? ctx.PictureHeight : Math.Max(ctx.PictureHeight, 280f * scale * (AfcConsole.HasPanes ? 1.4f : 1f));
         float chop = Math.Max(100f * scale, Math.Min(width - side - left - 8f * scale, wanted - head - bottom));
+        StageFuel[]? stages = null;
         using (PictureScope pic = Picture.Open(Picture.FrameHeight(head + chop + bottom)))
         {
             PictureFrame f = pic.Frame;
@@ -286,7 +287,7 @@ internal static class TransferPage
             var plot = new PicBox(f.Min.X + left, f.Min.Y + head, chop, chop);
             var axes = new PictureLanes(lanes.Head, new PicBox(f.Min.X, plot.Y, left, chop), plot, default, new PicBox(f.Min.X, plot.Bottom, plot.Right - f.Min.X, Picture.TextLaneHeight()));
             var nameLane = new PicBox(plot.X, plot.Bottom + Picture.TextLaneHeight(), plot.W, Picture.TextLaneHeight());
-            StageFuel[] stages = BurnBars.StagesOf(source);
+            stages = BurnBars.StagesOf(source);
             double budgetMs = stages.Length == 0 ? double.NaN : BurnBudget.OnBoard(stages);
             double onBoardMs = TransferSession.SelectBestRel ? double.NaN : budgetMs;
             DrawPorkchop(in f, in plot, raster!, raster!.PaidLevel(onBoardMs));
@@ -318,6 +319,7 @@ internal static class TransferPage
                 DrawTransferSketch(in sideFrame, source);
             DrawRampLegend(in f, new PicBox(column.X, column.Bottom - rampH, column.W, rampH), raster!, onBoardMs, noneOwnRow);
         }
+        return stages;
     }
 
     private static void DrawRampLegend(in PictureFrame f, in PicBox box, PorkchopRaster raster, double onBoardMs, bool noneOwnRow)

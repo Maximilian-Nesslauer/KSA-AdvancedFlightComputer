@@ -77,8 +77,10 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
 
     public int EffectiveIterationCap(int requested) => Math.Clamp(requested, 1, IpmIterationCeiling);
 
-    // ---- shared statistics, as ScsWorkspace keeps them, for the offline benchmarks.
+    // Shared statistics kept in a bounded ring buffer so long sessions do not grow unbounded.
     private static readonly object StatsGate = new();
+    private const int MaxSolveSamples = 1024;
+    private static int _solveSampleNext;
     public static double TotalSetupMs, TotalSolveMs;
     public static long TotalCalls, TotalRebuilds, TotalIpmIterations, TotalRefinementFallbacks;
     public static readonly List<double> SolveMsSamples = [];
@@ -90,6 +92,7 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
             TotalSetupMs = TotalSolveMs = 0;
             TotalCalls = TotalRebuilds = TotalIpmIterations = TotalRefinementFallbacks = 0;
             SolveMsSamples.Clear();
+            _solveSampleNext = 0;
         }
     }
 
@@ -190,7 +193,14 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
             TotalCalls++;
             if (rebuilt) TotalRebuilds++;
             TotalIpmIterations += Iterations;
-            SolveMsSamples.Add(LastSetupMs + LastSolveMs);
+            double totalMs = LastSetupMs + LastSolveMs;
+            if (SolveMsSamples.Count < MaxSolveSamples)
+                SolveMsSamples.Add(totalMs);
+            else
+            {
+                SolveMsSamples[_solveSampleNext] = totalMs;
+                _solveSampleNext = (_solveSampleNext + 1) % MaxSolveSamples;
+            }
         }
         return status;
     }

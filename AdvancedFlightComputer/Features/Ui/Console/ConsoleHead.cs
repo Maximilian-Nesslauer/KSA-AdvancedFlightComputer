@@ -143,6 +143,12 @@ internal static class ConsoleHead
         _burnEndTransfer = false;
     }
 
+    public static void OnVehicleDisposed(Vehicle vehicle)
+    {
+        if ((_burnEndBurn != null && ReferenceEquals(_burnEndBurn.Vehicle, vehicle)) || _burnEndCraft == vehicle.Id)
+            ClearBurnEnd();
+    }
+
     private static void RaiseBurnCue(ConsoleFrame f, Vehicle subject)
     {
         if (_burnEndCraft != subject.Id)

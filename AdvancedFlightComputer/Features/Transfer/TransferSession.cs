@@ -346,7 +346,7 @@ internal static class TransferSession
             if (!IsValidated(Selected))
             {
                 Selected = new int2(-1, -1);
-                SelectedEntry = null;
+                SetSelectedEntry(null);
                 CancelRefine();
             }
         }
@@ -388,7 +388,7 @@ internal static class TransferSession
         Selected = index;
         CancelRefine();
         var selectedCopy = new OrbitalTransfers.PorkChopEntry(cell);
-        SelectedEntry = selectedCopy;
+        SetSelectedEntry(selectedCopy);
 
         bool encounter = false;
         foreach (PatchedConic patch in selectedCopy.FlightPlan.Patches)
@@ -430,7 +430,15 @@ internal static class TransferSession
         bool publish = !task.IsCancellationRequested && task.Succeeded;
         task.Dispose();
         if (publish)
-            SelectedEntry = task.Result;
+            SetSelectedEntry(task.Result);
+    }
+
+    private static void SetSelectedEntry(OrbitalTransfers.PorkChopEntry? next)
+    {
+        if (ReferenceEquals(SelectedEntry, next))
+            return;
+        SelectedEntry?.FlightPlan.ReleaseCachedPoints();
+        SelectedEntry = next;
     }
 
     private static void CancelRefine()
@@ -629,13 +637,28 @@ internal static class TransferSession
         BestDv = new int2(-1, -1);
         BestDvRel = new int2(-1, -1);
         Selected = new int2(-1, -1);
-        SelectedEntry = null;
+        SetSelectedEntry(null);
         PresetUnavailable = false;
         CancelRefine();
         RasterDv = null;
         RasterRel = null;
         CancelCorrection();
         _correctionFailed = false;
+    }
+
+    public static void OnVehicleDisposed(Vehicle vehicle)
+    {
+        if (ReferenceEquals(Source, vehicle))
+            SetSource(null);
+        else if (ReferenceEquals(Destination, vehicle))
+            SetDestination(null);
+        if (TransferBurn != null && ReferenceEquals(TransferBurn.Vehicle, vehicle))
+            TransferBurn = null;
+        if (_correctionBurn != null && ReferenceEquals(_correctionBurn.Vehicle, vehicle))
+        {
+            _correctionBurn = null;
+            _correctionTime = null;
+        }
     }
 
     /// <summary>Cancels the workers and drops every result, for a save load and the unload.</summary>
