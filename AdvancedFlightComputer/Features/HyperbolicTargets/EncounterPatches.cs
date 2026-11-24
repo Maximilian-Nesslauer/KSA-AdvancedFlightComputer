@@ -80,7 +80,7 @@ internal static class Patch_TryFindIntercept
 
     /// <summary>Coarse pass at one day, then one minute around the coarse minimum
     /// so a fast flyby is not aliased between coarse samples.</summary>
-    private static double FindPatchedConicClosestApproach(
+    internal static double FindPatchedConicClosestApproach(
         FlightPlan flightPlan, IOrbiter target, double transitSeconds)
     {
         double minDist = double.MaxValue;
