@@ -20,8 +20,9 @@ internal sealed class RcsWorkerCommand
     /// <summary>Construct the ignition time on the main thread because UniverseTime rejects NaN. A conversion failure inside the worker would interrupt the physics step.</summary>
     public UniverseTime IgnitionTime { get; init; }
 
-    /// <summary>Align requires pitch and yaw errors inside the firing gate. Roll about the aligned axis does not change the thrust direction. Hold does not apply an attitude gate.</summary>
+    /// <summary>Align requires pitch and yaw errors inside the firing gate. Non-X axes also set <see cref="RequireRoll"/> because roll rotates the thrust axis off the burn vector. Hold does not apply an attitude gate.</summary>
     public bool RequireAttitude { get; init; }
+    public bool RequireRoll { get; init; }
 
     /// <summary>Limit each pulse in seconds to the stock burn control period.</summary>
     public float MaxPulseSec { get; init; }
@@ -32,8 +33,9 @@ internal sealed class RcsWorkerCommand
     public float3 AxisMinCorrectingImpulsePos { get; init; }
     public float3 AxisMinCorrectingImpulseNeg { get; init; }
 
-    /// <summary>Store seconds of firing per N s of net impulse along LpDirCtrl. Indices match VehicleConfig.Thrusters. The worker checks the length because staging can replace that list between driver ticks. Null selects axis groups.</summary>
+    /// <summary>Store seconds of firing per N s of net impulse along LpDirCtrl. Indices match VehicleConfig.Thrusters, verified by reference against <see cref="VehicleConfig"/> because staging can replace that list while preserving its count. Null selects axis groups.</summary>
     public float[]? LpSecondsPerImpulse { get; init; }
+    public FlightComputer.VehicleConfigInfo? VehicleConfig { get; init; }
     public float3 LpDirCtrl { get; init; }
 
     /// <summary>Impulse ceiling per control period so no single pulse in the LP pattern exceeds <see cref="MaxPulseSec"/>.</summary>

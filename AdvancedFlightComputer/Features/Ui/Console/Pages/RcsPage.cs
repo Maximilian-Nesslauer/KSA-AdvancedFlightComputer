@@ -200,8 +200,9 @@ internal static class RcsPage
         double timeSec = node.Time.Seconds();
         double dvMs = node.DeltaVVlf.Length();
         RcsBurnOptions? options = exec?.FindOptions(timeSec, dvMs);
-        bool active = exec != null && exec.IsActive && options != null
-            && options.Matches(exec.ActiveBurnTimeSec!.Value, exec.ActiveBurnDvMs!.Value);
+        bool active = exec != null && exec.IsActive
+            && (ReferenceEquals(exec.ActiveBurn, node)
+                || (options != null && options.Matches(exec.ActiveBurnTimeSec!.Value, exec.ActiveBurnDvMs ?? dvMs)));
         bool hooks = SharedVehicleHooks.RcsEnabled;
         bool hasThrusters = hooks && vehicle.Parts.Modules.Get<ThrusterController>().Length > 0;
         RcsEstimates est = default;
@@ -243,7 +244,9 @@ internal static class RcsPage
             double timeSec = burn.Time.Seconds();
             double dvMs = burn.DeltaVVlf.Length();
             RcsBurnOptions? options = exec?.FindOptions(timeSec, dvMs);
-            bool rcsFlies = exec != null && exec.IsActive && options != null && options.Matches(exec.ActiveBurnTimeSec!.Value, exec.ActiveBurnDvMs!.Value);
+            bool rcsFlies = exec != null && exec.IsActive
+                && (ReferenceEquals(exec.ActiveBurn, burn)
+                    || (options != null && options.Matches(exec.ActiveBurnTimeSec!.Value, exec.ActiveBurnDvMs ?? dvMs)));
             bool rcs = BurnList.RcsTakes(rcsFlies, options?.Mode == RcsExecutionMode.Rcs, RcsExecutor.ResolveMode(vehicle, options) == RcsExecutionMode.Rcs, canTranslate);
             bool flies = burnFlies && ReferenceEquals(burn, next);
             double toGo = fc.Burn is BurnTarget loaded && StockBurnIdentity.IsLoaded(loaded, burn) ? loaded.DeltaVToGoCci.Length() : dvMs;

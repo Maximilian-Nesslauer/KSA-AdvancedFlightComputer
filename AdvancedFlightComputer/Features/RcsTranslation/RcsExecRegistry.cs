@@ -443,7 +443,7 @@ internal static class RcsExecRegistry
             return false;
 
         if (storedMode != mode || storedAttitude != attitude || storedAllocator != allocator
-            || mode == RcsExecutionMode.Engine || resolvedAllocator != allocator)
+            || mode == RcsExecutionMode.Engine)
             return false;
 
         return resolved switch

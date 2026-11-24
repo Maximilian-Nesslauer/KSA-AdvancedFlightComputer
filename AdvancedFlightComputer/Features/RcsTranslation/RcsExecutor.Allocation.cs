@@ -67,6 +67,7 @@ internal static partial class RcsExecutor
     private static void DropLpSolution(RcsExecution exec, string reason)
     {
         exec.LpSecondsPerImpulse = null;
+        exec.LpVehicleConfig = null;
         exec.LpCostPerImpulse = 0.0;
         exec.LpSlackCostPerImpulse = 0.0;
         exec.LpResidualTorquePerNs = default;
@@ -83,7 +84,7 @@ internal static partial class RcsExecutor
     {
         float[] x = exec.LpSecondsPerImpulse!;
         List<ThrusterController> thrusters = fc.VehicleConfig.Thrusters;
-        if (x.Length != thrusters.Count)
+        if (!ReferenceEquals(exec.LpVehicleConfig, fc.VehicleConfig) || x.Length != thrusters.Count)
             return false;
         float j = float3.Dot(impulseCtrl, exec.LpDirCtrl);
         if (j <= 0f)
@@ -114,6 +115,11 @@ internal static partial class RcsExecutor
             // Refresh capability with the wrench table across staging. A lagging control frame affects the price only.
             exec.Capability = RcsCapability.Probe(vehicle);
             exec.CapabilityProbedAtSec = nowSec;
+        }
+        else if (exec.LpSecondsPerImpulse != null)
+        {
+            // Keep the config token aligned when stock rebuilt VehicleConfig with the exact same thruster modules.
+            exec.LpVehicleConfig = fc.VehicleConfig;
         }
 
         return exec.Wrench;
@@ -200,6 +206,7 @@ internal static partial class RcsExecutor
             slackCost += cost[j] * x[j];
 
         exec.LpSecondsPerImpulse = secondsPerImpulse;
+        exec.LpVehicleConfig = fc.VehicleConfig;
         exec.LpImpulseCapNs = MaxPulseSec / maxX;
         exec.LpCostPerImpulse = costPerImpulse;
         exec.LpSlackCostPerImpulse = slackCost;
