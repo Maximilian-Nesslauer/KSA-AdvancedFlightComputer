@@ -64,7 +64,7 @@ public static class ScvxConic
 /// Holds one workspace per backend and hands back the one <see cref="ScvxConic.Backend"/> selects, so a
 /// subproblem keeps its warm-start iterate or factorisation per backend across a switch and back.
 /// </summary>
-public sealed class ScvxConicWorkspaces
+public sealed class ScvxConicWorkspaces : IDisposable
 {
     private ScsWorkspace? _scs;
     private ClarabelWorkspace? _clarabel;
@@ -88,5 +88,11 @@ public sealed class ScvxConicWorkspaces
     {
         _scs?.ResetWarmStart();
         _clarabel?.ResetWarmStart();
+    }
+
+    public void Dispose()
+    {
+        _clarabel?.Dispose();
+        _clarabel = null;
     }
 }

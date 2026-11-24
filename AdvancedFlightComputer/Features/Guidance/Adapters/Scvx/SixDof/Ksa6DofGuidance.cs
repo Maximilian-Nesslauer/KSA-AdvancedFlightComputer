@@ -16,8 +16,9 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 ///  NODE 0 IS THE VEHICLE, and that has to be enforced rather than assumed. The subproblem pins it as an equality (`X[0][i] = x0[i]`), but the plan we read back is the SCvx REFERENCE trajectory, which only advances on an ACCEPTED step. Reseed sets that reference to the previous plan shifted forward - whose node 0 is the old plan's node `shift`, NOT the vehicle. So a cycle where the ratio test accepts nothing leaves a plan anchored an interval away from the vehicle, and the commands are read at the wrong point on it. AnchorOffsetM measures exactly that, and a plan is refused if it is not anchored.
 ///  NOT THREADED. A re-solve costs ~33 ms in the caller's frame.
 /// </summary>
-public sealed class Ksa6DofGuidance
+public sealed class Ksa6DofGuidance : IDisposable
 {
+    public void Dispose() => _solver.Dispose();
     private const int NX = 14;
     /// <summary>The control count, the base controls and the craft's fins (Scvx6DofConfig.NU).</summary>
     private int NU => _cfg.NU;

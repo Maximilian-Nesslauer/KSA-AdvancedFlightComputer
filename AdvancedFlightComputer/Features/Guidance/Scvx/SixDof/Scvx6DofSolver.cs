@@ -59,8 +59,9 @@ public enum ScvxStatus
 /// exactly one iteration so a guidance loop can spend a fixed budget per cycle
 /// and carry the reference forward, rather than blocking until convergence.
 /// </summary>
-public sealed class Scvx6DofSolver
+public sealed class Scvx6DofSolver : IDisposable
 {
+    public void Dispose() => _sub.Dispose();
     private const int NX = Dynamics6Dof.NX;
     /// <summary>The control count, the base controls and the craft's fins (Scvx6DofConfig.NU).</summary>
     private readonly int NU;

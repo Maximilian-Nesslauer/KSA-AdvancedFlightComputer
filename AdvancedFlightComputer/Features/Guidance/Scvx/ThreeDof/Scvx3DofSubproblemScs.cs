@@ -51,7 +51,7 @@ public sealed class Linearisation3Dof
 ///
 /// The structure is fixed at construction and refilled in place every iteration, as the 6-DOF subproblem is. Rows that apply only at some nodes - the angle-of-attack cone and the retrograde row below the speed threshold - are written as vacuous rows with explicit zeros rather than left out, so the sparsity pattern never changes.
 /// </summary>
-public sealed class Scvx3DofSubproblemScs
+public sealed class Scvx3DofSubproblemScs : IDisposable
 {
     private const int NX = PointMass3Dof.NX;
     private const int NU = PointMass3Dof.NU;
@@ -90,8 +90,10 @@ public sealed class Scvx3DofSubproblemScs
     public bool HitIterationLimit => _ws.HitIterationLimit;
     public bool HasWarmStart => _wss.Current.HasWarmStart;
 
-    /// <summary>The iteration cap the selected backend turns a requested budget into (IScvxConicWorkspace.EffectiveIterationCap).</summary>
-    public int EffectiveIterationCap(int requested) => _wss.Current.EffectiveIterationCap(requested);
+    /// <summary>The iteration cap the last solve backend turns a requested budget into (IScvxConicWorkspace.EffectiveIterationCap).</summary>
+    public int EffectiveIterationCap(int requested) => _ws.EffectiveIterationCap(requested);
+
+    public void Dispose() => _wss.Dispose();
 
     private int IX(int node, int i) => _oX + node * NX + i;
     private int IU(int node, int j) => _oU + node * NU + j;
