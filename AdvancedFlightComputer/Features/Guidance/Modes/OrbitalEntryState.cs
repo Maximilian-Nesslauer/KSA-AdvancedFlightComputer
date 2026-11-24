@@ -180,6 +180,8 @@ public sealed class BellyflopState
     public double3 BearingLocal;
     /// <summary>The range to go the entry leaves for bellyflop at the hand-over, m: the predicted belly-first fall (EntryConfig.TerminalRangeM).</summary>
     public double TerminalRangeM;
+    /// <summary>Bellyflop's reach from the entry plan's hand-over, m of range to go there: its fall held at the reserve's share of the pitch limits nose down and nose up (EntryConfig's reach band). NaN until predicted.</summary>
+    public double TerminalShortM = double.NaN, TerminalLongM = double.NaN;
     /// <summary>Pitch, bank and yaw flown now, deg (the airflow on the belly), for the log and the status.</summary>
     public double PitchDeg = double.NaN, BankDeg = double.NaN, YawDeg = double.NaN;
 
@@ -200,6 +202,7 @@ public sealed class BellyflopState
         LastRefusal = "";
         BearingLocal = default;
         TerminalRangeM = 0;
+        TerminalShortM = TerminalLongM = double.NaN;
         PitchDeg = BankDeg = YawDeg = double.NaN;
     }
 }

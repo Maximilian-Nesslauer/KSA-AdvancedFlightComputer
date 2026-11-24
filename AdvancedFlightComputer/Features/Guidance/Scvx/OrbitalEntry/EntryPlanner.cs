@@ -50,6 +50,11 @@ public sealed class EntryPlanner
         if (e0 >= ef) return new Result { Why = "past the hand-over energy" };
         // The range to go at the hand-over: what the terminal descent after it covers (bellyflop's glide), so the entry aims at the ground through it. Zero aims the hand-over itself at the site.
         double sT = cfg.TerminalRangeM / r0m;
+        // The reach band, or the point itself: the range is priced outside [sLo, sHi].
+        bool band = cfg.HasRangeBand;
+        double sLo = band ? Math.Min(cfg.TerminalRangeShortM / r0m, sT) : sT;
+        double sHi = band ? Math.Max(cfg.TerminalRangeLongM / r0m, sT) : sT;
+        var tb = new TerminalBand(sT, sLo, sHi, band ? cfg.RangeBandShare : cfg.TargetShare, band ? cfg.RangePullShare : 0.0);
 
         int n = Math.Max(cfg.Nodes, 8);
         double[] e = Grid(e0, ef, x0[IR], cfg, r0m, n);
@@ -111,11 +116,11 @@ public sealed class EntryPlanner
             maxDefect = MaxScaledDefect(lin, xs, n);
             // Done once the plan is well inside the gate and the steps have become small: the rest of the iterations would only polish it.
             if (iter > 0 && maxDefect <= 0.25 * cfg.GateDefect && lastStep < 0.02
-                && Math.Abs(x[n - 1, IS] - sT) * r0m <= 0.25 * cfg.GateRangeM)
+                && tb.Outside(x[n - 1, IS]) * r0m <= 0.25 * cfg.GateRangeM)
                 break;
-            double jRef = Merit(dyn, cfg, e, x, u, lin.Defect, c, qRef, floor, rfMin, rfMax, sT, xs, uPrev, corridor);
+            double jRef = Merit(dyn, cfg, e, x, u, lin.Defect, c, qRef, floor, rfMin, rfMax, tb, xs, uPrev, corridor);
 
-            var sub = BuildAndSolve(dyn, cfg, e, x0, x, u, lin, c, qRef, floor, rfMin, rfMax, sT,
+            var sub = BuildAndSolve(dyn, cfg, e, x0, x, u, lin, c, qRef, floor, rfMin, rfMax, tb,
                                     cosMin, cosMax, rollRate, xs, eta, uPrev, corridor, out double jLin);
             if (sub == null)
             {
@@ -127,7 +132,7 @@ public sealed class EntryPlanner
 
             var defC = new double[n - 1, NX];
             Defects(dyn, cfg, e, xc, uc, defC);
-            double jCand = Merit(dyn, cfg, e, xc, uc, defC, c, qRef, floor, rfMin, rfMax, sT, xs, uPrev, corridor);
+            double jCand = Merit(dyn, cfg, e, xc, uc, defC, c, qRef, floor, rfMin, rfMax, tb, xs, uPrev, corridor);
 
             double predicted = jRef - jLin;
             double actual = jRef - jCand;
@@ -155,13 +160,15 @@ public sealed class EntryPlanner
         Linearise(dyn, cfg, e, x, u, lin);
         maxDefect = MaxScaledDefect(lin, xs, n);
         double rangeErr = (x[n - 1, IS] - sT) * r0m;
-        bool ok = maxDefect <= cfg.GateDefect && Math.Abs(rangeErr) <= cfg.GateRangeM;
+        // Inside the band a plan reaches: the gate is on how far outside it the plan ends.
+        double outsideM = tb.Outside(x[n - 1, IS]) * r0m;
+        bool ok = maxDefect <= cfg.GateDefect && outsideM <= cfg.GateRangeM;
 
         var plan = Publish(dyn, cfg, e, x, u, floor, cosMin, ok, iter, maxDefect, rangeErr,
                            sw.Elapsed.TotalMilliseconds, cold);
         string why = ok ? "" : maxDefect > cfg.GateDefect
             ? $"defect {maxDefect:F3} over the gate"
-            : $"misses the target by {rangeErr / 1000:F1} km";
+            : band ? $"ends {outsideM / 1000:F1} km outside bellyflop's reach" : $"misses the target by {rangeErr / 1000:F1} km";
         return new Result { Plan = plan, Why = why };
     }
 
@@ -382,7 +389,7 @@ public sealed class EntryPlanner
 
     /// <summary>The true cost of a trajectory: heat, smoothness and exact penalties on what it violates.</summary>
     static double Merit(EntryDynamics dyn, EntryConfig cfg, double[] e, double[,] x, double[] u, double[,] def,
-                        double[] c, double qRef, double[] floor, double rfMin, double rfMax, double sT, double[] xs, double[]? uPrev, CorridorMargin corridor)
+                        double[] c, double qRef, double[] floor, double rfMin, double rfMax, TerminalBand tb, double[] xs, double[]? uPrev, CorridorMargin corridor)
     {
         int n = e.Length;
         double heat = 0;
@@ -391,7 +398,7 @@ public sealed class EntryPlanner
         double pen = 0;
         for (int k = 0; k < n - 1; k++)
             for (int i = 0; i < NX; i++) pen += Math.Abs(def[k, i]) / xs[i];
-        pen += SlackPenalty(cfg, x, floor, rfMin, rfMax, sT, xs, n);
+        pen += SlackPenalty(cfg, x, floor, rfMin, rfMax, tb, xs, n);
         return j + cfg.PenaltyWeight * pen;
     }
 
@@ -470,12 +477,19 @@ public sealed class EntryPlanner
         return j;
     }
 
-    /// <summary>The slacks' penalty, in PenaltyWeight units: the floors at FloorShare, the terminal range and box at TargetShare.</summary>
-    static double SlackPenalty(EntryConfig cfg, double[,] x, double[] floor, double rfMin, double rfMax, double sT, double[] xs, int n)
+    /// <summary>The terminal range's target: the aim sT, the band [Lo, Hi] priced outside at BandShare, the pull towards the aim inside at PullShare (both in PenaltyWeight units). A point is the band [sT, sT] with no pull.</summary>
+    readonly record struct TerminalBand(double Aim, double Lo, double Hi, double BandShare, double PullShare)
+    {
+        public double Outside(double s) => Math.Max(0, Math.Max(s - Hi, Lo - s));
+    }
+
+    /// <summary>The slacks' penalty, in PenaltyWeight units: the floors at FloorShare, the terminal range outside its band at its share and towards its aim at the pull's, the box at TargetShare.</summary>
+    static double SlackPenalty(EntryConfig cfg, double[,] x, double[] floor, double rfMin, double rfMax, TerminalBand tb, double[] xs, int n)
     {
         double pen = 0;
         for (int k = 0; k < n; k++) pen += cfg.FloorShare * Math.Max(0, floor[k] - x[k, IR]) / xs[IR];
-        pen += cfg.TargetShare * Math.Abs(x[n - 1, IS] - sT) / xs[IS];
+        double sN = x[n - 1, IS];
+        pen += (tb.BandShare * tb.Outside(sN) + tb.PullShare * Math.Abs(sN - tb.Aim)) / xs[IS];
         double rN = x[n - 1, IR];
         pen += cfg.TargetShare * (Math.Max(0, rN - rfMax) + Math.Max(0, rfMin - rN)) / xs[IR];
         return pen;
@@ -488,15 +502,15 @@ public sealed class EntryPlanner
     /// </summary>
     static (double[,], double[])? BuildAndSolve(
         EntryDynamics dyn, EntryConfig cfg, double[] e, double[] x0, double[,] xr, double[] ur, Linearisation lin,
-        double[] c, double qRef, double[] floor, double rfMin, double rfMax, double sT,
+        double[] c, double qRef, double[] floor, double rfMin, double rfMax, TerminalBand tb,
         double cosMin, double cosMax, double rollRate, double[] xs, double eta, double[]? uPrev, CorridorMargin corridor, out double jLin)
     {
         jLin = double.PositiveInfinity;
         int n = e.Length;
         int nI = n - 1;
         int iX = 0, iU = NX * n, iW = iU + n, iT = iW + NX * nI, iF = iT + NX * nI;
-        int iSp = iF + n, iSm = iSp + 1, iRr = iSm + 1;
-        int nv = iRr + 1;
+        int iSp = iF + n, iSm = iSp + 1, iRr = iSm + 1, iBo = iRr + 1;
+        int nv = iBo + 1;
         int X(int k, int j) => iX + NX * k + j;
         int W(int k, int j) => iW + NX * k + j;
         int T(int k, int j) => iT + NX * k + j;
@@ -581,8 +595,9 @@ public sealed class EntryPlanner
         for (int k = 0; k < nI; k++)
             for (int j = 0; j < NX; j++) cvec[T(k, j)] = lam / xs[j];
         for (int k = 0; k < n; k++) cvec[iF + k] = cfg.FloorShare * lam / xs[IR];
-        cvec[iSp] = cfg.TargetShare * lam / xs[IS];
-        cvec[iSm] = cfg.TargetShare * lam / xs[IS];
+        cvec[iSp] = tb.PullShare * lam / xs[IS];
+        cvec[iSm] = tb.PullShare * lam / xs[IS];
+        cvec[iBo] = tb.BandShare * lam / xs[IS];
         cvec[iRr] = cfg.TargetShare * lam / xs[IR];
 
         // ---- Equalities ----
@@ -612,7 +627,7 @@ public sealed class EntryPlanner
         A.Add(row, X(n - 1, IS), 1.0);
         A.Add(row, iSp, -1.0);
         A.Add(row, iSm, 1.0);
-        b[row++] = sT;
+        b[row++] = tb.Aim;
 
         // ---- Inequalities G v <= h ----
         var gRows = new List<(int Col, double Val)[]>();
@@ -652,6 +667,10 @@ public sealed class EntryPlanner
         Le(0, (iRr, -1.0));
         Le(0, (iSp, -1.0));
         Le(0, (iSm, -1.0));
+        // Outside the band: s_N - bo <= Hi, -s_N - bo <= -Lo, bo >= 0.
+        Le(tb.Hi, (X(n - 1, IS), 1.0), (iBo, -1.0));
+        Le(-tb.Lo, (X(n - 1, IS), -1.0), (iBo, -1.0));
+        Le(0, (iBo, -1.0));
         for (int k = 1; k < n; k++)
             for (int j = 0; j < NX; j++)
             {
@@ -698,7 +717,7 @@ public sealed class EntryPlanner
         double pen = 0;
         for (int k = 0; k < nI; k++)
             for (int j = 0; j < NX; j++) pen += Math.Abs(v[W(k, j)]) / xs[j];
-        pen += SlackPenalty(cfg, xc, floor, rfMin, rfMax, sT, xs, n);
+        pen += SlackPenalty(cfg, xc, floor, rfMin, rfMax, tb, xs, n);
         jLin = jl + cfg.PenaltyWeight * pen;
         return (xc, uc);
     }

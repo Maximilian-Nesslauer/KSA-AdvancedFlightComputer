@@ -12,9 +12,9 @@ using KSA;
 /// <summary>
 /// BELLYFLOP: the belly-first terminal descent from the orbital entry's hand-over to the flip (docs/guidance/bellyflop-design.md).
 ///
-///  AIM. Before each entry re-plan, the range the entry leaves at the hand-over is set to bellyflop's predicted belly-first fall from the plan's own hand-over state (BellyflopPlanner.FallRange), so the entry aims at the ground through it.
+///  AIM. Before each entry re-plan, the range the entry leaves at the hand-over is set to bellyflop's predicted fall from the plan's own hand-over state (BellyflopPlanner.FallRange), held at 20 deg of pitch, so the entry aims at the ground through it; and its reach band, the falls held nose down and nose up, outside which alone the entry prices the range (EntryConfig.TerminalRangeShortM).
 ///  PLAN. From OrbitalEntryBellyflopArmMach the planner (Scvx/Bellyflop) solves in the background on its own worker, warm from its last plan: pitch and bank (the airflow's angles on the belly) and yaw over a free flight time, falling onto the site.
-///  TAKE-OVER. At the hand-over (OrbitalEntryHandoverMach) with a converged plan, bellyflop flies the craft: the yaw reference is held from then, and the plan's angles become the nose and belly the attitude controller is given, as the entry's are.
+///  TAKE-OVER. At its first converged plan, from OrbitalEntryBellyflopArmMach (the entry's hand-over at OrbitalEntryHandoverMach is only the latest), bellyflop flies the craft: the yaw reference is held from then, and the plan's angles become the nose and belly the attitude controller is given, as the entry's are.
 /// </summary>
 public static partial class GuidanceWindow
 {
@@ -53,9 +53,16 @@ public static partial class GuidanceWindow
         double alphaBelly = (90.0 - st.Trim.AlphaAt(handMach)) * Math.PI / 180.0;
         double altitude = p.AltitudeM[last] - (siteRadius - parent.MeanRadius);
         // Holding BellyflopAimPitchDeg rather than falling flat: bellyflop can glide far beyond its flat fall and go only a little short of it, so the site is aimed inside its reach, not at the short edge.
-        double range = BellyflopPlanner.FallRange(model, BellyflopConfigNow(), altitude, p.SpeedMs[last], p.Gamma[last], alphaBelly, BellyflopAimPitchDeg * Math.PI / 180.0);
+        BellyflopConfig bcfg = BellyflopConfigNow();
+        double range = BellyflopPlanner.FallRange(model, bcfg, altitude, p.SpeedMs[last], p.Gamma[last], alphaBelly, BellyflopAimPitchDeg * Math.PI / 180.0);
         if (double.IsFinite(range) && range > 0)
             bf.TerminalRangeM = range;
+        // The reach band: the fall held at the reserve's share of the pitch limits each way, nose down (short) and nose up (long). Turns and sideslip reach a little shorter still, so the short edge is a safe one.
+        double share = Math.Clamp(bcfg.LimitMargin, 0.1, 1.0);
+        double shortM = BellyflopPlanner.FallRange(model, bcfg, altitude, p.SpeedMs[last], p.Gamma[last], alphaBelly, -share * bcfg.AngleMaxDeg * Math.PI / 180.0);
+        double longM = BellyflopPlanner.FallRange(model, bcfg, altitude, p.SpeedMs[last], p.Gamma[last], alphaBelly, share * bcfg.PitchUpMaxDeg * Math.PI / 180.0);
+        if (double.IsFinite(shortM) && double.IsFinite(longM) && longM > shortM && shortM > 0)
+            (bf.TerminalShortM, bf.TerminalLongM) = (Math.Min(shortM, bf.TerminalRangeM), Math.Max(longM, bf.TerminalRangeM));
     }
 
     /// <summary>The pitch the entry's aim assumes bellyflop holds after the hand-over, deg: a fall a little longer than flat, so the site sits inside bellyflop's reach with room to go short.</summary>
@@ -189,9 +196,9 @@ public static partial class GuidanceWindow
             });
         }
 
-        // ---- take-over: at the hand-over (HAND-OVER MACH) with a plan that reaches the site, solved in the background from BELLYFLOP FROM MACH so it is ready; the entry holds its attitude until one comes. ----
+        // ---- take-over: at the first plan that reaches the site, solved in the background from BELLYFLOP FROM MACH; HAND-OVER MACH is only the latest, where the entry holds its attitude until one comes. Waiting for Mach 5 with a plan in hand (2026-11-24) left the entry to fly on against a point it could no longer reach. ----
         if (!flying && (st.Phase is OrbitalEntryPhase.Entry or OrbitalEntryPhase.Holding)
-            && mach <= _s.OrbitalEntryHandoverMach && bf.Plan != null && bf.Plan.Converged && bf.Model != null)
+            && bf.Plan != null && bf.Plan.Converged && bf.Model != null)
         {
             st.Phase = OrbitalEntryPhase.Bellyflop;
             st.Tracker.Reset();

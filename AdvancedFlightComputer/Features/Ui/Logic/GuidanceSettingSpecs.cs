@@ -288,9 +288,9 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec OrbitalEntryHandoverAltKm = new("OrbitalEntryHandoverAltKm", "HAND-OVER ALTITUDE", "km", P, 38.0, 1.0, 200.0, "%.1f",
         "Where orbital entry guidance ends, with HAND-OVER MACH: BELLYFLOP takes over there, or with it off the craft holds its entry attitude.");
     public static readonly SettingSpec OrbitalEntryHandoverMach = new("OrbitalEntryHandoverMach", "HAND-OVER MACH", "", P, 5.0, 0.2, 20.0, "%.2f",
-        "Airspeed over the sea-level speed of sound at the hand-over, as the aero tables measure Mach: where BELLYFLOP takes over.");
+        "Airspeed over the sea-level speed of sound at the hand-over, as the aero tables measure Mach: where orbital entry guidance's plan ends. BELLYFLOP takes over at its first plan that reaches the site, from BELLYFLOP FROM MACH on, and the entry holds its attitude here until one comes.");
     public static readonly SettingSpec OrbitalEntryBellyflopArmMach = new("OrbitalEntryBellyflopArmMach", "BELLYFLOP FROM MACH", "", P, 10.0, 0.5, 20.0, "%.1f",
-        "Bellyflop starts solving in the background from this Mach, so its plan is ready when it takes over at HAND-OVER MACH.");
+        "Bellyflop starts solving in the background from this Mach and takes over at its first plan that reaches the site. Its belly-first tables reach Mach 8; above it, it plans with their Mach 8 values.");
     public static readonly SettingSpec OrbitalEntryBellyflopAngleMaxDeg = new("OrbitalEntryBellyflopAngleMaxDeg", "BELLYFLOP PITCH DOWN", "deg", E, 20.0, 2.0, 45.0, "%.0f",
         "Bellyflop's largest pitch nose down past belly-first: the airflow's angle on the belly towards the tail.");
     public static readonly SettingSpec OrbitalEntryBellyflopPitchUpDeg = new("OrbitalEntryBellyflopPitchUpDeg", "BELLYFLOP PITCH UP", "deg", E, 55.0, 2.0, 80.0, "%.0f",

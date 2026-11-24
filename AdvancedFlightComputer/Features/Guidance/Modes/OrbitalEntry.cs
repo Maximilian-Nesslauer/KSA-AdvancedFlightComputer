@@ -293,6 +293,8 @@ public static partial class GuidanceWindow
             {
                 UpdateBellyflopRangeTarget(vehicle, parent, st);
                 cfg.TerminalRangeM = st.Bellyflop.TerminalRangeM;
+                cfg.TerminalRangeShortM = st.Bellyflop.TerminalShortM;
+                cfg.TerminalRangeLongM = st.Bellyflop.TerminalLongM;
             }
             QueueOrbitalEntrySolve(vehicle, parent, st, cfg, nominal, e, rMag, vMag, gamma, rangeRad, drag, now);
         }

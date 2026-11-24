@@ -75,6 +75,17 @@ public sealed class EntryConfig
     /// <summary>The range to go to the site at the hand-over, m: what the terminal descent after it covers (bellyflop's predicted glide to the ground). Zero aims the hand-over itself at the site.</summary>
     public double TerminalRangeM { get; set; }
 
+    /// <summary>
+    /// THE REACH BAND: where the terminal descent can still take the craft from the hand-over, m of range to go there (bellyflop's shortest fall and longest glide). With both set, the range is priced only outside the band, at RangeBandShare of the dynamics, and pulled lightly towards TerminalRangeM inside it (RangePullShare). Aimed at a point, as before, the corridor closed on it at the hand-over, the point moved 9 km with bellyflop's predicted fall at Mach 6.4, and every entry plan after it was refused, bending its dynamics to a point bellyflop did not need (2026-11-24). NaN for a point.
+    /// </summary>
+    public double TerminalRangeShortM { get; set; } = double.NaN;
+    public double TerminalRangeLongM { get; set; } = double.NaN;
+    public double RangeBandShare { get; set; } = 0.5;
+    public double RangePullShare { get; set; } = 0.05;
+
+    /// <summary>True when the terminal range is a band (TerminalRangeShortM, TerminalRangeLongM).</summary>
+    public bool HasRangeBand => double.IsFinite(TerminalRangeShortM) && double.IsFinite(TerminalRangeLongM) && TerminalRangeLongM > TerminalRangeShortM;
+
     // ---- Solver ----
 
     public int Nodes { get; set; } = 60;

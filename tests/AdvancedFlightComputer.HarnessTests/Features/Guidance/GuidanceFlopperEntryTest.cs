@@ -291,7 +291,9 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
         if (heatLimit > 0)
             t.Check($"the heating peak holds the {heatLimit:F0} kW/m2 limit", peakHeat / 1000 <= 1.05 * heatLimit,
                 FormattableString.Invariant($"{peakHeat / 1000:F0} kW/m2 flown, {peakHeat / 1000 / heatLimit * 100:F0} % of the limit; the least this craft can fly {leastHeat:F0}"));
-        t.Check("bellyflop takes over between Mach 5.5 and 4", takeOverMach is >= 4.0 and <= 5.5,
+        // Bellyflop takes over at its first converged plan from BELLYFLOP FROM MACH; HAND-OVER MACH is the latest.
+        double armMach = state.OrbitalEntryBellyflopArmMach;
+        t.Check($"bellyflop takes over between Mach {armMach:F1} and 4", takeOverMach >= 4.0 && takeOverMach <= armMach + 0.2,
             double.IsNaN(takeOverMach) ? "it never took over" : FormattableString.Invariant($"Mach {takeOverMach:F2}, {takeOverAlt / 1000:F1} km up, {takeOverRange / 1000:F1} km from the site"));
         if (t.Check($"the flight reaches {EndHeightM:F0} m over the site", ended, $"stopped at {sim:F0} s"))
             t.Check($"within {missLimitM:F0} m of the site at {EndHeightM:F0} m up", endMiss <= missLimitM,
