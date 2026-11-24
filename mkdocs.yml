@@ -109,9 +109,15 @@ nav:
   - Developer:
       - dev/index.md
       - Control ownership: control-ownership.md
+      - Core subsystems:
+          - AutoStage: dev/autostage.md
+          - Maneuvers and transfers: dev/maneuvers-and-transfers.md
+          - Console and testing: dev/console-and-testing.md
       - Guidance:
           - guidance/README.md
           - Runtime: guidance/runtime.md
+          - UPFG and ascent hand-over: guidance/upfg.md
+          - Boostback and reserve: guidance/boostback.md
           - G-FOLD: guidance/gfold.md
           - Impact steering: guidance/reference-material/impact-steering.md
       - Successive convexification:

@@ -1,167 +1,51 @@
 # Touchdown guidance on the craft
 
-Touchdown guidance re-solves a trajectory-optimisation problem from the craft's measured state every tenth of a second and flies the first part of the answer. This page covers what happens around the solver: how a plan becomes a throttle setting and gimbal deflections, the receding-horizon loop, and where the flight design departs from textbook successive convexification.
+This page covers the **integration bridge** between the 6-DOF SCvx solver and a live vehicle in KSA: coordinate conversions, reading controls from the published plan, converting torque and thrust into actuator commands, and running the asynchronous receding-horizon worker loop.
 
-The problem itself - state, dynamics, every constraint and how it is made convex, the objective and this solver's settings - is on [Touchdown guidance (6-DOF)](scvx/touchdown.md). The machinery all of AFC's SCvx planners share is on [Successive convexification](scvx/index.md).
+- For the mathematical problem, constraints, scaling, `vc-rv` virtual control, two-grid schedule (`N = 25` to `N = 15`), defect gates, and safety guards, see [Touchdown (6-DOF)](scvx/touchdown.md).
+- For the shared persistent `ClarabelWorkspace` and SCvx machinery, see [Successive convexification](scvx/index.md).
+- For historical engineering lessons learned during initial flight bring-up, see [Dev notes](scvx-bridge-devnotes.md).
 
-For the development history and the specific traps encountered along the way, see [scvx-bridge-devnotes.md](scvx-bridge-devnotes.md).
+## 1. Frame conventions (`KsaFrameBridge`)
 
-!!! note "Architecture summary"
-    For the full mathematical formulation and current runtime parameters, see [Touchdown guidance (6-DOF)](scvx/touchdown.md). The solver runs through persistent `ClarabelWorkspace` (`IScvxConicWorkspace`) on a two-grid schedule (`N = 25` coast+burn to `N = 15` burn-only) with asynchronous `InitCold` initialisation on the worker thread, shared differentiable `EngineThrustTable(u, P)`, closed-form 2-term `MomentLimiter` plus rotational damping, `AttitudeFeedback6Dof` between re-solves, per-channel SI defect gates, and hover-aware climb-cut / emergency braking guards rather than a planned hover hand-off.
+The 6-DOF solver operates in a **site frame** with origin at the landing target and `+z` up, treated as inertial during each solve.
+KSA works in body-centred inertial (CCI) with scalar-last quaternions, while the solver uses scalar-first quaternions.
+`KsaFrameBridge` converts states, vectors and quaternions in both directions through rotation matrices so neither convention can be misread.
 
----
+Model body axes are derived from the measured thrust direction (`+z` along thrust) so any vehicle assembly orientation works.
+A round-trip check (convert out, convert back, compare) is exposed in diagnostics to catch any axis swap, handedness error, or sign flip.
 
-## Contents
+## 2. From plan to actuator commands
 
-1. [From plan to vehicle commands](#1-from-plan-to-vehicle-commands)
-2. [Receding horizon: this is an MPC, not a planner](#2-receding-horizon-this-is-an-mpc-not-a-planner)
-3. [Departures from textbook SCvx](#3-departures-from-textbook-scvx)
-4. [Code map](#4-code-map)
+Every simulation step, `Ksa6DofGuidance.Command` evaluates the latest accepted plan at $t = t_{\text{now}} - t_{\text{solve}}$ by linear interpolation between nodes, matching the solver's first-order-hold collocation:
 
----
+- **Attitude feedback between re-solves (`AttitudeFeedback6Dof`):** adds a closed-loop torque correction $\boldsymbol\tau_{\text{fb}}$ against the plan's attitude and rate at the same instant, sharing the correction across gimbals and RCS in proportion to their remaining room (`SixDofTorqueMargin`, 20 % reserve).
+- **Gimbal torque (`KsaTvcAllocator` + `KsaGimbalControl`):** converts the model's lateral thrust and coupled off-centre roll into body torque $\boldsymbol\tau_{\text{gim}}$ and solves the circular-cone TVC allocation ($\sqrt{u_{c_0}^2 + u_{c_1}^2} \le 1$) for per-gimbal deflections on the vehicle worker.
+- **Engine throttle (`EngineThrustTable`):** the solver outputs site-reference axial thrust in newtons, not throttle fraction. Because ambient back pressure $-P_a A_e$ causes a non-linear low-throttle deficit, `Ksa6DofGuidance.Command` inverts the shared differentiable 2D cubic B-spline `EngineThrustTable(u, P)` at live ambient pressure so commanded newtons match delivered thrust (matching `Dynamics6Dof.F` and eliminating 3-DOF to 6-DOF hand-over thrust jumps).
+- **RCS and fins:** plan RCS torques route through `KsaRcsTorqueControl` (LP allocation + pulse modulation), and plan fin deflections route fin-by-fin through `GuidanceWindow.FlyPlanFins`.
 
-## 1. From plan to vehicle commands
+## 3. Asynchronous receding-horizon loop (`Ksa6DofSolveWorker`)
 
-The output is a trajectory: state and control at `N` nodes over `sigma` seconds. Turning that into actuator commands is a short chain, but every link has a convention that must match the game's.
+Touchdown guidance never flies open loop. Every `0.1 s` (`10 Hz`), the main thread publishes a fresh state snapshot and dispatches work to the background `Ksa6DofSolveWorker`:
 
-### Frames
-
-The model works in a **site frame** - origin at the landing target, `+z` up - and treats it as inertial. The game works in a body-centred inertial frame and uses a scalar-**last** quaternion; the model uses scalar-**first**. `KsaFrameBridge` converts in both directions, routing through rotation matrices so the conversion cannot depend on either convention being guessed right.
-
-The model's body axes are derived from the *measured thrust direction* rather than assumed, so a vehicle assembled with any orientation still works. A round-trip check (convert out, convert back, compare) is exposed in the UI as the single number that would catch an axis swap, a handedness error or a sign flip.
-
-### Reading the control at the current instant
-
-The plan's control is sampled at `t = now - solve_time` and interpolated linearly between nodes - matching the assumption the collocation itself made. Immediately after a solve this returns node 0's control, which is the control the optimiser chose *for the vehicle's actual current state*.
-
-### Torque
-
-The model's lateral thrust becomes a body torque directly, from the geometry of an engine hanging below the centre of mass:
-
-```
-tau_body = r_engine x T_body = ( L*tdy, -L*tdx, tau_roll )
-```
-
-That torque is converted to the game's body axes and handed to an allocator, which solves a small least-squares problem for the per-gimbal deflections that produce it - including the roll verniers. The allocator clamps each axis independently, because roll authority on this class of vehicle is hundreds of times weaker than pitch and yaw, and a single over-large roll demand would otherwise scale down the whole solution.
-
-### Thrust
-
-The optimiser asks for **newtons**, not a throttle fraction. Converting to a throttle setting requires knowing what the engines can actually produce *right now*, which only the game side knows, so that conversion happens at the boundary rather than inside the guidance.
-
-It is not a division. In an atmosphere, nozzle thrust is
-
-```
-F = m-dot*Ve + (Pe - Pa)*Ae
-```
-
-The momentum term scales with throttle, but the ambient back-pressure term `-Pa*Ae` does not - throttle sets *combustion pressure*, not thrust. So
-
-```
-F(t) = t*F(1) - Pa*Ae*(1 - t)
-```
-
-which is a near-constant deficit, largest at low throttle, exactly where a descent lives. The commanded throttle is therefore obtained by **inverting the engine's real thrust curve numerically**, so the newtons requested are the newtons delivered.
-
----
-
-## 2. Receding horizon: this is an MPC, not a planner
-
-The trajectory is never flown open loop. Every cycle:
-
-1. Measure the vehicle state.
-2. Re-solve, seeded with the previous plan shifted forward in time.
-3. Apply the first fraction of the new plan.
-4. Discard the rest.
-
-There is no trajectory-tracking controller - no PD loop, no attitude reference, no gain schedule. **The feedback is the re-solve.** Because node 0 is pinned to the measured state, every plan begins where the vehicle actually is, and disturbances are absorbed by re-planning rather than corrected against a stored reference.
-
-Two properties follow, and they cut in opposite directions:
-
-- Anything wrong with the vehicle's *state* is corrected automatically, every cycle.
-- Anything wrong with the *model* is not corrected at all. Every re-plan meets the same error and makes the same mistake. Section 3 covers the mechanism added for that.
-
-Warm starting matters enormously here. The shifted previous plan is a very good guess, so a re-solve typically takes a few milliseconds against a few hundred for a cold start.
-
----
-
-## 3. Departures from textbook SCvx
-
-These are the additions this implementation makes to textbook SCvx, and why. Each one, with its current settings, is also in [What this solver does differently](scvx/touchdown.md#what-this-solver-does-differently).
-
-### Offset-free MPC: an estimated acceleration bias
-
-Standard MPC re-anchors the *state* but keeps planning with the same *model*. If a persistent force is missing from the model - a thrust calibration error, drag, a wrong gravity constant - every re-plan encounters it identically: the plan promises to arrive, the vehicle falls short, the next plan promises again. Re-solving cannot fix a model error.
-
-So the guidance estimates the residual acceleration
-
-```
-bias = measured acceleration - ( thrust/m + gravity )
-```
-
-low-pass filters it, clamps it, and **adds it to the planner's gravity vector**. The optimiser then plans *around* the disturbance instead of rediscovering it every cycle.
-
-Estimating the lumped residual rather than any individual term is deliberate: it requires no theory about which effect is responsible, and it tracks drag falling away as speed comes off.
-
-### A proximal term instead of large regularisers
-
-The reference formulation penalises control rate and body rate to keep the trajectory smooth. Those penalties also, incidentally, add positive-definite mass to `P` and hold the subproblem's conditioning together - so tuning them down to fix the trajectory triples the solver's iteration count.
-
-A **proximal** term `rho||(X - X-bar)/scale||^2` restores exactly that conditioning without the side effect. Being centred on the current reference rather than on zero, it expresses no preference about the answer, and it vanishes at convergence where `X = X-bar`.
-
-### Soft path constraints that start at node 1
-
-Optional glideslope and descent-rate corridors are added as a second-order cone and a linear row per node. Two design choices make them safe:
-
-**They skip node 0.** Node 0 is pinned by equality to the measured state. A hard constraint that the vehicle is *already violating* makes the problem infeasible by construction - no plan at all, precisely when one is most needed.
-
-**They carry penalised slacks.** The sharper hazard is two corridors interacting: outside a glideslope cone and too low, the only way back inside is to climb - which a descent-rate constraint forbids. Hard versions of both can trap the vehicle in a region with no feasible exit. Soft versions cannot.
-
-The penalties are **L1, not quadratic**. An L1 penalty is *exact*: above a finite weight, the solution is identical to the hard-constrained one, so the slack sits at exactly zero whenever the corridor is reachable. A quadratic penalty always trades a little violation for a little objective, and would quietly fly just outside the corridor forever.
-
-### A wall-clock budget, not an iteration cap
-
-Textbook SCvx runs to a tolerance. Running inside a game's simulation thread, a solve that takes a second is a visible freeze.
-
-An iteration cap does not bound time - one ADMM iteration costs several times more at 80 nodes than at 30. So the cap is derived each cycle from a *measured* cost per iteration against a wall-clock budget, with a larger escalated budget for the rare hard subproblem.
-
-The flight tolerance is also far looser than the validation tolerance. Measured across a descent, `1e-5`, `1e-4` and `1e-3` produce the same trajectory at very different cost; the tail of the ADMM iteration is almost the entire bill and buys nothing.
-
-### A defect gate in metres
-
-Whether a plan is flyable is an absolute question - a 10 cm discrepancy over a 20 second trajectory is fine whether the target is 2 km away or 50 m. But the solver's internal defect is normalised by the problem scale, whose length is the *range to target*, so a fixed scaled tolerance silently tightens as the vehicle closes in.
-
-The flight gate is therefore expressed in **metres**. The solver's own convergence test still uses the scaled figure, where it belongs.
-
-### A node ladder
-
-Node count steps down at fixed altitudes rather than being held constant. Since spacing is `sigma/(N-1)` and `sigma` shrinks on approach, a fixed count buys steadily finer resolution than the problem needs.
-
-It is a ladder rather than a continuously tracked value because changing `N` changes the problem's dimensions: the sparsity pattern is frozen at construction, so a new count means a new solver and the loss of the warm start. The reference *trajectory* survives by interpolation onto the new node count, and that is the seed that matters - measured 5-90x cheaper than a cold solve at the transition.
-
-### Hand-off to a hover controller
-
-The last few metres are the worst case for this solver and the easiest for a simple controller. The horizon has collapsed to a handful of nodes over a second or two, so the trust region rather than the physics is what binds; meanwhile the terminal state - near-zero velocity, upright, holding a point - is exactly what a hover PID is for. Optimising a descent is the wrong question by then, so the guidance hands over.
-
----
+1. **Async cold start (`Ksa6DofJob.InitCold`):** `StartSixDofStandby` reads immutable vehicle/body properties on the main thread, clones mutable target arrays, and dispatches `Ksa6DofGuidance` construction and `BeginCold` to the worker thread so standby engagement never hitches the main simulation thread.
+2. **Warm re-solve:** resamples the previous plan onto the shrinking horizon (cubic Hermite for position/velocity, linear for the rest), smoothly blends $(q, \boldsymbol\omega)$ onto the measured state via `ColdReferenceShift`, refreshes live inertia, closed-form 2-term `MomentLimiter`, `EngineThrustTable`, and offset-free acceleration bias, and solves through persistent `ClarabelWorkspace` (`IScvxConicWorkspace`, `SCS` optional).
+3. **Publication gate:** a candidate plan replaces the active plan only if its nonlinear defects pass the per-channel SI defect gate (`MaxDefectM = 1 m` in the commit horizon) and its anchor offset is within `1 m`. Refused cycles keep the previous plan; extended plan loss triggers the emergency `TerminalBraking` / G-FOLD backstop or hover fallback below `SixDofLostPlanGateM`.
 
 ## 4. Code map
 
 | File | Role |
-|---|---|
-| `AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/Dynamics6Dof.cs` | The nonlinear dynamics and their Jacobians |
-| `AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/Scvx6DofSubproblemScs.cs` | Builds one cone program per iteration |
-| `AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/Scvx6DofSolver.cs` | The SCvx loop: linearise, solve, ratio test, trust region |
-| `AdvancedFlightComputer/Features/Guidance/Conic/ClarabelWorkspace.cs` | Persistent Clarabel workspace (`IScvxConicWorkspace`) with zero-allocation numerical refills |
-| `AdvancedFlightComputer/Features/Guidance/Conic/ScsWorkspace.cs` | Optional SCS backend behind `IScvxConicWorkspace` |
-| `AdvancedFlightComputer/Features/Guidance/Adapters/KsaFrameBridge.cs` | Frame, body-axis and quaternion conversions |
-| `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/Ksa6DofSetup.cs` | Measures the live vehicle into a solver configuration |
-| `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/Ksa6DofGuidance.cs` | The MPC loop and the command interface |
-| `AdvancedFlightComputer/Features/Guidance/Control/TvcAllocator.cs` | Body torque -> per-gimbal deflections |
-| `AdvancedFlightComputer/Features/Guidance/Control/EnginePerf.cs` | Engine capability and the thrust-curve inversion |
-| `AdvancedFlightComputer/Features/Guidance/Modes/SixDof.cs` | UI, stepping, telemetry, hand-off |
-
-### Validation
-
-`tests/AdvancedFlightComputer.Guidance.Tests/Scvx` runs the solver headless against a JAX reference implementation and a set of behavioural checks - closed-loop MPC with injected dispersions, path-constraint enforcement, node-ladder transitions, defect behaviour against range, and solve-time distributions. `dotnet run --project tests/AdvancedFlightComputer.Guidance.Tests/Scvx -c Release -- --help` lists them.
-
-In flight, `SixDofLog` writes per-cycle telemetry (`-cycle.csv`), periodic whole-plan snapshots (`-plan.csv`) and an event log (`-events.log`).
+| --- | --- |
+| [Dynamics6Dof.cs](../../AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/Dynamics6Dof.cs) | Nonlinear 6-DOF dynamics, `EngineThrustTable` back-pressure parity, dual-number Jacobians |
+| [BodyAero6Dof.cs](../../AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/BodyAero6Dof.cs) | Body-axis aero tables, fins, rotational damping, closed-form 2-term `MomentLimiter` |
+| [Scvx6DofSubproblemScs.cs](../../AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/Scvx6DofSubproblemScs.cs) | Frozen-sparsity cone program assembly (`CcsAssembler`) |
+| [Scvx6DofSolver.cs](../../AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/Scvx6DofSolver.cs) | SCvx loop, merit, trust region, quaternion normalization |
+| [ClarabelWorkspace.cs](../../AdvancedFlightComputer/Features/Guidance/Conic/ClarabelWorkspace.cs) | Persistent native Clarabel workspace (`IScvxConicWorkspace`) |
+| [ScsWorkspace.cs](../../AdvancedFlightComputer/Features/Guidance/Conic/ScsWorkspace.cs) | Optional SCS backend behind `IScvxConicWorkspace` |
+| [KsaFrameBridge.cs](../../AdvancedFlightComputer/Features/Guidance/Adapters/KsaFrameBridge.cs) | Site/CCI frame, body-axis and quaternion conversions |
+| [Ksa6DofSetup.cs](../../AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/Ksa6DofSetup.cs) | Measures live vehicle properties into solver config and `GuidanceModelSnapshot` |
+| [Ksa6DofGuidance.cs](../../AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/Ksa6DofGuidance.cs) | MPC loop, `vc-rv` pricing stages, `Command` actuator boundary |
+| [Ksa6DofSolveWorker.cs](../../AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/Ksa6DofSolveWorker.cs) | Background worker thread (`InitCold`, warm re-solves) |
+| [TvcAllocator.cs](../../AdvancedFlightComputer/Features/Guidance/Control/TvcAllocator.cs) | Circular-cone body torque to per-gimbal deflections |
+| [SixDof.cs](../../AdvancedFlightComputer/Features/Guidance/Modes/SixDof.cs) | Mode driver, two-grid transitions, hover-aware climb-cut and safety guards |
+| [SixDofStandby.cs](../../AdvancedFlightComputer/Features/Guidance/Modes/SixDofStandby.cs) | Asynchronous background standby pre-planning before hand-over |
