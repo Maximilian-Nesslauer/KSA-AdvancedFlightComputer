@@ -2369,7 +2369,7 @@ public static partial class GuidanceWindow
             return null;
         ReadOnlySpan<Astronomical> all = system.All.AsSpan();
         for (int i = 0; i < all.Length; i++)
-            if (all[i] is Vehicle v && !ReferenceEquals(v, exclude) && v.Id == id)
+            if (all[i] is Vehicle v && !v.IsDisposed && !ReferenceEquals(v, exclude) && v.Id == id)
                 return v;
         return null;
     }

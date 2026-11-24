@@ -23,7 +23,8 @@ public static partial class GuidanceWindow
             return;
 
         Ksa6DofGuidance g = st.Guidance;
-        if (g == null || !g.HasPlan)
+        Ksa6DofPlan plan = g?.Published;
+        if (plan == null || plan.Nodes < 2)
             return;
         if (!SetupProjection(parent))
             return;
@@ -32,12 +33,11 @@ public static partial class GuidanceWindow
         double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         KsaFrameBridge.SiteFrame f = KsaFrameBridge.BuildSiteFrame(siteCci);
 
-        ReadOnlySpan<double> px = g.PlanState;
-        ReadOnlySpan<double> pu = g.PlanControl;
-        int n = g.Nodes;
-        // The plan's control count per node: the base controls and one per fin.
-        int nu = n > 0 ? pu.Length / n : 0;
-        if (px.Length < n * 14)
+        double[] px = plan.X;
+        double[] pu = plan.U;
+        int n = plan.Nodes;
+        int nu = plan.NU;
+        if (px == null || pu == null || px.Length < n * 14 || nu < 3 || pu.Length < n * nu)
             return;
 
         var trajCol = Ui.Canvas.Palette.Plan.Solid;
@@ -134,9 +134,7 @@ public static partial class GuidanceWindow
         OvLine(dl, siteCci, targetCci, padCol, 1.0f);
 
         // --- where the tracker thinks the vehicle should be right now --- Drawn against the live vehicle so plan-vs-flown divergence is visible in the world, not just as a number.
-        if (g.Published is not { } published || published.Nodes != n)
-            return;
-        (int k0, double frac) = published.Locate(g.PlanElapsed);
+        (int k0, double frac) = plan.Locate(Math.Max(0.0, SimNow() - plan.SolveTime));
         int k1 = Math.Min(k0 + 1, n - 1);
         double3 refCci = node[k0] * (1.0 - frac) + node[k1] * frac;
         if (TryProjectCci(refCci, out float2 rs))

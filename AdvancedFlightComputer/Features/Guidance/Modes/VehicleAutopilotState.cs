@@ -461,6 +461,8 @@ public sealed class VehicleAutopilotState
     public bool MoonChainCapture;
     /// <summary>Sim time from which the current stage may plan its next burn, s.</summary>
     public double MoonChainAfter = double.NaN;
+    /// <summary>Remaining frame steps to wait after a burn or SOI change so vehicle workers publish the updated flight plan.</summary>
+    public int MoonChainSettleSteps;
     /// <summary>The node the chain made for the current burn, with the burn target stock loaded for it and the time and delta v the node had then. A node that differs from these was changed by the player.</summary>
     public Burn MoonChainNode;
     public BurnTarget MoonChainTarget;
@@ -654,6 +656,7 @@ public sealed class VehicleAutopilotState
     internal double DeorbitNodeTime = double.NaN;
     internal bool DeorbitNodeClaimed;
     internal bool DeorbitAutoArmed;
+    internal bool DeorbitBurnCompleted;
     internal bool DeorbitWarpRequested;
     internal double DeorbitWarpTime = double.NaN;
     internal ProbeWarpRetry DeorbitPowerWarp;

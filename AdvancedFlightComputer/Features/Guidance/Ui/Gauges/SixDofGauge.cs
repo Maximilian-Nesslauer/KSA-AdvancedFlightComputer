@@ -57,8 +57,8 @@ public static partial class GuidanceWindow
             return;
         }
 
-        Ksa6DofGuidance g = _s.Guidance;
-        if (g == null || !g.HasPlan)
+        Ksa6DofPlan plan = _s.Guidance?.Published;
+        if (plan == null)
         {
             ConsoleUi.Sentence((_s.Converging ? "SOLVING FIRST PLAN" : "STARTED, NO PLAN").AsSpan(), in ConsoleStyle.TextPrimary);
         }
@@ -78,9 +78,10 @@ public static partial class GuidanceWindow
         if (_s.SixDofStandbyRefusal.Length > 0)
             GaugeRowText(D, "STANDBY REFUSED", _s.SixDofStandbyRefusal, ConsoleUi.WarnInk);
         Ksa6DofGuidance g = _s.Guidance;
-        if (g != null && g.HasPlan)
-            GaugeRowText(D, "BURN TIME", Fmt.TimeFine(g.Sigma));
-        if (_s.SixDofTrack && g != null && g.HasPlan)
+        Ksa6DofPlan plan = g?.Published;
+        if (plan != null)
+            GaugeRowText(D, "BURN TIME", Fmt.TimeFine(plan.Sigma));
+        if (_s.SixDofTrack && plan != null)
             GaugeRowText(D, "OFF PLAN",
                 FormattableString.Invariant($"{g.TrackingError.PositionM:F1} m, {g.TrackingError.VelocityMs:F1} m/s, THRUST {g.TrackingError.ThrustN / 1e3:+0;-0} kN"));
         else
@@ -180,9 +181,9 @@ public static partial class GuidanceWindow
         GaugeRowCheck(Specs.SixDofNodeGates, ref _s.SixDofNodeGates);
         using (new ImGuiDisabledScope(!_s.SixDofNodeGates))
             GaugeRow(Specs.SixDofNodeDtTarget, ref _s.SixDofNodeDtTarget);
-        if (_s.SixDofNodeGates && _s.Guidance != null && _s.Guidance.HasPlan)
+        if (_s.SixDofNodeGates && _s.Guidance?.Published is { } plan)
             GaugeRowText(T, "ACTUAL POINT SPACING",
-                FormattableString.Invariant($"{_s.Guidance.Sigma / Math.Max(_s.Guidance.Nodes - 1, 1):F2} s"));
+                FormattableString.Invariant($"{plan.Sigma / Math.Max(plan.Nodes - 1, 1):F2} s"));
 
         // Switching threading mid-flight is the point of having the toggle, so it has to be safe: stop the worker on the way off, start one on the way on.
         GaugeRowCheck(Specs.ScvxClarabel, ref _s.ScvxClarabel);

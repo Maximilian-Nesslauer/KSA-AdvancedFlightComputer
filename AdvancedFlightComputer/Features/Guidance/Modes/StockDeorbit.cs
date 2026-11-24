@@ -49,9 +49,11 @@ public static partial class GuidanceWindow
     }
 
     // FlightComputer.CopyFrom preserves the BurnTarget reference, so completion evidence survives removal of the node.
+    // Stock raises RaisePendingAlerts on completion before post-step RCS pulses can nudge DeltaVToGoCci back positive on short burns.
     private static bool StockDeorbitComplete => _s.DeorbitAutoArmed && _s.DeorbitTarget != null
-        && _s.DeorbitTarget.DeltaVTargetCci.LengthSquared() > 0
-        && float3.Dot(_s.DeorbitTarget.DeltaVToGoCci, _s.DeorbitTarget.DeltaVTargetCci) <= 0;
+        && (_s.DeorbitBurnCompleted
+            || (_s.DeorbitTarget.DeltaVTargetCci.LengthSquared() > 0
+                && float3.Dot(_s.DeorbitTarget.DeltaVToGoCci, _s.DeorbitTarget.DeltaVTargetCci) <= 0));
 
     // BurnTarget.UpdateFromBurn takes ImpulsiveInstant from Burn.ImpulseTime, so the node is recorded and checked by that time too.
     private static bool StockDeorbitTargetUnchanged => _s.DeorbitTarget != null
@@ -219,6 +221,7 @@ public static partial class GuidanceWindow
         // FlightComputer.BurnUpdated runs BurnTarget.UpdateFromBurn on the same loaded target, which clears PlannedIgnition, and marks the flight plans out of date, so stock predicts the ignition again at the Auto throttle.
         fc.BurnUpdated(_s.DeorbitNode);
         _s.DeorbitAutoArmed = true;
+        _s.DeorbitBurnCompleted = false;
         _s.LandingPhase = LandingPhase.DeorbitBurn;
         _s.LandingStatus = "STOCK AUTO: ALIGN + DEORBIT BURN";
         GuidanceLog.Info(vehicle, $"stock deorbit node armed: time {plan.DepartureTime:F3} s, delta-v {plan.DeltaV.Length():F3} m/s, minimum-throttle duration {duration:F3} s.");
@@ -318,6 +321,7 @@ public static partial class GuidanceWindow
         _s.DeorbitNode = null;
         _s.DeorbitTarget = null;
         _s.DeorbitAutoArmed = false;
+        _s.DeorbitBurnCompleted = false;
         _s.DeorbitWarpRequested = false;
         _s.DeorbitWarpTime = double.NaN;
         _s.DeorbitPowerWarp = ProbeWarpRetry.None;
