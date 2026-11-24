@@ -304,6 +304,11 @@ public static partial class GuidanceWindow
     private const double BankHoldStepDeg = 2.5;
     private const double BankHoldFloorDeg = 5.0;
 
+    /// <summary>
+    /// The oldest standby plan the hand-over from bellyflop takes, s: under the 3 s after which the standby starts again (SixDofStandbyStaleRestartS), over the 0.5 s the glide's takes. While bellyflop flies the craft, touchdown's standby re-solves are refused now and then on small rate and attitude errors at their first node (1.1 to 8 times the gate), so its plan is seldom under 0.5 s old: in the 2026-11-24 15:48 flight it converged three times and was never handed the craft. Once it flies, touchdown re-solves from the craft's state at once.
+    /// </summary>
+    private const double BellyflopHandoverPlanAgeS = 2.5;
+
     /// <summary>The flip's share of touchdown's burn-time seed, s: 90 deg at about 15 deg/s.</summary>
     private const double BellyflopFlipSeedS = 6.0;
 
@@ -412,7 +417,7 @@ public static partial class GuidanceWindow
         _s.SixDofCoastSeedS = coast;
         StepSixDofStandby(vehicle, parent, siteCci, x14, now, burn);
         // DUE SHORTLY BEFORE TOUCHDOWN'S IGNITION, as the glide's hand-over is (StepEntryTouchdownOwn): THREE-DOF TAKEOVER BEFORE IGNITION before the ignition touchdown's plan has now, or THREE-DOF TAKEOVER BEFORE IMPACT before bellyflop's ground, whichever is earlier. Bellyflop flies the belly-first coast; touchdown, re-solving on standby from the craft as bellyflop flies it, takes the flip and the burn. Handed the craft at its first plan, 27 s before ignition, touchdown did not hold it belly first: it lost its drag, fell from 52 to 99 m/s, every re-solve was refused on the turn rates it had not planned, and it lit on the old plan's clock at 152 m (harness, Starship, 2026-11-24). Bellyflop had it 16 m off the site at 100 m.
-        if (bf.TouchdownHandoff == null && SixDofStandbyReady(now) && _s.Guidance?.Published is { } td)
+        if (bf.TouchdownHandoff == null && SixDofStandbyReady(now, BellyflopHandoverPlanAgeS) && _s.Guidance?.Published is { } td)
         {
             double ignition = td.HasCoast ? td.IgnitionTime : now;
             double due = Math.Min(ignition - Math.Max(_s.ThreeDofTakeoverBeforeIgnitionS, 0.0), plan.EndTime - Math.Max(_s.ThreeDofTakeoverBeforeImpactS, 0.0));
@@ -440,7 +445,7 @@ public static partial class GuidanceWindow
             st.Bellyflop.TouchdownHandoffRetryAt = SimNow() + 5.0;
             return;
         }
-        if (!SixDofStandbyReady(SimNow()))
+        if (!SixDofStandbyReady(SimNow(), BellyflopHandoverPlanAgeS))
             return;
         GuidanceLog.Info(vehicle, handoff);
         Engage6Dof(vehicle, fromBrakingBurn: true, tookBurn: false);
