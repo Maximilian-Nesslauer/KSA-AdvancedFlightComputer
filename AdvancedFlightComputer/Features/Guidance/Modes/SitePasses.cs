@@ -74,17 +74,16 @@ public static partial class GuidanceWindow
         double phiDot = double.IsNaN(msProbe)
             ? meanMotion
             : meanMotion - (msProbe - ms0) / probe;
-        if (!(phiDot > 1e-9))
+        if (!(Math.Abs(phiDot) > 1e-9))
             phiDot = meanMotion;   // degenerate geometry: fall back to the orbit alone
+        bool descending = phiDot < 0.0;
 
-        double lap = TwoPi / phiDot;
+        double lap = TwoPi / Math.Abs(phiDot);
         double step = Math.Max(lap / 12.0, period / 24.0);
 
-        // BRACKET, then refine. phi is monotonic but distinctly non-linear across a lap, so walking it in steps and refining inside whichever step contains the crossing finds every root, in order, and cannot invent or skip one.
-        //
-        // Extrapolating instead - Newton against a single measured slope - was wrong by about a fifth over several laps, which is comparable to a whole lap by the fourth pass: it walked into the NEXT root and dropped one entirely.
-        // Still only a few dozen trig evaluations, against 1200 propagations before.
-        long j = (long)Math.Floor(phi0 / TwoPi) + 1;
+        long j = descending
+            ? (long)Math.Ceiling(phi0 / TwoPi) - 1
+            : (long)Math.Floor(phi0 / TwoPi) + 1;
         double tA = 0.0, phiA = phi0, msPrev = ms0;
 
         for (int guard = 0; guard < PassStepBudget && _s.Passes.Count < PassesToShow; guard++)
@@ -96,11 +95,12 @@ public static partial class GuidanceWindow
             double phiB = m0 + meanMotion * tB - msB;
 
             // A single step can straddle more than one target if the orbit is short against the step, so drain them all before moving on.
-            while (_s.Passes.Count < PassesToShow && phiB >= TwoPi * j)
+            while (_s.Passes.Count < PassesToShow && (descending ? phiB <= TwoPi * j : phiB >= TwoPi * j))
             {
                 double target = TwoPi * j;
                 double lo = tA, phiLo = phiA, hi = tB, phiHi = phiB;
-                double t = lo + (target - phiLo) * (hi - lo) / (phiHi - phiLo);
+                double denom = phiHi - phiLo;
+                double t = Math.Abs(denom) > 1e-12 ? lo + (target - phiLo) * (hi - lo) / denom : 0.5 * (lo + hi);
 
                 // False position: the bracket is kept valid at every step, so this cannot leave the interval however non-linear phi is inside it.
                 for (int i = 0; i < 4; i++)
@@ -109,9 +109,10 @@ public static partial class GuidanceWindow
                     if (double.IsNaN(msT))
                         break;
                     double phiT = m0 + meanMotion * t - msT;
-                    if (phiT < target) { lo = t; phiLo = phiT; }
+                    bool before = descending ? phiT > target : phiT < target;
+                    if (before) { lo = t; phiLo = phiT; }
                     else { hi = t; phiHi = phiT; }
-                    if (phiHi - phiLo < 1e-12)
+                    if (Math.Abs(phiHi - phiLo) < 1e-12)
                         break;
                     t = lo + (target - phiLo) * (hi - lo) / (phiHi - phiLo);
                 }
@@ -119,7 +120,7 @@ public static partial class GuidanceWindow
                 SiteMeanAnomaly(parent, t, n, u, w, ecc, bodyRadius, msPrev, out double crossM);
                 if (!double.IsNaN(crossM) && t >= 0.0)
                     _s.Passes.Add((t, Math.Abs(crossM) / 1000.0, crossM / 1000.0));
-                j++;
+                j += descending ? -1 : 1;
             }
 
             tA = tB;

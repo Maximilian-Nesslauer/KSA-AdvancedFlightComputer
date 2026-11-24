@@ -140,7 +140,7 @@ public static partial class GuidanceWindow
             }
 
             // NOT ONE THAT REACHES ORBIT. A stage that separates once the climb is over - an upper stage leaving its payload, a capsule - is already going orbital speed, and no boostback brings that home, command pod or not. The climb is over when nothing left aboard lights at this sequence or later: the booster's own separation lights the stage above it, and a strap-on's leaves the core and the upper stage still to fire. Hot staging, an upper stage lit a sequence before the booster leaves, would read as orbital here.
-            bool climbGoesOn = LightsLater(engines, i);
+            bool climbGoesOn = LightsLater(engines, sequences[i].Number);
 
             // ONE ENTRY PER SEPARATED ROOT, not per sequence (#130). Two side boosters leaving on one sequence are two craft, each needing its own target. Each root is judged on the part of its subtree it takes with it: a root nested inside another's subtree on the same row leaves as a craft of its own.
             for (int r = 0; r < _returnRoots.Count; r++)
@@ -285,11 +285,11 @@ public static partial class GuidanceWindow
     // Everything the separations so far in the walk drop, this one included.
     private static readonly HashSet<Part> _returnDropsSoFar = new HashSet<Part>();
 
-    /// <summary>True when an engine still aboard after the separations so far (<see cref="_returnDropsSoFar"/>) is lit by sequence <paramref name="sequence"/> or a later one: the climb goes on after that separation.</summary>
-    private static bool LightsLater(Span<EngineController> engines, int sequence)
+    /// <summary>True when an engine still aboard after the separations so far (<see cref="_returnDropsSoFar"/>) is lit by sequence <paramref name="sequenceNumber"/> or a later one: the climb goes on after that separation.</summary>
+    private static bool LightsLater(Span<EngineController> engines, int sequenceNumber)
     {
         for (int e = 0; e < engines.Length; e++)
-            if (engines[e].Sequence >= sequence && !_returnDropsSoFar.Contains(engines[e].Parent.FullPart))
+            if (engines[e].Sequence > 0 && engines[e].Sequence >= sequenceNumber && !_returnDropsSoFar.Contains(engines[e].Parent.FullPart))
                 return true;
         return false;
     }

@@ -56,7 +56,12 @@ internal static class EntryDeorbitPlanner
         if (!(current.PositionCci.Length() > entry) || !(request.Source.GetPeriapsisPositionOrb().Length() > entry))
             return null;
         refusal = "NO SUPPLIED ENGINE FOR DEORBIT.";
-        if (request.Engines.Length == 0 || !(request.ExhaustVelocity > 0.0))
+        if (request.Engines.Length == 0)
+            return null;
+        // Entry burns execute at the minimum-throttle preview point, so cutoff mass and duration both use Engines[0].
+        DeorbitEngine minimum = request.Engines[0];
+        double exhaustVelocity = minimum.MassFlow > 0.0 ? minimum.Thrust / minimum.MassFlow : double.NaN;
+        if (!(exhaustVelocity > 0.0) || !(minimum.MassFlow > 0.0))
             return null;
 
         const double schedulingMargin = 45.0;
@@ -87,13 +92,13 @@ internal static class EntryDeorbitPlanner
                 refusal = "NO RETROGRADE BURN TO THAT ENTRY PERIAPSIS.";
                 return null;
             }
-            double cutoff = request.Mass * Math.Exp(-dv.Length() / request.ExhaustVelocity);
+            double cutoff = request.Mass * Math.Exp(-dv.Length() / exhaustVelocity);
             if (request.Model.Stages.Count == 0 || cutoff < request.Model.Stages[0].MassDry)
             {
                 refusal = "INSUFFICIENT PROPELLANT FOR THE ENTRY BURN.";
                 return null;
             }
-            double duration = (request.Mass - cutoff) / request.Engines[0].MassFlow;
+            double duration = (request.Mass - cutoff) / minimum.MassFlow;
             double earliestDeparture = epoch + preparation + schedulingMargin + duration * 0.6;
             if (departure.Seconds() < earliestDeparture)
             {

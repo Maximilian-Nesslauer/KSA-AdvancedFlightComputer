@@ -109,7 +109,7 @@ public static partial class GuidanceWindow
 
     private static double DescentPlanToGo()
     {
-        if (_s.Active && _s.Guidance != null && _s.Guidance.HasPlan && _s.Guidance.Published is { } published)
+        if (_s.Active && _s.Guidance?.Published is { } published)
             return published.Duration - (SimNow() - published.SolveTime);
         return _s.LandingPhase == LandingPhase.GfoldDescent && _s.GfoldPlan != null ? _s.GfoldArrivalTime - SimNow() : double.NaN;
     }
@@ -165,7 +165,7 @@ public static partial class GuidanceWindow
             legend = Draw6DofPlannedPath(dl, ToPlot, plotMin, plotMax);
         DrawGfoldFlownPath(dl, ToPlot, plotMin, plotMax);
 
-        double thrNow = _s.Active && _s.Guidance != null && _s.Guidance.HasPlan ? _s.LastThrottle : _s.GfoldThrottle;
+        double thrNow = _s.Active && _s.Guidance?.Published != null ? _s.LastThrottle : _s.GfoldThrottle;
         double altNow = TryLastTraceSample(out float2 lastSample) ? lastSample.Y : _s.GfoldAltM;
         string caption = PlotShowsTouchdown ? SixDofCaption() : "";
         bool newPlan = !stopped && _planJumps.GetOrCreateValue(_s).Update(DescentPlanToGo(), GuidanceClock.NowMs / 1000.0);
@@ -285,11 +285,11 @@ public static partial class GuidanceWindow
                 altM = Math.Max(altM, pos[0]);
             }
         }
-        else if (_s.Active && _s.Guidance != null && _s.Guidance.HasPlan)
+        else if (_s.Active && _s.Guidance?.Published is { } published)
         {
-            ReadOnlySpan<double> px = _s.Guidance.PlanState;
-            int n = _s.Guidance.Nodes;
-            if (px.Length >= n * 14)
+            double[] px = published.X;
+            int n = published.Nodes;
+            if (px != null && px.Length >= n * 14)
             {
                 for (int k = 0; k < n; k++)
                 {
@@ -425,55 +425,48 @@ public static partial class GuidanceWindow
     private static int Draw6DofPlannedPath(ImDrawListPtr dl, Func<double, double, float2> toPlot,
                                            float2 lo, float2 hi)
     {
-        Ksa6DofGuidance g = _s.Guidance;
-        if (g == null || !g.HasPlan)
+        Ksa6DofPlan plan = _s.Guidance?.Published;
+        if (plan == null || plan.Nodes < 2)
             return 1;
 
-        int n = g.Nodes;
-        if (n < 2)
+        int n = plan.Nodes;
+        double[] px = plan.X;
+        double[] pu = plan.U;
+        if (px == null || px.Length < n * 14)
             return 1;
 
-        // Materialised up front: a Span cannot be captured by a local function, and projecting each node once is cheaper than doing it per use anyway.
         var pt = new float2[n];
         var thrust = new float2[n];
         var thrustMag = new double[n];
         double topThrust = 0.0;
-        bool haveThrust;
+        int nu = plan.NU;
+        bool haveThrust = pu != null && nu >= Dynamics6Dof.NUBase && pu.Length >= n * nu;
+
+        // KsaFrameBridge's site frame is Z-UP - (ex, ey, up) - unlike the G-FOLD frame above it, which is X-up. So height is index 2 and the horizon is 0 and 1, the other way round from DrawGfoldPlannedPath.
+        for (int k = 0; k < n; k++)
         {
-            ReadOnlySpan<double> px = g.PlanState;
-            ReadOnlySpan<double> pu = g.PlanControl;
-            // The plan's control count per node: the base controls and one per fin.
-            int nu = n > 0 ? pu.Length / n : 0;
-            if (px.Length < n * 14)
-                return 1;
-            haveThrust = nu >= Dynamics6Dof.NUBase && pu.Length >= n * nu;
+            int b = k * 14;
+            double horiz = Math.Sqrt(px[b + 0] * px[b + 0] + px[b + 1] * px[b + 1]);
+            pt[k] = toPlot(horiz, px[b + 2]);
 
-            // KsaFrameBridge's site frame is Z-UP - (ex, ey, up) - unlike the G-FOLD frame above it, which is X-up. So height is index 2 and the horizon is 0 and 1, the other way round from DrawGfoldPlannedPath.
-            for (int k = 0; k < n; k++)
-            {
-                int b = k * 14;
-                double horiz = Math.Sqrt(px[b + 0] * px[b + 0] + px[b + 1] * px[b + 1]);
-                pt[k] = toPlot(horiz, px[b + 2]);
+            if (!haveThrust)
+                continue;
 
-                if (!haveThrust)
-                    continue;
+            // The control starts with thrust in BODY coordinates (the plan's control count per node: lateral, lateral, axial, then the torques and the fins) - NOT three, and not in the site frame. It has to be rotated by the node's attitude quaternion before it means anything spatially, which is exactly what the world overlay does.
+            int c = k * nu;
+            KsaFrameBridge.QuatToMatrix(px[b + 6], px[b + 7], px[b + 8], px[b + 9],
+                out double3 b0, out double3 b1, out double3 b2);
+            double3 tSite = b0 * pu[c + 0] + b1 * pu[c + 1] + b2 * pu[c + 2];
 
-                // The control starts with thrust in BODY coordinates (the plan's control count per node: lateral, lateral, axial, then the torques and the fins) - NOT three, and not in the site frame. It has to be rotated by the node's attitude quaternion before it means anything spatially, which is exactly what the world overlay does.
-                int c = k * nu;
-                KsaFrameBridge.QuatToMatrix(px[b + 6], px[b + 7], px[b + 8], px[b + 9],
-                    out double3 b0, out double3 b1, out double3 b2);
-                double3 tSite = b0 * pu[c + 0] + b1 * pu[c + 1] + b2 * pu[c + 2];
-
-                // Up component, and the component along "away from the pad". Directly over the pad there is no meaningful range direction, so only the vertical part survives.
-                double alongRange = horiz > 1e-6
-                    ? (tSite.X * px[b + 0] + tSite.Y * px[b + 1]) / horiz
-                    : 0.0;
-                double mag = Math.Sqrt(tSite.Z * tSite.Z + alongRange * alongRange);
-                if (mag > 1e-6)
-                    thrust[k] = new float2((float)(-alongRange / mag), (float)(-tSite.Z / mag));
-                thrustMag[k] = mag;
-                topThrust = Math.Max(topThrust, mag);
-            }
+            // Up component, and the component along "away from the pad". Directly over the pad there is no meaningful range direction, so only the vertical part survives.
+            double alongRange = horiz > 1e-6
+                ? (tSite.X * px[b + 0] + tSite.Y * px[b + 1]) / horiz
+                : 0.0;
+            double mag = Math.Sqrt(tSite.Z * tSite.Z + alongRange * alongRange);
+            if (mag > 1e-6)
+                thrust[k] = new float2((float)(-alongRange / mag), (float)(-tSite.Z / mag));
+            thrustMag[k] = mag;
+            topThrust = Math.Max(topThrust, mag);
         }
 
         double burnThrust = haveThrust ? topThrust * PlanBurnShare : -1.0;
