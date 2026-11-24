@@ -161,8 +161,17 @@ public static partial class GuidanceWindow
             }
             st.Worker = new Ksa3DofWorker();
             st.Phase = OrbitalEntryPhase.Entry;
-            // The belly-first body and surface tables, on the side the trim chose: the same sweep as the nose- and engine-first ones, so the attitude controller and the fins' and flaps' allocator read the air belly first as they read it the other ways.
-            if (KsaAeroSweep.TryStart(vehicle, parent, now, out KsaAeroSweep.Job tables, out string tablesError, bellySide: st.BellyIndex))
+            // The belly-first body and surface tables, on the side the trim chose: the same sweep as the nose- and engine-first ones, so the attitude controller and the fins' and flaps' allocator read the air belly first as they read it the other ways. Shared with touchdown guidance (ResampleBoostbackAero): the craft's own sweep is taken where it already has them on this side, and this one becomes the craft's when it lands.
+            _s.AeroBellySide = st.BellyIndex;
+            KsaAeroSweep.Result shared = _s.Aero;
+            if (shared?.SphereBodyAero != null && shared.BellyBodyAero != null && shared.BellySide == st.BellyIndex
+                && ReferenceEquals(shared.Parent, parent) && !SweepStale(shared, vehicle))
+            {
+                st.Aero = shared;
+                st.TablesReady = true;
+                GuidanceLog.Info(vehicle, $"Orbital entry: belly-first tables on {st.BellyAxisName} taken from the craft's own sweep, {shared.Surfaces?.Length ?? 0} control surfaces.");
+            }
+            else if (KsaAeroSweep.TryStart(vehicle, parent, now, out KsaAeroSweep.Job tables, out string tablesError, bellySide: st.BellyIndex))
                 st.TablesJob = tables;
             else
                 GuidanceLog.Info(vehicle, "Orbital entry: the belly-first tables could not be swept (" + tablesError + "); the attitude holds without them.");
@@ -182,6 +191,9 @@ public static partial class GuidanceWindow
             {
                 st.Aero = swept;
                 st.TablesReady = true;
+                // The craft's sweep too, for touchdown guidance and whatever flies after (ResampleBoostbackAero).
+                _s.Aero = swept;
+                _s.AeroJob = null;
                 GuidanceLog.Info(vehicle, FormattableString.Invariant(
                     $"Orbital entry: belly-first tables on {st.BellyAxisName} swept, {swept.Surfaces?.Length ?? 0} control surfaces so far."));
             }

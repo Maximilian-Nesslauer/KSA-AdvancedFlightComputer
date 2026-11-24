@@ -1810,6 +1810,7 @@ public static partial class GuidanceWindow
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
         UpdateMomentLimiter(vehicle, now);
         _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz).WithMomentLimiter(_s.MomentLimiterPerPa);
+        LogAeroCheck(vehicle, x, now, "flying");
 
         // The first command after braking handover uses the plan the braking mode checked.
         if (!firstBrakingCommand && now - _s.LastReplan >= cadence)
@@ -1857,6 +1858,62 @@ public static partial class GuidanceWindow
         _s.MomentLimiterPerPa = double.IsFinite(_s.MomentLimiterPerPa) && _s.MomentLimiterPerPa > 0.0
             ? 0.7 * _s.MomentLimiterPerPa + 0.3 * perPa
             : perPa;
+    }
+
+    /// <summary>How often the AERO CHECK is logged, s (LogAeroCheck).</summary>
+    private const double AeroCheckEveryS = 1.0;
+
+    /// <summary>
+    /// AERO CHECK: touchdown guidance's air model against the game's own, at the craft's state as it is, for a craft with whole-sphere tables (a belly-flopper). Every AeroCheckEveryS, in the game log and the 6-DOF event log: the force in model body axes, kN, and the moment, kN m, the model gives (Ksa6DofGuidance.ModelAeroWrench) with the flaps where they are now, and apart, the body's with them at rest and so the flaps' share, against the game's (KsaAeroSweep.TryLiveAero) as the sweep measures it (no moment limiter) and as the integrator applies it (at its substep); the flaps as flown and as the plan commands them. A Starship's touchdown plan held the air and its flaps to about nothing belly first while the craft felt -1.1 to -1.2 MN m on model x, which bellyflop's flaps had been trimming (2026-11-24): this says which of the body's tables and the flaps' is wrong. Main thread: it reads the craft. Not on a predicted state.
+    /// </summary>
+    internal static void LogAeroCheck(Vehicle vehicle, double[] x, double now, string phase)
+    {
+        Ksa6DofGuidance g = _s.Guidance;
+        if (g == null || x == null || _s.Aero?.SphereBodyAero == null || now - _s.AeroCheckAt < AeroCheckEveryS)
+            return;
+        _s.AeroCheckAt = now;
+        try
+        {
+            if (!KsaAeroSweep.TryLiveAero(vehicle, out double3 fGame, out double3 tGame))
+                return;
+            double dt = vehicle.KinematicMeasurements.DeltaTime;
+            bool applied = KsaAeroSweep.TryLiveAero(vehicle, out _, out double3 tApplied, dt);
+            var surfaces = new List<ControlSurface>();
+            Ksa6DofSetup.FinsFor(vehicle, _s.Aero, surfaces);
+            int nf = g.FinCount;
+            var flown = new double[nf];
+            for (int i = 0; i < Math.Min(nf, surfaces.Count); i++)
+                flown[i] = surfaces[i].DeflectionDeg;
+            Span<double> wFlown = stackalloc double[6], wRest = stackalloc double[6];
+            if (!g.ModelAeroWrench(x, flown, wFlown) || !g.ModelAeroWrench(x, ReadOnlySpan<double>.Empty, wRest))
+                return;
+            // The model's force, site frame, into its body axes: R's transpose, R from the state's quaternion (body to site).
+            double qw = x[Dynamics6Dof.IQ], qx = x[Dynamics6Dof.IQ + 1], qy = x[Dynamics6Dof.IQ + 2], qz = x[Dynamics6Dof.IQ + 3];
+            double qn = Math.Sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+            qw /= qn; qx /= qn; qy /= qn; qz /= qn;
+            double r00 = 1 - 2 * (qy * qy + qz * qz), r01 = 2 * (qx * qy - qw * qz), r02 = 2 * (qx * qz + qw * qy);
+            double r10 = 2 * (qx * qy + qw * qz), r11 = 1 - 2 * (qx * qx + qz * qz), r12 = 2 * (qy * qz - qw * qx);
+            double r20 = 2 * (qx * qz - qw * qy), r21 = 2 * (qy * qz + qw * qx), r22 = 1 - 2 * (qx * qx + qy * qy);
+            double3 Body(Span<double> w) => new(r00 * w[0] + r10 * w[1] + r20 * w[2], r01 * w[0] + r11 * w[1] + r21 * w[2], r02 * w[0] + r12 * w[1] + r22 * w[2]);
+            KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+            double3 Model(double3 v) => new(double3.Dot(v, mx), double3.Dot(v, my), double3.Dot(v, mz));
+            double3 fModel = Body(wFlown), tModel = new(wFlown[3], wFlown[4], wFlown[5]), tBody = new(wRest[3], wRest[4], wRest[5]);
+            static string K(double3 v) => FormattableString.Invariant($"{v.X / 1e3:F0} {v.Y / 1e3:F0} {v.Z / 1e3:F0}");
+            string Deg(double[] d) => d == null || d.Length == 0 ? "none" : string.Join(" ", Array.ConvertAll(d, v => v.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)));
+            double speed = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
+            double tilt = Math.Acos(Math.Clamp(r22, -1.0, 1.0)) * 180.0 / Math.PI;
+            string text = FormattableString.Invariant(
+                $"AERO CHECK ({phase}) at {x[2]:F0} m, {speed:F1} m/s, tilt {tilt:F1} deg: force model {K(fModel)} kN, game {K(Model(fGame))} kN; ")
+                + FormattableString.Invariant($"moment model {K(tModel)} kN m (body {K(tBody)}, flaps {K(tModel - tBody)}), game {K(Model(tGame))} kN m")
+                + (applied ? $" (applied {K(Model(tApplied))})" : "")
+                + $"; flaps flown {Deg(flown)} deg, plan {Deg(g.FinDeflectionDeg)}; model limiter {_s.MomentLimiterPerPa * 1e3:F3} per kPa.";
+            GuidanceLog.Info(vehicle, text);
+            SixDofLog.Event(_s, now, text);
+        }
+        catch (Exception ex)
+        {
+            GuidanceLog.Info(vehicle, $"AERO CHECK failed: {ex.Message}");
+        }
     }
 
     /// <summary>Pitch and yaw before roll when the RCS cannot give the whole of the plan's torque: model z is the roll axis.</summary>

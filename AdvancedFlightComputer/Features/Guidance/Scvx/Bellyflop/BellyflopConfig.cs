@@ -58,6 +58,14 @@ public sealed class BellyflopConfig
     /// <summary>Price of being outside the cone, per km: half the miss's, and far under the dynamics' (PenaltyWeight), so a craft already outside it is brought back as it can be, and the plan never bends its dynamics to keep to it.</summary>
     public double ConeWeight { get; set; } = 500.0;
 
+    /// <summary>
+    /// THE LATERAL APPROACH CONE: a cone lying on its side, its apex at the aim and opening back along the bearing, the way the craft comes from: at every node |crossrange| &lt;= tan(LateralConeDeg) x the distance still to go along the bearing, plus LateralConeFloorM. Past the aim the distance to go is negative and nothing is inside, so a plan never passes the aim and comes back: the falling leaf, overshooting and swinging back, which the miss priced only at the end and the vertical cone round the site both allowed (2026-11-24). Soft, priced on the worst node's excess (LateralConeWeight), so going past at any point costs the same as at the end. 0 deg switches it off.
+    /// </summary>
+    public double LateralConeDeg { get; set; } = 60.0;
+    public double LateralConeFloorM { get; set; } = 25.0;
+    /// <summary>Price of the worst node's excess outside the lateral cone, per km: five times the miss, half one node's position defect (PenaltyWeight), so no defect ever buys its way into the cone.</summary>
+    public double LateralConeWeight { get; set; } = 5000.0;
+
     /// <summary>The most the cone may cost per metre outside it, summed over all its nodes, as a share of one node's position defect price (PenaltyWeight per km): under it, no defect ever buys its way into the cone (BellyflopPlanner.ConeNodePrice).</summary>
     public double ConeShareOfPenalty { get; set; } = 0.5;
 

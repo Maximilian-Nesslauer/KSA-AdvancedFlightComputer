@@ -1072,6 +1072,8 @@ public sealed class VehicleAutopilotState
 
     /// <summary>The game's air moment limiter measured on this craft, per Pa (BodyAero6Dof.MomentLimiterPerPa), smoothed; 0 until measured. The divisor it gave at the last reading, and when that was.</summary>
     internal double MomentLimiterPerPa, MomentLimiterDivisor = double.NaN, MomentLimiterAt = double.NegativeInfinity;
+    /// <summary>When the AERO CHECK was last logged (SixDof.LogAeroCheck).</summary>
+    internal double AeroCheckAt = double.NegativeInfinity;
 
     /// <summary>The body rates at the last entry log row, assembly axes, rad/s, for the three-axis balance.</summary>
     internal Brutal.Numerics.double3? RollMonitorPrevW;
@@ -1120,6 +1122,8 @@ public sealed class VehicleAutopilotState
     /// to answer a question whose inputs only change when the part tree does.
     /// </summary>
     public KsaAeroSweep.Result Aero;
+    /// <summary>The craft's belly side for its sweep (KsaAeroSweep.BellyAxes index), or -1 for none yet: kept between modes, so a belly-flopper's table is always swept with its belly-first and whole-sphere tables (BoostbackGauge.ResampleBoostbackAero).</summary>
+    public int AeroBellySide = -1;
 
     /// <summary>The sweep running for <see cref="Aero"/> on its own thread (KsaAeroSweep.Job), or null; and when a failed one may be tried again, sim time.</summary>
     public KsaAeroSweep.Job AeroJob;
@@ -1808,7 +1812,7 @@ public sealed class VehicleAutopilotState
     public double OrbitalEntryHandoverMach = 5.0;
     /// <summary>Fly the terminal descent from the hand-over with bellyflop (docs/guidance/bellyflop-design.md): the entry aims at the ground through its predicted fall.</summary>
     public bool OrbitalEntryBellyflop = true;
-    /// <summary>Bellyflop hands the craft to touchdown guidance for the flip and the landing burn (BELLYFLOP TO TOUCHDOWN): its standby solves from OrbitalEntryBellyflopTouchdownS before bellyflop's plan reaches the ground, and takes the craft at its first plan.</summary>
+    /// <summary>Bellyflop hands the craft to touchdown guidance for the flip and the landing burn (BELLYFLOP TO TOUCHDOWN): its standby solves from OrbitalEntryBellyflopTouchdownS before bellyflop's plan reaches the ground, and takes the craft a second before its plan turns away from bellyflop's attitude (SixDofTurnAwayDue).</summary>
     public bool OrbitalEntryBellyflopTouchdown = true;
     public double OrbitalEntryBellyflopTouchdownS = 45.0;
     /// <summary>The Mach bellyflop starts solving from, in the background.</summary>

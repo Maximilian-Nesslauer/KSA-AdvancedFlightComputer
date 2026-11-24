@@ -67,6 +67,7 @@ internal static class BellyflopCheck
         int bad = 0;
         var cfg = new BellyflopConfig();
         if (double.TryParse(Environment.GetEnvironmentVariable("AFC_BF_CROSS"), System.Globalization.CultureInfo.InvariantCulture, out double cw)) cfg.CrossWeight = cw;
+        Lateral(cfg);
         var model = Model();
         double a0 = 50 * Deg, y0 = 63 * Deg;
         double fall = new BellyflopPlanner().Solve(model, new BellyflopConfig { MissWeight = 0.0, ColdIterations = 1 }, HandOver(0, 0, 5.0, 38_000.0), 0.0, a0, 0, 0, null) is { Plan: { } pr } ? pr.X[pr.Nodes - 1, 0] : 70_000.0;
@@ -80,6 +81,8 @@ internal static class BellyflopCheck
             int solves = 0, refused = 0;
             var at = new Dictionary<int, double>();
             double yaw30 = double.NaN, cross30 = double.NaN, cross60 = double.NaN, cross120 = double.NaN;
+            // The furthest the craft gets past the site along the bearing (+x), m: the falling leaf (BellyflopConfig.LateralConeDeg).
+            double past = 0;
             const double dt = 0.05;
             Span<double> k1 = stackalloc double[6], k2 = stackalloc double[6], k3 = stackalloc double[6], k4 = stackalloc double[6], xt = stackalloc double[6];
             while (truth.Altitude(x) > 0 && t < 900)
@@ -104,6 +107,7 @@ internal static class BellyflopCheck
                 if (double.IsNaN(yaw30) && t >= 30) { yaw30 = y; cross30 = x[1]; }
                 if (double.IsNaN(cross60) && t >= 60) cross60 = x[1];
                 if (double.IsNaN(cross120) && t >= 120) cross120 = x[1];
+                past = Math.Max(past, x[0]);
                 foreach (int km in new[] { 12, 8, 4 })
                     if (!at.ContainsKey(km) && truth.Altitude(x) <= km * 1000.0)
                         at[km] = Math.Sqrt(x[0] * x[0] + x[1] * x[1]);
@@ -121,7 +125,7 @@ internal static class BellyflopCheck
             bool ok = miss <= 500 && plan != null;
             if (!ok) bad++;
             Console.WriteLine(FormattableString.Invariant(
-                $"  {(ok ? "ok  " : "FAIL")} {name}: lands {miss,5:F0} m off after {t:F0} s; {solves} solves, {refused} refused; off the site {at.GetValueOrDefault(12, double.NaN) / 1000:F2} / {at.GetValueOrDefault(8, double.NaN) / 1000:F2} / {at.GetValueOrDefault(4, double.NaN) / 1000:F2} km at 12 / 8 / 4 km up; yaw {yaw30 / Deg:F0} deg at 30 s; across {cross30 / 1000:F1} / {cross60 / 1000:F1} / {cross120 / 1000:F1} km at 30 / 60 / 120 s"));
+                $"  {(ok ? "ok  " : "FAIL")} {name}: lands {miss,5:F0} m off after {t:F0} s; {solves} solves, {refused} refused; off the site {at.GetValueOrDefault(12, double.NaN) / 1000:F2} / {at.GetValueOrDefault(8, double.NaN) / 1000:F2} / {at.GetValueOrDefault(4, double.NaN) / 1000:F2} km at 12 / 8 / 4 km up; yaw {yaw30 / Deg:F0} deg at 30 s; across {cross30 / 1000:F1} / {cross60 / 1000:F1} / {cross120 / 1000:F1} km at 30 / 60 / 120 s; past the site {past:F0} m at most"));
         }
         return bad;
     }
@@ -148,11 +152,18 @@ internal static class BellyflopCheck
         return ok ? 0 : 1;
     }
 
+    /// <summary>AFC_BF_LATERAL overrides the lateral approach cone's half-angle, deg (0 off), to compare against.</summary>
+    static void Lateral(BellyflopConfig cfg)
+    {
+        if (double.TryParse(Environment.GetEnvironmentVariable("AFC_BF_LATERAL"), System.Globalization.CultureInfo.InvariantCulture, out double deg)) cfg.LateralConeDeg = deg;
+    }
+
     static int RunFrom(double mach, double altitude, bool glide)
     {
         double[] HandOver(double d, double c) => BellyflopCheck.HandOver(d, c, mach, altitude);
         int bad = 0;
         var cfg = new BellyflopConfig();
+        Lateral(cfg);
         var model = Model();
         double alpha0 = 50 * Deg;
 
@@ -201,7 +212,7 @@ internal static class BellyflopCheck
             BellyflopPlan? plan = null;
             double t = 0, nextPlan = 0, a = alpha0, b = 0, y = 0;
             int solves = 0, refused = 0;
-            double worstMs = 0, aMax = 0, bMax = 0, gMax = 0, qMax = 0;
+            double worstMs = 0, aMax = 0, bMax = 0, gMax = 0, qMax = 0, past = 0;
             const double dt = 0.05;
             Span<double> k1 = stackalloc double[6], k2 = stackalloc double[6], k3 = stackalloc double[6], k4 = stackalloc double[6], xt = stackalloc double[6];
             while (truth.Altitude(x) > 0 && t < 900)
@@ -223,6 +234,7 @@ internal static class BellyflopCheck
                     y += Math.Clamp(py - y, -cfg.YawRateDegS * Deg * dt, cfg.YawRateDegS * Deg * dt);
                 }
                 if (t > 10) { aMax = Math.Max(aMax, Math.Abs(a)); bMax = Math.Max(bMax, Math.Abs(b)); }
+                past = Math.Max(past, x[0]);
                 if (truth.AirForce(x, a, b, y, out double fx, out double fy, out double fz))
                     gMax = Math.Max(gMax, Math.Sqrt(fx * fx + fy * fy + fz * fz) / truth.Mass / 9.81);
                 double vNow = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
@@ -242,7 +254,7 @@ internal static class BellyflopCheck
             bool ok = miss <= 500 && plan != null;
             if (!ok) bad++;
             Console.WriteLine(FormattableString.Invariant(
-                $"  {(ok ? "ok  " : "FAIL")} {name}: lands {miss,5:F0} m from the site at {vEnd:F0} m/s after {t:F0} s; {solves} solves, {refused} refused, worst {worstMs:F0} ms; |pitch| {aMax / Deg:F1} |bank| {bMax / Deg:F1} deg after 10 s; load {gMax:F2} g, q {qMax / 1000:F1} kPa at most"));
+                $"  {(ok ? "ok  " : "FAIL")} {name}: lands {miss,5:F0} m from the site at {vEnd:F0} m/s after {t:F0} s; {solves} solves, {refused} refused, worst {worstMs:F0} ms; |pitch| {aMax / Deg:F1} |bank| {bMax / Deg:F1} deg after 10 s; load {gMax:F2} g, q {qMax / 1000:F1} kPa at most; past the site {past:F0} m at most"));
         }
         return bad;
     }

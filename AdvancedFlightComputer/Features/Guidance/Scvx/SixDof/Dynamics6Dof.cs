@@ -278,6 +278,31 @@ public static class Dynamics6Dof
     }
 
     /// <summary>
+    /// The model's whole aerodynamic wrench at a state with the fins at <paramref name="finDeg"/> (empty: at rest): <paramref name="wrench"/> gets the force in the site frame, N (0-2), and the moment in model body axes, N m (3-5). For comparing the model with the game's own air (SixDof's AERO CHECK). False without a quaternion.
+    /// </summary>
+    public static bool AeroWrenchAt(ReadOnlySpan<double> x, Params p, ReadOnlySpan<double> finDeg, Span<double> wrench)
+    {
+        wrench.Clear();
+        Span<Dual> dx = stackalloc Dual[NX];
+        for (int i = 0; i < NX; i++) dx[i] = new Dual(x[i]);
+        Dual qw = dx[IQ + 0], qx = dx[IQ + 1], qy = dx[IQ + 2], qz = dx[IQ + 3];
+        Dual n = Dual.Sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+        if (!(n.V > 0.0))
+            return false;
+        qw /= n; qx /= n; qy /= n; qz /= n;
+        Span<Dual> fins = stackalloc Dual[finDeg.Length];
+        for (int i = 0; i < finDeg.Length; i++) fins[i] = new Dual(finDeg[i]);
+        AeroWrench(dx, p, dx[IV], dx[IV + 1], dx[IV + 2],
+                   1.0 - 2.0 * (qy * qy + qz * qz), 2.0 * (qx * qy - qw * qz), 2.0 * (qx * qz + qw * qy),
+                   2.0 * (qx * qy + qw * qz), 1.0 - 2.0 * (qx * qx + qz * qz), 2.0 * (qy * qz - qw * qx),
+                   2.0 * (qx * qz - qw * qy), 2.0 * (qy * qz + qw * qx), 1.0 - 2.0 * (qx * qx + qy * qy),
+                   out Dual fx, out Dual fy, out Dual fz, out Dual tx, out Dual ty, out Dual tz, fins);
+        wrench[0] = fx.V; wrench[1] = fy.V; wrench[2] = fz.V;
+        wrench[3] = tx.V; wrench[4] = ty.V; wrench[5] = tz.V;
+        return true;
+    }
+
+    /// <summary>
     /// f(x, u) and its Jacobians A = df/dx (NX x NX) and B = df/du (NX x NU) at
     /// one node, both row-major.
     ///

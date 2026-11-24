@@ -300,7 +300,7 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec OrbitalEntryBellyflopAimUprangeM = new("OrbitalEntryBellyflopAimUprangeM", "BELLYFLOP AIM SHORT", "m", P, 200.0, 0.0, 5000.0, "%.0f",
         "How far short of the site, along the bearing to it, bellyflop aims its fall: the ground the flip and landing burn cover after it, so they end on the site rather than past it. A fixed distance for now; the entry's aim takes it into account.");
     public static readonly SettingSpec OrbitalEntryBellyflopTouchdownS = new("OrbitalEntryBellyflopTouchdownS", "TOUCHDOWN FROM", "s", P, 45.0, 5.0, 300.0, "%.0f",
-        "How long before bellyflop's plan reaches the ground touchdown guidance starts solving on standby for the flip and the landing burn. It takes the craft at its first plan.");
+        "How long before bellyflop's plan reaches the ground touchdown guidance starts solving on standby for the flip and the landing burn. It takes the craft a second before touchdown's plan turns 5 deg away from the attitude bellyflop flies, or 5 s before touchdown's ignition at the latest.");
     public static readonly SettingSpec OrbitalEntryBellyflopAngleMaxDeg = new("OrbitalEntryBellyflopAngleMaxDeg", "BELLYFLOP PITCH DOWN", "deg", E, 20.0, 2.0, 45.0, "%.0f",
         "Bellyflop's largest pitch nose down past belly-first: the airflow's angle on the belly towards the tail.");
     public static readonly SettingSpec OrbitalEntryBellyflopPitchUpDeg = new("OrbitalEntryBellyflopPitchUpDeg", "BELLYFLOP PITCH UP", "deg", E, 55.0, 2.0, 80.0, "%.0f",

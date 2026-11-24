@@ -237,6 +237,14 @@ public sealed class Ksa6DofGuidance : IDisposable
         return new double3(fx / m, fy / m, fz / m);
     }
 
+    /// <summary>The model's aerodynamic wrench at state x with the fins at <paramref name="finDeg"/> (Dynamics6Dof.AeroWrenchAt): force site frame, N, then moment model body axes, N m. False with no aero model.</summary>
+    public bool ModelAeroWrench(double[] x, ReadOnlySpan<double> finDeg, Span<double> wrench)
+    {
+        if ((_dyn.Aero == null && _dyn.BodyAero == null) || x == null || x.Length < NX)
+            return false;
+        return Dynamics6Dof.AeroWrenchAt(x, _dyn, finDeg, wrench);
+    }
+
     /// <summary>Lateral (pitch/yaw) torque the model allows per newton of axial thrust, N m/N: the gimbal arm times the cone's tangent.</summary>
     public double LateralTorquePerNewton => _dyn.LArm * _cfg.TanGimbal;
 
@@ -985,6 +993,33 @@ public sealed class Ksa6DofGuidance : IDisposable
     ///  This is the number that decides whether a WARM start is still worth having. A warm start is an advantage only while the vehicle is near its plan; past some drift the stale plan is a WORSE seed than a straight line from the current state, because the straight line is at least self-consistent while the stale one asserts a trajectory the vehicle is no longer on. At that point re-solving from it is paying to use a bad guess.
     /// </summary>
     public double PlanDriftM { get; private set; }
+
+    /// <summary>
+    /// The first sim time from <paramref name="now"/> at which <paramref name="plan"/> asks for an attitude more than <paramref name="maxAngleRad"/> from <paramref name="state"/>'s (the attitude flown now), read every <paramref name="stepS"/> along the plan (slerped between nodes, as MatchesHandoffAttitude); +infinity when it never does. The hand-overs to touchdown guidance are taken a little before it (SixDofStandby's TURN-AWAY): until then the mode flying the craft holds the attitude the plan wants.
+    /// </summary>
+    internal static double TurnAwayTime(Ksa6DofPlan plan, double[] state, double now, double maxAngleRad, double stepS = 0.1)
+    {
+        if (plan == null || plan.Nodes < 2 || state == null || state.Length < NX)
+            return double.PositiveInfinity;
+        double stateNorm = 0.0;
+        for (int i = 0; i < 4; i++) stateNorm += state[IQ + i] * state[IQ + i];
+        stateNorm = Math.Sqrt(stateNorm);
+        if (!(stateNorm > 0.0))
+            return double.PositiveInfinity;
+        double cosHalf = Math.Cos(maxAngleRad / 2.0);
+        Span<double> target = stackalloc double[4];
+        for (double t = Math.Max(now - plan.SolveTime, 0.0); t < plan.Duration; t += Math.Max(stepS, 0.01))
+        {
+            (int k, double f) = plan.Locate(t);
+            int a = k * NX, b = a + NX;
+            Slerp(plan.X.AsSpan(a + IQ, 4), plan.X.AsSpan(b + IQ, 4), f, target);
+            double dot = 0.0;
+            for (int i = 0; i < 4; i++) dot += target[i] * state[IQ + i];
+            if (Math.Abs(dot) < stateNorm * cosHalf)
+                return plan.SolveTime + t;
+        }
+        return double.PositiveInfinity;
+    }
 
     internal static bool MatchesHandoffAttitude(Ksa6DofPlan plan, double[] state, double now,
                                                 double maxAngleRad, double maxRateRadS)

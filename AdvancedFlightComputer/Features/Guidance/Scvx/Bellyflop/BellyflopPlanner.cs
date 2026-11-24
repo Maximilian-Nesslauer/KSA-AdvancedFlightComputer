@@ -423,6 +423,20 @@ public sealed class BellyflopPlanner
     /// <summary>The horizontal offset across the bearing, m, + to its left.</summary>
     static double Cross(BellyflopModel model, double px, double py) => -model.BearingY * px + model.BearingX * py;
 
+    /// <summary>The worst node's distance outside the lateral approach cone, m (BellyflopConfig.LateralConeDeg): |crossrange| past tan(cone) x the distance to go along the bearing, plus the floor; zero with the cone off. The plan's states are about the aim.</summary>
+    static double LateralConeExcess(BellyflopModel model, BellyflopConfig cfg, double[,] x, int n)
+    {
+        if (!(cfg.LateralConeDeg > 0))
+            return 0.0;
+        double t = Math.Tan(cfg.LateralConeDeg * Deg), worst = 0.0;
+        for (int k = 1; k < n; k++)
+        {
+            double togo = -(model.BearingX * x[k, 0] + model.BearingY * x[k, 1]);
+            worst = Math.Max(worst, Math.Abs(Cross(model, x[k, 0], x[k, 1])) - t * togo - cfg.LateralConeFloorM);
+        }
+        return worst;
+    }
+
     /// <summary>How far a node is outside the approach cone, m, on the octagon the subproblem uses.</summary>
     static double ConeExcess(BellyflopConfig cfg, double[,] x, int k)
     {
@@ -458,6 +472,7 @@ public sealed class BellyflopPlanner
         j += ConeNodePrice(cfg, cone) * coneExcess;
         j += cfg.MissWeight * (Math.Abs(x[n - 1, 0]) + Math.Abs(x[n - 1, 1])) / 1000.0;
         j += CrossCost(model, cfg, x, n);
+        j += cfg.LateralConeWeight / 1000.0 * LateralConeExcess(model, cfg, x, n);
         double pen = 0;
         for (int k = 0; k < n - 1; k++)
             for (int i = 0; i < NX; i++) pen += Math.Abs(def[k, i]) / XS[i];
@@ -470,7 +485,7 @@ public sealed class BellyflopPlanner
     // ---------------------------------------------------------------- subproblem
 
     /// <summary>
-    /// Variables: x (6N), u (3N), sigma, w (6(N-1)), |w| bounds t (6(N-1)), |psi| bounds y (N), the end's x and y split into positive and negative parts (4), the end altitude's slack pair (2), the approach cone's slack per node (N), the crossrange's magnitude per node (N).
+    /// Variables: x (6N), u (3N), sigma, w (6(N-1)), |w| bounds t (6(N-1)), |psi| bounds y (N), the end's x and y split into positive and negative parts (4), the end altitude's slack pair (2), the approach cone's slack per node (N), the crossrange's magnitude per node (N), the lateral cone's worst excess (1).
     /// </summary>
     static (double[,], double[,], double)? BuildAndSolve(
         BellyflopModel model, BellyflopConfig cfg, double[] x0, double[,] xr, double[,] ur, double sr, Linearisation lin, double eta,
@@ -480,8 +495,8 @@ public sealed class BellyflopPlanner
         jLin = double.PositiveInfinity;
         int n = xr.GetLength(0), nI = n - 1;
         int iX = 0, iU = NX * n, iS = iU + NU * n, iW = iS + 1, iT = iW + NX * nI, iY = iT + NX * nI;
-        int iMx = iY + n, iMy = iMx + 2, iZa = iMy + 2, iC = iZa + 2, iL = iC + n;
-        int nv = iL + n;
+        int iMx = iY + n, iMy = iMx + 2, iZa = iMy + 2, iC = iZa + 2, iL = iC + n, iH = iL + n;
+        int nv = iH + 1;
         int X(int k, int j) => iX + NX * k + j;
         int U(int k, int i) => iU + NU * k + i;
         int W(int k, int j) => iW + NX * k + j;
@@ -540,6 +555,8 @@ public sealed class BellyflopPlanner
         double wc = cfg.CrossWeight / 1000.0 / n;
         for (int k = 1; k < n; k++)
             c[iL + k] = wc;
+        double wh = cfg.LateralConeWeight / 1000.0;
+        c[iH] = cfg.LateralConeDeg > 0 ? wh : 0.0;
 
         // ---- Equalities ----
         int nEq = NX + NX * nI + 3;
@@ -649,6 +666,17 @@ public sealed class BellyflopPlanner
             Le(0, (X(k, 0), -model.BearingY), (X(k, 1), model.BearingX), (iL + k, -1.0));
             Le(0, (X(k, 0), model.BearingY), (X(k, 1), -model.BearingX), (iL + k, -1.0));
         }
+        // The lateral approach cone, soft on its worst node: +-cross - tan(cone) x togo <= floor + h, togo = -(bearing . r), so -tan x togo = tan (bx x + by y).
+        Le(0, (iH, -1.0));
+        if (cfg.LateralConeDeg > 0)
+        {
+            double tanH = Math.Tan(cfg.LateralConeDeg * Deg), bx = model.BearingX, by = model.BearingY;
+            for (int k = 1; k < n; k++)
+            {
+                Le(cfg.LateralConeFloorM, (X(k, 0), -by + tanH * bx), (X(k, 1), bx + tanH * by), (iH, -1.0));
+                Le(cfg.LateralConeFloorM, (X(k, 0), by + tanH * bx), (X(k, 1), -bx + tanH * by), (iH, -1.0));
+            }
+        }
         Le(cfg.SigmaMax, (iS, 1.0));
         Le(-cfg.SigmaMin, (iS, -1.0));
         // Trust region.
@@ -696,6 +724,7 @@ public sealed class BellyflopPlanner
             jLin += wc * Math.Max(v[iL + k], 0.0);
         for (int k = 0; k < n; k++)
             if (cone[k]) jLin += ConeNodePrice(cfg, cone) * Math.Max(v[iC + k], 0.0);
+        jLin += c[iH] * Math.Max(v[iH], 0.0);
         return (xc, uc, sc);
     }
 }

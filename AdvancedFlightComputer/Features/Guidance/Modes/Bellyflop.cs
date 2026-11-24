@@ -416,13 +416,14 @@ public static partial class GuidanceWindow
         }
         _s.SixDofCoastSeedS = coast;
         StepSixDofStandby(vehicle, parent, siteCci, x14, now, burn);
-        // DUE SHORTLY BEFORE TOUCHDOWN'S IGNITION, as the glide's hand-over is (StepEntryTouchdownOwn): THREE-DOF TAKEOVER BEFORE IGNITION before the ignition touchdown's plan has now, or THREE-DOF TAKEOVER BEFORE IMPACT before bellyflop's ground, whichever is earlier. Bellyflop flies the belly-first coast; touchdown, re-solving on standby from the craft as bellyflop flies it, takes the flip and the burn. Handed the craft at its first plan, 27 s before ignition, touchdown did not hold it belly first: it lost its drag, fell from 52 to 99 m/s, every re-solve was refused on the turn rates it had not planned, and it lit on the old plan's clock at 152 m (harness, Starship, 2026-11-24). Bellyflop had it 16 m off the site at 100 m.
+        // DUE BEFORE TOUCHDOWN'S PLAN TURNS AWAY from the attitude bellyflop flies (SixDofTurnAwayDue: 1 s before it is 5 deg off), or at the latest THREE-DOF TAKEOVER BEFORE IGNITION before touchdown's ignition or THREE-DOF TAKEOVER BEFORE IMPACT before bellyflop's ground. With the craft's whole-sphere aero, touchdown's plans turn the craft for the flip early, on the air and the flaps; held to the ignition rule alone, its re-solves from the craft bellyflop held belly first drifted off and were refused from 750 m, and it never took the craft (harness, Starship, 2026-11-24). Before that, handed the craft at its first plan with no air moment in its model, it lost the belly-first attitude in the coast (harness, 2026-11-24).
         if (bf.TouchdownHandoff == null && SixDofStandbyReady(now, BellyflopHandoverPlanAgeS) && _s.Guidance?.Published is { } td)
         {
             double ignition = td.HasCoast ? td.IgnitionTime : now;
-            double due = Math.Min(ignition - Math.Max(_s.ThreeDofTakeoverBeforeIgnitionS, 0.0), plan.EndTime - Math.Max(_s.ThreeDofTakeoverBeforeImpactS, 0.0));
+            double turnAway = SixDofTurnAwayDue(x14, now);
+            double due = Math.Min(Math.Min(ignition - Math.Max(_s.ThreeDofTakeoverBeforeIgnitionS, 0.0), plan.EndTime - Math.Max(_s.ThreeDofTakeoverBeforeImpactS, 0.0)), turnAway);
             if (now >= due)
-                bf.TouchdownHandoff = FormattableString.Invariant($"HANDOVER FROM BELLYFLOP: TOUCHDOWN AT {x14[2]:F0} m, IGNITION IN {ignition - now:F1} s, {plan.EndTime - now:F0} s FROM BELLYFLOP'S GROUND.");
+                bf.TouchdownHandoff = FormattableString.Invariant($"HANDOVER FROM BELLYFLOP: TOUCHDOWN AT {x14[2]:F0} m, IGNITION IN {ignition - now:F1} s, {plan.EndTime - now:F0} s FROM BELLYFLOP'S GROUND, ") + (now >= turnAway ? "ITS PLAN TURNING AWAY." : "AT THE LATEST.");
         }
     }
 
