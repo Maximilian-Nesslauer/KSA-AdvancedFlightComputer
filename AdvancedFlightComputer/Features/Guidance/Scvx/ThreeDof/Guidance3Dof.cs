@@ -65,8 +65,13 @@ public sealed record Plan3Dof(
 ///
 /// A PLAN IS PUBLISHED ONLY IF IT IS FLYABLE: its true dynamics defect, weighted by how far ahead each interval is, must be inside the per-channel tolerances, as the 6-DOF gate does. A refused cycle keeps the previous plan.
 /// </summary>
-public sealed class Guidance3Dof
+public sealed class Guidance3Dof : IDisposable
 {
+    public void Dispose()
+    {
+        _two.Dispose();
+        _burn.Dispose();
+    }
     private const int NX = PointMass3Dof.NX;
     private const int NU = PointMass3Dof.NU;
 

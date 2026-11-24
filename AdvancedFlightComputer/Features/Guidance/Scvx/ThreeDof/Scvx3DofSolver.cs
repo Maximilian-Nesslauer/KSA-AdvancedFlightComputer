@@ -27,8 +27,9 @@ public readonly record struct Scvx3DofIteration(
 ///
 /// The unit attitude is re-projected on accept, as the 6-DOF quaternion is: the subproblem only enforces the plane tangent to the sphere at the reference, and without the projection the reference drifts off the sphere until the tangent plane and a tight trust region disagree.
 /// </summary>
-public sealed class Scvx3DofSolver
+public sealed class Scvx3DofSolver : IDisposable
 {
+    public void Dispose() => _sub.Dispose();
     private const int NX = PointMass3Dof.NX;
     private const int NU = PointMass3Dof.NU;
 

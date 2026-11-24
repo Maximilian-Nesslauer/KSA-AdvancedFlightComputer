@@ -145,11 +145,20 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
         ClarabelNative.clarabel_DefaultSolver_f64_solve(_solver);
         ClarabelNative.ClarabelDefaultSolution sol = ClarabelNative.clarabel_DefaultSolver_f64_solution(_solver);
 
-        // Numerical trouble with refinement off: turn it on for good, rebuild, and solve once more.
-        if (!_iterativeRefinement && sol.Status is ClarabelExit.NumericalError or ClarabelExit.InsufficientProgress)
+        // Recover once when an in-place update fails or when an unrefined solve hits numerical trouble:
+        // an in-place update reuses the first solve's Ruiz equilibration, so rebuilding refreshes scaling
+        // even when iterative refinement is already enabled.
+        bool badExit = sol.Status is not (ClarabelExit.Solved or ClarabelExit.AlmostSolved
+            or ClarabelExit.PrimalInfeasible or ClarabelExit.AlmostPrimalInfeasible
+            or ClarabelExit.DualInfeasible or ClarabelExit.AlmostDualInfeasible);
+        bool numericTrouble = sol.Status is ClarabelExit.NumericalError or ClarabelExit.InsufficientProgress;
+        if (badExit && (!rebuilt || (!_iterativeRefinement && numericTrouble)))
         {
-            _iterativeRefinement = true;
-            lock (StatsGate) TotalRefinementFallbacks++;
+            if (!_iterativeRefinement && numericTrouble)
+            {
+                _iterativeRefinement = true;
+                lock (StatsGate) TotalRefinementFallbacks++;
+            }
             Rebuild(A, b, c, hasP ? P : null, m, n, zeroDim, posDim, socDims, eps, cap, verbose);
             rebuilt = true;
             ClarabelNative.clarabel_DefaultSolver_f64_solve(_solver);

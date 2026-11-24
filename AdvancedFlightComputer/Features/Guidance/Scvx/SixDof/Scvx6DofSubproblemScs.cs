@@ -28,7 +28,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 /// expansion (a term w*z^2 contributes P_ii = 2w; a combined cross term w*zi*zj
 /// contributes P_ij = w, i&lt;j).
 /// </summary>
-public sealed class Scvx6DofSubproblemScs
+public sealed class Scvx6DofSubproblemScs : IDisposable
 {
     private const int NX = Dynamics6Dof.NX;
     /// <summary>The control count, the base controls and the craft's fins (Scvx6DofConfig.NU).</summary>
@@ -73,8 +73,10 @@ public sealed class Scvx6DofSubproblemScs
     public bool HitIterationLimit => _ws.HitIterationLimit;
     public bool HasWarmStart => _wss.Current.HasWarmStart;
 
-    /// <summary>The iteration cap the selected backend turns a requested budget into (IScvxConicWorkspace.EffectiveIterationCap).</summary>
-    public int EffectiveIterationCap(int requested) => _wss.Current.EffectiveIterationCap(requested);
+    /// <summary>The iteration cap the last solve backend turns a requested budget into (IScvxConicWorkspace.EffectiveIterationCap).</summary>
+    public int EffectiveIterationCap(int requested) => _ws.EffectiveIterationCap(requested);
+
+    public void Dispose() => _wss.Dispose();
 
     public int IX(int node, int i) => _oX + node * NX + i;
     public int IU(int node, int j) => _oU + node * NU + j;

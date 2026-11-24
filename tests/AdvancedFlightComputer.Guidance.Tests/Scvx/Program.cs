@@ -45,6 +45,9 @@ bool verbose = args.Contains("--verbose");
     };
 }
 
+if (args.Contains("--clarabel-workspace"))
+    return ClarabelWorkspaceCheck.Run();
+
 if (args.Contains("--standby"))
 {
     StandbyTrackCheck.Verbose = verbose;
