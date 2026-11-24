@@ -4,7 +4,7 @@ using KSA;
 namespace AdvancedFlightComputer.Core;
 
 /// <summary>
-/// LOG LINES ON SCREEN (AFC menu and TUNE > PREFERENCES): off stops the game's console from showing
+/// LOG LINES ON SCREEN (AFC menu and TUNE > PREFERENCES), off by default: off stops the game's console from showing
 /// new log lines over the flight while it is closed, KSA's and AFC's alike, for footage. Nothing is
 /// lost: the lines still go to the log file and to the console's history (open it with its key).
 /// It uses the console's own switch, ConsoleWindow.DisableMessageFading, which makes a new line's
@@ -18,7 +18,7 @@ internal static class ScreenLog
 
     private static bool _hiding;
 
-    internal static bool Shown => UiConfig.GetBool(Key, true);
+    internal static bool Shown => UiConfig.GetBool(Key, false);
 
     internal static void Set(bool shown)
     {

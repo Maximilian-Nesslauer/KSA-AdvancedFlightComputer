@@ -204,7 +204,7 @@ internal static partial class AfcConsole
         UiConfig.SetDefault(KeyExpertOpen, false);
         UiConfig.SetDefault(UiConfig.KeyHoverNumpad, false);
         UiConfig.SetDefault(UiConfig.KeyShowDiagnostics, false);
-        UiConfig.SetDefault(ScreenLog.Key, true);
+        UiConfig.SetDefault(ScreenLog.Key, false);
         PlannerRoute.LoadPreference();
         GuidanceWindow.LoadOverlayPreferences();
 
