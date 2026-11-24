@@ -94,15 +94,20 @@ Path constraints are imposed at the nodes only. Between nodes the plan can break
 
 ## Virtual control
 
-A linearised subproblem can be infeasible even when the real problem is not. For example, a small trust region may not reach the terminal conditions. The virtual control $\boldsymbol\nu_k$ is a free slack on every dynamics row that makes the subproblem always feasible. All three planners price it with a squared, scaled two-norm and a large weight $\rho_{vc}$ ($10^5$ in each):
+A linearised subproblem can be infeasible even when the real problem is not. For example, a small trust region may not reach the terminal conditions. The virtual control $\boldsymbol\nu_k$ is a free slack on every dynamics row that makes the subproblem always feasible.
 
-$$
-J_{\text{sub}} = J + \rho_{vc} \sum_k \big\lVert \boldsymbol\nu_k \oslash \mathbf x_{\text{scale}} \big\rVert_2^2 .
-$$
+Naive fixed-penalty L1 virtual control ($w = w^+ - w^-$) without second-order corrections penalises $O(\lVert\Delta\mathbf x\rVert^2)$ nonlinear curvature defects linearly at large $\rho_{vc}$, causing Maratos stalling on cold solves. Each planner therefore uses the penalty suited to its dynamics:
 
-The textbook choice is a one-norm, which is an *exact* penalty: with a large enough weight the optimum has $\boldsymbol\nu = \mathbf 0$ exactly. A squared price is smoother for the cone solver but only drives $\boldsymbol\nu$ close to zero. AFC therefore does not trust $\boldsymbol\nu$ to judge a plan. It tests the true defect of the plan instead. See [Convergence](#convergence).
+- **Convex ascent** uses a squared, scaled two-norm with $\rho_{vc} = 10^5$:
+  $$
+  J_{\text{sub}} = J + \rho_{vc} \sum_k \big\lVert \boldsymbol\nu_k \oslash \mathbf x_{\text{scale}} \big\rVert_2^2 .
+  $$
+- **Entry (3-DOF)** uses pure-dual **Augmented-Lagrangian SCvx (`AL-SCvx`)**, shifting the quadratic stationarity point onto $\mathbf d = \mathbf 0$ via dual multipliers $\boldsymbol\lambda$ (`AlPenaltyGrow = 1.0`) without stiffening the Hessian or inducing Maratos stalling.
+- **Touchdown (6-DOF)** uses a squared two-norm with **warm-ramped position and velocity scaling (`vc-rv`)**: loose on `XScale` during cold Stage 0 so straight-line cold seeds are not trapped in high-fuel local minima, then tightened geometrically to $5\text{ m}$ and $5\text{ m/s}$ over 4 accepted warm solves near touchdown. Because Clarabel's direct $LDL^\top$ KKT solver is insensitive to diagonal $P$ scaling, tight position weights yield sub-centimetre terminal accuracy without conditioning loss.
 
-A virtual control that will not shrink is a diagnosis in itself. It means the requested manoeuvre cannot be flown under the constraints, and the planner refuses rather than fakes it. Touchdown stages its price: the velocity scale inside the norm tightens over the first accepted steps, so a cold solve can first find the shape of the plan and then the detail.
+AFC never trusts $\boldsymbol\nu$ alone to judge a plan. It tests the true nonlinear defect of the plan instead. See [Convergence](#convergence).
+
+A virtual control that will not shrink is a diagnosis in itself: it means the requested manoeuvre cannot be flown under the constraints, and the planner refuses rather than fakes it.
 
 ## Trust region
 
@@ -112,7 +117,12 @@ $$
 \big\lVert\,\big(\delta\mathbf x_k,\ \delta\mathbf u_k,\ \delta\sigma\big) \oslash \text{scale}\,\big\rVert \le \eta .
 $$
 
-The changes are divided by their scales so that one radius $\eta$ means the same for every variable. All three planners use a **hard infinity-norm** bound: a box made of plain linear rows on every node's state, every control and every free duration. A two-norm ball would be a second-order cone per node, which costs more and gains little here. Touchdown also adds a small **proximal term**, a penalty $w_{\text{prox}}\lVert\delta\rVert^2$, which keeps a re-solve close to the plan already flying even inside the box.
+The changes are divided by their scales so that one radius $\eta$ means the same for every variable. All three planners use a **hard infinity-norm** bound: a box made of plain linear rows on every node's state, every control and every free duration. A two-norm ball would be a second-order cone per node, which costs more and gains little here. Subproblem objectives exclude unpriced regularisation terms (no proximal distortion), keeping nonlinear merit and subproblem cost strictly aligned.
+
+### Outer-loop correctness invariants
+
+- **Normalise before evaluating merit.** Both `Scvx6DofSolver` (`NormaliseQuaternions`) and `Scvx3DofSolver` (`NormaliseAttitudes`) project the reference onto its unit manifold *before* evaluating and storing `_jRef = TrueCost(...)`, preventing systematic bias in $\rho = (J_{\text{ref}} - J_{\text{true}}) / (J_{\text{ref}} - J_{\text{lin}})$.
+- **Shared physics models.** All atmospheric planners read altitude-varying speed of sound $a(h)$, dynamic viscosity $\mu(h)$ and Reynolds number $\operatorname{Re}(h)$ from `SampledAtmosphere` (with ideal-gas fallback $a(h) = a_0\sqrt{(P(h)/\rho(h))/(P_0/\rho_0)}$). Both 3-DOF Entry and 6-DOF Touchdown share the differentiable 2D cubic B-spline `EngineThrustTable(u, P)` with exact Inverse-Function-Theorem `Dual` inversion `ThrottleFor(Dual thrust, double pressure)`.
 
 After each step the radius is updated from how well the subproblem predicted the real improvement. See [Accepting a step](#accepting-a-step), and the [merit slice](../scvx-bridge-devnotes.md#see-it-work) to watch it happen.
 
@@ -184,12 +194,16 @@ $$
 G\mathbf y + \mathbf s = \mathbf h,\quad \mathbf s \in \{0\}^{m_0}\times\mathbb R_+^{m_1}\times\mathcal Q^{n_1}\times\dots\times\mathcal Q^{n_j},
 $$
 
-where $\mathcal Q^n = \{(t,\mathbf w) : \lVert\mathbf w\rVert_2 \le t\}$. Strictly it is a quadratic cone program: the squared penalties (virtual control, smoothing, proximal term) go straight into a quadratic objective $\tfrac12\mathbf y^\top P\mathbf y + \mathbf c^\top\mathbf y$, which both solvers accept, rather than through extra cones. AFC ships two native solvers:
+where $\mathcal Q^n = \{(t,\mathbf w) : \lVert\mathbf w\rVert_2 \le t\}$. Strictly it is a quadratic cone program: the squared penalties (virtual control, smoothing) go straight into a quadratic objective $\tfrac12\mathbf y^\top P\mathbf y + \mathbf c^\top\mathbf y$, which the solver accepts without extra epigraph cones.
 
-- **SCS**, a first-order (ADMM) solver, used by entry and touchdown. Each iteration is cheap and it warm-starts well from the previous plan, which suits re-solving in flight. It reaches moderate accuracy, and its run time depends strongly on scaling and tolerance.
-- **Clarabel**, an interior-point solver, used by the ascent and by G-FOLD. It reaches high accuracy in a few dozen iterations whatever the starting point, but cannot be warm-started. The ascent plans once on the pad, where accuracy matters more than speed.
+All three SCvx planners (ascent, 3-DOF entry and 6-DOF touchdown) solve through a persistent native **`ClarabelWorkspace`** backed by `clarabel_DefaultSolver_f64_update_P`, `update_A`, `update_q` and `update_b`, paired with a frozen-sparsity `CcsAssembler` for zero-allocation numerical refills:
 
-[Native solvers](../native-build.md) covers how both are built and shipped.
+- **Sparsity invariance (mandatory C-ABI rule):** `PresolveEnable = false` and `InputSparseDropzeros = false` whenever numeric updates are used, so native `update_A` always sees the exact CSC pattern from the initial symbolic factorisation. Before calling `RunUpdate`, `ClarabelWorkspace` verifies all problem dimensions, settings and SIMD `SequenceEqual` on `A.ColumnPointers` and `A.RowIndices` (and `P` when `nnzP > 0`).
+- **Self-healing fallback:** If `RunUpdate` returns an unexpected status, `ClarabelWorkspace` frees the native handle and performs one full `BuildAndSolve` with `IterativeRefinementEnable = true`. Likewise, if a fast build without iterative refinement hits `NumericalError` or `InsufficientProgress`, it rebuilds once with iterative refinement on.
+- **Ruiz equilibration:** Always enabled (`EquilibrateEnable = true`): `EquilibrateMaxIter = 3` for real-time 6-DOF warm updates, and default `10` (`-1`) for multi-stage ascent (resetting whenever a stage duration shifts by $\ge 2.0\times$).
+- **SCS (optional switch):** Retained behind `IScvxConicWorkspace` (`ScsWorkspace`) as a fallback/comparison backend, with bounded ring-buffer timing diagnostics (`SolveMsSamples`, 1024 entries).
+
+[Native solvers](../native-build.md) covers how both native libraries are built and shipped.
 
 ## Re-solving in flight
 
@@ -221,13 +235,13 @@ The same few moves make the constraints of all three problems convex. Each probl
 | | [Convex ascent](ascent.md) | [Entry (3-DOF)](entry.md) | [Touchdown (6-DOF)](touchdown.md) |
 | --- | --- | --- | --- |
 | State | position, velocity, mass | position, velocity, mass | position, velocity, mass, quaternion, body rate |
-| Phases | one per stage, joined at staging | glide, burn | coast (optional), burn |
-| Free durations | one per stage | glide, burn | coast, burn |
-| Nodes | 60 per stage | 30 (12 glide + 17 burn intervals); 20 burn-only | 50 down to 5, by a spacing target |
-| Virtual control | squared, $\rho_{vc} = 10^5$ | squared, $\rho_{vc} = 10^5$ | squared, $\rho_{vc} = 10^5$, staged |
-| Trust region | box, $\eta \in [5\times10^{-4},\,0.3]$ | box, $\eta \in [10^{-3},\,0.1]$ | box, $\eta \in [10^{-3},\,0.1]$, plus proximal term |
+| Phases | burn stages + optional ballistic coast | glide, burn | coast (optional), burn |
+| Free durations | one per stage (including coast) | glide, burn | coast, burn |
+| Nodes | 60 per burn stage; 25 per coast | 30 (12 glide + 17 burn intervals); 20 burn-only | Two-grid: 25 (coast+burn) -> 15 (burn-only) |
+| Virtual control | squared, $\rho_{vc} = 10^5$ | pure-dual AL-SCvx (`AlPenaltyGrow = 1.0`) | squared `vc-rv` (ramped to 5 m, 5 m/s) |
+| Trust region | accel-scaled box, $\eta \in [5\times10^{-4},\,0.3]$ | box, $\eta \in [10^{-3},\,0.1]$ | box, $\eta \in [10^{-3},\,0.1]$ |
 | Stops when | predicted gain $< 10^{-5}$ and all gates met | step $< 8\times10^{-3}$, defect $< 10^{-3}$ | step $< 8\times10^{-3}$, defect $< 10^{-3}$ |
-| Cone solver | Clarabel, tolerance $10^{-8}$ | SCS, $10^{-4}$, warm | SCS, $10^{-4}$ ($10^{-3}$ with RCS), warm |
-| Runs | once on the pad, with retries | every 0.1 s in flight | every 0.1 s in flight |
+| Cone solver | Persistent `ClarabelWorkspace`, $10^{-6}$ (polish $10^{-8}$) | Persistent `ClarabelWorkspace`, $10^{-4}$ (SCS optional) | Persistent `ClarabelWorkspace`, $10^{-4}$ (SCS optional) |
+| Runs | once on the pad, with retries | every 0.1 s in flight | every 0.1 s in flight (async `InitCold`) |
 
 The problem pages give the detail behind each cell, with the config names.
