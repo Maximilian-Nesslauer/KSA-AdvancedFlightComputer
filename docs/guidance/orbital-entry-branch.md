@@ -1,6 +1,6 @@
 # The `feature/orbital-entry` branch
 
-A summary of the work on `feature/orbital-entry` (2026-11-21 to 2026-11-24) and how it relates to the open GitHub issues. The detailed record of each change, with flight and harness evidence, is the [Unreleased] section of [CHANGELOG.md](CHANGELOG.md). The bellyflop design is in [bellyflop-design.md](bellyflop-design.md).
+A summary of the work on `feature/orbital-entry` (2026-11-21 to 2026-11-24, status updated after the first landing) and how it relates to the open GitHub issues. The detailed record of each change, with flight and harness evidence, is the [Unreleased] section of [CHANGELOG.md](CHANGELOG.md). The bellyflop design is in [bellyflop-design.md](bellyflop-design.md).
 
 ## Purpose and status
 
@@ -8,9 +8,11 @@ The branch builds a Starship-style flight chain from orbit to the pad: orbital e
 
 What works: the aimed deorbit, the entry and bellyflop. In the harness the KSAero "flopper" flies from 100 km to 100 m over the site; with BELLYFLOP AIM SHORT at 200 m it ends 216 m from the site and 11-20 m from bellyflop's aim (f09d793). The entry holds a heating limit to within a few percent where the site allows it (261b71d). A Starship (KSAStarship) has flown the entry and bellyflop in windowed flights and reached touchdown guidance.
 
-What does not work yet: no craft has landed through the flip and burn. On the latest Starship flights touchdown guidance's flying re-solves are refused at the publish gate during the coast flip; the craft lit late (60 m at 46 m/s) or the restart never converged (see [Open problems](#open-problems-and-next-steps)). The last four commits (08c3c62 to 0767fa7) have not been flown together, and a fix to the virtual-control pricing is in progress and not committed.
+First landing (2026-11-24, windowed): a Starship engaged from a bellyflop save with BELLYFLOP DIRECT, landing on a one-engine landing group (the centre sea-level Raptor), lit at 510 m, flipped under power and touched down at 1.6 m/s, 1.9 m from the target, with no refused re-solves. Every earlier flight lit all three sea-level Raptors, whose throttle floor is 2.3 times the craft's weight. Touchdown could then light only about 100 m up and had to flip in the coast on the air and flaps, which broke its plan. ORBITAL ENTRY did not apply the LAND landing group until 1c1f49e.
 
-Branch state when this was written: 51 commits on top of `origin/main`, one of them the merge of main (2a72baa). `origin/main` has 8 commits since that merge (#295 to #298) that the branch does not have yet. There is no pull request.
+Not yet flown: the whole chain from orbit to touchdown in one flight, a landing on all three engines, and the harness checks after the touchdown pricing changes (7e401d6 onwards).
+
+Branch state: 57 commits on top of `origin/main`, one of them the merge of main (2a72baa). `origin/main` has #295 to #298 since that merge, not yet merged in.
 
 ## The flight chain
 
@@ -85,7 +87,9 @@ Where a cell lists several paths, the later ones are relative to the first one's
 ### Touchdown solver and refusals
 
 - **Carry on after a refusal** (0767fa7): the flying re-solve starts from the refused attempt's trajectory, shifted to now and re-anchored at the measured state, as the standby's Track does. Seeded from the published plan each cycle, a Starship's re-solves were refused 15 times in a row at 1.2-1.6 m against the 1 m gate. Not flown.
-- **Virtual-control pricing: in progress, not committed.** See [Open problems](#open-problems-and-next-steps).
+- **Virtual-control pricing** (7e401d6): 5 m position scale, near-term intervals priced tight on warm re-solves, no loosening after a gate refusal.
+- **Flaps' tables first** (bc59fcd): touchdown waits for the sweep's control surfaces before it plans, flying on meanwhile; a direct engage had planned without flaps and stalled every half second.
+- **PLAN RCS AND FLAPS** (bc59fcd, 49464a7): the plans' share of the RCS torque and the surfaces' travel is a setting, default 0.75 (was a fixed 0.5).
 
 ### Attitude control and RCS
 
@@ -129,13 +133,13 @@ Where a cell lists several paths, the later ones are relative to the first one's
 
 ## Open problems and next steps
 
-1. **Touchdown re-solves refused during the coast flip.** On the latest Starship flights the flying re-solves left 1-2 m position defects against the 1 m publish gate. This traces to loose virtual-control pricing: position is priced on XScale, velocity is priced tight only under 10 s to go (`PricingTightBelowS`), and repeated refusals loosen the price a further stage. 0767fa7 (carry on from the last attempt) is committed but not flown. **In progress, not committed:** a 5 m position virtual-control scale, as proposed in #265, no loosening after gate refusals, and tight pricing on the near-term intervals the gate checks.
+1. **Touchdown re-solves refused during the coast flip (addressed, 0767fa7 and 7e401d6).** The landing flight had no refused re-solves. Before: On the latest Starship flights the flying re-solves left 1-2 m position defects against the 1 m publish gate. This traces to loose virtual-control pricing: position is priced on XScale, velocity is priced tight only under 10 s to go (`PricingTightBelowS`), and repeated refusals loosen the price a further stage. 0767fa7 (carry on from the last attempt) is committed but not flown. 7e401d6 adds a 5 m position virtual-control scale, as proposed in #265, no loosening after gate refusals, and tight pricing on the near-term intervals the gate checks.
 2. **Flap aero mid-flip.** Between 75 and 45 deg of tilt the air resisted the flip with 1.6-1.7 MN m where the model had 0.5-1.1 (AERO CHECK), and the old model credited the flaps three times what the game gave. The flip band and the moment-error integrator (7f6bbaa) are meant to close this; not flown.
 3. **Timing margin.** The coast flip fell 26 deg behind its plan and lit at 60 m at 46 m/s. The 50 % RCS and flap planning share (21fa816) should leave margin for the gimbals; not flown. The standby's plans are often stale while bellyflop flies, so the hand-over accepts plans up to 2.5 s old (4180bd6).
 4. **Bellyflop has no pitch moment in its planner**, so it can choose attitudes the flaps can barely hold (noted in 9f1c656). Not done.
 5. **Entry with too much energy.** Two offline bellyflop closed loops that start with more energy than they can lose before the site still pass it (08c3c62).
 6. **Heating limit.** The flopper cannot hold the default 440 kW/m²; the limit is soft and loses to the range, so the craft may fly hotter than the limit to reach the site. LEAST HEATING says so.
-7. **Deferred:** choosing the engines the chain lands on, and a UI for it. The hand-over checks only the active engines' thrust against weight.
+7. **Engines to land on.** The chain now lands on the LAND landing group (1c1f49e). Open: switching the number of engines in flight (flip on several, land on one, as the real Starship does), so a craft whose full set cannot hover can still light high. The hand-over checks only the active engines' thrust against weight.
 8. **Merge with main.** `origin/main` #295 (the #282 fixes) changes `KsaRcsTorqueControl.cs`, `KsaAeroTorqueControl.cs` and `AttitudeController.cs`, and #298 changes `RcsLpSolver.cs`. The branch rewrote large parts of these files, so expect conflicts there and in `Modes/SixDof.cs`.
 
 ## Relation to open issues
