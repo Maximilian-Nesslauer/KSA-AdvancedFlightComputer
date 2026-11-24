@@ -185,6 +185,7 @@ public static partial class GuidanceWindow
                 FormattableString.Invariant($"{_s.Guidance.Sigma / Math.Max(_s.Guidance.Nodes - 1, 1):F2} s"));
 
         // Switching threading mid-flight is the point of having the toggle, so it has to be safe: stop the worker on the way off, start one on the way on.
+        GaugeRowCheck(Specs.ScvxClarabel, ref _s.ScvxClarabel);
         GaugeRowCheck(Specs.SixDofThreaded, ref _s.SixDofThreaded);
         if (_s.SixDofThreaded && _s.Worker != null)
             GaugeRowText(T, "WORKER",

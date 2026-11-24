@@ -151,5 +151,6 @@ int main(void) {
     FIELD(ClarabelDefaultSettings, ClarabelDefaultSettings_f64, IterativeRefinementMaxIter, iterative_refinement_max_iter);
     FIELD(ClarabelDefaultSettings, ClarabelDefaultSettings_f64, IterativeRefinementStopRatio, iterative_refinement_stop_ratio);
     FIELD(ClarabelDefaultSettings, ClarabelDefaultSettings_f64, PresolveEnable, presolve_enable);
+    FIELD(ClarabelDefaultSettings, ClarabelDefaultSettings_f64, InputSparseDropzeros, input_sparse_dropzeros);
     return 0;
 }

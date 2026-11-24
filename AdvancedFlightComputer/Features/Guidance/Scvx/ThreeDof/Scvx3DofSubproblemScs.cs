@@ -77,7 +77,10 @@ public sealed class Scvx3DofSubproblemScs
     private readonly double[] _b, _c;
     private readonly double[] _colScale;
 
-    private readonly ScsWorkspace _ws = new();
+    // The conic backend (ScvxConic.Backend): SCS or Clarabel, one workspace each, the same problem data for both.
+    private readonly ScvxConicWorkspaces _wss = new();
+    /// <summary>The workspace of the last solve, whose solution and statistics the properties below read.</summary>
+    private IScvxConicWorkspace _ws => _wss.Last;
     private bool _frozen;
 
     public int VariableCount => _nVars;
@@ -85,7 +88,10 @@ public sealed class Scvx3DofSubproblemScs
     public int Iterations => _ws.Iterations;
     public string StatusText => _ws.StatusText;
     public bool HitIterationLimit => _ws.HitIterationLimit;
-    public bool HasWarmStart => _ws.HasWarmStart;
+    public bool HasWarmStart => _wss.Current.HasWarmStart;
+
+    /// <summary>The iteration cap the selected backend turns a requested budget into (IScvxConicWorkspace.EffectiveIterationCap).</summary>
+    public int EffectiveIterationCap(int requested) => _wss.Current.EffectiveIterationCap(requested);
 
     private int IX(int node, int i) => _oX + node * NX + i;
     private int IU(int node, int j) => _oU + node * NU + j;
@@ -240,11 +246,11 @@ public sealed class Scvx3DofSubproblemScs
                          double epsAbs = ScsWorkspace.DefaultEps, double epsRel = ScsWorkspace.DefaultEps)
     {
         ThrowIfNotFinite();
-        return _ws.Solve(_A, _b, _c, _P, _nEq, _lDim, _socDims, warmStart, false,
+        return _wss.ForSolve().Solve(_A, _b, _c, _P, _nEq, _lDim, _socDims, warmStart, false,
                          maxIterations, epsAbs, epsRel);
     }
 
-    public void ResetWarmStart() => _ws.ResetWarmStart();
+    public void ResetWarmStart() => _wss.ResetWarmStart();
 
     // ---------------------------------------------------------------- solution
 

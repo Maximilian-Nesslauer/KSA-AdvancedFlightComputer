@@ -84,6 +84,9 @@ public sealed class GuidanceMoonLandingRetargetTest : AfcTest
             t.Info($"hopper '{craft.Id}': {craft.TotalMass:F0} kg, {(craft.Orbit.StateVectors.PositionCci.Length() - luna.MeanRadius) / 1000:F1} km up");
 
             VehicleAutopilotState state = VehicleAutopilotState.For(craft);
+            // AFC_SCVX_BACKEND=scs flies the plans on SCS instead of Clarabel (CLARABEL SOLVER off), for an A/B in one build.
+            state.ScvxClarabel = !string.Equals(Environment.GetEnvironmentVariable("AFC_SCVX_BACKEND"), "scs", StringComparison.OrdinalIgnoreCase);
+            t.Info($"SCvx conic backend: {(state.ScvxClarabel ? "Clarabel" : "SCS")}");
             state.SixDofLogging = true;
             state.Engage = true;
             state.AutoStage = true;

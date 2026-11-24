@@ -982,6 +982,9 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool SixDofThreaded = true;
 
+    /// <summary>The 6-DOF and 3-DOF SCvx plans solve with Clarabel; off, with SCS. Process-wide in effect: the focused craft writes Conic.ScvxConic.Backend each frame.</summary>
+    public bool ScvxClarabel = true;
+
     // Per engagement: the first cold solve's seed, raised to the braking burn's time to go on a handoff, and the last plan published, whose expiry is the craft losing its plan.
     public double SixDofEntrySigmaSeed = 20.0;
     public Ksa6DofPlan SixDofLastPublishedPlan;
