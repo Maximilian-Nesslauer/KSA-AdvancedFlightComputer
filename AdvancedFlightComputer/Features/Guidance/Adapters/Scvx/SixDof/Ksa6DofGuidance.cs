@@ -749,17 +749,21 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// Burn time the NEW solve will use. The seed is stretched onto it, so this must be the same value handed to Reseed or Initialize - a different one re-times the whole reference and reintroduces exactly the fault this removes.
     /// </param>
     private void BuildShiftedSeed(double[] x0, double simNow, double sigmaNew,
-                                  out double[] xs, out double[] us, out double elapsed, double coastNew = 0.0)
+                                  out double[] xs, out double[] us, out double elapsed, double coastNew = 0.0, bool fromWork = false)
     {
-        double dtOld = Math.Max(_planSigma / (_n - 1 - _cfg.CoastIntervals), 1e-9);
-        elapsed = Math.Max(0.0, simNow - _solveTime);
+        // The trajectory shifted: the published plan, or the last attempt where it carries on from one (Update after a refusal).
+        double[] baseX = fromWork ? _workX : _planX, baseU = fromWork ? _workU : _planU;
+        double baseSigma = fromWork ? _workSigma : _planSigma, baseCoast = fromWork ? _workCoast : _planCoast;
+        double baseTime = fromWork ? _workTime : _solveTime;
+        double dtOld = Math.Max(baseSigma / (_n - 1 - _cfg.CoastIntervals), 1e-9);
+        elapsed = Math.Max(0.0, simNow - baseTime);
 
         // Recorded, not used: the seed no longer shifts by whole nodes. Current because it is the quantity the refusal correlation was measured against, so logs from either side of this change stay comparable.
         LastSeedShift = (int)(elapsed / dtOld);
 
         xs = new double[_n * NX];
         us = new double[_n * NU];
-        ResamplePlan(_planX, _planU, _n, _cfg.CoastIntervals, _planSigma, _planCoast, elapsed,
+        ResamplePlan(baseX, baseU, _n, _cfg.CoastIntervals, baseSigma, baseCoast, elapsed,
                      _n, _cfg.CoastIntervals, sigmaNew, coastNew, xs, us);
 
         // Seed node 0 with the MEASURED state, and carry the rest of the reference with it: position by the offset plus the velocity offset times time, velocity and mass by their offsets - the same re-anchoring the spread cold solve does between its iterations (ColdReferenceShift). It is what the equality will force at node 0 anyway, and starting the reference there means even a cycle that accepts no step still hands back a plan anchored at the vehicle.
@@ -1343,8 +1347,11 @@ public sealed class Ksa6DofGuidance : IDisposable
 
         // SIGMA FIRST, because the seed is stretched onto it rather than shifted by whole nodes - BuildShiftedSeed needs the horizon it is resampling to.
         //  FIXED TIME: count the COMMITTED burn time down rather than letting the solver re-choose it every cycle. Re-choosing is what made successive plans change shape instead of merely advancing, and it is what let the regularisers stretch sigma to make themselves cheaper.
-        double elapsed = Math.Max(0.0, simNow - _solveTime);
-        (double burnLeft, double coast) = Shorten(_planSigma, _planCoast, elapsed, simNow);
+        // AFTER A REFUSAL, CARRY ON FROM THE LAST ATTEMPT, as Track does: a refused re-solve's iterations are kept, and the next one starts from where it stopped, shifted to now and re-anchored at the measured state, in the trust region it reached. Seeded again from the published plan each cycle, every attempt started from the same ever older plan with the same few iterations and stopped at the same mismatch: a Starship's re-solves were refused 15 times in a row at 1.2 to 1.6 m against the 1 m gate, with the craft 1 m off its plan, and the restart that followed never converged (2026-11-24). A published plan is the newest again (_workTime is not past _solveTime), so a healthy loop is unchanged.
+        bool fromWork = _consecutiveFailures > 0 && _workX.Length == _planX.Length && _workTime > _solveTime && !FixedTime;
+        LastFromWork = fromWork;
+        double elapsed = Math.Max(0.0, simNow - (fromWork ? _workTime : _solveTime));
+        (double burnLeft, double coast) = fromWork ? Shorten(_workSigma, _workCoast, elapsed, simNow) : Shorten(_planSigma, _planCoast, elapsed, simNow);
         double sigma;
         if (FixedTime)
         {
@@ -1357,20 +1364,23 @@ public sealed class Ksa6DofGuidance : IDisposable
             sigma = Math.Max(_cfg.SigmaMin, burnLeft);
         }
 
-        BuildShiftedSeed(x0, simNow, sigma, out double[] xs, out double[] us, out _, coast);
+        BuildShiftedSeed(x0, simNow, sigma, out double[] xs, out double[] us, out _, coast, fromWork);
         // A cycle whose predecessor refused gets the larger budget, so it can take the second and third iterations that let SCvx shrink its way to an accepted step. A healthy cycle never reaches the deadline at all.
         double budget = _consecutiveFailures > 0 ? RecoveryCycleBudgetMs : CycleBudgetMs;
 
         FellBack = false;
-        LastTrustRegionStart = WarmTrustRegion;
+        // Carrying on, in the trust region the last attempt reached; a fresh cycle in the warm one.
+        double region = fromWork ? Math.Clamp(_solver.TrustRegion, WarmTrustRegion, _solver.TrustRegionMax) : WarmTrustRegion;
+        LastTrustRegionStart = region;
         PriceForHorizon(sigma + coast);
-        _solver.Reseed(x0, xs, us, sigma, trustRegion: WarmTrustRegion, coastSigma: coast);
+        _solver.Reseed(x0, xs, us, sigma, trustRegion: region, coastSigma: coast);
         if (Finish(x0, simNow, maxIterations, budgetMs: budget))
         {
             _consecutiveFailures = 0;
             SetPricingStage(PricingStage + 1);
             return true;
         }
+        KeepAttempt(simNow);
         // A plan the tight price will not let through is looser-priced next cycle rather than lost.
         if (_consecutiveFailures >= 1 && PricingStage > 0)
             SetPricingStage(PricingStage - 1);
@@ -1397,8 +1407,22 @@ public sealed class Ksa6DofGuidance : IDisposable
             SetPricingStage(PricingStage + 1);
             return true;
         }
+        KeepAttempt(simNow);
         return false;
     }
+
+    /// <summary>Keeps a refused attempt's trajectory as the working one, for the next re-solve to carry on from (Update, Track).</summary>
+    private void KeepAttempt(double simNow)
+    {
+        _workX = (double[])_solver.ReferenceX.Clone();
+        _workU = (double[])_solver.ReferenceU.Clone();
+        _workSigma = _solver.Sigma;
+        _workCoast = _solver.CoastSigma;
+        _workTime = simNow;
+    }
+
+    /// <summary>The last Update carried on from a refused attempt rather than the published plan.</summary>
+    public bool LastFromWork { get; private set; }
 
     /// <summary>
     /// A re-solve for a craft something else is flying - the 6-DOF standby under the 3-DOF's burn - that carries on from its OWN latest trajectory rather than from the published plan.
