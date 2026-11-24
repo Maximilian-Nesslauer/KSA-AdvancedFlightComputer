@@ -176,7 +176,7 @@ internal static class JettisonAnalysis
 
         try
         {
-            return FeedsStayingEngine(jettison, moleStates, out reason) || CrossesFuelLink(vehicle, jettison, out reason);
+            return FeedsStayingEngine(jettison, moleStates, out reason) || CrossesFuelLink(vehicle, jettison, moleStates, out reason);
         }
         finally
         {
@@ -198,13 +198,17 @@ internal static class JettisonAnalysis
             for (int i = 0; i < tanks.Length; i++)
             {
                 Tank tank = tanks[i];
+                if (!tank.PropellantUseEnabled || !tank.RoleAffinity.IsSet(ConsumerRole.Engine))
+                    continue;
                 if (tank.ComputeSubstanceMass(moleStates) <= 0f)
                     continue;
 
-                // AvailableConsumers is narrower than what a FurtherestToNearest flow rule drains, which is fine on stock parts, whose decoupler joints carry no BulkFluid capability.
+                // ResourceManager.CreateOrders populates AvailableConsumers before QualifiesForOrder, so check PropellantUseEnabled, RoleAffinity, and Mix explicitly.
                 foreach ((ResourceManager manager, int _) in tank.AvailableConsumers)
                 {
                     if (manager.Consumer is not PlumbedCore consumer || !_stayingEngineCores.Contains(consumer))
+                        continue;
+                    if (!tank.ContainsAny(manager.Mix))
                         continue;
 
                     reason = $"a tank on '{part.DisplayName}' still feeds the engine on '{consumer.Parent.FullPart.DisplayName}', which stays aboard";
@@ -215,20 +219,49 @@ internal static class JettisonAnalysis
         return false;
     }
 
-    // A player-drawn fuel link is plumbing the resource graph does not necessarily model.
-    private static bool CrossesFuelLink(Vehicle vehicle, IReadOnlySet<Part> jettison, out string? reason)
+    // Hold only on a fuel link that allows flow from the jettisoned side into the staying side while usable engine propellant remains on the jettisoned side.
+    private static bool CrossesFuelLink(Vehicle vehicle, IReadOnlySet<Part> jettison, ReadOnlySpan<MoleState> moleStates, out string? reason)
     {
         reason = null;
         ReadOnlySpan<FuelLink> links = vehicle.Parts.FuelLinks.Links;
+        bool checkedPropellant = false;
+        bool jettisonHasEnginePropellant = false;
         for (int i = 0; i < links.Length; i++)
         {
             FuelLink link = links[i];
             if (!link.Enabled)
                 continue;
-            if (jettison.Contains(link.PartA.FullPart) == jettison.Contains(link.PartB.FullPart))
+            bool aIn = jettison.Contains(link.PartA.FullPart);
+            bool bIn = jettison.Contains(link.PartB.FullPart);
+            if (aIn == bIn)
                 continue;
 
-            reason = $"an enabled fuel link joins '{link.PartA.FullPart.DisplayName}' and '{link.PartB.FullPart.DisplayName}' across the separation";
+            Part donor = aIn ? link.PartA : link.PartB;
+            if (!link.AllowsFlowFrom(donor))
+                continue;
+            if (!checkedPropellant)
+            {
+                checkedPropellant = true;
+                foreach (Part p in jettison)
+                {
+                    Span<Tank> tanks = p.SubtreeModules.Get<Tank>();
+                    for (int t = 0; t < tanks.Length; t++)
+                    {
+                        if (tanks[t].PropellantUseEnabled && tanks[t].RoleAffinity.IsSet(ConsumerRole.Engine)
+                            && tanks[t].ComputeSubstanceMass(moleStates) > 0f)
+                        {
+                            jettisonHasEnginePropellant = true;
+                            break;
+                        }
+                    }
+                    if (jettisonHasEnginePropellant)
+                        break;
+                }
+            }
+            if (!jettisonHasEnginePropellant)
+                continue;
+
+            reason = $"an enabled fuel link from '{donor.FullPart.DisplayName}' still feeds propellant across the separation";
             return true;
         }
 

@@ -162,6 +162,7 @@ internal static class SharedVehicleHooks
         // A failed feature can still have loaded entries that the save observer will persist.
         RcsExecRegistry.RenameVehicle(oldId, vehicle.Id);
         MultiPassRegistry.RenameVehicle(oldId, vehicle.Id);
+        StagingConfig.RenameVehicle(oldId, vehicle.Id);
     }
 
     // Vehicle.Dispose() delegates to Dispose(bool), and EVA boarding calls the bool overload directly.

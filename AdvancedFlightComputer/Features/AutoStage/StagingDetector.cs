@@ -58,10 +58,17 @@ internal static class StagingDetector
             // Dropped rather than frozen: sim time runs on while the switch is off, so a dwell left armed would already be expired on the frame it is switched back on.
             state.PropagationFrames = 0;
             state.ResetDwell();
-            state.HeldForControl = false;
             state.HeldBurn = null;
             state.ActivationEngines = null;
-            if (state.State != StagingState.Phase.AwaitingIgnition)
+            state.ClearSeparation();
+            if (state.HeldForControl && state.Pending != null)
+            {
+                state.Pending.ClearDecouplers();
+                if (!state.Pending.AnyPending)
+                    state.Pending = null;
+            }
+            state.HeldForControl = false;
+            if (state.State != StagingState.Phase.AwaitingIgnition || state.Pending == null)
                 state.State = StagingState.Phase.Monitoring;
         }
         if (DebugConfig.AutoStage)
@@ -119,6 +126,8 @@ internal static class StagingDetector
             state.ResetDwell();
             state.FairingGate.Reset();
             FairingJettison.ReturnToStock(vehicle, state);
+            state.FairingPending = null;
+            state.FairingFailed.Clear();
         }
         return false;
     }
