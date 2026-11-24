@@ -199,9 +199,10 @@ internal static class MpcHarness
             // recomputed identically every solve and can be hoisted.
             Console.WriteLine("  WHERE THE TIME GOES (closed loop, MOD AS SHIPPED, dispersed):");
             Console.WriteLine("     N   solves   init%   mean    p50    p90    p99    MAX   ADMM/solve");
-            foreach (int nn in new[] { 30, 50, 80 })
+            foreach (int nn in new[] { 15, 25, 30, 50, 80 })
             {
                 ScsWorkspace.ResetTimers();
+                ClarabelWorkspace.ResetTimers();
                 var sw = new System.IO.StringWriter();
                 var prev = Console.Out;
                 Console.SetOut(sw);
@@ -218,6 +219,18 @@ internal static class MpcHarness
                     $"{ScsWorkspace.SolveMsPercentile(0.90),6:F1} {ScsWorkspace.SolveMsPercentile(0.99),6:F1} " +
                     $"{ScsWorkspace.SolveMsPercentile(1.0),6:F0}  " +
                     $"{(double)ScsWorkspace.TotalAdmmIterations / calls,10:F0}");
+                if (ClarabelWorkspace.TotalCalls > 0)
+                {
+                    long cc = ClarabelWorkspace.TotalCalls;
+                    Console.WriteLine(
+                        $"  {nn,4}  {cc,7}  clarabel setup {100.0 * ClarabelWorkspace.TotalSetupMs / Math.Max(ClarabelWorkspace.TotalSetupMs + ClarabelWorkspace.TotalSolveMs, 1e-9),5:F1}%  " +
+                        $"mean {(ClarabelWorkspace.TotalSetupMs + ClarabelWorkspace.TotalSolveMs) / cc,6:F2} p50 {ClarabelWorkspace.SolveMsPercentile(0.50),6:F2} " +
+                        $"p90 {ClarabelWorkspace.SolveMsPercentile(0.90),6:F2} p99 {ClarabelWorkspace.SolveMsPercentile(0.99),6:F2} " +
+                        $"max {ClarabelWorkspace.SolveMsPercentile(1.0),6:F1}  ipm/solve {(double)ClarabelWorkspace.TotalIpmIterations / cc,5:F1}  rebuilds {ClarabelWorkspace.TotalRebuilds}  IR fallbacks {ClarabelWorkspace.TotalRefinementFallbacks}");
+                }
+                // The closed loop's own result line: tracking, so a faster solve that tracks worse shows.
+                string[] loopLines = sw.ToString().Split((char)10, StringSplitOptions.RemoveEmptyEntries);
+                if (loopLines.Length > 0) Console.WriteLine($"        loop: {loopLines[^1].Trim()}");
             }
             return 0;
         }

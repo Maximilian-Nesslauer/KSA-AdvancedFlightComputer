@@ -179,11 +179,15 @@ public static class KsaTvcAllocator
         double wz = inv[6] * strong.X + inv[7] * strong.Y + inv[8] * strong.Z;
 
         double peak = 0.0;
-        for (int c = 0; c < cols; c++)
+        for (int i = 0; i < n; i++)
         {
-            double u = bTorque[3 * c] * wx + bTorque[3 * c + 1] * wy + bTorque[3 * c + 2] * wz;
-            commands[c] = u;
-            peak = Math.Max(peak, Math.Abs(u));
+            int c0 = 2 * i, c1 = c0 + 1;
+            double u0 = bTorque[3 * c0] * wx + bTorque[3 * c0 + 1] * wy + bTorque[3 * c0 + 2] * wz;
+            double u1 = bTorque[3 * c1] * wx + bTorque[3 * c1 + 1] * wy + bTorque[3 * c1 + 2] * wz;
+            commands[c0] = u0;
+            commands[c1] = u1;
+            // KSA.Gimbal.ConstrainStateToCircle enforces a circular cone ||(u_y, u_z)||_2 <= 1, not a square box.
+            peak = Math.Max(peak, Math.Sqrt(u0 * u0 + u1 * u1));
         }
 
         // Saturation: scale the WHOLE solution rather than clipping per component, so the torque DIRECTION survives.
@@ -212,20 +216,26 @@ public static class KsaTvcAllocator
             }
         }
 
-        // The weak axis, in the travel left: the largest share of its own solution that keeps every gimbal inside its range.
+        // The weak axis, in the circular-cone travel left: largest share s in [0, 1] keeping ||u_i + s * ur_i||_2 <= 1 for every gimbal.
         result.WeakAxisScale = 1.0;
         if (weak >= 0 && weakDemand != 0.0)
         {
             double rx = inv[weak] * weakDemand, ry = inv[3 + weak] * weakDemand, rz = inv[6 + weak] * weakDemand;
             double share = 1.0;
-            for (int c = 0; c < cols; c++)
+            for (int i = 0; i < n; i++)
             {
-                double ur = bTorque[3 * c] * rx + bTorque[3 * c + 1] * ry + bTorque[3 * c + 2] * rz;
-                if (Math.Abs(ur) < 1e-12)
+                int c0 = 2 * i, c1 = c0 + 1;
+                double ur0 = bTorque[3 * c0] * rx + bTorque[3 * c0 + 1] * ry + bTorque[3 * c0 + 2] * rz;
+                double ur1 = bTorque[3 * c1] * rx + bTorque[3 * c1 + 1] * ry + bTorque[3 * c1 + 2] * rz;
+                double aQuad = ur0 * ur0 + ur1 * ur1;
+                if (aQuad < 1e-18)
                     continue;
-                // Room towards the side this gimbal's roll share pushes it.
-                double room = 1.0 - commands[c] * Math.Sign(ur);
-                share = Math.Min(share, Math.Max(room, 0.0) / Math.Abs(ur));
+                double u0 = commands[c0], u1 = commands[c1];
+                double bQuad = 2.0 * (u0 * ur0 + u1 * ur1);
+                double cQuad = u0 * u0 + u1 * u1 - 1.0;
+                double disc = bQuad * bQuad - 4.0 * aQuad * cQuad;
+                double sLim = disc <= 0.0 ? 0.0 : Math.Max(0.0, (-bQuad + Math.Sqrt(disc)) / (2.0 * aQuad));
+                share = Math.Min(share, sLim);
             }
             share = Math.Clamp(share, 0.0, 1.0);
             for (int c = 0; c < cols; c++)
@@ -257,39 +267,44 @@ public static class KsaTvcAllocator
         return result;
     }
 
-    // Largest torque about one axis alone that the min-norm solution can deliver before some gimbal saturates.
+    // Largest torque about one axis alone that the min-norm solution can deliver before some gimbal saturates its circular cone.
     private static double AxisCapability(double[] bTorque, int cols, ReadOnlySpan<double> inv, int axis)
     {
         double wx = inv[axis], wy = inv[3 + axis], wz = inv[6 + axis];
         double peak = 0.0, torque = 0.0;
-        for (int c = 0; c < cols; c++)
+        int n = cols / 2;
+        for (int i = 0; i < n; i++)
         {
-            double u = bTorque[3 * c] * wx + bTorque[3 * c + 1] * wy + bTorque[3 * c + 2] * wz;
-            peak = Math.Max(peak, Math.Abs(u));
-            torque += bTorque[3 * c + axis] * u;
+            int c0 = 2 * i, c1 = c0 + 1;
+            double u0 = bTorque[3 * c0] * wx + bTorque[3 * c0 + 1] * wy + bTorque[3 * c0 + 2] * wz;
+            double u1 = bTorque[3 * c1] * wx + bTorque[3 * c1 + 1] * wy + bTorque[3 * c1 + 2] * wz;
+            peak = Math.Max(peak, Math.Sqrt(u0 * u0 + u1 * u1));
+            torque += bTorque[3 * c0 + axis] * u0 + bTorque[3 * c1 + axis] * u1;
         }
         return peak > 0.0 ? torque / peak : 0.0;
     }
 
     /// <summary>
-    /// SATURATED GIMBALS HOLD, THE OTHERS CARRY ON (cascaded generalised inverse). <paramref name="commands"/> comes in as the min-norm solution scaled until its first gimbal reached a stop. Each pass holds every gimbal at its stop, solves the part of the strong axes' demand still missing on the gimbals left free, and moves them along that solution until the next reaches a stop or the demand is met. The weak axis is held where the commands have it (its row's target is zero), and is allocated afterwards in the travel left, as before.
+    /// SATURATED GIMBALS HOLD, THE OTHERS CARRY ON (cascaded generalised inverse). <paramref name="commands"/> comes in as the min-norm solution scaled until its first gimbal reached a stop. Each pass holds every gimbal at its circular-cone stop ||(u_y, u_z)||_2 = 1, solves the part of the strong axes' demand still missing on the gimbals left free, and moves them along that solution until the next reaches its circular-cone stop or the demand is met. The weak axis is held where the commands have it (its row's target is zero), and is allocated afterwards in the travel left, as before.
     ///  WHY. Scaling the whole solution to the first gimbal at its stop let the smallest actuator set the craft's torque. On 2026-11-21 one 10 deg engine of a triple plate landed with its main gimbal at a third of its travel while a 70 deg vernier sat at its stop, and the allocation delivered 51-69 % of the demand for the last 1.5 s of the burn: the craft could not make the turn its plan flew and touched down at 4.5 m/s sideways.
     ///  Where the free gimbals cannot make the missing torque without roll (a single engine whose verniers are at their stops), the solve is a least-squares compromise between the two, the regularisation keeping it well defined.
     /// </summary>
     /// <param name="trackWeak">The strong target carries the weak axis's coupled share (Solve's coupled): the passes keep making it, rather than holding the weak axis where the commands have it.</param>
     private static void Redistribute(double[] b, int cols, double3 strong, int weak, double lambda, double[] commands, bool trackWeak = false)
     {
-        Span<bool> held = stackalloc bool[cols];
+        int n = cols / 2;
+        Span<bool> held = stackalloc bool[n];
         Span<double> g = stackalloc double[9];
         double size = Math.Sqrt(double3.Dot(strong, strong));
-        for (int pass = 0; pass < cols; pass++)
+        for (int pass = 0; pass < n; pass++)
         {
             int free = 0;
-            for (int c = 0; c < cols; c++)
+            for (int i = 0; i < n; i++)
             {
-                if (!held[c] && Math.Abs(commands[c]) >= 1.0 - 1e-9)
-                    held[c] = true;
-                if (!held[c])
+                double u0 = commands[2 * i], u1 = commands[2 * i + 1];
+                if (!held[i] && Math.Sqrt(u0 * u0 + u1 * u1) >= 1.0 - 1e-9)
+                    held[i] = true;
+                if (!held[i])
                     free++;
             }
             if (free == 0)
@@ -304,14 +319,18 @@ public static class KsaTvcAllocator
                 return;
 
             g.Clear();
-            for (int c = 0; c < cols; c++)
+            for (int i = 0; i < n; i++)
             {
-                if (held[c])
+                if (held[i])
                     continue;
-                double x = b[3 * c], y = b[3 * c + 1], z = b[3 * c + 2];
-                g[0] += x * x; g[1] += x * y; g[2] += x * z;
-                g[4] += y * y; g[5] += y * z;
-                g[8] += z * z;
+                for (int axis = 0; axis < 2; axis++)
+                {
+                    int c = 2 * i + axis;
+                    double x = b[3 * c], y = b[3 * c + 1], z = b[3 * c + 2];
+                    g[0] += x * x; g[1] += x * y; g[2] += x * z;
+                    g[4] += y * y; g[5] += y * z;
+                    g[8] += z * z;
+                }
             }
             g[3] = g[1]; g[6] = g[2]; g[7] = g[5];
             g[0] += lambda; g[4] += lambda; g[8] += lambda;
@@ -321,21 +340,33 @@ public static class KsaTvcAllocator
             double wy = inv[3] * r.X + inv[4] * r.Y + inv[5] * r.Z;
             double wz = inv[6] * r.X + inv[7] * r.Y + inv[8] * r.Z;
 
-            // As far along this solution as the first free gimbal's stop allows, or all of it.
+            // As far along this solution as the first free gimbal's circular-cone stop allows, or all of it.
             double step = 1.0;
-            for (int c = 0; c < cols; c++)
+            for (int i = 0; i < n; i++)
             {
-                if (held[c])
+                if (held[i])
                     continue;
-                double u = b[3 * c] * wx + b[3 * c + 1] * wy + b[3 * c + 2] * wz;
-                if (Math.Abs(u) < 1e-15)
+                int c0 = 2 * i, c1 = c0 + 1;
+                double du0 = b[3 * c0] * wx + b[3 * c0 + 1] * wy + b[3 * c0 + 2] * wz;
+                double du1 = b[3 * c1] * wx + b[3 * c1 + 1] * wy + b[3 * c1 + 2] * wz;
+                double aQuad = du0 * du0 + du1 * du1;
+                if (aQuad < 1e-18)
                     continue;
-                double room = u > 0.0 ? (1.0 - commands[c]) / u : (-1.0 - commands[c]) / u;
-                step = Math.Min(step, Math.Max(room, 0.0));
+                double u0 = commands[c0], u1 = commands[c1];
+                double bQuad = 2.0 * (u0 * du0 + u1 * du1);
+                double cQuad = u0 * u0 + u1 * u1 - 1.0;
+                double disc = bQuad * bQuad - 4.0 * aQuad * cQuad;
+                double room = disc <= 0.0 ? 0.0 : Math.Max(0.0, (-bQuad + Math.Sqrt(disc)) / (2.0 * aQuad));
+                step = Math.Min(step, room);
             }
-            for (int c = 0; c < cols; c++)
-                if (!held[c])
-                    commands[c] += step * (b[3 * c] * wx + b[3 * c + 1] * wy + b[3 * c + 2] * wz);
+            for (int i = 0; i < n; i++)
+            {
+                if (held[i])
+                    continue;
+                int c0 = 2 * i, c1 = c0 + 1;
+                commands[c0] += step * (b[3 * c0] * wx + b[3 * c0 + 1] * wy + b[3 * c0 + 2] * wz);
+                commands[c1] += step * (b[3 * c1] * wx + b[3 * c1 + 1] * wy + b[3 * c1 + 2] * wz);
+            }
             if (step >= 1.0)
                 return;
         }

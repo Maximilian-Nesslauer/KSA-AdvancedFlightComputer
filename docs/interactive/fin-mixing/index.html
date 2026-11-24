@@ -1,0 +1,970 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fin mixing</title>
+<link rel="icon" href="data:,">
+<script src="../theme.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a reading column for the maths, widening to a two-pane bench (controls | plot), then one card per fin */
+:root{
+  --bg:#f2f4f3; --panel:#ffffff; --ink:#17201d; --muted:#57635e; --line:#d3dbd7; --gridline:#e5eae7; --code-bg:#e7ece9;
+  --accent:#0d6b63; --rcs:#4a52c4; --demand:#c0392b; --ok:#1f7a3a; --ill:#bf5d17;
+  --f0:#0a8573; --f1:#c06414; --f2:#a0457e; --f3:#857a0e;
+  --set-fill:rgba(13,107,99,.13); --reach-fill:rgba(13,107,99,.18); --box:#8a9690;
+  --f-head:"Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --f-body:"Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono:"JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#111614; --panel:#192120; --ink:#e4ebe8; --muted:#9aa8a2; --line:#2d3834; --gridline:#212a27; --code-bg:#1f2826;
+  --accent:#4cc3b2; --rcs:#8f97ff; --demand:#ff7a6e; --ok:#5fd27f; --ill:#f0954a;
+  --f0:#3fcab3; --f1:#f0954a; --f2:#e48ac4; --f3:#d6c955;
+  --set-fill:rgba(76,195,178,.14); --reach-fill:rgba(76,195,178,.22); --box:#7b8883; color-scheme:dark; } }
+:root[data-theme="dark"]{
+  --bg:#111614; --panel:#192120; --ink:#e4ebe8; --muted:#9aa8a2; --line:#2d3834; --gridline:#212a27; --code-bg:#1f2826;
+  --accent:#4cc3b2; --rcs:#8f97ff; --demand:#ff7a6e; --ok:#5fd27f; --ill:#f0954a;
+  --f0:#3fcab3; --f1:#f0954a; --f2:#e48ac4; --f3:#d6c955;
+  --set-fill:rgba(76,195,178,.14); --reach-fill:rgba(76,195,178,.22); --box:#7b8883; color-scheme:dark; }
+:root{color-scheme:light}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.6;
+  padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:28px 64px}
+.wrap{max-width:1080px;margin:0 auto;display:flex;flex-direction:column;gap:40px}
+.col{max-width:70ch}
+h1,h2,h3{font-family:var(--f-head);text-wrap:balance;line-height:1.2;margin:0}
+h1{font-size:2rem;font-weight:700;letter-spacing:-.01em}
+h2{font-size:1.35rem;font-weight:600;margin-bottom:12px}
+h3{font-size:1rem;font-weight:600}
+p{margin:0 0 12px}
+.lede{color:var(--muted);font-size:1.05rem;margin-top:8px}
+.eyebrow{font-family:var(--f-mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+code,.mono{font-family:var(--f-mono);font-size:.88em}
+code{background:var(--code-bg);padding:1px 5px;border-radius:4px}
+.eq{font-family:var(--f-head);font-size:1.9rem;font-weight:500;padding:18px 0 6px;letter-spacing:.01em;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 18px}
+.eq i{font-style:italic}
+.eq b{font-weight:700}
+.eq .side{font-size:1.1rem;color:var(--muted);white-space:nowrap}
+@media (max-width:480px){.eq{font-size:1.45rem}.eq .side{font-size:.95rem;white-space:normal}}
+dl.terms{display:grid;grid-template-columns:auto 1fr;gap:10px 18px;margin:16px 0 0}
+dl.terms dt{font-family:var(--f-head);font-weight:700;font-size:1.15rem;white-space:nowrap}
+dl.terms dd{margin:0;min-width:0}
+.derive{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-top:18px;font-size:.93rem}
+.derive .mono{display:block;margin:8px 0;white-space:pre-wrap;overflow-x:auto}
+.derive ol{margin:6px 0 0;padding-left:20px}
+.bench{display:grid;grid-template-columns:minmax(0,330px) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:820px){.bench{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
+.ctrl{display:flex;flex-direction:column;gap:18px}
+.group{display:flex;flex-direction:column;gap:8px}
+.label{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+button,.chip{font:inherit;font-size:.85rem;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:999px;padding:5px 11px;cursor:pointer}
+button:hover,.chip:hover{border-color:var(--accent)}
+button:focus-visible,.chip:focus-within,input:focus-visible,svg:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.on{background:var(--accent);color:var(--panel);border-color:var(--accent)}
+.chip{display:inline-flex;align-items:center;gap:6px}
+.chip input{margin:0;accent-color:var(--accent)}
+.sw{width:10px;height:10px;border-radius:2px;display:inline-block;flex:none}
+.row{display:grid;grid-template-columns:7.5em minmax(0,1fr) 4.6em;align-items:center;gap:8px;font-size:.85rem}
+.row input[type=range]{width:100%;accent-color:var(--accent)}
+.row output{font-family:var(--f-mono);font-size:.8rem;text-align:right;font-variant-numeric:tabular-nums}
+.plotwrap{display:flex;flex-direction:column;gap:12px}
+svg#plot{width:100%;max-width:560px;aspect-ratio:1;display:block;margin:0 auto;touch-action:none;cursor:crosshair;user-select:none}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.8rem;color:var(--muted);justify-content:center}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.read{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.read > div{border-top:1px solid var(--line);padding-top:6px;min-width:0}
+.read .k{font-size:.72rem;color:var(--muted);font-family:var(--f-mono);letter-spacing:.05em;text-transform:uppercase}
+.read .v{font-family:var(--f-mono);font-size:.88rem;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.pill{display:inline-block;font-family:var(--f-mono);font-size:.75rem;padding:2px 8px;border-radius:999px;border:1px solid currentColor}
+.pill.yes{color:var(--ok)} .pill.no{color:var(--demand)}
+.note{font-size:.82rem;color:var(--muted)}
+.fins{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+@media (max-width:720px){.fins{grid-template-columns:minmax(0,1fr)}}
+.fin{display:flex;flex-direction:column;gap:4px}
+.finhead{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;font-size:.88rem}
+.finhead b{font-family:var(--f-head);font-weight:600}
+.finhead .mono{font-size:.78rem;color:var(--muted);font-variant-numeric:tabular-nums;margin-left:auto}
+svg.bar{width:100%;display:block;touch-action:none;cursor:ew-resize;user-select:none}
+svg#trace{width:100%;max-width:440px;display:block}
+.sub{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.78rem;color:var(--muted)}
+.sub span{display:inline-flex;align-items:center;gap:6px}
+ul{margin:0 0 12px;padding-left:20px} li{margin:4px 0}
+a{color:var(--accent)}
+.tag{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:0 5px;margin-right:4px;white-space:nowrap}
+.tag.meas{color:var(--ok)} .tag.ill{color:var(--ill)}
+footer{font-size:.8rem;color:var(--muted)}
+footer p{margin:0}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<header class="col">
+  <div class="eyebrow">Attitude control · fins · AeroTorqueAllocator</div>
+  <h1>Fin mixing</h1>
+  <p class="lede">How AFC turns a torque demand into fin deflections, one linear programme a step, from where each fin is now and only as far as its rate reaches. This page runs a JavaScript port of the allocator on main, with its LP solver.</p>
+</header>
+
+<section class="col">
+  <h2>The equation</h2>
+  <div class="eq" aria-label="tau zero plus B u plus the sum of t k d k plus e equals tau, with u j between zero and w j and d k between zero and one"><span><b><i>τ</i></b><sub>0</sub> + <i>B</i> <b><i>u</i></b> + Σ <b><i>t</i></b><sub>k</sub> <i>d</i><sub>k</sub> + <b><i>e</i></b> = <b><i>τ</i></b></span><span class="side">0 ≤ <i>u</i><sub>j</sub> ≤ <i>w</i><sub>j</sub> &nbsp; 0 ≤ <i>d</i><sub>k</sub> ≤ 1</span></div>
+  <dl class="terms">
+    <dt><i>τ</i></dt><dd>The torque the attitude controller asks for, in N m, in its own frame. Here that frame is pitch, yaw and roll, with roll third.</dd>
+    <dt><i>τ</i><sub>0</sub></dt><dd>What the fins give where they are now. Every fin's curve is zero at rest.</dd>
+    <dt><i>u</i><sub>j</sub></dt><dd>How far a fin travels along segment <i>j</i> of its curve this step, in degrees. Each fin's travel is split outward each way from where it is now, at its 15° table points, at rest, and at its rate reach, so 0 ≤ <i>u</i><sub>j</sub> ≤ <i>w</i><sub>j</sub> keeps every fin inside what it reaches by the next step.</dd>
+    <dt><i>B</i></dt><dd>Column <i>j</i> is segment <i>j</i>'s slope <b><i>b</i></b><sub>j</sub>, its torque per degree. A segment steeper than the one inside it is merged with it, so the slopes only get shallower outward and the programme fills them inside first.</dd>
+    <dt><i>t</i><sub>k</sub> <i>d</i><sub>k</sub></dt><dd>The RCS backup columns: thruster <i>k</i>'s torque at full duty, times its duty between 0 and 1. The best thruster costs 0.02 per N m. These columns are absent with the backup off.</dd>
+    <dt><i>e</i></dt><dd>The shortfall, <b><i>e</i></b><sup>+</sup> − <b><i>e</i></b><sup>−</sup>, priced 1 per N m at priority 1 and 0.3 in roll in flight. A fin degree that buys 1 kN m costs about 0.001 per N m, so the fins give all they can before any demand goes unmet.</dd>
+  </dl>
+  <div class="derive">
+    <strong>The programme, and its refinement.</strong> Each pass minimises
+    <span class="mono">Σⱼ (±c_δ ± c_Δ) uⱼ + Σₖ cₖ dₖ + Σₐ wₐ (e⁺ₐ + e⁻ₐ)
+c_δ = 10⁻³ × the best segment's slope   (a degree away from rest; earned back toward rest)
+c_Δ = c_δ / 2                             (a degree moved; earned back toward where the fin is now)</span>
+    The first pass is the programme on the straightened segments. It is exact where a fin stalls the usual way. Where a curve bends the other way, its answer can count on torque the fin does not give, so <code>Allocate</code> refines it:
+    <ol>
+      <li>Give each fin one straight slope, the secant of its curve across a window of ±<i>W</i> around the best answer so far, the same slope both ways.</li>
+      <li>Solve, then read what the new deflections really give off the curves and the true cost in the programme's own prices.</li>
+      <li>If the cost fell, keep the answer and double <i>W</i>, up to 15°. If not, halve it.</li>
+      <li>Stop when <i>W</i> is under 0.05°, after 24 passes, or once the planned torque is within 1 + 0.005 |<i>τ</i>| N m of what the curves give. <i>W</i> starts at 10°. If the first start does not settle, a second runs from where the fins are now, and the better answer is kept.</li>
+    </ol>
+  </div>
+</section>
+
+<section>
+  <div class="col"><h2>See it</h2>
+  <p>Drag anywhere on the plot to set the demand <b><i>τ</i></b>, or focus the plot and use the arrow keys. Every change re-runs the allocation from where the fins are now, with each fin's rate reach this step. <strong>Step</strong> moves the fins to that answer and advances the clock by Δ<i>t</i>; <strong>Run</strong> keeps stepping. The arrows add up each fin's torque, then the RCS backup's, tip to tail.</p></div>
+  <div class="bench">
+    <div class="panel ctrl">
+      <div class="group"><div class="label">Fins</div><div class="chips" id="presets"></div><div class="note" id="presetnote"></div></div>
+      <div class="group"><div class="label">Plane</div><div class="chips" id="planes"></div></div>
+      <div class="group"><div class="label">Roll priority <i>w</i><sub>roll</sub></div><div class="chips" id="pris"></div></div>
+      <div class="group"><div class="label">Time</div>
+        <div class="row"><label for="rate">Fin rate</label><input id="rate" type="range" min="1" max="60" step="1"><output id="rateo"></output></div>
+        <div class="row"><label for="dt">Step Δt</label><input id="dt" type="range" min="0.01" max="0.25" step="0.01"><output id="dto"></output></div>
+        <div class="note" id="reachnote"></div>
+        <div class="chips"><button id="step" type="button">Step</button><button id="run" type="button" aria-pressed="false">Run</button><button id="home" type="button">Fins to rest</button></div>
+      </div>
+      <div class="group"><div class="label">Backup</div>
+        <div class="chips"><label class="chip"><input type="checkbox" id="backup"><span class="sw" style="background:var(--rcs)"></span>RCS backup columns</label></div>
+      </div>
+      <div class="group"><div class="label">Demand</div>
+        <div class="chips"><button id="hold" type="button">What the fins give now</button><button id="zero" type="button">Zero</button></div>
+      </div>
+    </div>
+    <div class="panel plotwrap">
+      <svg id="plot" viewBox="0 0 400 400" tabindex="0" role="img" aria-label="Fin torque in the demand plane"></svg>
+      <div class="legend" id="legend"></div>
+      <div class="read" id="read"></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="col"><h2>Each fin</h2>
+  <p>Each bar is one fin's range, with its 15° table points as ticks. The shaded band is what it reaches this step, its deflection now ± rate · Δ<i>t</i>. Drag a bar, or focus it and use the arrow keys, to put that fin somewhere else now.</p></div>
+  <div class="panel" style="display:flex;flex-direction:column;gap:14px">
+    <div class="fins" id="fins"></div>
+    <div class="sub">
+      <span><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="var(--ink)"/></svg>now</span>
+      <span><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 2 L11 2 L6 11 Z" fill="var(--ink)"/></svg>this step's command</span>
+      <span><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1 L11 6 L6 11 L1 6 Z" fill="none" stroke="var(--ink)" stroke-width="1.5"/></svg>where it is heading (no rate limit)</span>
+      <span><span class="sw" style="background:var(--reach-fill);border:1px solid var(--accent)"></span>rate reach this step</span>
+    </div>
+    <div>
+      <div class="label" style="margin-bottom:4px">This step's passes</div>
+      <svg id="trace" viewBox="0 0 320 64" role="img" aria-label="Refinement passes"></svg>
+      <div class="note" id="tracenote"></div>
+    </div>
+  </div>
+</section>
+
+<section class="col">
+  <h2>Things to try</h2>
+  <p>These are the cases AFC's offline check <code>AeroAllocatorCheck</code> tests, on the cross fins.</p>
+  <ul>
+    <li>12 kN m of pitch from rest, nothing else: fins 0 and 2 go to 6° each, half the work each so their rolls cancel.</li>
+    <li>36 kN m of pitch: into the stall, each pitch fin at 15 + 2 × 3 = 21°.</li>
+    <li>60 kN m of pitch: out of reach. The fins give 45 kN m at their stops and fall 15 kN m short.</li>
+    <li>Set rate × Δ<i>t</i> to 2° (20°/s and 0.10 s) and ask for 36 kN m from rest: one step gets the pitch fins to 2° and 4 kN m, no further.</li>
+    <li>Drag the fins to 8, 0, 4 and 0°, then press <strong>What the fins give now</strong>. A demand already met moves nothing, though 6 and 6° would be cheaper from rest.</li>
+    <li>Put every fin at 5°, zero the demand and step with a 1° reach: each fin moves 1° toward rest.</li>
+    <li>With the backup on, ask for 45 kN m of pitch and 10 kN m of roll. The pitch pair gives all the pitch, the yaw pair rolls against each other, and the RCS gives the roll left over.</li>
+  </ul>
+  <p class="note"><span class="tag ill">Illustrative</span> the cross fins are the made-up curve of the offline check: 1000 N m a degree to 15° and half that beyond, with a roll of 200 N m a degree. The 20°/s fin rate is assumed, not measured. The RCS backup is six pure-axis columns of 5 kN m at equal propellant flow, so each costs 0.02 per N m; the offline check uses two of them.</p>
+  <p class="note"><span class="tag meas">Measured</span> the 2stage_KSAero rows are the harness's sweep of that craft's four ±45° fins at Mach 0.3 and 6 kPa, engine first (2026-11-20), as stored in the offline check. Their asmb rows are reordered into the controller's frame: asmb y as pitch, z as yaw and x as roll. Their side forces are not in the check, so none is shown.</p>
+  <p class="note">The outline is what the fins reach from rest with no rate limit and the off-plane axis held at zero: for every 2° of direction, the LP that maximises <i>t</i> with <i>B</i><b><i>u</i></b> = <i>t</i> · direction on the straightened segments. On curves that bend the wrong way that LP can promise a little more than the fins give, which is why <code>Characterise</code> checks its answer by allocating it.</p>
+</section>
+
+<footer class="col">
+  <p>Part of the AFC docs. JavaScript port of AeroTorqueAllocator as of main 155357c (2026-11-21).</p>
+</footer>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+/* ===================== RcsLpSolver (port) =====================
+   minimise cost·x subject to A x = b, x >= 0; two-phase simplex, Bland's rule; columns column-major. */
+const LP_EPS = 1e-9;
+function lpSolve(rows, n, columns, cost, b){
+  if (rows < 0 || n < 0 || !columns || !cost || !b || rows * n !== columns.length || cost.length !== n || b.length !== rows) return null;
+  for (let i = 0; i < columns.length; i++) if (!isFinite(columns[i])) return null;
+  for (let i = 0; i < cost.length; i++) if (!isFinite(cost[i])) return null;
+  for (let i = 0; i < b.length; i++) if (!isFinite(b[i])) return null;
+  // ScaleRows
+  const rowScale = new Float64Array(rows), rowActive = new Array(rows).fill(false);
+  let activeRows = 0;
+  for (let r = 0; r < rows; r++){
+    let max = Math.abs(b[r]);
+    for (let i = 0; i < n; i++) max = Math.max(max, Math.abs(columns[i * rows + r]));
+    if (max < LP_EPS){ rowActive[r] = false; continue; }
+    let anyCoeff = false;
+    for (let i = 0; i < n; i++) if (Math.abs(columns[i * rows + r]) > LP_EPS * max){ anyCoeff = true; break; }
+    if (!anyCoeff){
+      if (Math.abs(b[r]) > 1e-6 * max) return null;
+      rowActive[r] = false; continue;
+    }
+    rowScale[r] = 1.0 / max; rowActive[r] = true; activeRows++;
+  }
+  if (activeRows === 0){
+    for (let i = 0; i < n; i++) if (cost[i] < 0.0) return null;
+    const zero = new Array(n).fill(0);
+    return satisfies(rows, n, columns, b, zero) ? zero : null;
+  }
+  // BuildTableau: artificials start in the basis, rows flipped to keep b >= 0.
+  const m = activeRows, width = n + m + 1;
+  const t = new Float64Array(m * width), basis = new Array(m);
+  let row = 0;
+  for (let r = 0; r < rows; r++){
+    if (!rowActive[r]) continue;
+    const sign = b[r] * rowScale[r] >= 0.0 ? 1.0 : -1.0;
+    for (let i = 0; i < n; i++) t[row * width + i] = sign * columns[i * rows + r] * rowScale[r];
+    t[row * width + n + row] = 1.0;
+    t[row * width + n + m] = sign * b[r] * rowScale[r];
+    basis[row] = n + row;
+    row++;
+  }
+  if (!findFeasibleBasis(t, basis, m, n, width)) return null;
+  const phase2 = new Array(n + m);
+  for (let i = 0; i < n; i++) phase2[i] = cost[i];
+  for (let i = 0; i < m; i++) phase2[n + i] = Infinity;
+  if (runSimplex(t, basis, m, width, phase2) === null) return null;
+  const x = new Array(n).fill(0);
+  for (let r = 0; r < m; r++) if (basis[r] < n) x[basis[r]] = Math.max(0.0, t[r * width + width - 1]);
+  return satisfies(rows, n, columns, b, x) ? x : null;
+}
+function findFeasibleBasis(t, basis, m, n, width){
+  const phase1 = new Array(n + m).fill(0);
+  for (let i = 0; i < m; i++) phase1[n + i] = 1.0;
+  const obj = runSimplex(t, basis, m, width, phase1);
+  if (obj === null) return false;
+  if (obj > 1e-7) return false;
+  for (let r2 = 0; r2 < m; r2++){
+    if (basis[r2] < n) continue;
+    let pivotCol = -1;
+    for (let i = 0; i < n; i++) if (!isBasic(basis, m, i) && Math.abs(t[r2 * width + i]) > LP_EPS){ pivotCol = i; break; }
+    if (pivotCol >= 0) pivot(t, basis, m, width, r2, pivotCol);
+    else for (let c = 0; c < width; c++) t[r2 * width + c] = 0.0;
+  }
+  return true;
+}
+function satisfies(rows, n, columns, b, x){
+  for (let i = 0; i < x.length; i++) if (!isFinite(x[i])) return false;
+  for (let r = 0; r < rows; r++){
+    let sum = 0.0, mag = 0.0;
+    for (let i = 0; i < n; i++){ const term = columns[i * rows + r] * x[i]; sum += term; mag += Math.abs(term); }
+    const tol = 1e-10 + 1e-6 * Math.max(Math.abs(b[r]), mag);
+    if (!isFinite(sum) || !isFinite(mag) || Math.abs(sum - b[r]) > tol) return false;
+  }
+  return true;
+}
+// Returns the objective, or null where the C# returns false.
+function runSimplex(t, basis, m, width, varCost){
+  const rhs = width - 1, numVars = width - 1;
+  const pivotLimit = Math.min(Math.max(32 * numVars, 256), 4096);
+  let pivots = 0;
+  while (true){
+    let entering = -1;
+    for (let j = 0; j < numVars; j++){
+      if (isBasic(basis, m, j) || varCost[j] === Infinity) continue;
+      let reduced = varCost[j];
+      for (let r = 0; r < m; r++){
+        const cb = varCost[basis[r]];
+        if (cb === Infinity) continue;
+        reduced -= cb * t[r * width + j];
+      }
+      if (reduced < -1e-9){ entering = j; break; }
+    }
+    if (entering < 0) break;
+    let leaving = -1, bestRatio = Infinity;
+    for (let r = 0; r < m; r++){
+      const a = t[r * width + entering];
+      if (a <= LP_EPS) continue;
+      const ratio = Math.max(0.0, t[r * width + rhs]) / a;
+      if (!isFinite(ratio)) continue;
+      if (ratio < bestRatio || (ratio === bestRatio && (leaving < 0 || basis[r] < basis[leaving]))){ bestRatio = ratio; leaving = r; }
+    }
+    if (leaving < 0) return null;
+    if (pivots++ >= pivotLimit) return null;
+    pivot(t, basis, m, width, leaving, entering);
+  }
+  let objective = 0.0;
+  for (let r = 0; r < m; r++){ const cb = varCost[basis[r]]; if (cb !== Infinity) objective += cb * t[r * width + rhs]; }
+  return objective;
+}
+function isBasic(basis, m, j){ for (let r = 0; r < m; r++) if (basis[r] === j) return true; return false; }
+function pivot(t, basis, m, width, pr, pc){
+  const p = t[pr * width + pc];
+  for (let c = 0; c < width; c++) t[pr * width + c] /= p;
+  for (let r = 0; r < m; r++){
+    if (r === pr) continue;
+    const f = t[r * width + pc];
+    if (f === 0.0) continue;
+    for (let c = 0; c < width; c++) t[r * width + c] -= f * t[pr * width + c];
+  }
+  basis[pr] = pc;
+}
+
+/* ===================== AeroTorqueAllocator (port) ===================== */
+const DegreePriceShare = 1.0e-3, DeflectionFloorDeg = 1.0e-3, ChangePriceShare = 0.5e-3;
+const MaxPasses = 24, RefineWindowDeg = 10.0, RefineWindowMaxDeg = 15.0, RefineWindowMinDeg = 0.05;
+const clamp = (v, lo, hi) => v < lo ? lo : (v > hi ? hi : v);
+
+// A: { count, d:[[deg]], t:[[3 per deg]], f:[[3 per deg]] }
+function at(A, i, deg){
+  const d = A.d[i], t = A.t[i], f = A.f[i], n = d.length;
+  const x = clamp(deg, d[0], d[n - 1]);
+  let k = 0;
+  while (k + 2 < n && x > d[k + 1]) k++;
+  const k1 = Math.min(k + 1, n - 1);
+  const w = d[k1] > d[k] ? (x - d[k]) / (d[k1] - d[k]) : 0.0;
+  return [t[3*k] + w * (t[3*k1] - t[3*k]), t[3*k+1] + w * (t[3*k1+1] - t[3*k+1]), t[3*k+2] + w * (t[3*k1+2] - t[3*k+2]),
+          f[3*k] + w * (f[3*k1] - f[3*k]), f[3*k+1] + w * (f[3*k1+1] - f[3*k+1]), f[3*k+2] + w * (f[3*k1+2] - f[3*k+2])];
+}
+function evaluate(A, defl, dx, dy, dz, solved){
+  let tx = 0, ty = 0, tz = 0, fx = 0, fy = 0, fz = 0, deflected = 0;
+  for (let i = 0; i < A.count; i++){
+    if (defl[i] !== 0.0) deflected++;
+    const v = at(A, i, defl[i]);
+    tx += v[0]; ty += v[1]; tz += v[2]; fx += v[3]; fy += v[4]; fz += v[5];
+  }
+  const sx = dx - tx, sy = dy - ty, sz = dz - tz;
+  return { solved: solved !== false, torque: [tx, ty, tz], force: [fx, fy, fz], shortfall: Math.sqrt(sx*sx + sy*sy + sz*sz), deflected };
+}
+function segmentsAll(A){
+  const segs = [];
+  for (let i = 0; i < A.count; i++){
+    const d = A.d[i], t = A.t[i];
+    const zero = d.indexOf(0.0);
+    if (zero < 0) continue;
+    for (let k = zero; k + 1 < d.length; k++) addSegment(segs, i, d, t, k, k + 1);
+    for (let k = zero; k - 1 >= 0; k--) addSegment(segs, i, d, t, k, k - 1);
+  }
+  return segs;
+}
+function addSegment(into, s, d, t, from, to){
+  const width = Math.abs(d[to] - d[from]);
+  if (!(width > 0.0)) return;
+  const sx = (t[3*to] - t[3*from]) / width, sy = (t[3*to+1] - t[3*from+1]) / width, sz = (t[3*to+2] - t[3*from+2]) / width;
+  if (!isFinite(sx) || !isFinite(sy) || !isFinite(sz)) return;
+  into.push({ surface: s, from: d[from], width: d[to] - d[from], sx, sy, sz });
+}
+function degreePrice(segs){
+  let best = 0.0;
+  for (const s of segs) best = Math.max(best, Math.sqrt(s.sx*s.sx + s.sy*s.sy + s.sz*s.sz));
+  return DegreePriceShare * (best > 0.0 ? best : 1.0);
+}
+function slopeNorm(A, i, from, to){
+  const a = at(A, i, from), b = at(A, i, to), w = Math.abs(to - from);
+  return w > 0.0 ? Math.sqrt((b[0]-a[0])*(b[0]-a[0]) + (b[1]-a[1])*(b[1]-a[1]) + (b[2]-a[2])*(b[2]-a[2])) / w : 0.0;
+}
+function addSegmentAt(A, into, i, from, to){
+  const width = Math.abs(to - from);
+  if (!(width > 1e-9)) return;
+  const a = at(A, i, from), b = at(A, i, to);
+  const sx = (b[0]-a[0]) / width, sy = (b[1]-a[1]) / width, sz = (b[2]-a[2]) / width;
+  if (!isFinite(sx) || !isFinite(sy) || !isFinite(sz)) return;
+  into.push({ surface: i, from, width: to - from, sx, sy, sz });
+}
+// Straightened where they steepen.
+function addDirection(A, into, i, path){
+  const pieces = [];
+  for (let k = 0; k + 1 < path.length; k++){
+    if (!(Math.abs(path[k+1] - path[k]) > 1e-9)) continue;
+    let piece = [path[k], path[k+1]];
+    while (pieces.length > 0 && slopeNorm(A, i, piece[0], piece[1]) > slopeNorm(A, i, pieces[pieces.length-1][0], pieces[pieces.length-1][1]) * (1.0 + 1e-9)){
+      piece = [pieces[pieces.length-1][0], piece[1]];
+      pieces.pop();
+    }
+    pieces.push(piece);
+  }
+  for (const p of pieces) addSegmentAt(A, into, i, p[0], p[1]);
+}
+function segmentsWithin(A, start, los, his){
+  const segs = [];
+  for (let i = 0; i < A.count; i++){
+    const d = A.d[i], lo = los[i], hi = his[i];
+    const c = clamp(start[i], lo, hi);
+    const points = [c, lo, hi];
+    for (const p of d) if (p > lo && p < hi) points.push(p);
+    if (0.0 > lo && 0.0 < hi) points.push(0.0);
+    points.sort((x, y) => x - y);
+    const ci = points.indexOf(c);
+    const up = points.slice(ci);
+    const down = points.slice(0, ci + 1).reverse();
+    addDirection(A, segs, i, up);
+    addDirection(A, segs, i, down);
+  }
+  return segs;
+}
+function secantsWithin(A, start, los, his, windowDeg){
+  const segs = [];
+  for (let i = 0; i < A.count; i++){
+    const c = clamp(start[i], los[i], his[i]);
+    const a = Math.max(los[i], c - windowDeg), b = Math.min(his[i], c + windowDeg);
+    if (!(b - a > 1e-9)) continue;
+    const va = at(A, i, a), vb = at(A, i, b), w = b - a;
+    const sx = (vb[0]-va[0]) / w, sy = (vb[1]-va[1]) / w, sz = (vb[2]-va[2]) / w;
+    if (!isFinite(sx) || !isFinite(sy) || !isFinite(sz)) continue;
+    if (b - c > 1e-9) segs.push({ surface: i, from: c, width: b - c, sx, sy, sz });
+    if (c - a > 1e-9) segs.push({ surface: i, from: c, width: a - c, sx: -sx, sy: -sy, sz: -sz });
+  }
+  return segs;
+}
+const pri = (p, r) => p && p.length > r && p[r] > 0.0 ? p[r] : 1.0;
+function solvePass(A, dem, priority, start, current, lo, hi, degree, change, bT, bC, deflection, duty, windowDeg){
+  const N = A.count, m = bC.length;
+  let bx = 0, by = 0, bz = 0;
+  for (let i = 0; i < N; i++){ const v = at(A, i, start[i]); bx += v[0]; by += v[1]; bz += v[2]; }
+  const planned = [bx, by, bz];
+  const segs = windowDeg > 0.0 ? secantsWithin(A, start, lo, hi, windowDeg) : segmentsWithin(A, start, lo, hi);
+  const n = segs.length;
+  const rows = 3 + n + m, cols = 2 * n + 2 * m + 6;
+  const a = new Array(rows * cols).fill(0), cost = new Array(cols).fill(0), b = new Array(rows).fill(0);
+  b[0] = dem[0] - bx; b[1] = dem[1] - by; b[2] = dem[2] - bz;
+  for (let j = 0; j < n; j++){
+    const s = segs[j];
+    a[j*rows] = s.sx; a[j*rows+1] = s.sy; a[j*rows+2] = s.sz;
+    a[j*rows+3+j] = 1.0;
+    a[(n+j)*rows+3+j] = 1.0;
+    b[3+j] = Math.abs(s.width);
+    const outward = Math.abs(s.from + s.width) > Math.abs(s.from);
+    const away = Math.abs(s.from + s.width - current[s.surface]) > Math.abs(s.from - current[s.surface]);
+    cost[j] = (away ? change : -change) + (outward ? degree : -degree);
+  }
+  for (let k = 0; k < m; k++){
+    const col = 2*n + k, slack = 2*n + m + k, row = 3 + n + k;
+    const usable = isFinite(bC[k]) && bC[k] >= 0.0;
+    for (let r = 0; r < 3; r++) a[col*rows+r] = usable && isFinite(bT[3*k+r]) ? bT[3*k+r] : 0.0;
+    a[col*rows+row] = 1.0;
+    a[slack*rows+row] = 1.0;
+    b[row] = usable ? 1.0 : 0.0;
+    cost[col] = usable ? bC[k] : 0.0;
+  }
+  const sf = 2*n + 2*m;
+  for (let r = 0; r < 3; r++){
+    const w = pri(priority, r);
+    a[(sf+2*r)*rows+r] = 1.0;
+    a[(sf+2*r+1)*rows+r] = -1.0;
+    cost[sf+2*r] = w; cost[sf+2*r+1] = w;
+  }
+  const x = lpSolve(rows, cols, a, cost, b);
+  if (x === null) return null;
+  for (let i = 0; i < N; i++) deflection[i] = start[i];
+  for (let j = 0; j < n; j++){
+    const s = segs[j];
+    const travel = clamp(x[j], 0.0, Math.abs(s.width));
+    deflection[s.surface] += Math.sign(s.width) * travel;
+    planned[0] += s.sx * travel; planned[1] += s.sy * travel; planned[2] += s.sz * travel;
+  }
+  for (let i = 0; i < N; i++){
+    deflection[i] = clamp(deflection[i], lo[i], hi[i]);
+    if (Math.abs(deflection[i]) < DeflectionFloorDeg) deflection[i] = 0.0;
+  }
+  for (let k = 0; k < m; k++) duty[k] = clamp(x[2*n + k], 0.0, 1.0);
+  return { planned, segments: n };
+}
+function trueCost(A, dem, priority, surf, deflection, current, degree, change, bT, bC, duty){
+  let tx = surf.torque[0], ty = surf.torque[1], tz = surf.torque[2], cost = 0.0;
+  for (let k = 0; k < bC.length; k++){
+    if (!(isFinite(bC[k]) && bC[k] >= 0.0)) continue;
+    tx += bT[3*k] * duty[k]; ty += bT[3*k+1] * duty[k]; tz += bT[3*k+2] * duty[k];
+    cost += bC[k] * duty[k];
+  }
+  cost += pri(priority, 0) * Math.abs(dem[0] - tx) + pri(priority, 1) * Math.abs(dem[1] - ty) + pri(priority, 2) * Math.abs(dem[2] - tz);
+  for (let i = 0; i < A.count; i++) cost += degree * Math.abs(deflection[i]) + change * Math.abs(deflection[i] - current[i]);
+  return cost;
+}
+/* Allocate(demand, priority, deflection, currentDeg, maxStepDeg, backupTorque, backupCost, backupDuty).
+   currentDeg / maxStepDeg null: all at rest / anywhere in range. Returns the C# Result plus deflection, duty and a pass trace. */
+function allocate(A, dem, priority, currentDeg, maxStepDeg, bT, bC){
+  bT = bT || []; bC = bC || [];
+  const N = A.count, m = bC.length;
+  const fail = () => ({ solved: false, torque: [0,0,0], force: [0,0,0], shortfall: 0, deflected: 0, deflection: new Array(N).fill(0), duty: new Array(m).fill(0), trace, settled: false });
+  const trace = [];
+  if (bT.length < 3 * m) throw new Error("The backup needs three torques per column.");
+  const current = [], lo = [], hi = [];
+  for (let i = 0; i < N; i++){
+    const d = A.d[i];
+    current[i] = clamp(currentDeg && currentDeg.length > i && isFinite(currentDeg[i]) ? currentDeg[i] : 0.0, d[0], d[d.length-1]);
+    const step = maxStepDeg && maxStepDeg.length > i && maxStepDeg[i] > 0.0 && isFinite(maxStepDeg[i]) ? maxStepDeg[i] : Infinity;
+    lo[i] = Math.max(d[0], current[i] - step);
+    hi[i] = Math.min(d[d.length-1], current[i] + step);
+  }
+  const degree = degreePrice(segmentsAll(A));
+  const change = degree * ChangePriceShare / DegreePriceShare;
+  const best = new Array(N).fill(0), bestDuty = new Array(m).fill(0);
+  const trial = new Array(N).fill(0), trialDuty = new Array(m).fill(0);
+  const anchor = new Array(N).fill(0), anchorDuty = new Array(m).fill(0);
+  let bestCost = Infinity, bestMiss = Infinity;
+  const size = Math.sqrt(dem[0]*dem[0] + dem[1]*dem[1] + dem[2]*dem[2]);
+  const settled = 1.0 + 5e-3 * size;
+  let any = false;
+  for (let round = 0; round < 2 && bestMiss > settled; round++){
+    let window = RefineWindowDeg, anchorCost = Infinity;
+    for (let i = 0; i < N; i++) anchor[i] = current[i];
+    for (let pass = 0; pass < MaxPasses && window > RefineWindowMinDeg; pass++){
+      const pieces = round === 0 && pass === 0;
+      const used = pieces ? 0.0 : window;
+      const sp = solvePass(A, dem, priority, anchor, current, lo, hi, degree, change, bT, bC, trial, trialDuty, used);
+      if (sp === null){
+        trace.push({ round, pass, window: used, ok: false });
+        if (pieces) return fail();
+        window *= 0.5;
+        continue;
+      }
+      const r = evaluate(A, trial, 0, 0, 0);
+      const cost = trueCost(A, dem, priority, r, trial, current, degree, change, bT, bC, trialDuty);
+      const p = sp.planned;
+      const miss = Math.sqrt((p[0]-r.torque[0])*(p[0]-r.torque[0]) + (p[1]-r.torque[1])*(p[1]-r.torque[1]) + (p[2]-r.torque[2])*(p[2]-r.torque[2]));
+      const entry = { round, pass, window: used, ok: true, cost, miss, kept: false, best: false };
+      if (anchorCost === Infinity || cost < anchorCost - 1e-9 * (1.0 + Math.abs(anchorCost))){
+        anchorCost = cost;
+        for (let i = 0; i < N; i++) anchor[i] = trial[i];
+        for (let k = 0; k < m; k++) anchorDuty[k] = trialDuty[k];
+        entry.kept = true;
+        if (!pieces) window = Math.min(2.0 * window, RefineWindowMaxDeg);
+        if (!any || cost < bestCost - 1e-9 * (1.0 + Math.abs(bestCost))){
+          any = true; bestCost = cost; bestMiss = miss; entry.best = true;
+          for (let i = 0; i < N; i++) best[i] = trial[i];
+          for (let k = 0; k < m; k++) bestDuty[k] = trialDuty[k];
+        }
+      } else if (!pieces) window *= 0.5;
+      trace.push(entry);
+      if (bestMiss <= settled) break;
+    }
+  }
+  if (!any) return fail();
+  const res = evaluate(A, best, dem[0], dem[1], dem[2], true);
+  res.deflection = best.slice(); res.duty = bestDuty.slice(); res.trace = trace; res.settled = bestMiss <= settled; res.bestMiss = bestMiss;
+  return res;
+}
+/* KsaAeroTorqueControl.BackupColumns (port): thrusters {torque:[3], flow} -> columns priced so the best costs 0.02 per N m. */
+const BackupPricePerNm = 0.02;
+function backupColumns(thrusters){
+  if (!thrusters || thrusters.length === 0) return { torque: [], cost: [] };
+  const m = thrusters.length, torque = new Array(3*m).fill(0), cost = new Array(m).fill(0);
+  let best = Infinity;
+  for (let i = 0; i < m; i++){
+    const T = thrusters[i].torque, t = Math.sqrt(T[0]*T[0] + T[1]*T[1] + T[2]*T[2]), flow = thrusters[i].flow;
+    if (flow > 0.0 && isFinite(flow) && t > 0.0 && isFinite(t)) best = Math.min(best, flow / t);
+  }
+  if (!isFinite(best)) return { torque: [], cost: [] };
+  const perKgS = BackupPricePerNm / best;
+  for (let i = 0; i < m; i++){
+    const flow = thrusters[i].flow, usable = flow > 0.0 && isFinite(flow);
+    for (let r = 0; r < 3; r++) torque[3*i+r] = usable ? thrusters[i].torque[r] : 0.0;
+    cost[i] = usable ? flow * perKgS : NaN;
+  }
+  return { torque, cost };
+}
+/* The attainable-set outline: maximise t with B u (+ backup) = t dir, from rest over each fin's whole range, as Characterise sets it up. */
+function reachAlong(A, dir, bT){
+  const N = A.count, los = [], his = [], rest = new Array(N).fill(0);
+  for (let i = 0; i < N; i++){ los[i] = A.d[i][0]; his[i] = A.d[i][A.d[i].length-1]; }
+  const segs = segmentsWithin(A, rest, los, his);
+  const n = segs.length, m = bT ? bT.length / 3 : 0;
+  if (n === 0 && m === 0) return 0;
+  const rows = 3 + n + m, cols = 2*n + 2*m + 1;
+  const a = new Array(rows * cols).fill(0), cost = new Array(cols).fill(0), b = new Array(rows).fill(0);
+  const tie = 1.0e-3 * degreePrice(segs);
+  for (let j = 0; j < n; j++){
+    const s = segs[j];
+    a[j*rows] = s.sx; a[j*rows+1] = s.sy; a[j*rows+2] = s.sz;
+    a[j*rows+3+j] = 1.0; a[(n+j)*rows+3+j] = 1.0; b[3+j] = Math.abs(s.width); cost[j] = tie;
+  }
+  for (let k = 0; k < m; k++){
+    const col = 2*n + k, slack = 2*n + m + k, row = 3 + n + k;
+    for (let r = 0; r < 3; r++) a[col*rows+r] = bT[3*k+r];
+    a[col*rows+row] = 1.0; a[slack*rows+row] = 1.0; b[row] = 1.0;
+  }
+  const tc = 2*n + 2*m;
+  for (let r = 0; r < 3; r++) a[tc*rows+r] = -dir[r];
+  cost[tc] = -1.0;
+  const x = lpSolve(rows, cols, a, cost, b);
+  return x ? Math.max(x[tc], 0) : null;
+}
+
+/* ===================== Sample data (AeroAllocatorCheck) ===================== */
+function makeAllocator(fins){
+  return { count: fins.length, d: fins.map(f => f.d.slice()), t: fins.map(f => f.t.slice()), f: fins.map(f => f.f.slice()) };
+}
+// Cross(): four fins on +-30/+-15/0, 1000 N m/deg to 15 and half beyond, roll 200 N m/deg (fins 2 and 3 negative). Frame x pitch, y yaw, z roll.
+function curve(deg){ const s = Math.sign(deg), m = Math.abs(deg); return s * (Math.min(m, 15.0) + 0.5 * Math.max(m - 15.0, 0.0)); }
+function cross(){
+  const grid = [-30.0, -15.0, 0.0, 15.0, 30.0], fins = [];
+  for (let i = 0; i < 4; i++){
+    const torque = new Array(3*grid.length).fill(0), force = new Array(3*grid.length).fill(0);
+    const rollSign = i < 2 ? 1.0 : -1.0;
+    for (let k = 0; k < grid.length; k++){
+      const c = curve(grid[k]), axis = i % 2 === 0 ? 0 : 1;
+      torque[3*k+axis] = c * 1000.0;
+      torque[3*k+2] = rollSign * c * 200.0;
+      force[3*k + (axis === 0 ? 1 : 0)] = -c * 50.0;
+    }
+    fins.push({ d: grid, t: torque, f: force });
+  }
+  return makeAllocator(fins);
+}
+// 2stage_KSAero's four fins at Mach 0.3, 6 kPa, +-45 deg (asmb x roll, y pitch, z yaw), reordered into (pitch, yaw, roll).
+const REAL = [
+  [23605.0, 29152.5, -24763.2, 22530.4, 27100.2, -13864.0, 13225.5, 14687.4, -3642.4, 0, 0, 0, -12496.7, -13504.5, -3348.9, -21775.4, -24718.9, -11672.8, -20826.1, -23308.8, -19778.5],
+  [27969.5, 29130.5, 35134.8, 27740.1, 17293.1, 34273.6, 20761.9, 6635.1, 25471.8, 0, 0, 0, -17989.1, 4087.2, -20712.7, -25048.3, 13437.2, -29118.3, -23623.0, 22963.2, -26770.6],
+  [24529.3, -30434.3, 23550.7, 23572.5, -28805.7, 12752.9, 19968.5, -24349.6, 4191.4, 0, 0, 0, -19173.6, 23158.1, 6300.1, -21048.3, 23814.7, 13132.1, -20839.3, 23491.2, 21625.8],
+  [24808.5, -23797.7, -30307.6, 24075.3, -13005.4, -28958.7, 19133.8, -4212.4, -23199.5, 0, 0, 0, -18934.9, -5979.6, 22522.9, -24152.4, -14941.6, 27878.1, -24003.6, -24947.5, 27237.9],
+];
+function ksaero(order){
+  const grid = [-45.0, -30.0, -15.0, 0.0, 15.0, 30.0, 45.0];
+  return makeAllocator(REAL.map(row => {
+    const t = [];
+    for (let k = 0; k < grid.length; k++) for (const o of order) t.push(row[3*k + o]);
+    return { d: grid, t, f: new Array(3*grid.length).fill(0) };
+  }));
+}
+// Illustrative RCS: six pure-axis columns of 5 kN m at equal flow (the check uses +roll and +pitch only).
+function rcs(nm){
+  const out = [];
+  for (let a = 0; a < 3; a++) for (const s of [1, -1]){ const t = [0,0,0]; t[a] = s * nm; out.push({ torque: t, flow: 1.0 }); }
+  return out;
+}
+const PRESETS = {
+  cross: { label: 'Cross fins (offline check)', alloc: cross(), names: ['Fin 0 · pitch', 'Fin 1 · yaw', 'Fin 2 · pitch', 'Fin 3 · yaw'],
+           note: '<span class="tag ill">Illustrative</span> four fins in a cross, ±30°: fins 0 and 2 pitch, 1 and 3 yaw, and every fin rolls.',
+           demand: [24000, 0, 3000], plane: 'pr', rcs: rcs(5000) },
+  ksaero: { label: '2stage_KSAero, ±45°', alloc: ksaero([1, 2, 0]), names: ['Fin 0', 'Fin 1', 'Fin 2', 'Fin 3'],
+           note: '<span class="tag meas">Measured</span> four ±45° fins at Mach 0.3 and 6 kPa. Each fin rolls about as hard as it pitches or yaws.',
+           demand: [30000, 0, 0], plane: 'pr', rcs: rcs(5000) },
+};
+const PLANES = { pr: { h: 2, v: 0, off: 1, label: 'Pitch–roll', hname: 'roll', offname: 'yaw' },
+                 py: { h: 1, v: 0, off: 2, label: 'Pitch–yaw', hname: 'yaw', offname: 'roll' } };
+const AXIS = ['pitch', 'yaw', 'roll'];
+const PRIS = [1, 0.3, 0.1];
+
+/* ===================== Page ===================== */
+const S = { preset: 'cross', plane: 'pr', rollPri: 0.3, rate: 20, dt: 0.05, backup: true, demand: [24000, 0, 3000], now: [0, 0, 0, 0], clock: 0, running: false };
+const $ = s => document.querySelector(s);
+const NS = 'http://www.w3.org/2000/svg';
+const reduceMotion = () => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (_) { return false; } };
+function el(tag, attrs, parent){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+const kn = v => { const x = v / 1000; return (Math.abs(x) < 0.005 ? 0 : x).toFixed(2); };
+const dg = v => (Math.abs(v) < 0.005 ? 0 : v).toFixed(2);
+const fcol = i => 'var(--f' + i + ')';
+const norm = v => Math.hypot(v[0], v[1], v[2]);
+
+const view = { ext: 50 };
+let last = null;          // the latest step allocation, for Step
+const polyCache = {};
+
+function current(){ return PRESETS[S.preset]; }
+function backupNow(){ return S.backup ? backupColumns(current().rcs) : { torque: [], cost: [] }; }
+function priority(){ return [1, 1, S.rollPri]; }
+
+function polygons(){
+  const key = S.preset + '|' + S.plane + '|' + (S.backup ? 1 : 0);
+  if (polyCache[key]) return polyCache[key];
+  const A = current().alloc, pl = PLANES[S.plane], bk = backupColumns(current().rcs);
+  const fins = [], both = [];
+  for (let k = 0; k < 180; k++){
+    const th = k * 2 * Math.PI / 180, dir = [0, 0, 0];
+    dir[pl.h] = Math.cos(th); dir[pl.v] = Math.sin(th);
+    const t = reachAlong(A, dir, null);
+    if (t !== null) fins.push([t * Math.cos(th), t * Math.sin(th)]);
+    if (S.backup){ const t2 = reachAlong(A, dir, bk.torque); if (t2 !== null) both.push([t2 * Math.cos(th), t2 * Math.sin(th)]); }
+  }
+  return (polyCache[key] = { fins, both });
+}
+
+function compute(){
+  const P = current(), A = P.alloc, bk = backupNow();
+  const reach = S.now.map(() => S.rate * S.dt);
+  const step = allocate(A, S.demand, priority(), S.now, reach, bk.torque, bk.cost);
+  const target = allocate(A, S.demand, priority(), S.now, null, bk.torque, bk.cost);
+  // In flight an unsolved programme sends every fin home (KsaAeroTorqueControl.Release).
+  const command = step.solved ? step.deflection.slice() : new Array(A.count).fill(0);
+  const finsT = step.solved ? step.torque : [0, 0, 0];
+  const bkT = [0, 0, 0];
+  if (step.solved) for (let k = 0; k < bk.cost.length; k++) for (let r = 0; r < 3; r++) bkT[r] += bk.torque[3*k+r] * step.duty[k];
+  const given = [0, 1, 2].map(r => finsT[r] + bkT[r]);
+  const tgtBk = [0, 0, 0];
+  if (target.solved) for (let k = 0; k < bk.cost.length; k++) for (let r = 0; r < 3; r++) tgtBk[r] += bk.torque[3*k+r] * target.duty[k];
+  const tgtGiven = [0, 1, 2].map(r => target.torque[r] + tgtBk[r]);
+  const now = evaluate(A, S.now, 0, 0, 0);
+  const tol = 1.0 + 5e-3 * norm(S.demand);
+  const short = [0, 1, 2].map(r => S.demand[r] - given[r]);
+  const tshort = [0, 1, 2].map(r => S.demand[r] - tgtGiven[r]);
+  return { A, bk, step, target, command, finsT, bkT, given, tgtGiven, now: now.torque, short, tshort, tol, reach: S.rate * S.dt };
+}
+
+function niceExt(m){ const steps = [1, 2, 2.5, 5, 10, 20, 25, 50]; for (const s of steps){ if (m / s <= 5) return { step: s, ext: Math.max(s, Math.ceil(m / s - 1e-9) * s) }; } return { step: 100, ext: Math.ceil(m / 100) * 100 }; }
+
+function arrow(svg, x1, y1, x2, y2, col, w){
+  const L = Math.hypot(x2 - x1, y2 - y1); if (L < 0.8) return;
+  el('line', { x1, y1, x2, y2, stroke: col, 'stroke-width': w || 2, 'stroke-linecap': 'round' }, svg);
+  const ux = (x2 - x1) / L, uy = (y2 - y1) / L, h = Math.min(7, L * 0.6);
+  el('polygon', { points: [x2, y2, x2 - h*ux - h*0.45*uy, y2 - h*uy + h*0.45*ux, x2 - h*ux + h*0.45*uy, y2 - h*uy - h*0.45*ux].join(','), fill: col }, svg);
+}
+
+function renderPlot(R){
+  const pl = PLANES[S.plane], P2 = v => [v[pl.h] / 1000, v[pl.v] / 1000];
+  const polys = polygons();
+  const dem = P2(S.demand), giv = P2(R.given), tgt = P2(R.tgtGiven), t0 = P2(R.now);
+  let m = 5;
+  const grow = p => { m = Math.max(m, Math.abs(p[0]), Math.abs(p[1])); };
+  polys.fins.forEach(p => grow([p[0]/1000, p[1]/1000])); polys.both.forEach(p => grow([p[0]/1000, p[1]/1000]));
+  [dem, giv, tgt, t0].forEach(grow);
+  const ne = niceExt(m * 1.08), step = ne.step, ext = ne.ext; view.ext = ext;
+  const svg = $('#plot'); while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const C = 200, Rr = 162, k = Rr / ext, X = x => C + x * k, Y = y => C - y * k;
+  const n = Math.round(ext / step);
+  for (let i = -n; i <= n; i++){
+    const vv = i * step;
+    el('line', { x1: X(vv), y1: C - Rr, x2: X(vv), y2: C + Rr, stroke: 'var(--gridline)', 'stroke-width': 1 }, svg);
+    el('line', { x1: C - Rr, y1: Y(vv), x2: C + Rr, y2: Y(vv), stroke: 'var(--gridline)', 'stroke-width': 1 }, svg);
+    if (i !== 0){
+      el('text', { x: X(vv), y: C + Rr + 14, 'text-anchor': 'middle', 'font-size': 9, fill: 'var(--muted)', 'font-family': 'var(--f-mono)' }, svg).textContent = +vv.toFixed(1);
+      el('text', { x: C - Rr - 4, y: Y(vv) + 3, 'text-anchor': 'end', 'font-size': 9, fill: 'var(--muted)', 'font-family': 'var(--f-mono)' }, svg).textContent = +vv.toFixed(1);
+    }
+  }
+  el('line', { x1: C - Rr, y1: C, x2: C + Rr, y2: C, stroke: 'var(--muted)', 'stroke-width': 1 }, svg);
+  el('line', { x1: C, y1: C - Rr, x2: C, y2: C + Rr, stroke: 'var(--muted)', 'stroke-width': 1 }, svg);
+  el('text', { x: C + Rr, y: C - 6, 'text-anchor': 'end', 'font-size': 10, fill: 'var(--muted)', 'font-family': 'var(--f-body)' }, svg).textContent = pl.hname + ' →';
+  el('text', { x: C + 6, y: C - Rr + 10, 'font-size': 10, fill: 'var(--muted)', 'font-family': 'var(--f-body)' }, svg).textContent = '↑ pitch (kN m)';
+  const pts = poly => poly.map(p => X(p[0]/1000) + ',' + Y(p[1]/1000)).join(' ');
+  if (polys.both.length >= 3) el('polygon', { points: pts(polys.both), fill: 'none', stroke: 'var(--rcs)', 'stroke-width': 1.2, 'stroke-dasharray': '5 4', 'stroke-linejoin': 'round' }, svg);
+  if (polys.fins.length >= 3) el('polygon', { points: pts(polys.fins), fill: 'var(--set-fill)', stroke: 'var(--accent)', 'stroke-width': 1.5, 'stroke-linejoin': 'round' }, svg);
+  // tau_0: where the fins are now
+  el('circle', { cx: X(t0[0]), cy: Y(t0[1]), r: 3.5, fill: 'var(--panel)', stroke: 'var(--ink)', 'stroke-width': 1.5 }, svg);
+  const lt = el('text', { x: X(t0[0]) + 6, y: Y(t0[1]) + 14, 'font-size': 12, 'font-style': 'italic', 'font-weight': 700, fill: 'var(--ink)', 'font-family': 'var(--f-head)' }, svg);
+  lt.textContent = 'τ'; el('tspan', { 'font-size': 8, dy: 3, 'font-style': 'normal' }, lt).textContent = '0';
+  // the chain: each fin at this step's command, then each backup column at its duty
+  let cur = [0, 0];
+  R.command.forEach((d, i) => { const v = P2(at(R.A, i, d)); const nx = [cur[0] + v[0], cur[1] + v[1]]; arrow(svg, X(cur[0]), Y(cur[1]), X(nx[0]), Y(nx[1]), fcol(i), 2.2); cur = nx; });
+  if (R.step.solved) for (let kk = 0; kk < R.bk.cost.length; kk++){
+    const d = R.step.duty[kk]; if (!(d > 1e-9)) continue;
+    const v = P2([R.bk.torque[3*kk] * d, R.bk.torque[3*kk+1] * d, R.bk.torque[3*kk+2] * d]);
+    const nx = [cur[0] + v[0], cur[1] + v[1]]; arrow(svg, X(cur[0]), Y(cur[1]), X(nx[0]), Y(nx[1]), 'var(--rcs)', 2.2); cur = nx;
+  }
+  // where the allocation is heading with no rate limit
+  el('circle', { cx: X(tgt[0]), cy: Y(tgt[1]), r: 5.5, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 1.5, 'stroke-dasharray': '2 2' }, svg);
+  // shortfall this step
+  if (Math.hypot(dem[0] - giv[0], dem[1] - giv[1]) * k > 1) el('line', { x1: X(giv[0]), y1: Y(giv[1]), x2: X(dem[0]), y2: Y(dem[1]), stroke: 'var(--demand)', 'stroke-dasharray': '3 3', 'stroke-width': 1.5 }, svg);
+  el('circle', { cx: X(giv[0]), cy: Y(giv[1]), r: 4, fill: 'var(--ink)' }, svg);
+  el('circle', { cx: X(dem[0]), cy: Y(dem[1]), r: 7, fill: 'none', stroke: 'var(--demand)', 'stroke-width': 2 }, svg);
+  el('circle', { cx: X(dem[0]), cy: Y(dem[1]), r: 2.5, fill: 'var(--demand)' }, svg);
+  const met = norm(R.short) <= R.tol;
+  svg.setAttribute('aria-label', pl.label + ' plane, kN m. Demand pitch ' + kn(S.demand[0]) + ', ' + pl.hname + ' ' + kn(S.demand[pl.h]) +
+    '. This step gives pitch ' + kn(R.given[0]) + ', ' + pl.hname + ' ' + kn(R.given[pl.h]) + (met ? ', meeting it.' : ', short ' + kn(norm(R.short)) + '.'));
+}
+
+function renderRead(R){
+  const pl = PLANES[S.plane];
+  const vec = v => 'pitch ' + kn(v[0]) + ' · ' + pl.hname + ' ' + kn(v[pl.h]) + (Math.abs(v[pl.off]) >= 5 ? ' · ' + pl.offname + ' ' + kn(v[pl.off]) : '');
+  const met = R.step.solved && norm(R.short) <= R.tol, reach = R.target.solved && norm(R.tshort) <= R.tol;
+  const f = R.step.force;
+  $('#read').innerHTML =
+    '<div><div class="k">Demand τ</div><div class="v">' + vec(S.demand) + '</div></div>' +
+    '<div><div class="k">Fins give now, τ₀</div><div class="v">' + vec(R.now) + '</div></div>' +
+    '<div><div class="k">Fins give, this step</div><div class="v">' + vec(R.finsT) + '</div></div>' +
+    (S.backup ? '<div><div class="k">RCS backup gives</div><div class="v">' + vec(R.bkT) + '</div></div>' : '') +
+    '<div><div class="k">Met this step</div><div class="v">' + (!R.step.solved ? '<span class="pill no">not solved: fins home</span>' : met ? '<span class="pill yes">yes</span>' : '<span class="pill no">no · short ' + kn(norm(R.short)) + '</span>') + '</div></div>' +
+    '<div><div class="k">Reachable, no rate limit</div><div class="v">' + (reach ? '<span class="pill yes">yes</span>' : '<span class="pill no">no · short ' + kn(norm(R.tshort)) + '</span>') + '</div></div>' +
+    '<div><div class="k">Side force, left free</div><div class="v">' + (Math.hypot(f[0], f[1], f[2]) < 0.5 ? '—' : Math.round(Math.hypot(f[0], f[1], f[2])) + ' N') + '</div></div>' +
+    '<div><div class="k">Clock · reach</div><div class="v">t = ' + S.clock.toFixed(2) + ' s · ±' + dg(R.reach) + '°</div></div>';
+}
+
+function buildLegend(){
+  const P = current();
+  let h = '<span><span class="sw" style="background:var(--set-fill);border:1px solid var(--accent)"></span>fins reach from rest</span>';
+  if (S.backup) h += '<span><span class="sw" style="border:1px dashed var(--rcs)"></span>fins + RCS</span>';
+  P.names.forEach((nm, i) => { h += '<span><span class="sw" style="background:' + fcol(i) + '"></span>' + nm + '</span>'; });
+  if (S.backup) h += '<span><span class="sw" style="background:var(--rcs)"></span>RCS</span>';
+  h += '<span><span class="sw" style="background:var(--demand);border-radius:50%"></span>demand τ</span>';
+  h += '<span><span class="sw" style="background:var(--ink);border-radius:50%"></span>given this step</span>';
+  h += '<span><span class="sw" style="border:1.5px dashed var(--accent);border-radius:50%"></span>heading for</span>';
+  $('#legend').innerHTML = h;
+}
+
+/* Fin bars */
+const BX0 = 14, BX1 = 306;
+function barX(A, i, deg){ const d = A.d[i]; return BX0 + (deg - d[0]) / (d[d.length-1] - d[0]) * (BX1 - BX0); }
+function buildFins(){
+  const P = current(), A = P.alloc, box = $('#fins'); box.innerHTML = '';
+  P.names.forEach((nm, i) => {
+    const d = A.d[i];
+    const card = document.createElement('div'); card.className = 'fin';
+    card.innerHTML = '<div class="finhead"><span class="sw" style="background:' + fcol(i) + '"></span><b>' + nm + '</b><span class="mono" id="fin-txt-' + i + '"></span></div>';
+    const svg = el('svg', { class: 'bar', viewBox: '0 0 320 58', tabindex: 0, role: 'slider', 'aria-label': nm + ' deflection now, degrees',
+      'aria-valuemin': d[0], 'aria-valuemax': d[d.length-1], id: 'fin-bar-' + i });
+    card.appendChild(svg); box.appendChild(card);
+    let drag = false;
+    const setX = ev => { const mtx = svg.getScreenCTM(); if (!mtx) return; const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY; const p = pt.matrixTransform(mtx.inverse());
+      const deg = d[0] + (p.x - BX0) / (BX1 - BX0) * (d[d.length-1] - d[0]); S.now[i] = Math.round(clamp(deg, d[0], d[d.length-1]) * 10) / 10; render(); };
+    svg.addEventListener('pointerdown', e => { drag = true; try { svg.setPointerCapture(e.pointerId); } catch (_) {} setX(e); });
+    svg.addEventListener('pointermove', e => { if (drag) setX(e); });
+    svg.addEventListener('pointerup', () => { drag = false; }); svg.addEventListener('pointercancel', () => { drag = false; });
+    svg.addEventListener('keydown', e => { const s = e.shiftKey ? 0.1 : 1; let v = S.now[i], hit = true;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') v -= s; else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') v += s; else if (e.key === 'Home') v = 0; else hit = false;
+      if (hit){ e.preventDefault(); S.now[i] = Math.round(clamp(v, d[0], d[d.length-1]) * 10) / 10; render(); } });
+  });
+}
+function renderFins(R){
+  const A = R.A;
+  for (let i = 0; i < A.count; i++){
+    const svg = $('#fin-bar-' + i); if (!svg) continue;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    const d = A.d[i], X = deg => barX(A, i, deg), y = 24;
+    const lo = Math.max(d[0], S.now[i] - R.reach), hi = Math.min(d[d.length-1], S.now[i] + R.reach);
+    el('rect', { x: X(lo), y: y - 9, width: Math.max(1, X(hi) - X(lo)), height: 18, rx: 3, fill: 'var(--reach-fill)', stroke: 'var(--accent)', 'stroke-width': 1 }, svg);
+    el('line', { x1: BX0, y1: y, x2: BX1, y2: y, stroke: 'var(--line)', 'stroke-width': 4, 'stroke-linecap': 'round' }, svg);
+    d.forEach(g => {
+      el('line', { x1: X(g), y1: y - (g === 0 ? 12 : 7), x2: X(g), y2: y + (g === 0 ? 12 : 7), stroke: g === 0 ? 'var(--ink)' : 'var(--muted)', 'stroke-width': g === 0 ? 1.5 : 1 }, svg);
+      el('text', { x: X(g), y: 52, 'text-anchor': 'middle', 'font-size': 9, fill: 'var(--muted)', 'font-family': 'var(--f-mono)' }, svg).textContent = g + '°';
+    });
+    const tg = R.target.solved ? R.target.deflection[i] : 0, cm = R.command[i], nw = S.now[i];
+    el('path', { d: 'M' + X(tg) + ' ' + (y - 6) + ' L' + (X(tg) + 6) + ' ' + y + ' L' + X(tg) + ' ' + (y + 6) + ' L' + (X(tg) - 6) + ' ' + y + ' Z', fill: 'var(--panel)', stroke: fcol(i), 'stroke-width': 1.6 }, svg);
+    el('circle', { cx: X(nw), cy: y, r: 5, fill: fcol(i), stroke: 'var(--panel)', 'stroke-width': 1.2 }, svg);
+    el('path', { d: 'M' + (X(cm) - 5) + ' ' + (y - 16) + ' L' + (X(cm) + 5) + ' ' + (y - 16) + ' L' + X(cm) + ' ' + (y - 8) + ' Z', fill: 'var(--ink)' }, svg);
+    svg.setAttribute('aria-valuenow', nw);
+    svg.setAttribute('aria-valuetext', 'now ' + dg(nw) + ' degrees, command ' + dg(cm) + ', heading for ' + dg(tg));
+    $('#fin-txt-' + i).textContent = 'now ' + dg(nw) + '° → ' + dg(cm) + '° · heading ' + dg(tg) + '°';
+  }
+}
+function renderTrace(R){
+  const svg = $('#trace'); while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const tr = R.step.trace || [];
+  const n = Math.max(tr.length, 12), w = 300 / n, base = 50;
+  el('line', { x1: 10, y1: base, x2: 310, y2: base, stroke: 'var(--line)', 'stroke-width': 1 }, svg);
+  el('text', { x: 10, y: 61, 'font-size': 8, fill: 'var(--muted)', 'font-family': 'var(--f-mono)' }, svg).textContent = 'window W per pass (bar, to 15°) · filled = cost fell, kept';
+  tr.forEach((p, j) => {
+    const x = 10 + j * w + w * 0.15, bw = Math.max(1, w * 0.7);
+    if (j > 0 && tr[j-1].round !== p.round) el('line', { x1: 10 + j * w, y1: 4, x2: 10 + j * w, y2: base, stroke: 'var(--muted)', 'stroke-dasharray': '2 2' }, svg);
+    if (p.window === 0){
+      el('rect', { x, y: 6, width: bw, height: base - 6, fill: p.kept ? 'var(--accent)' : 'none', stroke: 'var(--accent)', 'stroke-width': 1, opacity: 0.55 }, svg);
+      el('text', { x: x + bw / 2, y: base - 4, 'text-anchor': 'middle', 'font-size': 8, fill: 'var(--panel)', 'font-family': 'var(--f-mono)' }, svg).textContent = 'P';
+      return;
+    }
+    const h = Math.max(1.5, p.window / 15 * (base - 6));
+    el('rect', { x, y: base - h, width: bw, height: h, fill: p.ok && p.kept ? 'var(--accent)' : 'none', stroke: p.ok ? 'var(--accent)' : 'var(--demand)', 'stroke-width': 1 }, svg);
+  });
+  const rounds = tr.length ? tr[tr.length-1].round + 1 : 0;
+  let note;
+  if (!R.step.solved) note = 'The first pass found no answer, so in flight every fin is sent home.';
+  else if (tr.length === 1) note = 'One pass: the programme on the straightened segments (P) planned what the curves give, so no refinement was needed.';
+  else note = tr.length + ' passes over ' + rounds + (rounds === 1 ? ' start' : ' starts') + '. P is the programme on the straightened segments; each bar after it is a secant pass at window W. ' +
+    (R.step.settled ? 'Settled: the plan is within 1 + 0.005 |τ| N m of what the curves give.' : 'Not settled; the best answer by true cost is kept (planned ' + Math.round(R.step.bestMiss) + ' N m off the curves).');
+  $('#tracenote').textContent = note;
+  svg.setAttribute('aria-label', note);
+}
+
+function render(){
+  const R = compute(); last = R;
+  renderPlot(R); renderRead(R); renderFins(R); renderTrace(R);
+  $('#rateo').textContent = S.rate + '°/s'; $('#dto').textContent = S.dt.toFixed(2) + ' s';
+  $('#reachnote').textContent = 'Each fin reaches ±' + dg(S.rate * S.dt) + '° this step. The fin rate is assumed: 20°/s by default, not measured.';
+}
+
+function doStep(){
+  const R = last || compute();
+  let moved = false;
+  for (let i = 0; i < S.now.length; i++){
+    const target = R.command[i], lim = S.rate * S.dt;
+    const nx = S.now[i] + clamp(target - S.now[i], -lim, lim);
+    if (Math.abs(nx - S.now[i]) > 1e-9) moved = true;
+    S.now[i] = nx;
+  }
+  S.clock += S.dt;
+  render();
+  return moved;
+}
+let timer = null;
+function setRun(on){
+  S.running = on; const b = $('#run'); b.textContent = on ? 'Pause' : 'Run'; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  if (timer){ clearTimeout(timer); timer = null; }
+  if (on) tick();
+}
+function tick(){
+  if (!S.running) return;
+  if (!document.hidden){
+    const R = last || compute();
+    const still = R.command.every((c, i) => Math.abs(c - S.now[i]) < 1e-9);
+    if (!still) doStep();
+  }
+  const ms = Math.max(S.dt * 1000, reduceMotion() ? 250 : 60);
+  timer = setTimeout(tick, ms);
+}
+
+function buildChips(){
+  const pr = $('#presets'); pr.innerHTML = '';
+  Object.keys(PRESETS).forEach(k => { const b = document.createElement('button'); b.type = 'button'; b.textContent = PRESETS[k].label; if (S.preset === k) b.className = 'on'; b.addEventListener('click', () => applyPreset(k)); pr.appendChild(b); });
+  $('#presetnote').innerHTML = current().note;
+  const pl = $('#planes'); pl.innerHTML = '';
+  Object.keys(PLANES).forEach(k => { const b = document.createElement('button'); b.type = 'button'; b.textContent = PLANES[k].label; if (S.plane === k) b.className = 'on';
+    b.addEventListener('click', () => { if (S.plane !== k){ S.plane = k; S.demand[PLANES[k].off] = 0; } buildChips(); render(); }); pl.appendChild(b); });
+  const pp = $('#pris'); pp.innerHTML = '';
+  PRIS.forEach(v => { const b = document.createElement('button'); b.type = 'button'; b.textContent = v === 0.3 ? '0.3 (flight)' : String(v); if (S.rollPri === v) b.className = 'on';
+    b.addEventListener('click', () => { S.rollPri = v; buildChips(); render(); }); pp.appendChild(b); });
+}
+function applyPreset(k){
+  const P = PRESETS[k]; S.preset = k; S.plane = P.plane; S.demand = P.demand.slice(); S.now = new Array(P.alloc.count).fill(0); S.clock = 0;
+  buildChips(); buildFins(); buildLegend(); render();
+}
+
+$('#rate').value = S.rate; $('#dt').value = S.dt; $('#backup').checked = S.backup;
+$('#rate').addEventListener('input', e => { S.rate = +e.target.value; render(); });
+$('#dt').addEventListener('input', e => { S.dt = +e.target.value; render(); });
+$('#backup').addEventListener('change', e => { S.backup = e.target.checked; buildLegend(); render(); });
+$('#step').addEventListener('click', () => { setRun(false); doStep(); });
+$('#run').addEventListener('click', () => setRun(!S.running));
+$('#home').addEventListener('click', () => { S.now = S.now.map(() => 0); S.clock = 0; render(); });
+$('#hold').addEventListener('click', () => { S.demand = evaluate(current().alloc, S.now, 0, 0, 0).torque.slice(); render(); });
+$('#zero').addEventListener('click', () => { S.demand = [0, 0, 0]; render(); });
+
+const plot = $('#plot'); let drag = false;
+function setFromEvent(ev){ const mtx = plot.getScreenCTM(); if (!mtx) return; const pt = plot.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY; const p = pt.matrixTransform(mtx.inverse());
+  const k = 162 / view.ext, pl = PLANES[S.plane];
+  S.demand[pl.h] = Math.round((p.x - 200) / k * 10) * 100; S.demand[pl.v] = Math.round((200 - p.y) / k * 10) * 100; render(); }
+plot.addEventListener('pointerdown', e => { drag = true; try { plot.setPointerCapture(e.pointerId); } catch (_) {} setFromEvent(e); });
+plot.addEventListener('pointermove', e => { if (drag) setFromEvent(e); });
+plot.addEventListener('pointerup', () => { drag = false; }); plot.addEventListener('pointercancel', () => { drag = false; });
+plot.addEventListener('keydown', e => { const pl = PLANES[S.plane], d = (e.shiftKey ? 100 : 1000) * Math.max(1, Math.round(view.ext / 40)); let hit = true;
+  if (e.key === 'ArrowLeft') S.demand[pl.h] -= d; else if (e.key === 'ArrowRight') S.demand[pl.h] += d; else if (e.key === 'ArrowUp') S.demand[pl.v] += d; else if (e.key === 'ArrowDown') S.demand[pl.v] -= d; else hit = false;
+  if (hit){ e.preventDefault(); render(); } });
+window.addEventListener('afc-theme', () => { if (last) render(); });
+
+// For checking the port against AeroAllocatorCheck from the console.
+window.afcFinMixing = { allocate, evaluate, lpSolve, backupColumns, reachAlong, cross, ksaero, state: S, render };
+
+applyPreset('cross');
+})();
+</script>
+
+</body></html>

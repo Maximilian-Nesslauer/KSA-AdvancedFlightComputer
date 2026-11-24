@@ -138,8 +138,8 @@ $nativeCheckBase = @(
 )
 # Fixed counts catch removed bindings that the layout and export checks would no longer see.
 # Review binding changes before updating these values.
-$expectedClarabelChecks = 62
-$expectedClarabelExports = 5
+$expectedClarabelChecks = 63
+$expectedClarabelExports = 9
 $expectedScsChecks = 73
 $expectedScsExports = 6
 Invoke-Checked -FilePath "dotnet" -ArgumentList ($nativeCheckBase + @("clarabel", $conicAssembly,"--rid", $RuntimeIdentifier, "--zig", $ZigExe, "--expect-checks", $expectedClarabelChecks, "--expect-exports", $expectedClarabelExports)) -FailureMessage "The Clarabel ABI check failed."
@@ -166,7 +166,7 @@ $scvxBase = @(
     "--runtime", $RuntimeIdentifier,
     "--"
 )
-foreach ($command in @("--fd", "--aero", "--impact", "--sub-scs", "--loop", "--ascent", "--ascent-glimit", "--ascent-qceiling", "--cold-shift", "--hermite", "--slope", "--3dof", "--3dof-model", "--3dof-ksa", "--orbital-entry")) {
+foreach ($command in @("--fd", "--aero", "--impact", "--clarabel-workspace", "--sub-scs", "--loop", "--ascent", "--ascent-glimit", "--ascent-qceiling", "--cold-shift", "--hermite", "--slope", "--3dof", "--3dof-model", "--3dof-ksa", "--orbital-entry")) {
     Invoke-Checked -FilePath "dotnet" -ArgumentList ($scvxBase + $command) -FailureMessage "The Scvx $command check failed."
 }
 

@@ -89,9 +89,9 @@ public static partial class GuidanceWindow
             default:
             {
                 if (OwnerThreadViolation.Length > 0)
-                    ConsoleUi.DangerWrapped(ConsoleUi.EscapeFormat("THREADING: " + OwnerThreadViolation));
+                    ConsoleUi.DangerWrapped("THREADING: " + OwnerThreadViolation);
                 if (_s.GuidanceError.Length > 0)
-                    ConsoleUi.WarningWrapped(ConsoleUi.EscapeFormat($"LAST STEP ERROR ({_s.FailStreak} IN A ROW): {_s.GuidanceError}"));
+                    ConsoleUi.WarningWrapped($"LAST STEP ERROR ({_s.FailStreak} IN A ROW): {_s.GuidanceError}");
                 ModeDiagnostics modeView = DrawDiagnosticsTabs(TuneDiagnosticsLabels, ref diagnostics);
                 ImGui.Spacing();
                 if (modeView != null)

@@ -18,10 +18,10 @@ using AdvancedFlightComputer.Guidance.Numerics.Flight;
 ///     tau = I kd (w_capture + (w_target - w)_filtered)  +  I ki wn^2 integral(theta)  +  w x I w  -  M_air,   kd = 2 zeta wn
 ///  - w_capture = (wn / 2 zeta) theta, capped at CaptureRateDegS: unsaturated it is the PD's kp theta; a large error (the glide's first step, 73 deg off in roll on 2026-11-20) is closed at a set rate rather than at the RCS's full thrust. The roll has its own cap where RollCaptureRateDegS is set: an ascent's roll program turns up to 180 deg while it climbs straight up, and at 5 deg/s it was still 62 deg off when the roll program gave up after 10 s, and only finished 13 s into the pitch-over (harness, 2026-11-21; the stock hold rolled at 17-34 deg/s).
 ///    That cap is also held to what the craft can stop in the roll left, sqrt(2 a theta) at half the roll acceleration its lit gimbals and RCS can give (RollAuthority), and the roll may have its own, softer gain (RollBandwidthRadS): at 30 deg/s with neither, the solids stack rolled through its target and never settled.
-///  - theta's roll part is the true roll angle about the roll axis, to 180 deg either way: the sum below gives the sine of the angle, which falls back to nothing as a roll error nears 180 deg, the heads-down roll from a pad facing the other way.
+///  - theta's roll part is the true roll angle about the roll axis, to 180 deg either way (RollAngle): the heads-down roll from a pad facing the other way. The old error, half the sum of e_i x t_i, gave the sine of the angle, which fell back to nothing near 180 deg.
 ///  - (w_target - w)_filtered: the rate error through a first-order lag of RateFilterS, 0.05 s. It went in at 0.2 s when the flown booster's rate error read 0.5 deg/s of wobble, about 10 kN m of demand jittering every step through its inertia, which the fins chased (2026-11-20); but it went in with the fin allocator that works from each fin's deflection and rate and prices a degree moved, the likelier fix, and KSA's body rates are the physics' own, without noise. 0.2 s lags the damping 18 deg at the glide's 1.6 rad/s (#291); 0.05 s, which the ascent already flew better on (Autopilot.FlyOwnAttitude), lags it 5 deg.
 ///  - integral(theta): the error integrated while within IntegralWithinDeg, capped at IntegralMaxDegS, at ki = IntegralPerS: it learns what the feedforward from the tables misses (17 % of the air's moment on that flight), so the error settles inside the deadband instead of standing at a degree. It keeps acting in the deadband.
-///  - theta: the small rotation that takes the body onto the target, from their axes; w and w_target the body's rate and the target's turning rate.
+///  - theta: the rotation that takes the body onto the target, its exact axis and angle (So3AxisAngle, #278); w and w_target the body's rate and the target's turning rate.
 ///  - M_air: the air's moment on the craft as it flies now, from the sweep's body moment table at the Mach, alpha and beta flown, moved to the present centre of mass and divided by the game's moment limiter (BodyAero6Dof.MomentLimiterPerPa). Cancelled before any error builds: the feedforward. None outside the table (20 deg off engine first).
 ///  - I: the inertia about the model's axes (Ksa6DofSetup.Inertia), and w x I w its gyroscopic part.
 ///
@@ -124,10 +124,14 @@ internal static class AttitudeController
         doubleQuat body2Cci = KsaFrameBridge.BodyToCci(vehicle);
         doubleQuat cci2Body = doubleQuat.Inverse(body2Cci);
 
-        // The rotation onto the target, in body axes: from the target's axes seen in the body, half the sum of e_i x t_i (exact for small errors, saturating for large ones).
-        double3 theta = default;
-        foreach (double3 e in new[] { new double3(1, 0, 0), new double3(0, 1, 0), new double3(0, 0, 1) })
-            theta += 0.5 * double3.Cross(e, e.Transform(targetBody2Cci).Transform(cci2Body));
+        // Exact SO(3) axis-angle error in body axes from the relative rotation matrix columns t_i = R_err e_i.
+        // Avoids sin(phi) fold-back past 90 deg and remains non-zero at 180 deg.
+        double3 t0 = new double3(1, 0, 0).Transform(targetBody2Cci).Transform(cci2Body);
+        double3 t1 = new double3(0, 1, 0).Transform(targetBody2Cci).Transform(cci2Body);
+        double3 t2 = new double3(0, 0, 1).Transform(targetBody2Cci).Transform(cci2Body);
+        So3AxisAngle.FromBasisColumns(t0.X, t0.Y, t0.Z, t1.X, t1.Y, t1.Z, t2.X, t2.Y, t2.Z,
+            out double ex, out double ey, out double ez);
+        var theta = new double3(ex, ey, ez);
         // Roll free (Settings.RollFree): no roll angle is held, only the roll rate damped.
         if (settings.RollFree)
             theta -= double3.Dot(theta, mz) * mz;
@@ -139,7 +143,7 @@ internal static class AttitudeController
             slot.RateErrorFiltered += dt / (settings.RateFilterS + dt) * (rawRateError - slot.RateErrorFiltered);
         slot.RateKnown = true;
         double3 rateError = slot.RateErrorFiltered;
-        double errorDeg = Math.Asin(Math.Min(theta.Length(), 1.0)) * 180.0 / Math.PI;
+        double errorDeg = theta.Length() * 180.0 / Math.PI;
 
         // Pointing and roll apart (model z, mz, is the roll axis): a craft that starts 90 deg off in roll must not have its pointing starved by it. On the harness booster (2026-11-20) one cap on the whole error vector let a 5 deg pointing error close at 0.3 deg/s while the roll took 18 s.
         double3 thetaPoint = theta - double3.Dot(theta, mz) * mz;

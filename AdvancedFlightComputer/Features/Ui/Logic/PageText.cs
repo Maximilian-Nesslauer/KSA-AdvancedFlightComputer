@@ -478,10 +478,10 @@ internal static class PageText
     /// Where a returnable stage goes, under its name in BOOSTERS: its site; for an optimal return the drone ship's point once a plan has found it, frozen from lift-off; or EXPENDABLE.
     /// </summary>
     /// <summary>The row under a stage's name in REUSE: where it goes (green, under REUSED), or how to bring it home (amber, under EXPENDED).</summary>
-    public static string StageReturn(bool site, bool optimal, double latDeg, double lonDeg)
+    public static string StageReturn(bool site, bool optimal, double latDeg, double lonDeg, string siteName = "")
     {
         if (site)
-            return "TO SITE " + Fmt.LatLon(latDeg, lonDeg);
+            return siteName.Length > 0 ? "TO " + siteName.ToUpperInvariant() : "TO SITE " + Fmt.LatLon(latDeg, lonDeg);
         if (!optimal)
             return StageExpendedHint;
         if (!double.IsFinite(latDeg) || !double.IsFinite(lonDeg))
@@ -490,6 +490,26 @@ internal static class PageText
     }
 
     public const string StageExpendedHint = "PICK SITE OR OPTIMAL RETURN TO REUSE";
+
+    public const string ReturnTo = "RETURN TO";
+
+    public const string ReturnToTip = "The landing sites that mods add on this body, nearest to the launch site first. A pick sends this booster there, as PICK SITE does. A site takes one booster, so a site that another booster has stands dim with its name.";
+
+    public const string LandAt = "LAND AT";
+
+    public const string LandAtTip = "The landing sites that mods add on this body, nearest to the craft first. A pick moves the site, as PICK SITE does. While the craft falls, IN REACH marks the sites near enough for its fall.";
+
+    public const string SiteListChoose = "CHOOSE A SITE";
+
+    public const string SiteListPickedPoint = "PICKED POINT";
+
+    public const string AnotherBooster = "ANOTHER BOOSTER";
+
+    public const string SiteInReach = "IN REACH";
+
+    /// <summary>One line of a site list: the name, the distance, the booster that holds the site and the reach mark.</summary>
+    public static string SiteChoice(string name, double distanceM, string takenBy, bool? inReach)
+        => name + "  " + Fmt.Distance(distanceM) + (takenBy.Length > 0 ? "  " + takenBy : "") + (inReach == true ? "  " + SiteInReach : "");
 
     /// <summary>The reserve of a booster that is not next to separate: nothing wrong, it arms in turn.</summary>
     public const string ReserveArmsLater = "ARMS AFTER STAGES BELOW SEPARATE";

@@ -1026,6 +1026,7 @@ public static partial class GuidanceWindow
         {
             _s.CancelEntrySolve();
             _s.ThreeDofGuidance = null;
+            dropped?.Dispose();
             // The last plan flies on to its ignition lock at the latest: a dropped guidance cannot lock it or light the engine on it.
             Plan3Dof last = _s.ThreeDofPlan;
             double lockLead = dropped?.IgnitionLockLeadS ?? 0.0;

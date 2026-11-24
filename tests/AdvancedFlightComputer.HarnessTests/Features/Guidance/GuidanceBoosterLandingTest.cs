@@ -155,6 +155,9 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                    $"starting {heightM:F0} m over the site, {rangeM:F0} m short, sinking {sinkMs:F0} m/s, closing at {groundSpeedMs:F0} m/s");
 
             VehicleAutopilotState state = VehicleAutopilotState.For(booster);
+            // AFC_SCVX_BACKEND=scs flies the 6-DOF and 3-DOF plans on SCS instead of Clarabel (CLARABEL SOLVER off), for an A/B in one build.
+            state.ScvxClarabel = !string.Equals(Environment.GetEnvironmentVariable("AFC_SCVX_BACKEND"), "scs", StringComparison.OrdinalIgnoreCase);
+            t.Info($"SCvx conic backend: {(state.ScvxClarabel ? "Clarabel" : "SCS")}");
             if (blockActivation)
             {
                 _blockedActivationVehicle = booster;

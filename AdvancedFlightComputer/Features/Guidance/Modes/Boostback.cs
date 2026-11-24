@@ -260,6 +260,9 @@ public static partial class GuidanceWindow
             _s.HandoverPendingUntil = double.NegativeInfinity;
             return;
         }
+        // Clear any stale aero error when a valid table is already loaded so a transient setup error cannot latch boostback engagement off.
+        if (_s.Aero?.Table != null && _s.AeroError.Length > 0 && _s.AeroError != KsaAeroSweep.RebuildingError)
+            _s.AeroError = "";
         ResampleBoostbackAero(vehicle, parent);
         if (_s.AeroJob != null)
         {

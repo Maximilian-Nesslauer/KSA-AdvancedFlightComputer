@@ -1,0 +1,145 @@
+# The AFC documentation site: https://maximilian-nesslauer.github.io/KSA-AdvancedFlightComputer/
+# Build locally:  pip install -r docs/requirements.txt  then  mkdocs serve
+# .github/workflows/docs.yml builds every PR that touches the docs and deploys main to GitHub Pages.
+#
+# The User Guide lives in docs/user-guide/. It started as a copy of README.md (2026-11-22) and is
+# kept by hand from here on, so a change to the README does not reach the site by itself.
+
+site_name: Advanced Flight Computer
+site_description: Maneuver planning, burn execution and closed-loop guidance for Kitten Space Agency.
+site_url: https://maximilian-nesslauer.github.io/KSA-AdvancedFlightComputer/
+repo_url: https://github.com/Maximilian-Nesslauer/KSA-AdvancedFlightComputer
+repo_name: KSA-AdvancedFlightComputer
+edit_uri: edit/main/docs/
+copyright: MIT licensed. Vendored solvers keep their own licenses.
+
+docs_dir: docs
+exclude_docs: |
+  hooks/
+  requirements.txt
+
+hooks:
+  - docs/hooks/site.py
+
+theme:
+  name: material
+  icon:
+    logo: material/rocket-launch
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Follow the system setting
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - def_list
+  - toc:
+      permalink: true
+      # GitHub's heading ids, so an anchor link works on GitHub and on the site alike.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.details
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - javascripts/viz.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - User Guide:
+      - user-guide/index.md
+      - Installation: user-guide/installation.md
+      - The AFC console: user-guide/console.md
+      - Maneuvers and transfers: user-guide/maneuvers.md
+      - Burns and staging: user-guide/burns-and-staging.md
+      - Powered guidance: user-guide/powered-guidance.md
+      - Landing sites for mod authors: user-guide/landing-sites.md
+      - Compatibility and credits: user-guide/about.md
+  - Developer:
+      - dev/index.md
+      - Control ownership: control-ownership.md
+      - Core subsystems:
+          - AutoStage: dev/autostage.md
+          - Maneuvers and transfers: dev/maneuvers-and-transfers.md
+          - Console and testing: dev/console-and-testing.md
+      - Guidance:
+          - guidance/README.md
+          - Runtime: guidance/runtime.md
+          - UPFG and ascent hand-over: guidance/upfg.md
+          - Boostback and reserve: guidance/boostback.md
+          - G-FOLD: guidance/gfold.md
+          - Impact steering: guidance/reference-material/impact-steering.md
+      - Successive convexification:
+          - guidance/scvx/index.md
+          - Convex ascent: guidance/scvx/ascent.md
+          - Entry (3-DOF): guidance/scvx/entry.md
+          - Touchdown (6-DOF): guidance/scvx/touchdown.md
+          - Touchdown on the craft: guidance/scvx-bridge.md
+          - Dev notes: guidance/scvx-bridge-devnotes.md
+      - Attitude control:
+          - guidance/attitude/index.md
+          - Gimbal mixing: guidance/attitude/gimbals.md
+          - RCS mixing: guidance/attitude/rcs.md
+          - Fin mixing: guidance/attitude/fins.md
+      - Build and release:
+          - Native solvers: guidance/native-build.md
+          - Releasing: releasing.md
+      - History:
+          - Guidance changelog: guidance/CHANGELOG.md
+
+validation:
+  links:
+    absolute_links: relative_to_docs
+    unrecognized_links: warn
+    anchors: warn

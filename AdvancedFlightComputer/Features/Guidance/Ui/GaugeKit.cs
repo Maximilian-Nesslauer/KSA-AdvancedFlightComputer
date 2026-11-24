@@ -382,7 +382,7 @@ public static partial class GuidanceWindow
                 ConsoleUi.Tooltip(_s.VehicleHeightCard.AsSpan());
         }
         else
-            ConsoleUi.TickedNote(ConsoleUi.EscapeFormat(note), _s.VehicleHeightCard);
+            ConsoleUi.TickedNote(note, _s.VehicleHeightCard);
     }
 
     private static void DrawLiftNote(Vehicle vehicle, LandWay way, bool roomOnly = false)
@@ -393,7 +393,7 @@ public static partial class GuidanceWindow
         if (shows && roomOnly)
             ConsoleUi.SentenceRoom(note);
         else if (shows)
-            ConsoleUi.MutedNote(ConsoleUi.EscapeFormat(note), Fmt.Sentence(AeroLiftWarning()));
+            ConsoleUi.MutedNote(note, Fmt.Sentence(AeroLiftWarning()));
         DrawBalanceNote(vehicle, way, roomOnly);
     }
 
@@ -412,8 +412,8 @@ public static partial class GuidanceWindow
         if (roomOnly)
             ConsoleUi.SentenceRoom(note);
         else if (aero.BalanceWorstM <= -KsaAeroSweep.NeutralBalanceM)
-            ConsoleUi.TickedNote(ConsoleUi.EscapeFormat(note), PageText.UnstableBalanceCard);
+            ConsoleUi.TickedNote(note, PageText.UnstableBalanceCard);
         else
-            ConsoleUi.MutedNote(ConsoleUi.EscapeFormat(note), PageText.BalanceCard);
+            ConsoleUi.MutedNote(note, PageText.BalanceCard);
     }
 }

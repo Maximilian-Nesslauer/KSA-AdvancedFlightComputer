@@ -74,7 +74,8 @@ public sealed class GuidanceGfoldBackoffTest : AfcTest
             int afterRefusal = _searches;
             state.LandingPhase = GuidanceWindow.LandingPhase.GfoldDescent;
             ambient.SetValue(null, state);
-            Method("RetargetLandingSite").Invoke(null, [0.0, 0.0]);
+            // The vehicle path of the retarget does not read the parent body, so the test passes none.
+            Method("RetargetLandingSite").Invoke(null, [null, 0.0, 0.0]);
             t.Check("a retarget ends the rest", double.IsNegativeInfinity(state.GfoldSearchRetryTime));
 
             Replan(ambient, state, now + 0.25);

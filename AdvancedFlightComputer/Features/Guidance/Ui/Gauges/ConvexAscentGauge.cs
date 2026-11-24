@@ -32,7 +32,7 @@ public static partial class GuidanceWindow
         bool relaxed = !_s.Running && shown?.Usable == true && shown.QRelaxed;
         ConsoleUi.NoteShape("AfcLaunchRelaxed", relaxed ? 1 : 0);
         if (relaxed)
-            ConsoleUi.TickedNote(ConsoleUi.EscapeFormat(PageText.QRelaxedNote(shown.QMaxRequestedKpa, shown.QMaxKpa)));
+            ConsoleUi.TickedNote(PageText.QRelaxedNote(shown.QMaxRequestedKpa, shown.QMaxKpa));
 
         if (_s.ConvexLaunchFailure.Length == 0)
             return;

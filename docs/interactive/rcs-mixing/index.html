@@ -1,0 +1,793 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RCS mixing</title>
+<link rel="icon" href="data:,">
+<script src="../theme.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a reading column for the programme, a two-pane bench (controls and top view | torque plane), then the pulse timeline */
+:root{
+  --bg:#f2f4f3; --panel:#ffffff; --ink:#17201d; --muted:#57635e; --line:#d3dbd7; --gridline:#e5eae7; --code-bg:#e7ece9;
+  --accent:#0d6b63; --rcs:#4a52c4; --side:#bf5d17; --carry:#9c7a00; --demand:#c0392b; --ok:#1f7a3a;
+  --set-fill:rgba(13,107,99,.13); --box:#8a9690; --ill:#bf5d17;
+  --f-head:"Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --f-body:"Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono:"JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#111614; --panel:#192120; --ink:#e4ebe8; --muted:#9aa8a2; --line:#2d3834; --gridline:#212a27; --code-bg:#1f2826;
+  --accent:#4cc3b2; --rcs:#8f97ff; --side:#f0954a; --carry:#e3c04f; --demand:#ff7a6e; --ok:#5fd27f;
+  --set-fill:rgba(76,195,178,.14); --box:#7b8883; --ill:#f0954a; color-scheme:dark; } }
+:root[data-theme="dark"]{
+  --bg:#111614; --panel:#192120; --ink:#e4ebe8; --muted:#9aa8a2; --line:#2d3834; --gridline:#212a27; --code-bg:#1f2826;
+  --accent:#4cc3b2; --rcs:#8f97ff; --side:#f0954a; --carry:#e3c04f; --demand:#ff7a6e; --ok:#5fd27f;
+  --set-fill:rgba(76,195,178,.14); --box:#7b8883; --ill:#f0954a; color-scheme:dark; }
+:root{color-scheme:light}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.6;
+  padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(16px, env(safe-area-inset-right, 0px));padding-block:28px 64px}
+.wrap{max-width:1080px;margin:0 auto;display:flex;flex-direction:column;gap:40px}
+.col{max-width:70ch}
+h1,h2,h3{font-family:var(--f-head);text-wrap:balance;line-height:1.2;margin:0}
+h1{font-size:2rem;font-weight:700;letter-spacing:-.01em}
+h2{font-size:1.35rem;font-weight:600;margin-bottom:12px}
+h3{font-size:1rem;font-weight:600}
+p{margin:0 0 12px}
+.lede{color:var(--muted);font-size:1.05rem;margin-top:8px}
+.eyebrow{font-family:var(--f-mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+code,.mono{font-family:var(--f-mono);font-size:.88em}
+code{background:var(--code-bg);padding:1px 5px;border-radius:4px;overflow-wrap:anywhere}
+.eq{font-family:var(--f-head);font-size:1.4rem;font-weight:500;padding:14px 0 6px;letter-spacing:.01em;display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 14px;align-items:baseline}
+.eq .kw{font-size:1rem;color:var(--muted);font-family:var(--f-mono)}
+.eq i{font-style:italic}
+.eq b{font-weight:700}
+.eq .side{font-size:1rem;color:var(--muted)}
+@media (max-width:520px){.eq{font-size:1.08rem}}
+dl.terms{display:grid;grid-template-columns:auto 1fr;gap:10px 18px;margin:16px 0 0}
+dl.terms dt{font-family:var(--f-head);font-weight:700;font-size:1.15rem;white-space:nowrap}
+dl.terms dd{margin:0;min-width:0}
+.derive{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-top:18px;font-size:.93rem}
+.derive .mono{display:block;margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.bench{display:grid;grid-template-columns:minmax(0,330px) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:820px){.bench{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
+.ctrl{display:flex;flex-direction:column;gap:18px}
+.group{display:flex;flex-direction:column;gap:8px}
+.label{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+button,.chip{font:inherit;font-size:.85rem;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:999px;padding:5px 11px;cursor:pointer}
+button:hover,.chip:hover{border-color:var(--accent)}
+button:focus-visible,input:focus-visible,svg:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.on{background:var(--accent);color:var(--panel);border-color:var(--accent)}
+.sw{width:10px;height:10px;border-radius:2px;display:inline-block;flex:none}
+.row{display:grid;grid-template-columns:7.5em minmax(0,1fr) 5.4em;align-items:center;gap:8px;font-size:.85rem}
+.row input[type=range]{width:100%;accent-color:var(--accent)}
+.row output{font-family:var(--f-mono);font-size:.8rem;text-align:right;font-variant-numeric:tabular-nums}
+.plotwrap{display:flex;flex-direction:column;gap:12px}
+svg#plot{width:100%;max-width:560px;aspect-ratio:1;display:block;margin:0 auto;touch-action:none;cursor:crosshair;user-select:none}
+svg#ring{width:100%;max-width:300px;aspect-ratio:1;display:block;margin:0 auto;user-select:none}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.8rem;color:var(--muted);justify-content:center}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.read{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.read div{border-top:1px solid var(--line);padding-top:6px;min-width:0}
+.read .k{font-size:.72rem;color:var(--muted);font-family:var(--f-mono);letter-spacing:.05em;text-transform:uppercase}
+.read .v{font-family:var(--f-mono);font-size:.88rem;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.pill{display:inline-block;font-family:var(--f-mono);font-size:.75rem;padding:2px 8px;border-radius:999px;border:1px solid currentColor}
+.pill.yes{color:var(--ok)} .pill.no{color:var(--demand);border-radius:10px}
+.note{font-size:.82rem;color:var(--muted)}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;font-size:.82rem;width:100%}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+td.n{font-family:var(--f-mono);font-variant-numeric:tabular-nums;text-align:right}
+th{font-family:var(--f-mono);font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:500}
+th.n{text-align:right}
+a{color:var(--accent)}
+.tag{font-family:var(--f-mono);font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:0 5px;margin-right:4px;white-space:nowrap}
+.tag.meas{color:var(--ok)} .tag.ill{color:var(--ill)}
+#pulsewrap{width:100%;min-width:0}
+#pulses{display:block}
+.pulsehead{display:flex;flex-wrap:wrap;gap:14px 28px;align-items:flex-end;margin-bottom:12px}
+.pulsehead .row{min-width:min(100%,330px)}
+footer{font-size:.8rem;color:var(--muted)}
+footer p{margin:0}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<header class="col">
+  <div class="eyebrow">Attitude control · RCS mixing · KsaRcsTorqueControl</div>
+  <h1>RCS mixing</h1>
+  <p class="lede">How AFC turns a torque demand into the cheapest set of thruster duties its layout allows, what side force comes with it, and how the vehicle worker turns those duties into pulses.</p>
+</header>
+
+<section class="col">
+  <h2>The programme</h2>
+  <div class="eq" aria-label="Minimise the sum over thrusters of m dot i times d i, plus the sum over axes of p times w a times e plus a plus e minus a, subject to the sum of t i d i plus e plus minus e minus equal to tau, with each d i between zero and one and e plus and e minus non-negative">
+    <span class="kw">min</span><span>Σ<sub>i</sub> <i>ṁ</i><sub>i</sub> <i>d</i><sub>i</sub> + Σ<sub>a</sub> <i>p</i> <i>w</i><sub>a</sub> (<i>e</i><sup>+</sup><sub>a</sub> + <i>e</i><sup>−</sup><sub>a</sub>)</span>
+    <span class="kw">s.t.</span><span>Σ<sub>i</sub> <b><i>t</i></b><sub>i</sub> <i>d</i><sub>i</sub> + <b><i>e</i></b><sup>+</sup> − <b><i>e</i></b><sup>−</sup> = <b><i>τ</i></b></span>
+    <span></span><span class="side">0 ≤ <i>d</i><sub>i</sub> ≤ 1 (through a slack <i>d</i><sub>i</sub> + <i>s</i><sub>i</sub> = 1),&nbsp; <b><i>e</i></b><sup>±</sup> ≥ 0</span>
+  </div>
+  <dl class="terms">
+    <dt><i>d</i><sub>i</sub></dt><dd>Thruster <i>i</i>'s <strong>duty</strong>: the share of the 0.1 s control period it fires. These are what the mixer solves for, one per thruster.</dd>
+    <dt><i>ṁ</i><sub>i</sub></dt><dd>Its propellant flow at full thrust, kg/s. This is the price of a duty, so the mixer picks the pattern that burns the least propellant.</dd>
+    <dt><b><i>t</i></b><sub>i</sub></dt><dd>The torque it gives at full thrust about the centre of mass, <b><i>r</i></b><sub>i</sub> × <b><i>f</i></b><sub>i</sub>, N m, in pitch, yaw and roll.</dd>
+    <dt><b><i>τ</i></b></dt><dd>The torque the caller asks for. On this page it is the red ring you drag.</dd>
+    <dt><b><i>e</i></b><sup>±</sup></dt><dd>The <strong>shortfall</strong>: the part of the demand no duty pattern can give. It is split into a positive and a negative part per axis so both stay non-negative.</dd>
+    <dt><i>p</i></dt><dd>The shortfall price, 10<sup>3</sup> × max<sub>i</sub> <i>ṁ</i><sub>i</sub>/|<b><i>t</i></b><sub>i</sub>|: a thousand times the dearest thruster's propellant per newton metre. The mixer gives every newton metre it can before it leaves any unmet.</dd>
+    <dt><i>w</i><sub>a</sub></dt><dd>The axis priorities, (1, 1, 0.3) from every caller: pitch and yaw before roll. When the demand is out of reach, the axis with the smallest weight gives way first.</dd>
+    <dt><b><i>f</i></b><sub>i</sub></dt><dd>Its full-thrust force. The <strong>side force</strong> Σ<sub>i</sub> <b><i>f</i></b><sub>i</sub> <i>d</i><sub>i</sub> is not a constraint. It is left free and reported, because thrusters at the top of a booster cannot turn it without pushing it sideways.</dd>
+  </dl>
+  <div class="derive">
+    <strong>Then the pulses.</strong> A thruster is on or off. At the start of each period of <i>T</i> = 0.1 s, thruster <i>i</i> wants <i>d</i><sub>i</sub><i>T</i> + <i>c</i><sub>i</sub> seconds of firing, <i>c</i><sub>i</sub> being what it carried from the last period:
+    <span class="mono">want = dᵢ·T + cᵢ
+if want ≥ minimum pulse:  fire min(want, T),  carry min(want − fired, T)
+else:                     fire nothing,       carry want</span>
+    So a small duty comes out as an occasional pulse with the right average, not a minimum pulse every period and not nothing. Duties under 10<sup>−4</sup> are dropped before this.
+  </div>
+</section>
+
+<section>
+  <div class="col"><h2>See it</h2>
+  <p>The shaded shape is every torque the thrusters can give together in the chosen plane, with the third axis held at its demand. Drag anywhere on the plot, or focus it and use the arrow keys, to move the demand. Each move runs the allocator's linear programme, as ported from AFC, and the top view shows which thrusters fire and for how long.</p></div>
+  <div class="bench">
+    <div class="panel ctrl">
+      <div class="group"><div class="label">Craft</div><div class="chips" id="presets"></div><div class="note" id="presetnote"></div></div>
+      <div class="group"><div class="label">Torque plane</div><div class="chips" id="planes"></div></div>
+      <div class="group"><div class="label">Off the plane</div>
+        <div class="row"><label for="off" id="offlabel">Yaw</label><input id="off" type="range" min="-1" max="1" step="0.005" value="0"><output id="offo"></output></div>
+      </div>
+      <div class="group"><div class="label">Priorities w</div><div class="chips" id="prios"></div></div>
+      <div class="group"><div class="label">Set the demand</div><div class="chips" id="demands"></div></div>
+      <div class="group"><div class="label">Top view, from the nose</div>
+        <svg id="ring" viewBox="0 0 300 300" role="img" aria-label="Top view of the thrusters"></svg>
+        <div class="legend">
+          <span><span class="sw" style="background:var(--rcs)"></span>duty (glow)</span>
+          <span><span class="sw" style="background:var(--side)"></span>side force</span>
+        </div>
+        <div class="note" id="ringnote"></div>
+      </div>
+    </div>
+    <div class="panel plotwrap">
+      <svg id="plot" viewBox="0 0 400 400" tabindex="0" role="img" aria-label="Attainable torque and demand"></svg>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--set-fill);border:1px solid var(--accent)"></span>reachable together</span>
+        <span><span class="sw" style="border:1px dashed var(--box)"></span>per-axis maxima (Characterise)</span>
+        <span><span class="sw" style="background:var(--demand);border-radius:50%"></span>demand τ</span>
+        <span><span class="sw" style="background:var(--ink);border-radius:50%"></span>given torque</span>
+        <span><span class="sw" style="border-top:2px dashed var(--demand);height:0;margin-top:4px"></span>shortfall</span>
+      </div>
+      <div class="read" id="read"></div>
+      <p class="note" style="margin-top:-4px">Torques read pitch · yaw · roll. Hover a value for it in N m.</p>
+      <p class="note">The two axes are scaled separately, so a booster's weak roll axis is not squashed flat. The shape is found the way <code>Characterise</code> finds an axis's reach: the same programme, maximising the torque along each direction every 2° on the plot.</p>
+      <div>
+        <h3 style="margin-bottom:6px">What it can reach: <code>Characterise</code></h3>
+        <div class="tbl"><table>
+          <thead><tr><th>Direction</th><th class="n">Max, kN m</th><th class="n">Propellant, g/s per kN m</th><th class="n">Side force, N per kN m</th></tr></thead>
+          <tbody id="chartab"></tbody>
+        </table></div>
+        <p class="note" style="margin-top:8px">The largest torque about each axis with the other two held at zero, then the cheapest pattern at half of it, per newton metre. Touchdown guidance builds its RCS model from these six rows.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="col"><h2>Pulses</h2>
+  <p>One row per thruster, one cell per 0.1 s period, starting from no carry as a fresh command would. Each cell shows the pulse fired and the time carried into the next period. Slide the minimum pulse up and the small duties stop firing every period: they save up and fire a minimum pulse now and then, with the same average.</p></div>
+  <div class="panel">
+    <div class="pulsehead">
+      <div class="row"><label for="minp">Minimum pulse</label><input id="minp" type="range" min="0.02" max="0.08" step="0.005" value="0.04"><output id="minpo"></output></div>
+      <div class="group"><div class="label">Periods shown</div><div class="chips" id="periods"></div></div>
+    </div>
+    <div id="pulsewrap"><svg id="pulses" role="img" aria-label="Pulse timeline"></svg></div>
+    <div class="legend" style="margin-top:10px">
+      <span><span class="sw" style="background:var(--rcs)"></span>pulse fired</span>
+      <span><span class="sw" style="border:1px dashed var(--muted)"></span>dᵢ·T asked</span>
+      <span><span class="sw" style="background:var(--carry)"></span>carried to the next period</span>
+    </div>
+    <p class="note" id="pulsenote" style="margin-top:10px"></p>
+    <p class="note"><span class="tag ill">Illustrative</span> the minimum pulse. In the game each thruster has its own <code>MinimumPulseTime</code>, and the worker reads it per thruster.</p>
+  </div>
+</section>
+
+<footer class="col">
+  <p>Part of the AFC docs. JavaScript port of RcsTorqueAllocator as of main 155357c (2026-11-21).</p>
+</footer>
+</div>
+
+<script>
+(function(){
+'use strict';
+// ================================================================ RcsLpSolver.Solve, ported line for line
+// Solve min cost.x with A x = b and x >= 0 using two-phase simplex and Bland's rule. Columns are column-major.
+const EPS = 1e-9;
+function lpSolve(rows, n, columns, cost, b){
+  if (rows < 0 || n < 0 || !columns || !cost || !b || rows * n !== columns.length || cost.length !== n || b.length !== rows) return null;
+  for (const v of columns) if (!Number.isFinite(v)) return null;
+  for (const v of cost) if (!Number.isFinite(v)) return null;
+  for (const v of b) if (!Number.isFinite(v)) return null;
+  return solveValid(rows, n, columns, cost, b);
+}
+function solveValid(rows, n, columns, cost, b){
+  const sc = scaleRows(rows, n, columns, b);
+  if (!sc) return null;
+  if (sc.activeRows === 0){
+    for (const v of cost) if (v < 0) return null;
+    const zero = new Float64Array(n);
+    return satisfies(rows, n, columns, b, zero) ? zero : null;
+  }
+  const tb = buildTableau(rows, n, columns, b, sc.rowScale, sc.rowActive, sc.activeRows);
+  const t = tb.t, basis = tb.basis, width = tb.width, m = sc.activeRows;
+  if (!findFeasibleBasis(t, basis, m, n, width)) return null;
+  // Artificial columns cannot enter the basis during the cost phase.
+  const phase2 = new Float64Array(n + m);
+  for (let i = 0; i < n; i++) phase2[i] = cost[i];
+  for (let i = 0; i < m; i++) phase2[n + i] = Infinity;
+  if (!runSimplex(t, basis, m, width, phase2).ok) return null;
+  const x = new Float64Array(n);
+  for (let r = 0; r < m; r++) if (basis[r] < n) x[basis[r]] = Math.max(0, t[r * width + width - 1]);
+  return satisfies(rows, n, columns, b, x) ? x : null;
+}
+function scaleRows(rows, n, columns, b){
+  // Normalise rows separately because their magnitudes can differ greatly.
+  const rowScale = new Float64Array(rows), rowActive = new Array(rows).fill(false);
+  let activeRows = 0;
+  for (let r = 0; r < rows; r++){
+    let max = Math.abs(b[r]);
+    for (let i = 0; i < n; i++) max = Math.max(max, Math.abs(columns[i * rows + r]));
+    if (max < EPS){ rowActive[r] = false; continue; }
+    let any = false;
+    for (let i = 0; i < n; i++) if (Math.abs(columns[i * rows + r]) > EPS * max){ any = true; break; }
+    if (!any){
+      if (Math.abs(b[r]) > 1e-6 * max) return null;
+      rowActive[r] = false; continue;
+    }
+    rowScale[r] = 1 / max; rowActive[r] = true; activeRows++;
+  }
+  return {rowScale, rowActive, activeRows};
+}
+function buildTableau(rows, n, columns, b, rowScale, rowActive, m){
+  // Artificial variables start in the basis. Flip rows to keep every right-hand side non-negative.
+  const width = n + m + 1, t = new Float64Array(m * width), basis = new Int32Array(m);
+  let row = 0;
+  for (let r = 0; r < rows; r++){
+    if (!rowActive[r]) continue;
+    const sign = b[r] * rowScale[r] >= 0 ? 1 : -1;
+    for (let i = 0; i < n; i++) t[row * width + i] = sign * columns[i * rows + r] * rowScale[r];
+    t[row * width + n + row] = 1;
+    t[row * width + n + m] = sign * b[r] * rowScale[r];
+    basis[row] = n + row;
+    row++;
+  }
+  return {t, basis, width};
+}
+function findFeasibleBasis(t, basis, m, n, width){
+  const phase1 = new Float64Array(n + m);
+  for (let i = 0; i < m; i++) phase1[n + i] = 1;
+  const r1 = runSimplex(t, basis, m, width, phase1);
+  if (!r1.ok) return false;
+  if (r1.objective > 1e-7) return false;
+  // Drive leftover artificials out of the basis; a row where no structural column can pivot is redundant and is zeroed out.
+  for (let r2 = 0; r2 < m; r2++){
+    if (basis[r2] < n) continue;
+    let pc = -1;
+    for (let i = 0; i < n; i++) if (!isBasic(basis, m, i) && Math.abs(t[r2 * width + i]) > EPS){ pc = i; break; }
+    if (pc >= 0) pivot(t, basis, m, width, r2, pc);
+    else for (let c = 0; c < width; c++) t[r2 * width + c] = 0;
+  }
+  return true;
+}
+function satisfies(rows, n, columns, b, x){
+  for (const v of x) if (!Number.isFinite(v)) return false;
+  for (let r = 0; r < rows; r++){
+    let sum = 0, mag = 0;
+    for (let i = 0; i < n; i++){ const term = columns[i * rows + r] * x[i]; sum += term; mag += Math.abs(term); }
+    const tol = 1e-10 + 1e-6 * Math.max(Math.abs(b[r]), mag);
+    if (!Number.isFinite(sum) || !Number.isFinite(mag) || Math.abs(sum - b[r]) > tol) return false;
+  }
+  return true;
+}
+function runSimplex(t, basis, m, width, varCost){
+  const rhs = width - 1, numVars = width - 1;
+  const pivotLimit = Math.min(Math.max(32 * numVars, 256), 4096);
+  let pivots = 0;
+  while (true){
+    // Bland's rule: the first column whose reduced cost is negative enters.
+    let entering = -1;
+    for (let j = 0; j < numVars; j++){
+      if (isBasic(basis, m, j) || varCost[j] === Infinity) continue;
+      let reduced = varCost[j];
+      for (let r = 0; r < m; r++){
+        const cb = varCost[basis[r]];
+        if (cb === Infinity) continue;
+        reduced -= cb * t[r * width + j];
+      }
+      if (reduced < -1e-9){ entering = j; break; }
+    }
+    if (entering < 0) break;
+    let leaving = -1, best = Infinity;
+    for (let r = 0; r < m; r++){
+      const a = t[r * width + entering];
+      if (a <= EPS) continue;
+      const ratio = Math.max(0, t[r * width + rhs]) / a;
+      if (!Number.isFinite(ratio)) continue;
+      if (ratio < best || (ratio === best && (leaving < 0 || basis[r] < basis[leaving]))){ best = ratio; leaving = r; }
+    }
+    if (leaving < 0) return {ok:false, objective:-Infinity};
+    if (pivots++ >= pivotLimit) return {ok:false, objective:NaN};
+    pivot(t, basis, m, width, leaving, entering);
+  }
+  let objective = 0;
+  for (let r = 0; r < m; r++){ const cb = varCost[basis[r]]; if (cb !== Infinity) objective += cb * t[r * width + rhs]; }
+  return {ok:true, objective};
+}
+function isBasic(basis, m, j){ for (let r = 0; r < m; r++) if (basis[r] === j) return true; return false; }
+function pivot(t, basis, m, width, pr, pc){
+  const pv = t[pr * width + pc];
+  for (let c = 0; c < width; c++) t[pr * width + c] /= pv;
+  for (let r = 0; r < m; r++){
+    if (r === pr) continue;
+    const f = t[r * width + pc];
+    if (f === 0) continue;
+    for (let c = 0; c < width; c++) t[r * width + c] -= f * t[pr * width + c];
+  }
+  basis[pr] = pc;
+}
+
+// ================================================================ RcsTorqueAllocator, ported
+const SHORTFALL_PRICE_FACTOR = 1e3, DUTY_FLOOR = 1e-4;
+class RcsTorqueAllocator {
+  constructor(count){ this.count = count; this.force = new Float64Array(3 * count); this.torque = new Float64Array(3 * count); this.flow = new Float64Array(count); }
+  usable(i){
+    const f = this.flow[i];
+    if (!(f > 0) || !Number.isFinite(f)) return false;
+    const T = this.torque, t = Math.abs(T[3*i]) + Math.abs(T[3*i+1]) + Math.abs(T[3*i+2]);
+    return t > 0 && Number.isFinite(t);
+  }
+  dearestFlowPerNm(){
+    let worst = 0; const T = this.torque;
+    for (let i = 0; i < this.count; i++){
+      if (!this.usable(i)) continue;
+      const t = Math.sqrt(T[3*i]*T[3*i] + T[3*i+1]*T[3*i+1] + T[3*i+2]*T[3*i+2]);
+      worst = Math.max(worst, this.flow[i] / t);
+    }
+    return worst > 0 ? worst : 1;
+  }
+  // The cheapest duties, written into duty, for a torque demand in N m; priority weights each axis's shortfall.
+  allocate(dx, dy, dz, priority, duty){
+    duty.fill(0);
+    const n = this.count, rows = 3 + n, cols = 2 * n + 6;
+    const a = new Float64Array(rows * cols), cost = new Float64Array(cols), b = new Float64Array(rows);
+    b[0] = dx; b[1] = dy; b[2] = dz;
+    for (let i = 0; i < n; i++){
+      const u = this.usable(i);
+      for (let r = 0; r < 3; r++) a[i * rows + r] = u ? this.torque[3*i + r] : 0;
+      a[i * rows + 3 + i] = 1;
+      a[(n + i) * rows + 3 + i] = 1;
+      b[3 + i] = u ? 1 : 0;
+      cost[i] = u ? this.flow[i] : 0;
+    }
+    const price = SHORTFALL_PRICE_FACTOR * this.dearestFlowPerNm();
+    for (let r = 0; r < 3; r++){
+      const w = priority.length > r && priority[r] > 0 ? priority[r] : 1;
+      a[(2*n + 2*r) * rows + r] = 1;
+      a[(2*n + 2*r + 1) * rows + r] = -1;
+      cost[2*n + 2*r] = w * price;
+      cost[2*n + 2*r + 1] = w * price;
+    }
+    const x = lpSolve(rows, cols, a, cost, b);
+    if (!x) return {solved:false, tx:0, ty:0, tz:0, fx:0, fy:0, fz:0, flow:0, shortfall:0, firing:0};
+    let tx = 0, ty = 0, tz = 0, fx = 0, fy = 0, fz = 0, flow = 0, firing = 0;
+    const T = this.torque, F = this.force;
+    for (let i = 0; i < n; i++){
+      let d = Math.min(Math.max(x[i], 0), 1);
+      if (d < DUTY_FLOOR) d = 0;
+      duty[i] = d;
+      if (d <= 0) continue;
+      firing++;
+      tx += T[3*i] * d; ty += T[3*i+1] * d; tz += T[3*i+2] * d;
+      fx += F[3*i] * d; fy += F[3*i+1] * d; fz += F[3*i+2] * d;
+      flow += this.flow[i] * d;
+    }
+    const sx = dx - tx, sy = dy - ty, sz = dz - tz;
+    return {solved:true, tx, ty, tz, fx, fy, fz, flow, shortfall:Math.sqrt(sx*sx + sy*sy + sz*sz), firing};
+  }
+  // Characterise's programme, along any direction u from a base torque: maximise t with sum t_i d_i = base + t u.
+  // With base 0 and u a unit axis times sign, this is exactly Characterise's first solve.
+  // u is normalised here, so t is in N m and the tie cost stays the whisper it is in Characterise; the result is the N m along u.
+  reachAlong(dir, base){
+    const len = Math.hypot(dir[0], dir[1], dir[2]);
+    if (!(len > 0)) return null;
+    const u = [dir[0] / len, dir[1] / len, dir[2] / len];
+    const n = this.count, rows = 3 + n, cols = 2 * n + 1;
+    const a = new Float64Array(rows * cols), cost = new Float64Array(cols), b = new Float64Array(rows);
+    const tie = 1e-6 / this.dearestFlowPerNm();
+    for (let i = 0; i < n; i++){
+      const us = this.usable(i);
+      for (let r = 0; r < 3; r++) a[i * rows + r] = us ? this.torque[3*i + r] : 0;
+      a[i * rows + 3 + i] = 1;
+      a[(n + i) * rows + 3 + i] = 1;
+      b[3 + i] = us ? 1 : 0;
+      cost[i] = us ? tie * this.flow[i] : 0;
+    }
+    for (let r = 0; r < 3; r++){ a[2*n*rows + r] = -u[r]; b[r] = base ? base[r] : 0; }
+    cost[2*n] = -1;
+    const x = lpSolve(rows, cols, a, cost, b);
+    return x ? Math.max(x[2*n], 0) : null;
+  }
+  characterise(axis, sign){
+    const none = {max:0, flowPerNm:0, fx:0, fy:0, fz:0};
+    const u = [0,0,0]; u[axis] = sign;
+    const r = this.reachAlong(u, null);
+    const max = r !== null ? r : 0;
+    if (!(max > 0) || !Number.isFinite(max)) return none;
+    const dem = [0,0,0]; dem[axis] = 0.5 * sign * max;
+    const duty = new Float64Array(this.count);
+    const half = this.allocate(dem[0], dem[1], dem[2], [1,1,1], duty);
+    const given = 0.5 * max;
+    if (!half.solved || half.shortfall > 1e-6 * given) return {max, flowPerNm:0, fx:0, fy:0, fz:0};
+    return {max, flowPerNm:half.flow / given, fx:half.fx / given, fy:half.fy / given, fz:half.fz / given};
+  }
+}
+
+// ================================================================ the crafts
+const G0 = 9.80665, PERIOD = 0.1;
+const AXN = ['Pitch','Yaw','Roll'];        // model axes x, y, z (z is the thrust axis, towards the nose)
+function tangential(R, H, F, flow, deg, s, name){
+  const phi = deg * Math.PI / 180;
+  return {r:[R*Math.cos(phi), R*Math.sin(phi), H], f:[-s*F*Math.sin(phi), s*F*Math.cos(phi), 0], flow, name, deg, kind:'tan'};
+}
+function booster(){
+  // SixDofRcsCheck.Layout: four points round the top, a thruster pushing each way round the body at each.
+  const F = 6.7e3, isp = 220, R = 1.85, H = 28, flow = F / (isp * G0), th = [];
+  for (let p = 0; p < 4; p++) for (const s of [1, -1]) th.push(tangential(R, H, F, flow, p * 90, s, (p*90)+'° '+(s > 0 ? 'ccw' : 'cw')));
+  return th;
+}
+function capsule(){
+  // Illustrative: four quads at 45° round a capsule, each with two thrusters pushing round the body and two pushing fore and aft.
+  const F = 445, isp = 290, R = 1.95, H = 0.4, flow = F / (isp * G0), th = [];
+  for (let q = 0; q < 4; q++){
+    const deg = 45 + 90 * q, phi = deg * Math.PI / 180, r = [R*Math.cos(phi), R*Math.sin(phi), H], tag = 'Q' + (q + 1);
+    th.push(tangential(R, H, F, flow, deg, 1, tag + ' ccw'));
+    th.push(tangential(R, H, F, flow, deg, -1, tag + ' cw'));
+    th.push({r:r.slice(), f:[0,0,F], flow, name:tag + ' +z', deg, kind:'ax', up:true});
+    th.push({r:r.slice(), f:[0,0,-F], flow, name:tag + ' −z', deg, kind:'ax', up:false});
+  }
+  return th;
+}
+function buildAlloc(th){
+  const a = new RcsTorqueAllocator(th.length);
+  th.forEach((t, i) => {
+    const [rx, ry, rz] = t.r, [fx, fy, fz] = t.f;
+    a.force[3*i] = fx; a.force[3*i+1] = fy; a.force[3*i+2] = fz;
+    a.torque[3*i] = ry * fz - rz * fy;
+    a.torque[3*i+1] = rz * fx - rx * fz;
+    a.torque[3*i+2] = rx * fy - ry * fx;
+    a.flow[i] = t.flow;
+  });
+  return a;
+}
+const PRESETS = {
+  booster:{label:'Booster: 8 at the top', make:booster, R:1.85, demand:[30e3, 0, 8e3],
+    note:'<span class="tag meas">Measured</span> the logged booster\'s RCS as the offline check <code>SixDofRcsCheck.Layout</code> models it: eight 6.7 kN thrusters, Isp 220 s (3.105 kg/s each), on a 1.85 m ring 28 m above the centre of mass, pushing either way round the body.'},
+  capsule:{label:'Capsule: 4 quads', make:capsule, R:1.95, demand:[600, 0, 300],
+    note:'<span class="tag ill">Illustrative</span> a made-up capsule: four quads at 45° on a 1.95 m body, 0.4 m above the centre of mass, each with two 445 N thrusters pushing round the body and two pushing fore and aft, Isp 290 s. Not a KSA part. Two fore–aft thrusters give pitch as cheaply as four, and the programme does not price force, so a fore–aft push often comes along.'}
+};
+const PLANES = { pr:{h:2, v:0, label:'Pitch–roll'}, py:{h:1, v:0, label:'Pitch–yaw'}, yr:{h:2, v:1, label:'Yaw–roll'} };
+const PRIOS = { callers:{w:[1,1,0.3], label:'Callers (1, 1, 0.3)'}, even:{w:[1,1,1], label:'Even (1, 1, 1)'} };
+
+const S = { preset:'booster', plane:'pr', prio:'callers', demand:[0,0,0], minPulse:0.04, periods:10 };
+let craft = null;   // {th, alloc, chars, scale[3]}
+let polyCache = {key:'', poly:[]};
+const view = {extH:1, extV:1, frozen:false};
+let res = null, duty = null;
+
+const $ = s => document.querySelector(s);
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+function txt(parent, attrs, s){ const t = el('text', attrs, parent); t.textContent = s; return t; }
+const kNm = v => { const x = v / 1e3; return (Math.abs(x) < 0.005 ? 0 : x).toFixed(2); };
+const exact = v => (Math.abs(v) < 1e-9 ? '0' : v.toPrecision(10)) + ' N m';
+const nf = (v, d) => v.toLocaleString('en-US', {maximumFractionDigits:d, minimumFractionDigits:d});
+
+function setCraft(key){
+  const th = PRESETS[key].make(), alloc = buildAlloc(th), chars = [];
+  for (let axis = 0; axis < 3; axis++) for (const s of [1, -1]) chars.push(alloc.characterise(axis, s));
+  const scale = [0,1,2].map(a => Math.max(chars[2*a].max, chars[2*a+1].max) || 1);
+  craft = {th, alloc, chars, scale};
+  duty = new Float64Array(th.length);
+  polyCache.key = '';
+}
+
+function solve(){ res = craft.alloc.allocate(S.demand[0], S.demand[1], S.demand[2], PRIOS[S.prio].w, duty); }
+
+// The reachable slice in the plane, with the off-plane axis held at its demand: maximise t along a direction every 2°,
+// directions spaced on the plot (each axis scaled by its own reach).
+function polygon(){
+  const pl = PLANES[S.plane], off = 3 - pl.h - pl.v;
+  const key = S.preset + '|' + S.plane + '|' + S.demand[off];
+  if (polyCache.key === key) return polyCache.poly;
+  const base = [0,0,0]; base[off] = S.demand[off];
+  const poly = [];
+  for (let k = 0; k < 180; k++){
+    const th = k * 2 * Math.PI / 180, u = [0,0,0];
+    u[pl.h] = Math.cos(th) * craft.scale[pl.h]; u[pl.v] = Math.sin(th) * craft.scale[pl.v];
+    const t = craft.alloc.reachAlong(u, base);
+    if (t === null) continue;
+    const len = Math.hypot(u[pl.h], u[pl.v]);
+    const q = [t * u[pl.h] / len, t * u[pl.v] / len], L = poly[poly.length - 1];
+    if (!L || Math.abs(q[0] - L[0]) / craft.scale[pl.h] + Math.abs(q[1] - L[1]) / craft.scale[pl.v] > 1e-7) poly.push(q);
+  }
+  polyCache = {key, poly};
+  return poly;
+}
+
+function niceExt(m){
+  if (!(m > 0)) m = 1;
+  const base = Math.pow(10, Math.floor(Math.log10(m)));
+  for (const k of [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10]){ const s = k * base; if (m / s <= 4) return {step:s, ext:Math.max(s, Math.ceil(m / s - 1e-9) * s)}; }
+  return {step:base * 10, ext:Math.ceil(m / (base * 10)) * base * 10};
+}
+
+// ---------------------------------------------------------------- torque plane
+function renderPlot(){
+  const pl = PLANES[S.plane], poly = polygon();
+  const dem = [S.demand[pl.h], S.demand[pl.v]];
+  const giv = [[res.tx, res.ty, res.tz][pl.h], [res.tx, res.ty, res.tz][pl.v]];
+  const ch = craft.chars, box = [-ch[2*pl.h+1].max, ch[2*pl.h].max, -ch[2*pl.v+1].max, ch[2*pl.v].max];
+  if (!view.frozen){
+    let mh = 0, mv = 0;
+    poly.forEach(p => { mh = Math.max(mh, Math.abs(p[0])); mv = Math.max(mv, Math.abs(p[1])); });
+    mh = Math.max(mh, box[1], -box[0]) * 1.35; mv = Math.max(mv, box[3], -box[2]) * 1.35;
+    mh = Math.max(mh, Math.abs(dem[0]) * 1.08, Math.abs(giv[0]) * 1.08); mv = Math.max(mv, Math.abs(dem[1]) * 1.08, Math.abs(giv[1]) * 1.08);
+    const nh = niceExt(mh), nv = niceExt(mv);
+    view.extH = nh.ext; view.stepH = nh.step; view.extV = nv.ext; view.stepV = nv.step;
+  }
+  const svg = $('#plot'); while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const C = 200, R = 162, X = x => C + x / view.extH * R, Y = y => C - y / view.extV * R;
+  const lab = v => String(+(v / 1e3).toFixed(3));
+  const nh = Math.round(view.extH / view.stepH), nv = Math.round(view.extV / view.stepV);
+  for (let i = -nh; i <= nh; i++){ const v = i * view.stepH;
+    el('line', {x1:X(v), y1:C-R, x2:X(v), y2:C+R, stroke:'var(--gridline)', 'stroke-width':1}, svg);
+    if (i !== 0) txt(svg, {x:X(v), y:C+R+14, 'text-anchor':'middle', 'font-size':9, fill:'var(--muted)', 'font-family':'var(--f-mono)'}, lab(v)); }
+  for (let i = -nv; i <= nv; i++){ const v = i * view.stepV;
+    el('line', {x1:C-R, y1:Y(v), x2:C+R, y2:Y(v), stroke:'var(--gridline)', 'stroke-width':1}, svg);
+    if (i !== 0) txt(svg, {x:C-R-4, y:Y(v)+3, 'text-anchor':'end', 'font-size':9, fill:'var(--muted)', 'font-family':'var(--f-mono)'}, lab(v)); }
+  el('line', {x1:C-R, y1:C, x2:C+R, y2:C, stroke:'var(--muted)', 'stroke-width':1}, svg);
+  el('line', {x1:C, y1:C-R, x2:C, y2:C+R, stroke:'var(--muted)', 'stroke-width':1}, svg);
+  txt(svg, {x:C+R, y:C-6, 'text-anchor':'end', 'font-size':10, fill:'var(--muted)', 'font-family':'var(--f-body)'}, AXN[pl.h].toLowerCase() + ' (kN m) →');
+  txt(svg, {x:C+6, y:C-R+10, 'font-size':10, fill:'var(--muted)', 'font-family':'var(--f-body)'}, '↑ ' + AXN[pl.v].toLowerCase() + ' (kN m)');
+  el('rect', {x:X(box[0]), y:Y(box[3]), width:Math.max(0, X(box[1]) - X(box[0])), height:Math.max(0, Y(box[2]) - Y(box[3])), fill:'none', stroke:'var(--box)', 'stroke-dasharray':'4 4', 'stroke-width':1}, svg);
+  if (poly.length >= 3) el('polygon', {points:poly.map(p => X(p[0]) + ',' + Y(p[1])).join(' '), fill:'var(--set-fill)', stroke:'var(--accent)', 'stroke-width':1.5, 'stroke-linejoin':'round'}, svg);
+  else if (poly.length === 0) txt(svg, {x:C, y:C-R+28, 'text-anchor':'middle', 'font-size':11, fill:'var(--demand)', 'font-family':'var(--f-body)'}, 'The off-plane demand alone is out of reach');
+  const reach = res.solved && res.shortfall <= 1e-6 * Math.hypot(S.demand[0], S.demand[1], S.demand[2]) + 1e-3;
+  if (!reach && res.solved) el('line', {x1:X(dem[0]), y1:Y(dem[1]), x2:X(giv[0]), y2:Y(giv[1]), stroke:'var(--demand)', 'stroke-dasharray':'3 3', 'stroke-width':1.5}, svg);
+  el('circle', {cx:X(dem[0]), cy:Y(dem[1]), r:7, fill:'none', stroke:'var(--demand)', 'stroke-width':2}, svg);
+  el('circle', {cx:X(dem[0]), cy:Y(dem[1]), r:2.5, fill:'var(--demand)'}, svg);
+  if (res.solved) el('circle', {cx:X(giv[0]), cy:Y(giv[1]), r:4, fill:'var(--ink)'}, svg);
+  svg.setAttribute('aria-label', pl.label + ' plane. Demand ' + AXN[pl.h].toLowerCase() + ' ' + kNm(dem[0]) + ', ' + AXN[pl.v].toLowerCase() + ' ' + kNm(dem[1]) + ' kN m, ' + (reach ? 'reachable' : 'not reachable, short ' + kNm(res.shortfall) + ' kN m') + '.');
+  return reach;
+}
+
+// ---------------------------------------------------------------- readouts
+function renderRead(reach){
+  const d = S.demand, g = [res.tx, res.ty, res.tz];
+  const trip = v => AXN.map((n, i) => '<span title="' + n + ' ' + exact(v[i]) + '">' + kNm(v[i]) + '</span>').join(' · ');
+  const s = [d[0]-g[0], d[1]-g[1], d[2]-g[2]];
+  let worst = 0; for (let i = 1; i < 3; i++) if (Math.abs(s[i]) > Math.abs(s[worst])) worst = i;
+  const F = Math.hypot(res.fx, res.fy, res.fz), Tg = Math.hypot(g[0], g[1], g[2]);
+  const per = Tg > 1e-6 ? F / Tg : 0;
+  const perTxt = F < 1e-6 ? '0 N per N m' : nf(per, 4) + ' N per N m (1/' + nf(1 / per, 1) + ')';
+  $('#read').innerHTML =
+    '<div><div class="k">Demand, kN m</div><div class="v">' + trip(d) + '</div></div>' +
+    '<div><div class="k">Given, kN m</div><div class="v">' + (res.solved ? trip(g) : 'no solution') + '</div></div>' +
+    '<div><div class="k">Reachable</div><div class="v">' + (reach ? '<span class="pill yes">yes</span>' : '<span class="pill no">no · short ' + kNm(res.shortfall) + ' kN m, most in ' + AXN[worst].toLowerCase() + '</span>') + '</div></div>' +
+    '<div><div class="k">Side force</div><div class="v" title="x ' + res.fx.toFixed(3) + ', y ' + res.fy.toFixed(3) + ', z ' + res.fz.toFixed(3) + ' N">' + nf(F, 0) + ' N<br>' + perTxt + '</div></div>' +
+    '<div><div class="k">Propellant flow</div><div class="v">' + nf(res.flow, 3) + ' kg/s</div></div>' +
+    '<div><div class="k">Firing</div><div class="v">' + res.firing + ' of ' + craft.th.length + ' thrusters</div></div>';
+}
+
+function renderChars(){
+  const names = ['+pitch (x)', '−pitch (x)', '+yaw (y)', '−yaw (y)', '+roll (z)', '−roll (z)'];
+  $('#chartab').innerHTML = craft.chars.map((c, j) => {
+    const f = Math.hypot(c.fx, c.fy, c.fz);
+    return '<tr><td>' + names[j] + '</td><td class="n" title="' + exact(c.max) + '">' + nf(c.max / 1e3, 2) + '</td><td class="n">' + nf(c.flowPerNm * 1e6, 2) + '</td><td class="n">' + nf(f * 1e3, 2) + '</td></tr>';
+  }).join('');
+}
+
+// ---------------------------------------------------------------- top view
+function arrowHead(parent, x2, y2, ux, uy, h, attrs){
+  return el('polygon', Object.assign({points:[x2, y2, x2 - h*ux - h*0.5*uy, y2 - h*uy + h*0.5*ux, x2 - h*ux + h*0.5*uy, y2 - h*uy - h*0.5*ux].join(',')}, attrs), parent);
+}
+function renderRing(){
+  const svg = $('#ring'); while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const defs = el('defs', {}, svg), flt = el('filter', {id:'glow', x:'-60%', y:'-60%', width:'220%', height:'220%'}, defs);
+  el('feGaussianBlur', {stdDeviation:3}, flt);
+  const C = 150, Rpx = 86, k = Rpx / PRESETS[S.preset].R;
+  el('circle', {cx:C, cy:C, r:Rpx, fill:'none', stroke:'var(--line)', 'stroke-width':1.5}, svg);
+  el('line', {x1:C-Rpx-30, y1:C, x2:C+Rpx+30, y2:C, stroke:'var(--gridline)', 'stroke-width':1}, svg);
+  el('line', {x1:C, y1:C-Rpx-30, x2:C, y2:C+Rpx+30, stroke:'var(--gridline)', 'stroke-width':1}, svg);
+  txt(svg, {x:298, y:C+14, 'text-anchor':'end', 'font-size':9, fill:'var(--muted)', 'font-family':'var(--f-mono)'}, 'x · pitch');
+  txt(svg, {x:C+5, y:12, 'font-size':9, fill:'var(--muted)', 'font-family':'var(--f-mono)'}, 'y · yaw');
+  txt(svg, {x:4, y:296, 'font-size':9, fill:'var(--muted)', 'font-family':'var(--f-mono)'}, 'z · roll, out of the page');
+  const fmax = Math.max(...craft.th.map(t => Math.hypot(t.f[0], t.f[1], t.f[2])));
+  craft.th.forEach((t, i) => {
+    const d = duty[i], px = C + t.r[0] * k, py = C - t.r[1] * k;
+    const rad = [t.r[0], t.r[1]], rn = Math.hypot(rad[0], rad[1]) || 1, ox = rad[0] / rn, oy = -rad[1] / rn;
+    if (t.kind === 'tan'){
+      const fn = Math.hypot(t.f[0], t.f[1]), ux = t.f[0] / fn, uy = -t.f[1] / fn, L = 40;
+      const x2 = px + ux * L, y2 = py + uy * L;
+      el('line', {x1:px, y1:py, x2:x2 - ux*6, y2:y2 - uy*6, stroke:'var(--line)', 'stroke-width':1.5}, svg);
+      arrowHead(svg, x2, y2, ux, uy, 7, {fill:'var(--line)'});
+      if (d > 0){
+        el('line', {x1:px, y1:py, x2:x2, y2:y2, stroke:'var(--rcs)', 'stroke-width':8, 'stroke-linecap':'round', opacity:(0.25 + 0.6 * d).toFixed(3), filter:'url(#glow)'}, svg);
+        el('line', {x1:px, y1:py, x2:x2 - ux*6, y2:y2 - uy*6, stroke:'var(--rcs)', 'stroke-width':2.5, opacity:(0.45 + 0.55 * d).toFixed(3)}, svg);
+        arrowHead(svg, x2, y2, ux, uy, 8, {fill:'var(--rcs)', opacity:(0.45 + 0.55 * d).toFixed(3)});
+      }
+      txt(svg, {x:x2 + ux*8 + ox*6, y:y2 + uy*8 + oy*6 + 3, 'text-anchor':'middle', 'font-size':9, fill:d > 0 ? 'var(--ink)' : 'var(--muted)', 'font-family':'var(--f-mono)'}, String(i + 1));
+    } else {
+      // Fore and aft thrusters: drawn side by side on the radius so both show. +z towards the nose (out of the page), −z away.
+      const off = t.up ? -12 : 12, cx = px + ox * off, cy = py + oy * off;
+      if (d > 0) el('circle', {cx, cy, r:9, fill:'var(--rcs)', opacity:(0.25 + 0.6 * d).toFixed(3), filter:'url(#glow)'}, svg);
+      el('circle', {cx, cy, r:6, fill:d > 0 ? 'var(--rcs)' : 'var(--panel)', 'fill-opacity':d > 0 ? (0.35 + 0.65 * d).toFixed(3) : 1, stroke:d > 0 ? 'var(--rcs)' : 'var(--muted)', 'stroke-width':1.2}, svg);
+      const ink = d > 0 ? 'var(--panel)' : 'var(--muted)';
+      if (t.up) el('circle', {cx, cy, r:1.8, fill:ink}, svg);
+      else { el('line', {x1:cx-3, y1:cy-3, x2:cx+3, y2:cy+3, stroke:ink, 'stroke-width':1.3}, svg); el('line', {x1:cx-3, y1:cy+3, x2:cx+3, y2:cy-3, stroke:ink, 'stroke-width':1.3}, svg); }
+      const lx = px + ox * (t.up ? -24 : 24), ly = py + oy * (t.up ? -24 : 24);
+      txt(svg, {x:lx, y:ly + 3, 'text-anchor':'middle', 'font-size':9, fill:d > 0 ? 'var(--ink)' : 'var(--muted)', 'font-family':'var(--f-mono)'}, String(i + 1));
+    }
+  });
+  const fxy = Math.hypot(res.fx, res.fy);
+  if (fxy > 1e-6){
+    const L = Math.min(80, 45 * fxy / fmax), ux = res.fx / fxy, uy = -res.fy / fxy;
+    if (L > 3){
+      el('line', {x1:C, y1:C, x2:C + ux*(L - 6), y2:C + uy*(L - 6), stroke:'var(--side)', 'stroke-width':3}, svg);
+      arrowHead(svg, C + ux*L, C + uy*L, ux, uy, 9, {fill:'var(--side)'});
+    }
+  }
+  el('circle', {cx:C, cy:C, r:3, fill:'var(--ink)'}, svg);
+  const fz = Math.abs(res.fz) > 1e-6 ? ', fore–aft ' + nf(res.fz, 0) + ' N' : '';
+  $('#ringnote').innerHTML = 'Numbers match the pulse rows. Side force across the body ' + nf(fxy, 0) + ' N' + fz + '.' +
+    (craft.th.some(t => t.kind === 'ax') ? ' ⊙ pushes towards the nose, ⊗ away from it.' : '');
+  svg.setAttribute('aria-label', 'Top view from the nose. ' + res.firing + ' of ' + craft.th.length + ' thrusters firing: ' +
+    craft.th.map((t, i) => duty[i] > 0 ? (i + 1) + ' ' + t.name + ' ' + (duty[i] * 100).toFixed(1) + '%' : null).filter(Boolean).join(', ') + '. Side force ' + nf(fxy, 0) + ' N.');
+}
+
+// ---------------------------------------------------------------- pulses: KsaRcsTorqueControl.OnComputeControl's period loop
+function pulseTrain(d, minPulse, periods){
+  const fire = [], carry = [];
+  let c = 0;
+  for (let k = 0; k < periods; k++){
+    const want = Math.min(Math.max(d, 0), 1) * PERIOD + c;
+    const mp = Math.max(minPulse, 0);
+    if (want > 0 && want >= mp){ const on = Math.min(want, PERIOD); fire.push(on); c = Math.min(want - on, PERIOD); }
+    else { fire.push(0); c = want; }
+    carry.push(c);
+  }
+  return {fire, carry};
+}
+let lastPulseW = 0;
+function renderPulses(){
+  const wrap = $('#pulsewrap'), W = Math.max(260, Math.floor(wrap.clientWidth || 600));
+  lastPulseW = W;
+  const narrow = W < 520, N = S.periods, labelW = narrow ? 112 : 132, avgW = narrow ? 44 : 64, cellW = (W - labelW - avgW) / N, rowH = 20, top = 22;
+  const n = craft.th.length, H = top + n * rowH + 6;
+  const svg = $('#pulses'); while (svg.firstChild) svg.removeChild(svg.firstChild);
+  svg.setAttribute('width', W); svg.setAttribute('height', H); svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  const every = [1, 2, 5, 10, 20].find(e => e * cellW >= 44) || 20;
+  for (let k = 0; k <= (narrow ? N - every : N); k += every) txt(svg, {x:labelW + k * cellW, y:12, 'text-anchor':k === 0 ? 'start' : 'middle', 'font-size':9, fill:'var(--muted)', 'font-family':'var(--f-mono)'}, (k * PERIOD).toFixed(1) + (k === 0 ? ' s' : ''));
+  txt(svg, {x:W - 2, y:12, 'text-anchor':'end', 'font-size':9, fill:'var(--muted)', 'font-family':'var(--f-mono)'}, 'fired');
+  const pick = {i:-1, d:Infinity};
+  const desc = [];
+  craft.th.forEach((t, i) => {
+    const d = duty[i], y = top + i * rowH, tr = pulseTrain(d, S.minPulse, N);
+    if (d > 0 && d < pick.d){ pick.i = i; pick.d = d; pick.tr = tr; }
+    txt(svg, {x:0, y:y + 13, 'font-size':10, fill:d > 0 ? 'var(--ink)' : 'var(--muted)', 'font-family':'var(--f-mono)'}, (i + 1) + ' ' + t.name);
+    txt(svg, {x:labelW - 6, y:y + 13, 'text-anchor':'end', 'font-size':10, fill:d > 0 ? 'var(--ink)' : 'var(--muted)', 'font-family':'var(--f-mono)'}, (d * 100).toFixed(1) + '%');
+    let total = 0;
+    for (let k = 0; k < N; k++){
+      const x0 = labelW + k * cellW, f = tr.fire[k], c = tr.carry[k];
+      total += f;
+      el('rect', {x:x0, y:y + 2, width:cellW, height:rowH - 4, fill:'none', stroke:'var(--gridline)', 'stroke-width':1}, svg);
+      if (d > 0) el('rect', {x:x0 + 0.5, y:y + 4, width:Math.max(0, cellW * d - 1), height:10, fill:'none', stroke:'var(--muted)', 'stroke-dasharray':'2 2', 'stroke-width':0.8}, svg);
+      if (f > 0) el('rect', {x:x0 + 0.5, y:y + 4, width:Math.max(1, cellW * f / PERIOD - 1), height:10, fill:'var(--rcs)'}, svg);
+      if (c > 1e-12) el('rect', {x:x0 + 0.5, y:y + 15, width:Math.max(1, cellW * c / PERIOD - 1), height:3, fill:'var(--carry)'}, svg);
+    }
+    txt(svg, {x:W - 2, y:y + 13, 'text-anchor':'end', 'font-size':10, fill:d > 0 ? 'var(--ink)' : 'var(--muted)', 'font-family':'var(--f-mono)'}, (total / (N * PERIOD) * 100).toFixed(1) + '%');
+    if (d > 0) desc.push((i + 1) + ' asks ' + (d * 100).toFixed(1) + '% and fires ' + tr.fire.filter(f => f > 0).length + ' of ' + N + ' periods');
+  });
+  svg.setAttribute('aria-label', 'Pulse timeline over ' + N + ' periods of 0.1 s with a minimum pulse of ' + (S.minPulse * 1000).toFixed(0) + ' ms. ' + (desc.length ? desc.join('; ') : 'No thruster fires') + '.');
+  const mp = S.minPulse * 1000;
+  let note;
+  if (pick.i < 0) note = 'No thruster fires for this demand.';
+  else {
+    const ms = pick.d * PERIOD * 1000, firstK = pick.tr.fire.findIndex(f => f > 0), count = pick.tr.fire.filter(f => f > 0).length;
+    const name = 'Thruster ' + (pick.i + 1) + ' (' + craft.th[pick.i].name + ')';
+    if (ms >= mp) note = name + ', the smallest duty, asks for ' + nf(ms, 1) + ' ms a period. That is at least the ' + nf(mp, 0) + ' ms minimum pulse, so it fires every period and carries nothing.';
+    else if (firstK < 0) note = name + ' asks for ' + nf(ms, 1) + ' ms a period, under the ' + nf(mp, 0) + ' ms minimum. It carries the time over and has not saved up a pulse within the ' + N + ' periods shown. Show more periods, or lower the minimum.';
+    else note = name + ' asks for ' + nf(ms, 1) + ' ms a period, under the ' + nf(mp, 0) + ' ms minimum. It carries the time over, first fires in period ' + (firstK + 1) + ', and fires ' + count + ' of the ' + N + ' periods shown, about the same average as asking for ' + nf(ms, 1) + ' ms every time.';
+  }
+  $('#pulsenote').textContent = note;
+}
+
+// ---------------------------------------------------------------- controls
+function syncOff(){
+  const pl = PLANES[S.plane], off = 3 - pl.h - pl.v, sc = craft.scale[off] * 1.25, inp = $('#off');
+  $('#offlabel').textContent = AXN[off];
+  inp.min = -sc; inp.max = sc; inp.step = sc / 250; inp.value = S.demand[off];
+  $('#offo').textContent = kNm(S.demand[off]) + ' kN m';
+}
+function chipRow(id, obj, cur, on){
+  const box = $(id); box.innerHTML = '';
+  Object.keys(obj).forEach(k => { const b = document.createElement('button'); b.type = 'button'; b.textContent = obj[k].label; if (cur === k) b.className = 'on'; b.setAttribute('aria-pressed', cur === k ? 'true' : 'false'); b.addEventListener('click', () => on(k)); box.appendChild(b); });
+}
+function buildChips(){
+  chipRow('#presets', PRESETS, S.preset, k => { S.preset = k; setCraft(k); S.demand = PRESETS[k].demand.slice(); refresh(true); });
+  chipRow('#planes', PLANES, S.plane, k => { S.plane = k; refresh(true); });
+  chipRow('#prios', PRIOS, S.prio, k => { S.prio = k; refresh(true); });
+  const per = {}; [10, 20, 40].forEach(n => per[n] = {label:String(n)});
+  chipRow('#periods', per, String(S.periods), k => { S.periods = +k; buildChips(); renderPulses(); });
+  const dm = $('#demands'); dm.innerHTML = '';
+  const ch = craft.chars;
+  const sets = [
+    ['Max +pitch', () => [ch[0].max, 0, 0]],
+    ['2× max pitch', () => [2 * ch[0].max, 0, 0]],
+    ['Max +roll', () => [0, 0, ch[4].max]],
+    ['40 % pitch, −30 % yaw, 20 % roll', () => [0.4 * ch[0].max, -0.3 * ch[2].max, 0.2 * ch[4].max]],
+    ['Zero', () => [0, 0, 0]]
+  ];
+  sets.forEach(([label, f]) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.addEventListener('click', () => { S.demand = f(); refresh(false); }); dm.appendChild(b); });
+  $('#presetnote').innerHTML = PRESETS[S.preset].note;
+}
+function refresh(chips){
+  if (chips) buildChips();
+  syncOff();
+  solve();
+  const reach = renderPlot();
+  renderRead(reach);
+  renderRing();
+  renderPulses();
+  if (chips) renderChars();
+}
+function live(){ solve(); syncOff(); const reach = renderPlot(); renderRead(reach); renderRing(); renderPulses(); }
+
+$('#off').addEventListener('input', e => { const pl = PLANES[S.plane]; S.demand[3 - pl.h - pl.v] = +e.target.value; live(); });
+$('#minp').addEventListener('input', e => { S.minPulse = +e.target.value; $('#minpo').textContent = (S.minPulse * 1000).toFixed(0) + ' ms'; renderPulses(); });
+$('#minpo').textContent = (S.minPulse * 1000).toFixed(0) + ' ms';
+
+const svg = $('#plot'); let drag = false;
+function setFromEvent(ev){
+  const m = svg.getScreenCTM(); if (!m) return;
+  const pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY; const p = pt.matrixTransform(m.inverse());
+  const pl = PLANES[S.plane];
+  S.demand[pl.h] = (p.x - 200) / 162 * view.extH; S.demand[pl.v] = (200 - p.y) / 162 * view.extV;
+  live();
+}
+svg.addEventListener('pointerdown', e => { drag = true; view.frozen = true; try { svg.setPointerCapture(e.pointerId); } catch (_) {} setFromEvent(e); });
+svg.addEventListener('pointermove', e => { if (drag) setFromEvent(e); });
+function endDrag(){ if (!drag) return; drag = false; view.frozen = false; live(); }
+svg.addEventListener('pointerup', endDrag); svg.addEventListener('pointercancel', endDrag);
+svg.addEventListener('keydown', e => {
+  const pl = PLANES[S.plane]; let hit = true;
+  if (e.key === 'ArrowLeft') S.demand[pl.h] -= view.extH / 40; else if (e.key === 'ArrowRight') S.demand[pl.h] += view.extH / 40;
+  else if (e.key === 'ArrowUp') S.demand[pl.v] += view.extV / 40; else if (e.key === 'ArrowDown') S.demand[pl.v] -= view.extV / 40;
+  else hit = false;
+  if (hit){ e.preventDefault(); live(); }
+});
+try { new ResizeObserver(() => { const w = Math.floor($('#pulsewrap').clientWidth); if (w && w !== lastPulseW) renderPulses(); }).observe($('#pulsewrap')); } catch (_) {}
+window.addEventListener('afc-theme', () => { if (craft) live(); });
+
+setCraft(S.preset);
+S.demand = PRESETS[S.preset].demand.slice();
+refresh(true);
+})();
+</script>
+
+</body></html>

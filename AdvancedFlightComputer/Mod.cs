@@ -4,6 +4,7 @@ using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
+using AdvancedFlightComputer.Features.LandingSites;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.Features.RcsTranslation;
@@ -124,6 +125,15 @@ public sealed class Mod
             ConsoleMenu.Register();
         ModSettingsPage.Register(ConsoleMenu.DrawModsSettingsLine);
         AfcAlerts.History = ConsoleMessages.RecordAlert;
+        // The reader already skips a bad file, so this only keeps an unexpected failure from costing the rest of the load.
+        try
+        {
+            LandingSiteRegistry.Load();
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Warning($"[AFC] Landing sites could not be read: {ex.Message}");
+        }
         AfcConsole.LoadPreferences();
         AfcConsole.Enabled = true;
         PlannerRoute.MenuMissing = !guidanceMenu;
@@ -252,6 +262,7 @@ public sealed class Mod
         SaveLoadObserver.Reset();
         HyperbolicTargets.ResetAlerts();
         UiConfig.Reset();
+        LandingSiteRegistry.Reset();
         LogHelper.Reset();
 #if DEBUG
         PerfTracker.Reset();

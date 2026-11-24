@@ -340,10 +340,10 @@ internal static class MultiPassUI
         double estimatedSavings = singlePassLoss - splitLoss;
 
         ImGui.Spacing();
-        ConsoleUi.AdviceWrapped(ConsoleUi.EscapeFormat(string.Format(Inv,
+        ConsoleUi.AdviceWrapped(string.Format(Inv,
             "Burn duration ({0:F0}s) is {1:F0}% of orbital period. " +
             "Splitting across {2} passes saves ~{3:F0} m/s.",
-            totalBurnTime, burnRatio * 100.0, suggestedN, estimatedSavings)));
+            totalBurnTime, burnRatio * 100.0, suggestedN, estimatedSavings));
     }
 
     // Choose the smallest pass count that meets the loss threshold and saves less than 0.1 percent with another pass. The maximum count can still leave the loss above the threshold.

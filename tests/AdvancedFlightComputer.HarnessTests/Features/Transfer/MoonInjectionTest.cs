@@ -80,16 +80,16 @@ internal static class MoonTestWorld
         return Orbit.CreateFromStateCci(home, now, x * radius, v, VehicleSpawner.OrbitLineColor);
     }
 
-    // The orbit of an injection that was flown half an hour ago from a parking orbit in the moon's plane and aimed at the moon's centre: the cheapest Lambert departure of the last parking revolution.
-    // It is on an impact course, as a flown injection that missed its periapsis is.
+    // The orbit of an injection that was flown half an hour ago from a parking orbit in the moon's plane and aimed at the moon's centre: the cheapest Lambert departure of the last parking revolution
+    // whose orbit passes within AimToleranceM of the moon's centre at the arrival. It is on an impact course, as a flown injection that missed its periapsis is.
+    // The cheapest departure is a transfer of close to 180 degrees. Within about a thousandth of a degree of it, OrbitalTransfers.SuperiorLambert can return a velocity that is cheaper than the true one
+    // and misses the moon by up to its whole orbit radius. Whether a grid point falls there depends on where the moon is at the start epoch, so the check on the propagated orbit keeps the scenario the same at every epoch.
     public static Orbit FlownInjection(IParentBody home, Celestial moon, UniverseTime now, out double dvMs)
     {
         Orbit parking = CircularInPlane(home, MoonNormal(moon, now), now);
         double hohmann = LunarTransferGeometry.HohmannTime(home.Mu, parking.SemiMajorAxis, moon.Orbit.SemiMajorAxis);
         double latest = now.Seconds() - 1800.0;
-        dvMs = double.MaxValue;
-        double bestStart = latest, bestFlight = hohmann;
-        double3 bestVelocity = default;
+        var candidates = new List<(double Cost, double Start, double Flight, double3 Velocity)>();
         for (int i = 0; i <= 720; i++)
             for (int j = 0; j <= 24; j++)
             {
@@ -99,17 +99,26 @@ internal static class MoonTestWorld
                 double3 to = moon.Orbit.GetStateVectorsAt(new UniverseTime(start + flight)).PositionCci;
                 OrbitalTransfers.SuperiorLambert(home.Mu, from.PositionCci, to, new UniverseTime(flight), out double3 departure, out _);
                 double cost = (departure - from.VelocityCci).Length();
-                if (double.IsFinite(cost) && cost < dvMs)
-                {
-                    dvMs = cost;
-                    bestStart = start;
-                    bestFlight = flight;
-                    bestVelocity = departure;
-                }
+                if (double.IsFinite(cost))
+                    candidates.Add((cost, start, flight, departure));
             }
-        StateVectors at = parking.GetStateVectorsAt(new UniverseTime(bestStart));
-        return Orbit.CreateFromStateCci(home, new UniverseTime(bestStart), at.PositionCci, bestVelocity, VehicleSpawner.OrbitLineColor);
+        candidates.Sort((a, b) => a.Cost.CompareTo(b.Cost));
+        foreach (var c in candidates)
+        {
+            StateVectors at = parking.GetStateVectorsAt(new UniverseTime(c.Start));
+            Orbit orbit = Orbit.CreateFromStateCci(home, new UniverseTime(c.Start), at.PositionCci, c.Velocity, VehicleSpawner.OrbitLineColor);
+            UniverseTime arrival = new UniverseTime(c.Start + c.Flight);
+            if ((orbit.GetStateVectorsAt(arrival).PositionCci - moon.Orbit.GetStateVectorsAt(arrival).PositionCci).Length() <= AimToleranceM)
+            {
+                dvMs = c.Cost;
+                return orbit;
+            }
+        }
+        throw new InvalidOperationException("no Lambert departure of the last parking revolution reaches the moon's centre.");
     }
+
+    // How close to the moon's centre the two-body orbit of the flown injection must pass, m. Small against the moon's radius, so the game's propagation in the moon's sphere gives an impact course.
+    private const double AimToleranceM = 50_000.0;
 
     // A flyby orbit at the moon whose periapsis is two hours ahead, with the excess speed of a transfer from a low parking orbit.
     public static Orbit FlybyAtMoon(IParentBody moonBody, UniverseTime now, out UniverseTime periapsis)
@@ -594,7 +603,9 @@ public sealed class MoonChainTest : AfcTest
             BurnTarget target = state.MoonChainTarget;
             // One step in Auto first, so the craft is awake and the flight computer steps again in the next one.
             driver.Step(1.0);
-            target.DeltaVAccumCci = target.DeltaVTargetCci * 1.01f;
+            // 1 m/s past the target along it: the step measures its own delta-v into the accumulator, and at some epochs that moves the
+            // remaining delta-v by a third of a metre per second, so a 1 percent overshoot of a 2 m/s correction is not enough to complete.
+            target.DeltaVAccumCci = target.DeltaVTargetCci * (1f + 1f / target.DeltaVTargetCci.Length());
             driver.Step(1.0);
             if (!t.Check($"{label}: stock completed the burn and selected Manual",
                     fc.AutoBurnCompleted && fc.BurnMode == FlightComputerBurnMode.Manual, $"completed {fc.AutoBurnCompleted}, mode {fc.BurnMode}"))

@@ -59,8 +59,9 @@ public enum ScvxStatus
 /// exactly one iteration so a guidance loop can spend a fixed budget per cycle
 /// and carry the reference forward, rather than blocking until convergence.
 /// </summary>
-public sealed class Scvx6DofSolver
+public sealed class Scvx6DofSolver : IDisposable
 {
+    public void Dispose() => _sub.Dispose();
     private const int NX = Dynamics6Dof.NX;
     /// <summary>The control count, the base controls and the craft's fins (Scvx6DofConfig.NU).</summary>
     private readonly int NU;
@@ -455,7 +456,7 @@ public sealed class Scvx6DofSolver
         // SCS returns SolvedInaccurate when it runs out of iterations, and that iterate can sit far outside the trust region - accepting it produced a step 100x the radius and a rho of +335 before this guard existed.
         // Truncation is a BUDGET problem, not a trajectory problem: retry the same already-assembled subproblem with more iterations rather than shrinking the trust region, which would only make it harder.
         // Warm-started from the last GOOD iterate, since truncated ones are no longer carried forward.
-        if (_sub.HitIterationLimit && EscalatedSubproblemIterations > MaxSubproblemIterations)
+        if (_sub.HitIterationLimit && _sub.EffectiveIterationCap(EscalatedSubproblemIterations) > _sub.EffectiveIterationCap(MaxSubproblemIterations))
         {
             Escalations++;
             st = _sub.Run(warmStart: WarmStart && _sub.HasWarmStart,

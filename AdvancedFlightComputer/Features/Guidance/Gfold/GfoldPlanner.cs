@@ -48,17 +48,29 @@ public sealed record GfoldOptions
     /// <summary>Wall-clock ceiling for one native solve, in seconds. Zero lets it finish.</summary>
     public double SolveTimeLimitS { get; init; }
 
+    // Enforce the physical thrust bounds at node 0 using the exact initial wet mass, because
+    // the trapezoidal mass recursion only bounds the average of nodes 0 and 1.
+    public bool EnforceNode0Bounds { get; init; }
+
+    // Leave the final thrust magnitude free within physical bounds while keeping it upright,
+    // because pinning s[N - 1] = 0 requires at least 2g at node N - 2 on the last trapezoid step.
+    public bool FreeTerminalThrust { get; init; }
+
     public static readonly GfoldOptions Reference = new();
     public static readonly GfoldOptions RealTime = new()
     {
         EnforceLowerThrust = true, FreeInitialThrust = true, RelaxInitialPath = true,
+        EnforceNode0Bounds = true, FreeTerminalThrust = true,
         LandingFuelReg = 0.001,
     };
 
     // Use no thrust floor for committed-trajectory tracking.
     // The min-fuel plan can coast where optimal and brake where needed, while the caller follows the whole trajectory by time index.
     public static readonly GfoldOptions Descent = new()
-    { FreeInitialThrust = true, RelaxInitialPath = true };
+    {
+        FreeInitialThrust = true, RelaxInitialPath = true,
+        EnforceNode0Bounds = true, FreeTerminalThrust = true,
+    };
 }
 
 public static class GfoldPlanner
@@ -255,8 +267,8 @@ public static class GfoldPlanner
         int IQ = 11 * N + (p3 ? 1 : 0);           // slew-norm variable (when smoothing)
         int nv = 11 * N + (p3 ? 1 : 0) + (smooth ? 1 : 0);
 
-        // --- equality constraints A x = b --- Boundary rows: r0 (3) + v0 (3) + vf (3) + s_end (1) + u_end (3) + z0 (1) = 14, plus u_start (3) unless the initial thrust is free, then the landing rows and the dynamics.
-        int pEq = 14 + (opt.FreeInitialThrust ? 0 : 3) + (p3 ? 1 : 3) + 7 * (N - 1);
+        // Equality constraints A x = b: r0 (3), v0 (3), vf (3), optional s_end (1), u_end (3), z0 (1), optional u_start (3), landing rows, and dynamics.
+        int pEq = (opt.FreeTerminalThrust ? 13 : 14) + (opt.FreeInitialThrust ? 0 : 3) + (p3 ? 1 : 3) + 7 * (N - 1);
         var A = new SparseCcs(pEq, nv);
         var b = new double[pEq];
         int row = 0;
@@ -268,7 +280,10 @@ public static class GfoldPlanner
         for (int i = 0; i < 3; i++) // final velocity ("don't forget to slow down, buddy!")
         { A.Add(row, IX(N - 1, 3 + i), 1); b[row++] = vf[i]; }
 
-        A.Add(row, IS(N - 1), 1); b[row++] = 0; // thrust slack ends at zero
+        if (!opt.FreeTerminalThrust)
+        {
+            A.Add(row, IS(N - 1), 1); b[row++] = 0; // thrust slack ends at zero
+        }
         // thrust starts (optional) and ends pointing straight up: u = s * (1,0,0)
         if (!opt.FreeInitialThrust)
         {
@@ -322,19 +337,26 @@ public static class GfoldPlanner
             b[row++] = 0;
         }
 
-        // --- cone constraints G x + s = h, s in R+^l x SOC(q...) --- Path inequalities (pointing/glideslope/velocity) run from node p0: when relaxing the initial state, skip node 0 so a fast/shallow handoff can't make every tf infeasible. Thrust magnitude (lossless ||u|| <= s) and the ground constraint stay on every node.
+        // Cone constraints G x + s = h, s in R+^l x SOC(q...). Path inequalities (pointing, glideslope, velocity) run from node p0 so relaxing the initial state skips node 0 and avoids making every tf infeasible on a shallow handoff. Thrust magnitude (lossless ||u|| <= s) and the ground constraint stay on every node.
         int p0 = opt.RelaxInitialPath ? 1 : 0;
         int pathNodes = (N - 1) - p0;
+        int boxEnd = opt.FreeTerminalThrust ? N : N - 1;
+        int boxNodes = Math.Max(boxEnd - 1, 0);
+        int accelNodes = opt.FreeTerminalThrust ? N : N - 1;
+        int node0Lp = opt.EnforceNode0Bounds ? (opt.EnforceLowerThrust ? 2 : 1) : 0;
+        int freeEndNonnegLp = (opt.FreeTerminalThrust && !opt.EnforceLowerThrust) ? 1 : 0;
         bool accelLimited = double.IsFinite(P.AccelMax);
         int lp = pathNodes               // thrust pointing
-               + 3 * Math.Max(N - 2, 0)  // thrust upper bound + z box, n = 1..N-2
+               + node0Lp                 // exact physical thrust bounds at node 0
+               + 3 * boxNodes            // thrust upper bound + z box, n = 1..boxEnd-1
+               + freeEndNonnegLp         // s[N-1] >= 0 when terminal thrust is free without a thrust floor
                + (N - 1)                 // altitude >= 0
-               + (accelLimited ? N - 1 : 0); // thrust acceleration bound, n = 0..N-2
+               + (accelLimited ? accelNodes : 0); // thrust acceleration bound
         int mIneq = lp
             + 3 * pathNodes // glideslope cones, Q3
             + 4 * pathNodes // velocity cones, Q4
             + 4 * (N - 1)   // thrust magnitude cones, Q4
-            + (opt.EnforceLowerThrust ? 3 * Math.Max(N - 2, 0) : 0) // thrust floor cones
+            + (opt.EnforceLowerThrust ? 3 * boxNodes : 0) // thrust floor cones
             + (p3 ? 4 : 0) // landing-error epigraph cone, Q4
             + (smooth ? 1 + 3 * (N - 1) : 0); // thrust-slew smoothing cone, Q(1+3(N-1))
 
@@ -350,8 +372,20 @@ public static class GfoldPlanner
             h[row++] = 0;
         }
 
+        // Exact physical thrust bounds at node 0 because m[0] = WetMass is fixed by equality.
+        if (opt.EnforceNode0Bounds)
+        {
+            G.Add(row, IS(0), 1);
+            h[row++] = r2Acc / P.WetMass;
+            if (opt.EnforceLowerThrust)
+            {
+                G.Add(row, IS(0), -1);
+                h[row++] = -r1Acc / P.WetMass;
+            }
+        }
+
         // convexified thrust bound + ln-mass box (reference eq. 34-36)
-        for (int n = 1; n < N - 1; n++)
+        for (int n = 1; n < boxEnd; n++)
         {
             // alpha' * r' * t' == alpha * r * t, so these mass terms are the same numbers as in physical units.
             double z0Term = P.WetMass - alpha * r2Acc * n * dt;
@@ -373,6 +407,12 @@ public static class GfoldPlanner
             h[row++] = z1;
         }
 
+        if (freeEndNonnegLp > 0)
+        {
+            G.Add(row, IS(N - 1), -1);
+            h[row++] = 0;
+        }
+
         // stay above ground: x[n] >= 0  ("no, this is not the Boring Company!")
         for (int n = 0; n < N - 1; n++)
         {
@@ -384,16 +424,17 @@ public static class GfoldPlanner
         // It caps s from above, the same side as the thrust bound, so the thrust floor stays the only nonconvex constraint the relaxation lifts (Acikmese and Ploen 2007, Acikmese and Blackmore 2011).
         // Where the floor is enforced, the bound is raised to R1 / z0Term, the floor acceleration at the lightest mass the node admits, so the floor cone stays feasible, because the thrust cannot go under R1 to hold a load limit either.
         // A bound that follows the floor at the node's own mass would put s under a convex function of z, which is not convex. So where this relief applies, the plan can ride above the floor at its actual mass, up to R1 / z0Term.
-        // Node N-1 has s pinned to zero, so the trapezoid gives the last interval half the thrust of node N-2, and holding the final velocity there takes twice the gravity at node N-2.
-        // The bound at N-2 is raised to that, otherwise a bound under 2g makes every flight time infeasible.
+        // When FreeTerminalThrust is false, node N - 1 has s pinned to zero, so the last trapezoid interval gets half the thrust of node N - 2 and node N - 2 needs a 2g floor to keep every flight time feasible.
         if (accelLimited)
         {
-            for (int n = 0; n < N - 1; n++)
+            for (int n = 0; n < accelNodes; n++)
             {
                 double bound = P.AccelMax;
                 if (opt.EnforceLowerThrust && n > 0)
                     bound = Math.Max(bound, P.R1 / (P.WetMass - alpha * r2Acc * n * dt));
-                if (n == N - 2)
+                else if (opt.EnforceLowerThrust && opt.EnforceNode0Bounds && n == 0)
+                    bound = Math.Max(bound, P.R1 / P.WetMass);
+                if (!opt.FreeTerminalThrust && n == N - 2)
                     bound = Math.Max(bound, 2 * P.GravityMag);
                 G.Add(row, IS(n), 1);
                 h[row++] = bound / accScale;
@@ -441,10 +482,10 @@ public static class GfoldPlanner
 
         // Thrust floor (continuous thrust): s[n] >= mu1*(1 - w + w^2/2), w = z - z0, mu1 = rho1/z0Term.
         // The RHS is convex quadratic in z, so it becomes a rotated cone L >= u^2 (L affine, u = sqrt(mu1/2)*w) written as the SOC ||(L-1, 2u)|| <= L+1, with L = s[n] + mu1*z[n] - mu1*(1+z0).
-        // Applied on the same interior nodes as the box (n = 1..N-2, where z0 <= z <= z1 keeps w >= 0 and the Taylor cut conservative).
+        // Applied on the same nodes as the mass box (n = 1..boxEnd-1, including N - 1 when FreeTerminalThrust is true).
         if (opt.EnforceLowerThrust)
         {
-            for (int n = 1; n < N - 1; n++)
+            for (int n = 1; n < boxEnd; n++)
             {
                 double z0Term = P.WetMass - alpha * r2Acc * n * dt;
                 double z0 = Math.Log(z0Term);

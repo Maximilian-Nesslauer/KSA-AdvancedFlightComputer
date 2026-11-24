@@ -140,6 +140,8 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         state.GLimitG = GLimitG;
         state.ReserveArmed = false;
         state.TargetId = "";
+        // The default steering, AFC's own attitude controller, is the one that flies through the drop.
+        state.AscentOwnAttitude = true;
         AmbientState() = state;
         DescribeSequences(t, vehicle, "at spawn");
 
@@ -234,7 +236,7 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         // After the drop: the craft stays guidance's, and the command stays continuous.
         double maxPitch = double.NegativeInfinity, minPitch = double.PositiveInfinity;
         double reconvergedAt = double.NaN;
-        bool claimHeld = true, commandHeld = true, tracking = true;
+        bool claimHeld = true, commandHeld = true, ownSteering = true;
         string takeover = "";
         double end = time + AfterDropSeconds;
         nextSample = time;
@@ -256,7 +258,8 @@ public sealed class GuidanceAscentStagingTest : AfcTest
             }
             claimHeld &= VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.Guidance && state.ControlAcquired;
             commandHeld &= state.Running && state.HasCommand;
-            tracking &= vehicle.FlightComputer.AttitudeTrackTarget == FlightComputerAttitudeTrackTarget.Custom;
+            ownSteering &= state.OwnAttitudeFlying && ReferenceEquals(state.OwnAttitudeVehicle, vehicle)
+                && vehicle.FlightComputer.AttitudeMode == FlightComputerAttitudeMode.Manual;
             if (takeover.Length == 0 && (state.TakeoverStop || state.Status.StartsWith("GUIDANCE STOPPED", StringComparison.Ordinal)))
                 takeover = state.Status.Length > 0 ? state.Status : "takeover flagged";
             if (double.IsNaN(reconvergedAt) && state.Upfg.Converged && time - dropTime >= 1.0)
@@ -269,7 +272,8 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         t.Check("guidance keeps the claim through the drop", claimHeld);
         t.Check("no takeover is detected at the drop", takeover.Length == 0, takeover);
         t.Check("the ascent keeps running through the drop", commandHeld, $"running={state.Running} status='{state.Status}'");
-        t.Check("the flight computer keeps tracking guidance's custom target", tracking);
+        t.Check("AFC's own attitude controller keeps steering with the flight computer in Manual", ownSteering,
+            $"own={state.OwnAttitudeFlying} mode={vehicle.FlightComputer.AttitudeMode}");
         t.Check($"the commanded pitch rises by at most {MaxPitchRiseDeg:F0} deg after the drop",
             maxPitch - pitchBefore <= MaxPitchRiseDeg, $"{pitchBefore:F1} -> {maxPitch:F1} deg");
         t.Check($"UPFG converges again within {ReconvergeSeconds:F0} s of the drop",
