@@ -41,9 +41,11 @@ internal static class HohmannMultiPassUI
         long FlybyRpBucket,
         FlybySide FlybySide,
         FlybyTargeting.DepartureKey? FlybyDeparture = null,
-        int PhaseSignature = 0)
+        int PhaseSignature = 0,
+        long SelectedStartBucketSec = 0,
+        long SelectedTransitBucketSec = 0)
     {
-        // Thrust changes mass and can shift the final time through the parking period. Ignore those fields while thrust is active, but retain changes to the transfer, flyby request, and pass index.
+        // Thrust changes mass and can shift the final time through the parking period. Ignore those fields while thrust is active, but retain changes to the selected transfer entry, flyby request, and pass index.
         public PreviewKey WithoutDrift() =>
             this with { TFinalBucketSec = 0, MassBucket = 0, PhaseSignature = 0,
                 FlybyDeparture = FlybyDeparture?.WithoutParkingDrift() };
@@ -487,7 +489,7 @@ internal static class HohmannMultiPassUI
         var shift = HohmannMultiPassPlanner.PrepareShiftedInput(
             raw, source, info, _passCount, parkingPeriodSec, now, _splitMode, state);
         var key = BuildKey(source, shift.Input, _passCount, _splitMode, 0,
-            ResolveFlybyTransit(shift, entry));
+            ResolveFlybyTransit(shift, entry), entry);
         if (_hasCachedPreview && key == _cachedKey)
         {
             _lastShiftKShift = shift.KShift;
@@ -495,11 +497,12 @@ internal static class HohmannMultiPassUI
         }
         if (CanKeepPreviewDuringThrust(source, key)) return;
 
-        shift = ClampPassCount(source, info, raw, shift, state, parkingPeriodSec, now);
+        shift = ClampPassCount(source, entry, info, raw, shift, state, parkingPeriodSec, now,
+            out var planInput, out bool flybyFailed);
         // The cache key describes the shifted input and requested flyby. The retargeted result is derived from them.
         key = BuildKey(source, shift.Input, _passCount, _splitMode, 0,
-            ResolveFlybyTransit(shift, entry));
-        PlanPreview(source, entry, info, shift, key, state, parkingPeriodSec, now);
+            ResolveFlybyTransit(shift, entry), entry);
+        PlanPreview(source, shift, planInput, flybyFailed, key, state, parkingPeriodSec, now);
     }
 
     // Freeze drift from mass and time while thrust is active. Changes to other inputs or the pass index still invalidate the preview.
@@ -509,16 +512,23 @@ internal static class HohmannMultiPassUI
                source, key.WithoutDrift() == _cachedKey.WithoutDrift());
 
     private static HohmannMultiPassPlanner.ShiftResult ClampPassCount(
-        Vehicle source, OrbitalTransfers.TransferInfo info,
+        Vehicle source, OrbitalTransfers.PorkChopEntry entry,
+        OrbitalTransfers.TransferInfo info,
         HohmannMultiPassPlanner.HohmannPlanInput raw,
         HohmannMultiPassPlanner.ShiftResult shift, SequenceBurnState state,
-        double parkingPeriodSec, UniverseTime now)
+        double parkingPeriodSec, UniverseTime now,
+        out HohmannMultiPassPlanner.HohmannPlanInput planInput,
+        out bool flybyFailed)
     {
         int requestedN = _passCount;
         _lastShiftKShift = shift.KShift;
 
+        // Apply flyby retargeting before clamping pass count so time shifts and departure speed changes enter the feasibility check.
+        planInput = MaybeApplyFlyby(
+            source, info, shift.Input, ResolveFlybyTransit(shift, entry), out flybyFailed);
+
         int clampedN = HohmannMultiPassPlanner.LargestFeasibleN(
-            source, shift.Input, state, parkingPeriodSec, now, requestedN, _splitMode,
+            source, planInput, state, parkingPeriodSec, now, requestedN, _splitMode,
             out string? clampReason, out PassPlanFailure clampKind);
 
         if (clampedN < requestedN)
@@ -532,20 +542,19 @@ internal static class HohmannMultiPassUI
             shift = HohmannMultiPassPlanner.PrepareShiftedInput(
                 raw, source, info, _passCount, parkingPeriodSec, now, _splitMode, state);
             _lastShiftKShift = shift.KShift;
-
+            planInput = MaybeApplyFlyby(
+                source, info, shift.Input, ResolveFlybyTransit(shift, entry), out flybyFailed);
         }
 
         return shift;
     }
 
     private static void PlanPreview(
-        Vehicle source, OrbitalTransfers.PorkChopEntry entry,
-        OrbitalTransfers.TransferInfo info, HohmannMultiPassPlanner.ShiftResult shift,
+        Vehicle source, HohmannMultiPassPlanner.ShiftResult shift,
+        HohmannMultiPassPlanner.HohmannPlanInput planInput, bool flybyFailed,
         PreviewKey key, SequenceBurnState state, double parkingPeriodSec, UniverseTime now)
     {
-        // Apply the flyby offset before splitting the departure. Retain a failed retarget so the UI can warn about the unchanged aim.
-        var planInput = MaybeApplyFlyby(
-            source, info, shift.Input, ResolveFlybyTransit(shift, entry), out _flybyRetargetFailed);
+        _flybyRetargetFailed = flybyFailed;
 
         _cachedPreview = HohmannMultiPassPlanner.Plan(
             source, planInput, _passCount, startPassIndex: 0,
@@ -817,7 +826,8 @@ internal static class HohmannMultiPassUI
 
     private static PreviewKey BuildKey(
         Vehicle source, HohmannMultiPassPlanner.HohmannPlanInput input,
-        int passCount, SplitMode mode, int startPassIndex, UniverseTime? transit = null)
+        int passCount, SplitMode mode, int startPassIndex, UniverseTime? transit = null,
+        OrbitalTransfers.PorkChopEntry? selectedEntry = null)
     {
         // Changing the flyby altitude or side must invalidate the preview.
         bool flybyOn = false;
@@ -851,7 +861,9 @@ internal static class HohmannMultiPassUI
             FlybyRpBucket: flybyRpBucket,
             FlybySide: flybySide,
             FlybyDeparture: departureKey,
-            PhaseSignature: FiniteBurns.PhaseSignature(source));
+            PhaseSignature: FiniteBurns.PhaseSignature(source),
+            SelectedStartBucketSec: selectedEntry != null ? (long)selectedEntry.TransferData.Start.Seconds() : 0L,
+            SelectedTransitBucketSec: selectedEntry != null ? (long)selectedEntry.TransferData.Transit.Seconds() : 0L);
     }
 
     // Preview and commit must use the same shifted transit.

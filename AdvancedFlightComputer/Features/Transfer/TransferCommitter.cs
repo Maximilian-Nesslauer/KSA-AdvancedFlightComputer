@@ -51,7 +51,14 @@ internal static class TransferCommitter
             return "DEPARTURE NOT ON TRAJECTORY";
         if (!TransferSession.DepartureMatchesBasis(patch, departure))
             return "DEPARTURE ORBIT CHANGED. SOLVE AGAIN.";
-        return HohmannFlybyUI.CreateRefusal(source);
+        string flybyRefusal = HohmannFlybyUI.CreateRefusal(source);
+        if (flybyRefusal.Length > 0)
+            return flybyRefusal;
+        if (HohmannFlybyUI.TryGetArmed(source, out FlybyTargeting.FlybyResult flyby)
+            && !HohmannMultiPassUI.WantsMultiPass
+            && source.FlightPlan.TryFindPatch(flyby.BurnTime) == null)
+            return "FLYBY DEPARTURE NOT ON TRAJECTORY";
+        return "";
     }
 
     public static void Create()

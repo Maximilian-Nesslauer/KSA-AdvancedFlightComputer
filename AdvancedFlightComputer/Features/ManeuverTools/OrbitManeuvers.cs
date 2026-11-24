@@ -137,10 +137,7 @@ internal static class OrbitManeuvers
         double3 vehicleNormal = orbit.GetOrbitNormalCci();
         double3 referenceNormal = GetReferenceNormalCci(orbit, reference);
 
-        double3 nodeDir = double3.Cross(referenceNormal, vehicleNormal).NormalizeOrZero();
-        if (nodeDir.LengthSquared() < 1e-12)
-            // Use CCI +X when the orbit is coplanar because its node line is undefined.
-            nodeDir = new double3(1, 0, 0);
+        double3 nodeDir = ResolveReferenceNodeDirection(referenceNormal, vehicleNormal);
 
         TrueAnomaly anTa = orbit.GetTrueAnomaly(nodeDir);
         TrueAnomaly nodeTa = useDescendingNode
@@ -168,17 +165,24 @@ internal static class OrbitManeuvers
         return new ManeuverResult(dvCci, dvVlf, nodeTime);
     }
 
+    // Returns the ascending node direction, or a unit axis in the orbit plane when the orbit is coplanar with the reference plane.
+    internal static double3 ResolveReferenceNodeDirection(double3 referenceNormal, double3 vehicleNormal)
+    {
+        double3 nodeDir = double3.Cross(referenceNormal, vehicleNormal).NormalizeOrZero();
+        if (nodeDir.LengthSquared() >= 1e-12)
+            return nodeDir;
+        // Project CCI +X (or +Y if nearly aligned with +X) onto the plane orthogonal to the orbit normal so tilted reference planes still get a perpendicular axis and equatorial orbits keep the +X convention.
+        double3 basis = Math.Abs(vehicleNormal.X) < 0.9 ? new double3(1, 0, 0) : new double3(0, 1, 0);
+        return (basis - double3.Dot(basis, vehicleNormal) * vehicleNormal).NormalizeOrZero();
+    }
+
     // An unreachable node has no time.
     public static (TrueAnomaly anTa, TrueAnomaly dnTa, UniverseTime? anTime, UniverseTime? dnTime)
         GetReferenceNodes(Orbit orbit, UniverseTime now, InclinationReference reference)
     {
         double3 vehicleNormal = orbit.GetOrbitNormalCci();
         double3 referenceNormal = GetReferenceNormalCci(orbit, reference);
-        double3 nodeDir = double3.Cross(referenceNormal, vehicleNormal).NormalizeOrZero();
-
-        if (nodeDir.LengthSquared() < 1e-12)
-            // Use the same coplanar node convention as ComputeSetInclination.
-            nodeDir = new double3(1, 0, 0);
+        double3 nodeDir = ResolveReferenceNodeDirection(referenceNormal, vehicleNormal);
 
         TrueAnomaly anTa = orbit.GetTrueAnomaly(nodeDir);
         TrueAnomaly dnTa = new TrueAnomaly((anTa.Value() + Math.PI) % (Math.PI * 2.0));

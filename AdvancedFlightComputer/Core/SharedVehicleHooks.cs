@@ -171,6 +171,8 @@ internal static class SharedVehicleHooks
         RcsExecRegistry.RenameVehicle(oldId, vehicle.Id);
         MultiPassRegistry.RenameVehicle(oldId, vehicle.Id);
         StagingConfig.RenameVehicle(oldId, vehicle.Id);
+        HohmannMultiPassUI.OnVehicleDisposed(oldId);
+        HohmannMultiPassPlanner.OnVehicleDisposed(oldId);
     }
 
     // Vehicle.Dispose() delegates to Dispose(bool), and EVA boarding calls the bool overload directly.

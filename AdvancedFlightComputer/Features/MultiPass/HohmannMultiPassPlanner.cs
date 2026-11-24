@@ -15,6 +15,8 @@ internal static class HohmannMultiPassPlanner
     private const double EarliestPassMarginSec = 30.0;
     // A prior at K = 1 adds no speed and leaves the periapsis direction undefined on a circular orbit.
     private const double KFloor = 1.01;
+    // Multi-pass splitting assumes pass 0 fires near the parking periapsis so later passes share that apse.
+    private const double MaxParkingEccentricity = 0.05;
     private const int TransitScanSteps = 64;
     internal readonly record struct HohmannPlanInput(
         IOrbiter Target,
@@ -109,6 +111,11 @@ internal static class HohmannMultiPassPlanner
         double rp = currentOrbit.Periapsis;
         if (!(rp > 0.0))
             return Fail($"vehicle '{source.Id}': current orbit has non-positive periapsis", PassPlanFailure.Other);
+
+        if (startPassIndex == 0 && totalPassCount > 1 && currentOrbit.Eccentricity > MaxParkingEccentricity)
+            return Fail(string.Format(CultureInfo.InvariantCulture,
+                "vehicle '{0}': multi-pass transfer requires a near-circular parking orbit (e={1:F3} > {2:F2})",
+                source.Id, currentOrbit.Eccentricity, MaxParkingEccentricity), PassPlanFailure.Other);
 
         double tPark = parkingPeriodSec;
 
