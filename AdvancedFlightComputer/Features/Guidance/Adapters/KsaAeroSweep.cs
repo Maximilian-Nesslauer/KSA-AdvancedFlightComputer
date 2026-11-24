@@ -179,8 +179,8 @@ public static class KsaAeroSweep
         public BodyAeroTable SphereBodyMoment;
 
         /// <summary>The body-axis force and moment tables of a set (TableSet).</summary>
-        public BodyAeroTable BodyForceFor(TableSet set) => set switch { TableSet.Nose => NoseBodyAero, TableSet.Belly => BellyBodyAero, _ => BodyAero };
-        public BodyAeroTable BodyMomentFor(TableSet set) => set switch { TableSet.Nose => NoseBodyMoment, TableSet.Belly => BellyBodyMoment, _ => BodyMoment };
+        public BodyAeroTable BodyForceFor(TableSet set) => set switch { TableSet.Nose => NoseBodyAero, TableSet.Belly => BellyBodyAero, TableSet.Sphere => SphereBodyAero, _ => BodyAero };
+        public BodyAeroTable BodyMomentFor(TableSet set) => set switch { TableSet.Nose => NoseBodyMoment, TableSet.Belly => BellyBodyMoment, TableSet.Sphere => SphereBodyMoment, _ => BodyMoment };
 
         /// <summary>
         /// Each control surface's effect (ControlSurfaces), swept like the body table and on its grid: the change its deflection makes to the body-axis force and moment, per deflection swept. Empty for a craft with none, or one swept on an airless body.
@@ -337,8 +337,8 @@ public static class KsaAeroSweep
         public double SweepMillis;
 
         /// <summary>The per-deflection force tables of a set (TableSet).</summary>
-        public BodyAeroTable[] ForceTables(TableSet set) => set switch { TableSet.Nose => NoseForce, TableSet.Belly => BellyForce, _ => Force };
-        public BodyAeroTable[] MomentTables(TableSet set) => set switch { TableSet.Nose => NoseMoment, TableSet.Belly => BellyMoment, _ => Moment };
+        public BodyAeroTable[] ForceTables(TableSet set) => set switch { TableSet.Nose => NoseForce, TableSet.Belly => BellyForce, TableSet.Sphere => SphereForce, _ => Force };
+        public BodyAeroTable[] MomentTables(TableSet set) => set switch { TableSet.Nose => NoseMoment, TableSet.Belly => BellyMoment, TableSet.Sphere => SphereMoment, _ => Moment };
     }
 
     /// <summary>The deflections a surface is swept at: every SurfaceStepDeg out from rest inside its range, its two ends, and rest.</summary>
@@ -373,11 +373,11 @@ public static class KsaAeroSweep
         public string AxisName => Axis.Z < -0.5 ? "-Z" : Axis.Z > 0.5 ? "+Z" : Axis.Y < -0.5 ? "-Y" : "+Y";
     }
 
-    /// <summary>The body-axis tables a reader can fly with: engine first (BodyAero), nose first (NoseBodyAero) or belly first (BellyBodyAero).</summary>
-    public enum TableSet { Tail, Nose, Belly }
+    /// <summary>The body-axis tables a reader can fly with: engine first (BodyAero), nose first (NoseBodyAero), belly first (BellyBodyAero), or every air direction (SphereBodyAero, its angles the sphere's longitude and latitude, BodyAeroTable.SphereAngles).</summary>
+    public enum TableSet { Tail, Nose, Belly, Sphere }
 
     /// <summary>
-    /// THE ONE RULE for which body-axis tables describe the air as it is now: belly first where the sweep has those tables and the air is inside them, else nose first likewise, else engine first likewise. With <paramref name="surfacesToo"/>, a set counts only where every swept surface has it too. False where the air is inside none. <paramref name="u"/> is the craft's velocity through the air in body axes, unit; the angles come back about the chosen set's frame, radians.
+    /// THE ONE RULE for which body-axis tables describe the air as it is now: belly first where the sweep has those tables and the air is inside them, else nose first likewise, else engine first likewise, else the whole sphere where the sweep has it (a belly-flop's: every air direction, coarser). Without the sphere a Starship banked past the belly-first tables' 45 deg had no air moment and no flaps, and tumbled (2026-11-24, twice). With <paramref name="surfacesToo"/>, a set counts only where every swept surface has it too. False where the air is inside none. <paramref name="u"/> is the craft's velocity through the air in body axes, unit; the angles come back about the chosen set's frame, radians.
     /// </summary>
     public static bool TryPickTables(Result aero, double3 u, bool surfacesToo, out TableSet set, out double alphaRad, out double betaRad)
     {
@@ -435,6 +435,14 @@ public static class KsaAeroSweep
                 betaRad = b;
                 return true;
             }
+        }
+        if (aero.SphereBodyAero != null && aero.SphereBodyMoment != null && SurfacesHave(TableSet.Sphere))
+        {
+            BodyAeroTable.SphereAngles(aero.SphereBodyAero.Frame, u.X, u.Y, u.Z, out double lambda, out double mu);
+            set = TableSet.Sphere;
+            alphaRad = lambda;
+            betaRad = mu;
+            return true;
         }
         return false;
     }

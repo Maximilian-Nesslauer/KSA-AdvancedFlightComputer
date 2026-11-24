@@ -98,7 +98,7 @@ public static partial class GuidanceWindow
             BrakingSeed = braking, LongBudgetMs = braking ? BrakingStandbyBudgetMs : 0.0,
         };
         // A standby that takes the craft before ignition plans the coast too, from entry guidance's time to ignition, seeded along entry's plan.
-        guidance.ColdSeedPath = _s.SixDofCoastPending ? EntrySeedPath(now) : null;
+        guidance.ColdSeedPath = _s.SixDofCoastPending ? EntrySeedPath(now) ?? BellyflopSeedPath(now) : null;
         guidance.BeginCold(x, xf, sigmaSeed, _s.SixDofCoastPending ? _s.SixDofCoastSeedS : double.NaN, now);
         _s.Guidance = guidance;
         _s.Worker = new Ksa6DofSolveWorker();

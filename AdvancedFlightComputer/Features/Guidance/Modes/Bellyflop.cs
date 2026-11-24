@@ -6,6 +6,7 @@ using System;
 using System.Threading;
 using AdvancedFlightComputer.Guidance.Scvx.Bellyflop;
 using AdvancedFlightComputer.Guidance.Scvx.OrbitalEntry;
+using AdvancedFlightComputer.Guidance.Numerics.Flight;
 using Brutal.Numerics;
 using KSA;
 
@@ -189,6 +190,7 @@ public static partial class GuidanceWindow
         {
             bf.Worker ??= new Ksa3DofWorker();
             BellyflopConfig cfg = BellyflopConfigNow();
+            LimitBellyflopBankToRollTrim(vehicle, st, cfg, mach, aNow);
             // A run of refusals means the warm start no longer leads anywhere from the real state (2026-11-23: 40 in a row, each seeded from the same stale plan): start cold.
             bool cold = bf.RefusedInRow >= BellyflopColdAfterRefusals;
             BellyflopPlan warm = cold ? null : bf.Plan ?? bf.Warm;
@@ -236,8 +238,136 @@ public static partial class GuidanceWindow
     /// <summary>Natural frequency of the critically damped filter on bellyflop's commanded angles, rad/s (BellyflopAttitude): a step settles in about 2 s, and a turn the plan starts at 7 deg/s asks at most about 5 deg/s^2, inside what the flaps spare at Mach 5.</summary>
     private const double BellyflopCommandOmega = 2.0;
 
+    /// <summary>
+    /// THE BANK THE FLAPS CAN HOLD. Bellyflop's bank is the airflow's sideslip on the belly, and the air rolls the craft harder the more of it there is; past a bank the flaps cannot hold that roll, and the attitude is held on the RCS or not at all. A Starship banked to 48 deg 10 km up, its flaps at their stops against 480 kN m of roll and the RCS firing at 98 kg/s; the RCS ran dry, the bank passed the belly-first tables' 45 deg, and it tumbled (2026-11-24). So each plan's bank limit is held to the largest bank, either way, at which the flaps can hold the body's rolling moment with RollTrimShare of their reach, read off the belly-first tables at the Mach and pitch flown now: the same tables and rule the entry trims its pitch on (RetrimWithFlaps), on the roll axis. Never under BankHoldFloorDeg; unchanged where the tables have no flaps.
+    /// </summary>
+    private static void LimitBellyflopBankToRollTrim(Vehicle vehicle, OrbitalEntryState st, BellyflopConfig cfg, double mach, double pitchRad)
+    {
+        var bf = st.Bellyflop;
+        double hold = BellyflopRollTrimBankDeg(st.Aero, mach, pitchRad);
+        if (!double.IsFinite(hold))
+            return;
+        double limit = Math.Clamp(hold, BankHoldFloorDeg, cfg.BankMaxDeg);
+        if (!double.IsFinite(bf.BankHoldDeg) || Math.Abs(limit - bf.BankHoldDeg) >= 5.0)
+        {
+            GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                $"Bellyflop: the flaps hold the roll to {hold:F1} deg of bank at Mach {mach:F2}, pitch {pitchRad * 180.0 / Math.PI:F0} deg; plans bank to {limit:F1} (BELLYFLOP BANK {cfg.BankMaxDeg:F0})."));
+            bf.BankHoldDeg = limit;
+        }
+        cfg.BankMaxDeg = limit;
+    }
+
+    /// <summary>The largest bank, deg, at which the flaps hold the body's rolling moment both ways with RollTrimShare of their reach (belly-first tables, BankHoldStepDeg apart); NaN without flap tables.</summary>
+    internal static double BellyflopRollTrimBankDeg(KsaAeroSweep.Result aero, double mach, double pitchRad)
+    {
+        BodyAeroTable body = aero?.BellyBodyMoment;
+        var surfaces = aero?.Surfaces;
+        if (body == null || surfaces == null || surfaces.Length == 0)
+            return double.NaN;
+        foreach (var t in surfaces)
+            if (t.BellyMoment.Length != t.DeflectionDeg.Length || t.BellyMoment.Length == 0)
+                return double.NaN;
+        const double deg = Math.PI / 180.0;
+        double m = Math.Clamp(mach, body.MachMin, body.MachMax);
+        double a = Math.Clamp(pitchRad, KsaAeroSweep.BellyAlphaTableMinDeg * deg, KsaAeroSweep.BellyAlphaTableMaxDeg * deg);
+        double held = 0.0;
+        for (double b = BankHoldStepDeg; b <= KsaAeroSweep.BellyBetaTableMaxDeg + 1e-9; b += BankHoldStepDeg)
+        {
+            foreach (double sign in new[] { 1.0, -1.0 })
+            {
+                double beta = sign * b * deg;
+                body.Coefficients(m, a, beta, out double roll, out _, out _);
+                double down = 0.0, up = 0.0;
+                foreach (var t in surfaces)
+                {
+                    double lo = 0.0, hi = 0.0;
+                    foreach (BodyAeroTable table in t.BellyMoment)
+                    {
+                        table.Coefficients(m, a, beta, out double r, out _, out _);
+                        lo = Math.Min(lo, r);
+                        hi = Math.Max(hi, r);
+                    }
+                    down += lo;
+                    up += hi;
+                }
+                // Held: the flaps' share of their reach brings the body's roll to zero.
+                if (!(roll + RollTrimShare * down <= 0.0 && 0.0 <= roll + RollTrimShare * up))
+                    return held;
+            }
+            held = b;
+        }
+        return held;
+    }
+
+    /// <summary>The share of the flaps' rolling reach a plan's bank may use (LimitBellyflopBankToRollTrim): the rest is for the pitch they trim at the same time and for the attitude feedback.</summary>
+    private const double RollTrimShare = 0.6;
+    private const double BankHoldStepDeg = 2.5;
+    private const double BankHoldFloorDeg = 5.0;
+
     /// <summary>The flip's share of touchdown's burn-time seed, s: 90 deg at about 15 deg/s.</summary>
     private const double BellyflopFlipSeedS = 6.0;
+
+    /// <summary>
+    /// Bellyflop's plan as a path for touchdown guidance's cold seed (ColdSeed6Dof.BuildAlongPath), as the glide's is (EntrySeedPath): the coast from now to the ignition touchdown seeds (SixDofCoastSeedS) along bellyflop's plan, its position and velocity in the site frame and its nose as the body z axis wanted, so touchdown's coast holds the attitude bellyflop flies; the burn a straight braking burn from the coast's end, thrust against the velocity, slowing evenly to rest over the burn's seed, which the seed's own end correction lays onto the target. Without it touchdown planned a coast of its own, belly first but wandering 60 to 106 deg off vertical; while bellyflop flew the craft every standby re-solve was refused on the attitude at its first node, and the standby never had a plan when the hand-over came due (harness, Starship, 2026-11-24). Null while bellyflop has no plan. The plan and model are immutable, so the worker can sample them.
+    /// </summary>
+    internal static AdvancedFlightComputer.Guidance.Scvx.SixDof.SeedPath BellyflopSeedPath(double now)
+    {
+        var st = _s.OrbitalEntry;
+        var bf = st.Bellyflop;
+        BellyflopPlan plan = bf.Plan;
+        BellyflopModel model = bf.Model;
+        if (st.Phase != OrbitalEntryPhase.Bellyflop || plan == null || model == null)
+            return null;
+        double coast = Math.Max(_s.SixDofCoastSeedS, 0.0);
+        double burn = Math.Max(_s.SixDofEntrySigmaSeed, SixDofStandbyMinSeedS);
+        double d = BellyflopAimShortM();
+        double3 bearing = bf.BearingLocal;
+        double ignitionTime = Math.Min(now + coast, plan.EndTime);
+        // The plan's states are about its aim point, BELLYFLOP AIM SHORT short of the site along the bearing: back to the site.
+        void Sample(double t, Span<double> x)
+        {
+            plan.StateAt(Math.Clamp(t, plan.StartTime, plan.EndTime), x);
+            x[0] -= d * bearing.X;
+            x[1] -= d * bearing.Y;
+        }
+        var xi = new double[6];
+        Sample(ignitionTime, xi);
+        double vi = Math.Sqrt(xi[3] * xi[3] + xi[4] * xi[4] + xi[5] * xi[5]);
+        return (int phase, double f, Span<double> rv, Span<double> axis, out double thrustN) =>
+        {
+            thrustN = 0.0;
+            if (phase == 0)
+            {
+                Span<double> x = stackalloc double[6];
+                double t = now + f * coast;
+                Sample(t, x);
+                x.CopyTo(rv);
+                var (a, b, p) = plan.ControlAt(Math.Min(t, plan.EndTime));
+                Span<double> xa = stackalloc double[6];
+                plan.StateAt(Math.Clamp(t, plan.StartTime, plan.EndTime), xa);
+                if (!model.Axes(xa, a, b, p, out V3 nose, out _, out _, out _))
+                    return false;
+                axis[0] = nose.X; axis[1] = nose.Y; axis[2] = nose.Z;
+                return true;
+            }
+            // The braking burn: v(f) = v_i (1 - f), r(f) = r_i + v_i burn (f - f^2 / 2), the thrust against the velocity.
+            double g = 1.0 - f, s = burn * (f - 0.5 * f * f);
+            for (int i = 0; i < 3; i++)
+            {
+                rv[i] = xi[i] + xi[3 + i] * s;
+                rv[3 + i] = xi[3 + i] * g;
+            }
+            if (vi > 1e-3)
+                for (int i = 0; i < 3; i++) axis[i] = -xi[3 + i] / vi;
+            else
+            {
+                axis[0] = 0; axis[1] = 0; axis[2] = 1;
+            }
+            // Per unit of mass: the builder clamps it into the engines' range and corrects it for the end; the craft's weight and the braking.
+            thrustN = Math.Max(model.Mass, 1.0) * (vi / burn + 9.81);
+            return true;
+        };
+    }
 
     /// <summary>Share of the engines' full thrust the burn-time seed assumes on average, less gravity.</summary>
     private const double BellyflopBurnSeedThrottle = 0.7;
@@ -281,8 +411,14 @@ public static partial class GuidanceWindow
         }
         _s.SixDofCoastSeedS = coast;
         StepSixDofStandby(vehicle, parent, siteCci, x14, now, burn);
-        if (bf.TouchdownHandoff == null && SixDofStandbyReady(now))
-            bf.TouchdownHandoff = FormattableString.Invariant($"HANDOVER FROM BELLYFLOP: TOUCHDOWN AT {x14[2]:F0} m, {plan.EndTime - now:F0} s FROM BELLYFLOP'S GROUND.");
+        // DUE SHORTLY BEFORE TOUCHDOWN'S IGNITION, as the glide's hand-over is (StepEntryTouchdownOwn): THREE-DOF TAKEOVER BEFORE IGNITION before the ignition touchdown's plan has now, or THREE-DOF TAKEOVER BEFORE IMPACT before bellyflop's ground, whichever is earlier. Bellyflop flies the belly-first coast; touchdown, re-solving on standby from the craft as bellyflop flies it, takes the flip and the burn. Handed the craft at its first plan, 27 s before ignition, touchdown did not hold it belly first: it lost its drag, fell from 52 to 99 m/s, every re-solve was refused on the turn rates it had not planned, and it lit on the old plan's clock at 152 m (harness, Starship, 2026-11-24). Bellyflop had it 16 m off the site at 100 m.
+        if (bf.TouchdownHandoff == null && SixDofStandbyReady(now) && _s.Guidance?.Published is { } td)
+        {
+            double ignition = td.HasCoast ? td.IgnitionTime : now;
+            double due = Math.Min(ignition - Math.Max(_s.ThreeDofTakeoverBeforeIgnitionS, 0.0), plan.EndTime - Math.Max(_s.ThreeDofTakeoverBeforeImpactS, 0.0));
+            if (now >= due)
+                bf.TouchdownHandoff = FormattableString.Invariant($"HANDOVER FROM BELLYFLOP: TOUCHDOWN AT {x14[2]:F0} m, IGNITION IN {ignition - now:F1} s, {plan.EndTime - now:F0} s FROM BELLYFLOP'S GROUND.");
+        }
     }
 
     /// <summary>

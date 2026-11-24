@@ -2182,7 +2182,7 @@ public static partial class GuidanceWindow
         if (_s.SixDofSpreadCold && !_s.SixDofFixedTime && !_s.SixDofGfoldSeed)
         {
             _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
-            _s.Guidance.ColdSeedPath = _s.SixDofCoastPending ? EntrySeedPath(now) : null;
+            _s.Guidance.ColdSeedPath = _s.SixDofCoastPending ? EntrySeedPath(now) ?? BellyflopSeedPath(now) : null;
             _s.Guidance.BeginCold(x, xf, _s.SixDofEntrySigmaSeed, _s.SixDofCoastPending ? _s.SixDofCoastSeedS : double.NaN, now);
             _s.Converging = true;
             _s.Worker = _s.SixDofThreaded ? new Ksa6DofSolveWorker() : null;
