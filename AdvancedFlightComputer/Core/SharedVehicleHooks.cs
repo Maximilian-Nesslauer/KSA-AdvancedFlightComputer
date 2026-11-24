@@ -2,10 +2,13 @@ using AdvancedFlightComputer.Features.AutoRemove;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.Guidance;
+using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.Features.RcsTorque;
 using AdvancedFlightComputer.Features.RcsTranslation;
+using AdvancedFlightComputer.Features.Transfer;
 using AdvancedFlightComputer.Features.Ui.Console;
+using AdvancedFlightComputer.Features.Ui.Console.Pages;
 using HarmonyLib;
 using KSA;
 
@@ -118,6 +121,11 @@ internal static class SharedVehicleHooks
         // Vehicle.Dispose leaves the part graph intact. Clear caches that can keep it reachable.
         PlannedBurnPhases.OnVehicleDisposed(vehicle);
         FlybyCourse.OnVehicleDisposed(vehicle);
+        TransferSession.OnVehicleDisposed(vehicle);
+        TransferFlownPlan.OnVehicleDisposed(vehicle);
+        OrbitToolsPanel.OnVehicleDisposed(vehicle);
+        RcsPage.OnVehicleDisposed(vehicle);
+        ConsoleHead.OnVehicleDisposed(vehicle);
         MultiPassPreviewCache.OnVehicleDisposed(vehicle);
         HohmannMultiPassUI.OnVehicleDisposed(vehicle.Id);
         HohmannMultiPassPlanner.OnVehicleDisposed(vehicle.Id);

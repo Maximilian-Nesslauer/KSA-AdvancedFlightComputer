@@ -109,11 +109,10 @@ public sealed class ScsWorkspace : IScvxConicWorkspace
     public static long TotalCalls, TotalAdmmIterations;
 
     /// <summary>
-    /// Per-solve wall clock, for percentiles. The MEAN is the wrong statistic for a
-    /// real-time loop: a hitch is what the player sees, and a mean of 80 ms could be
-    /// almost every solve at 5 ms plus a handful at two seconds. Those two
-    /// distributions need completely different fixes, so measure the tail directly.
+    /// Bounded ring buffer of recent per-solve wall clocks (ms), for tail percentiles without unbounded session growth.
     /// </summary>
+    private const int MaxSolveSamples = 1024;
+    private static int _solveSampleNext;
     public static readonly List<double> SolveMsSamples = [];
 
     public static void ResetTimers()
@@ -123,6 +122,7 @@ public sealed class ScsWorkspace : IScvxConicWorkspace
             TotalInitMs = TotalSolveMs = TotalFinishMs = 0;
             TotalCalls = TotalAdmmIterations = 0;
             SolveMsSamples.Clear();
+            _solveSampleNext = 0;
         }
     }
 
@@ -300,7 +300,14 @@ public sealed class ScsWorkspace : IScvxConicWorkspace
                     TotalFinishMs += LastFinishMs;
                     TotalCalls++;
                     TotalAdmmIterations += Iterations;
-                    SolveMsSamples.Add(LastInitMs + LastSolveMs + LastFinishMs);
+                    double totalMs = LastInitMs + LastSolveMs + LastFinishMs;
+                    if (SolveMsSamples.Count < MaxSolveSamples)
+                        SolveMsSamples.Add(totalMs);
+                    else
+                    {
+                        SolveMsSamples[_solveSampleNext] = totalMs;
+                        _solveSampleNext = (_solveSampleNext + 1) % MaxSolveSamples;
+                    }
                 }
             }
         }
