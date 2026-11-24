@@ -436,7 +436,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         for (int k = 0; k < _n - 1; k++)
             for (int i = 0; i < NX; i++)
             {
-                double vs = _cfg.VirtualControlScaleOf(i);
+                double vs = _cfg.VirtualControlScaleOf(i, k);
                 double w = _cfg.RhoVc / (vs * vs);
                 AddP(IW(k, i), IW(k, i), 2.0 * w);
             }

@@ -60,6 +60,16 @@ public sealed class Scvx6DofConfig
     public double VirtualControlScaleOf(int i)
         => VirtualControlScale is { } s && i < s.Length && s[i] > 0.0 ? s[i] : XScale[i];
 
+    /// <summary>
+    /// THE NEAR-TERM PRICE: the first <see cref="VirtualControlNearIntervals"/> intervals priced on this scale instead (NX long, null or entries of 0 or less for none), so the intervals about to be flown, which the flight's gate holds to its tolerance in full, are priced as tight as it is, whatever <see cref="VirtualControlScale"/> is for the rest. SETTABLE as VirtualControlScale is, through Scvx6DofSolver.SetVirtualControlScale.
+    /// </summary>
+    public double[]? VirtualControlNearScale { get; set; }
+    public int VirtualControlNearIntervals { get; set; }
+
+    /// <summary>The scale channel <paramref name="i"/>'s virtual control is priced on over interval <paramref name="k"/>: the near-term price on the first VirtualControlNearIntervals, VirtualControlScaleOf after.</summary>
+    public double VirtualControlScaleOf(int i, int k)
+        => k < VirtualControlNearIntervals && VirtualControlNearScale is { } s && i < s.Length && s[i] > 0.0 ? s[i] : VirtualControlScaleOf(i);
+
     public double WDu { get; init; } = 0.2;                     // control-rate smoothing
 
     /// <summary>
