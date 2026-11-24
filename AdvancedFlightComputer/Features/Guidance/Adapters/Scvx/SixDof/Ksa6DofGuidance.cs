@@ -199,6 +199,13 @@ public sealed class Ksa6DofGuidance : IDisposable
         if (inputs.Ixx > 0.0) _dyn.Ixx = inputs.Ixx;
         if (_dyn.BodyAero != null && inputs.MomentLimiterPerPa >= 0.0 && double.IsFinite(inputs.MomentLimiterPerPa))
             _dyn.BodyAero.MomentLimiterPerPa = inputs.MomentLimiterPerPa;
+        // The air moment's measured error (SixDof's moment-error integrator), as the force's is AccelBias.
+        if (_dyn.BodyAero != null && double.IsFinite(inputs.MomentBiasPerPa.X) && double.IsFinite(inputs.MomentBiasPerPa.Y) && double.IsFinite(inputs.MomentBiasPerPa.Z))
+        {
+            _dyn.BodyAero.MomentBiasXPerPa = inputs.MomentBiasPerPa.X;
+            _dyn.BodyAero.MomentBiasYPerPa = inputs.MomentBiasPerPa.Y;
+            _dyn.BodyAero.MomentBiasZPerPa = inputs.MomentBiasPerPa.Z;
+        }
         if (inputs.Iyy > 0.0) _dyn.Iyy = inputs.Iyy;
         if (inputs.Izz > 0.0) _dyn.Izz = inputs.Izz;
 
@@ -236,6 +243,9 @@ public sealed class Ksa6DofGuidance : IDisposable
         double m = x[Dynamics6Dof.IM];
         return new double3(fx / m, fy / m, fz / m);
     }
+
+    /// <summary>The air moment's error the model holds now, per pascal, model body axes (BodyAero6Dof.MomentBias*PerPa): what its wrench already carries.</summary>
+    public double3 ModelMomentBiasPerPa => _dyn.BodyAero is { } b ? new double3(b.MomentBiasXPerPa, b.MomentBiasYPerPa, b.MomentBiasZPerPa) : default;
 
     /// <summary>The model's aerodynamic wrench at state x with the fins at <paramref name="finDeg"/> (Dynamics6Dof.AeroWrenchAt): force site frame, N, then moment model body axes, N m. False with no aero model.</summary>
     public bool ModelAeroWrench(double[] x, ReadOnlySpan<double> finDeg, Span<double> wrench)

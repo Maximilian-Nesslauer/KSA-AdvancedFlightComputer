@@ -178,6 +178,10 @@ public static class KsaAeroSweep
         public BodyAeroTable SphereBodyAero;
         public BodyAeroTable SphereBodyMoment;
 
+        /// <summary>The same on the flip band's finer grid (BandLambdaDeg, BandMuDeg; the whole sphere's frame): what touchdown guidance flies a belly-flop's flip with between its engine-first and belly-first tables. Swept with them, null otherwise.</summary>
+        public BodyAeroTable BandBodyAero;
+        public BodyAeroTable BandBodyMoment;
+
         /// <summary>The body-axis force and moment tables of a set (TableSet).</summary>
         public BodyAeroTable BodyForceFor(TableSet set) => set switch { TableSet.Nose => NoseBodyAero, TableSet.Belly => BellyBodyAero, TableSet.Sphere => SphereBodyAero, _ => BodyAero };
         public BodyAeroTable BodyMomentFor(TableSet set) => set switch { TableSet.Nose => NoseBodyMoment, TableSet.Belly => BellyBodyMoment, TableSet.Sphere => SphereBodyMoment, _ => BodyMoment };
@@ -334,6 +338,9 @@ public static class KsaAeroSweep
         /// <summary>The same over every air direction (Result.SphereBodyAero's frame), on the coarser FinSphereLambdaDeg and FinSphereMuDeg grid, per deflection; empty where the sweep had no whole-sphere pass.</summary>
         public BodyAeroTable[] SphereForce = [];
         public BodyAeroTable[] SphereMoment = [];
+        /// <summary>The same on the flip band (Result.BandBodyAero's grid), per deflection; empty where the sweep had no band.</summary>
+        public BodyAeroTable[] BandForce = [];
+        public BodyAeroTable[] BandMoment = [];
         public double SweepMillis;
 
         /// <summary>The per-deflection force tables of a set (TableSet).</summary>
@@ -457,6 +464,12 @@ public static class KsaAeroSweep
     public static readonly double[] SphereMuDeg = Grid(-90.0, 90.0, 15.0);
     public static readonly double[] FinSphereLambdaDeg = Grid(-240.0, 240.0, 30.0);
     public static readonly double[] FinSphereMuDeg = Grid(-90.0, 90.0, 30.0);
+
+    /// <summary>
+    /// THE FLIP BAND's grids, degrees, about the whole sphere's frame (SphereFrame: 0 engine first, 90 belly first): the longitude every 5 deg from 15 past engine first to 10 past belly first, the latitude every 7.5 deg to 45 either side, for the body and each control surface alike (Result.BandBodyAero, SurfaceTable.BandForce): 24 x 13 directions a Mach row. Between the engine-first table's 20 deg and the belly-first table's 20 deg towards the engine (70 here) a belly-flopper's flip had only the whole sphere, 15 deg a node for the body and 30 for the flaps; mid-flip the Starship's flaps gave a third of what those said, and it fell 21 deg behind its plan (2026-11-24).
+    /// </summary>
+    public static readonly double[] BandLambdaDeg = Grid(-15.0, 100.0, 5.0);
+    public static readonly double[] BandMuDeg = Grid(-45.0, 45.0, 7.5);
 
     private static double[] Grid(double from, double to, double step)
     {
@@ -986,6 +999,14 @@ public static class KsaAeroSweep
             sphereMoments = new double[sphereCoefficients.Length];
             FlySphere(SphereLambdaDeg, SphereMuDeg, sphereFrame, sphereCoefficients, sphereMoments);
         }
+        // THE FLIP BAND, finer, between the engine-first and belly-first tables (BandLambdaDeg).
+        double[] bandCoefficients = null, bandMoments = null, bandRest = null, bandRestMoments = null;
+        if (bellySide >= 0)
+        {
+            bandCoefficients = new double[nbm * BandLambdaDeg.Length * BandMuDeg.Length * 3];
+            bandMoments = new double[bandCoefficients.Length];
+            FlySphere(BandLambdaDeg, BandMuDeg, sphereFrame, bandCoefficients, bandMoments);
+        }
         // BELLY FIRST, for an orbital entry: per candidate belly axis b (body axes, square to x), the air at angle of attack a comes from cos(a) x + sin(a) b, so 0 is nose-first and 90 is belly-first. Drag is along that direction, lift along sin(a) x - cos(a) b, and the pitch moment about b x x, positive when it raises a.
         if (p.BellyFirst)
         {
@@ -1157,6 +1178,11 @@ public static class KsaAeroSweep
                 res.SphereBodyAero = new BodyAeroTable(bodyMach, SphereLambdaDeg, SphereMuDeg, sphereCoefficients, sphereFrame, sphere: true);
                 res.SphereBodyMoment = momentLength > 0.0 ? new BodyAeroTable(bodyMach, SphereLambdaDeg, SphereMuDeg, sphereMoments, sphereFrame, sphere: true) : null;
             }
+            if (bandCoefficients != null)
+            {
+                res.BandBodyAero = new BodyAeroTable(bodyMach, BandLambdaDeg, BandMuDeg, bandCoefficients, sphereFrame, sphere: true);
+                res.BandBodyMoment = momentLength > 0.0 ? new BodyAeroTable(bodyMach, BandLambdaDeg, BandMuDeg, bandMoments, sphereFrame, sphere: true) : null;
+            }
         }
         catch (Exception ex)
         {
@@ -1209,6 +1235,32 @@ public static class KsaAeroSweep
                 var bellyMomentTables = bellySide >= 0 ? new BodyAeroTable[grid.Length] : [];
                 var sphereForceTables = bellySide >= 0 ? new BodyAeroTable[grid.Length] : [];
                 var sphereMomentTables = bellySide >= 0 ? new BodyAeroTable[grid.Length] : [];
+                var bandForceTables = bellySide >= 0 ? new BodyAeroTable[grid.Length] : [];
+                var bandMomentTables = bellySide >= 0 ? new BodyAeroTable[grid.Length] : [];
+                // The body at rest on the band's grid, once for all the surfaces, before any is turned.
+                if (bellySide >= 0 && bandRest == null)
+                {
+                    bandRest = new double[nbm * BandLambdaDeg.Length * BandMuDeg.Length * 3];
+                    bandRestMoments = new double[bandRest.Length];
+                    FlySphere(BandLambdaDeg, BandMuDeg, sphereFrame, bandRest, bandRestMoments);
+                }
+                void DeltaBand(int d)
+                {
+                    int n3 = bandRest.Length;
+                    var df = new double[n3];
+                    var dm = new double[n3];
+                    if (grid[d] != 0.0)
+                    {
+                        FlySphere(BandLambdaDeg, BandMuDeg, sphereFrame, df, dm);
+                        for (int k = 0; k < n3; k++)
+                        {
+                            df[k] -= bandRest[k];
+                            dm[k] -= bandRestMoments[k];
+                        }
+                    }
+                    bandForceTables[d] = new BodyAeroTable(bodyMach, BandLambdaDeg, BandMuDeg, df, sphereFrame, sphere: true);
+                    bandMomentTables[d] = new BodyAeroTable(bodyMach, BandLambdaDeg, BandMuDeg, dm, sphereFrame, sphere: true);
+                }
                 // The body at rest on the fins' coarser sphere, once for all the surfaces, before any is turned.
                 if (bellySide >= 0 && finSphereRest == null)
                 {
@@ -1266,6 +1318,7 @@ public static class KsaAeroSweep
                         {
                             DeltaFrame(BellyAlphaTableDeg, BellyBetaTableDeg, bellyFrame, bellyCoefficients, bellyMoments, d, bellyForceTables, bellyMomentTables);
                             DeltaSphere(d);
+                            DeltaBand(d);
                         }
                     }
                 }
@@ -1280,6 +1333,7 @@ public static class KsaAeroSweep
                     NoseForce = noseForceTables, NoseMoment = noseMomentTables,
                     BellyForce = bellyForceTables, BellyMoment = bellyMomentTables,
                     SphereForce = sphereForceTables, SphereMoment = sphereMomentTables,
+                    BandForce = bandForceTables, BandMoment = bandMomentTables,
                     SweepMillis = surfaceClock.Elapsed.TotalMilliseconds,
                 };
                 surfaceTables.Add(table);

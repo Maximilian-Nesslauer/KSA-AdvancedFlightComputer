@@ -166,7 +166,7 @@ $scvxBase = @(
     "--runtime", $RuntimeIdentifier,
     "--"
 )
-foreach ($command in @("--fd", "--aero", "--impact", "--clarabel-workspace", "--sub-scs", "--loop", "--ascent", "--ascent-glimit", "--ascent-qceiling", "--cold-shift", "--hermite", "--slope", "--3dof", "--3dof-model", "--3dof-ksa", "--orbital-entry")) {
+foreach ($command in @("--fd", "--aero", "--impact", "--clarabel-workspace", "--sub-scs", "--loop", "--ascent", "--ascent-glimit", "--ascent-qceiling", "--cold-shift", "--hermite", "--slope", "--3dof", "--3dof-model", "--3dof-ksa", "--orbital-entry", "--6dof-blend")) {
     Invoke-Checked -FilePath "dotnet" -ArgumentList ($scvxBase + $command) -FailureMessage "The Scvx $command check failed."
 }
 

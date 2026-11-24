@@ -345,7 +345,8 @@ public static partial class GuidanceWindow
 
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
         UpdateMomentLimiter(vehicle, now);
-        _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz).WithMomentLimiter(_s.MomentLimiterPerPa);
+        _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz).WithMomentLimiter(_s.MomentLimiterPerPa)
+            .WithMomentBias(_s.SixDofStandbyPredicted ? _s.MomentBiasPerPa : UpdateMomentBias(vehicle, x, now));
         if (!_s.SixDofStandbyPredicted)
             LogAeroCheck(vehicle, x, now, "standby");
         // Back to back, not on the flying cadence: the craft is not following this plan, so the solve has to keep moving to keep up.

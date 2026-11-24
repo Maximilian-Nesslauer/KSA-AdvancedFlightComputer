@@ -439,6 +439,11 @@ public static class Ksa6DofSetup
                         // Over every air direction too, where the sweep had a whole-sphere pass and the body has one to match.
                         SphereForce = aero.SphereBodyAero != null && table.SphereForce.Length == table.DeflectionDeg.Length ? table.SphereForce : [],
                         SphereMoment = aero.SphereBodyAero != null && table.SphereMoment.Length == table.DeflectionDeg.Length ? table.SphereMoment : [],
+                        // Belly first and on the flip band too, where the body has them to match (BodyAero6Dof.BellyForce, BandForce).
+                        BellyForce = aero.BellyBodyAero != null && table.BellyForce.Length == table.DeflectionDeg.Length ? table.BellyForce : [],
+                        BellyMoment = aero.BellyBodyAero != null && table.BellyMoment.Length == table.DeflectionDeg.Length ? table.BellyMoment : [],
+                        BandForce = aero.BandBodyAero != null && table.BandForce.Length == table.DeflectionDeg.Length ? table.BandForce : [],
+                        BandMoment = aero.BandBodyAero != null && table.BandMoment.Length == table.DeflectionDeg.Length ? table.BandMoment : [],
                         MinDeg = surface.MinDeg,
                         MaxDeg = surface.MaxDeg,
                         RateDegS = surface.RateDegS,
@@ -469,6 +474,11 @@ public static class Ksa6DofSetup
             // Every air direction past the engine-first table's fade, where the sweep flew the whole sphere (a belly-flop's tables): the flip.
             SphereForce = aero.SphereBodyAero,
             SphereMoment = aero.SphereBodyMoment,
+            // A belly-flopper's belly-first tables and the flip band between them and engine first, read before the whole sphere.
+            BellyForce = aero.BellyBodyAero,
+            BellyMoment = aero.BellyBodyMoment,
+            BandForce = aero.BandBodyAero,
+            BandMoment = aero.BandBodyMoment,
             ReferenceArea = aero.ReferenceArea,
             ReferenceLength = aero.ReferenceLength,
             ModelToTable = [mx.X, my.X, mz.X, mx.Y, my.Y, mz.Y, mx.Z, my.Z, mz.Z],

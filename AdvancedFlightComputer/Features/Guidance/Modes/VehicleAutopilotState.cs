@@ -1074,6 +1074,9 @@ public sealed class VehicleAutopilotState
     internal double MomentLimiterPerPa, MomentLimiterDivisor = double.NaN, MomentLimiterAt = double.NegativeInfinity;
     /// <summary>When the AERO CHECK was last logged (SixDof.LogAeroCheck).</summary>
     internal double AeroCheckAt = double.NegativeInfinity;
+    /// <summary>The air moment's measured error per pascal, model body axes, N m/Pa, and when it was last updated (SixDof.UpdateMomentBias).</summary>
+    internal double3 MomentBiasPerPa;
+    internal double MomentBiasAt = double.NegativeInfinity;
 
     /// <summary>The body rates at the last entry log row, assembly axes, rad/s, for the three-axis balance.</summary>
     internal Brutal.Numerics.double3? RollMonitorPrevW;
