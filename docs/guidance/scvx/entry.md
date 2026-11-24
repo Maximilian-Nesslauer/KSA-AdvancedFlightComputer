@@ -180,7 +180,7 @@ Above a finite weight, an L1 slack is zero whenever the target can be reached. I
 
 | Constraint | Continuous form | In the subproblem | Code |
 |---|---|---|---|
-| Dynamics | $\dot{\mathbf x} = \sigma\,\mathbf f(\mathbf x,\mathbf u)$ per phase | Linearised, trapezoidal, virtual control $\mathbf w_k$ | `AssembleEqualities` |
+| Dynamics | $\dot{\mathbf x} = \sigma\,\mathbf f(\mathbf x,\mathbf u)$ per phase | Linearised, trapezoidal, virtual control $\boldsymbol\nu_k$ | `AssembleEqualities` |
 | Unit attitude | $\lVert\mathbf b\rVert = 1$ | Tangent plane $\bar{\mathbf b}_k\cdot\mathbf b_k = 1$, re-projected on accept; hard | `AssembleEqualities` |
 | Engine off in glide | $\kappa = 0$ for $t<\sigma_G$ | Equality; hard | `AssembleEqualities` |
 | Throttle floor and ceiling | $\kappa_{\min}\le\kappa\le\kappa_{\max}$ in burn | Convex box as-is; hard | `AssembleCone` |
@@ -206,12 +206,12 @@ There is **no** heating, load-factor, dynamic-pressure or glide-slope constraint
 ### Dynamics
 
 $$
-\mathbf x_{k+1} = \mathbf x_k + \frac{\Delta\tau}{2}\big(\mathbf g_k + \mathbf g_{k+1}\big) + \mathbf w_k,
+\mathbf x_{k+1} = \mathbf x_k + \frac{\Delta\tau}{2}\big(\mathbf g_k + \mathbf g_{k+1}\big) + \boldsymbol\nu_k,
 \qquad
 \mathbf g_k = \sigma\,\bar{\mathbf f}_k + \bar\sigma\big(A_k(\mathbf x_k-\bar{\mathbf x}_k) + B_k(\mathbf u_k-\bar{\mathbf u}_k)\big),
 $$
 
-in each phase's own $\sigma$ and $\Delta\tau$. Here $A_k$ and $B_k$ are the Jacobians at the reference, computed with forward-mode dual numbers. $\sigma$ enters linearly with the coefficient $\bar{\mathbf f}$, so freeing the durations needs no extra Jacobian. $\mathbf w_k$ is the [virtual control](index.md#virtual-control). See [linearisation](index.md#linearisation) and [discretisation](index.md#discretisation).
+in each phase's own $\sigma$ and $\Delta\tau$. Here $A_k$ and $B_k$ are the Jacobians at the reference, computed with forward-mode dual numbers. $\sigma$ enters linearly with the coefficient $\bar{\mathbf f}$, so freeing the durations needs no extra Jacobian. $\boldsymbol\nu_k$ is the [virtual control](index.md#virtual-control). See [linearisation](index.md#linearisation) and [discretisation](index.md#discretisation).
 
 ### Unit attitude
 
@@ -365,7 +365,7 @@ $$
 J ={}& \frac{m_0 - m_{N-1}}{m_0}
 + w_\kappa\sum_{k=K}^{N-2}\big(\kappa_{k+1}-\kappa_k\big)^2
 + w_b\sum_{k=0}^{N-2}\lVert\mathbf b_{k+1}-\mathbf b_k\rVert^2 \\
-&+ \rho_{vc}\sum_{k=0}^{N-2}\big\lVert\mathbf w_k\oslash\mathbf x_{\text{scale}}\big\rVert^2
+&+ \rho_{vc}\sum_{k=0}^{N-2}\big\lVert\boldsymbol\nu_k\oslash\mathbf x_{\text{scale}}\big\rVert^2
 + w_r\,\mathbf 1^\top\!\big(\mathbf s^+_r+\mathbf s^-_r\big)\oslash\mathbf x_{\text{scale},r}
 + w_v\,\mathbf 1^\top\!\big(\mathbf s^+_v+\mathbf s^-_v\big)\oslash\mathbf x_{\text{scale},v}
 + w_{\text{path}}\sum s_{\text{path}} .
@@ -408,7 +408,7 @@ These are this solver's settings for the [common machinery](index.md), and the t
 
 **The ignition lock.** At 2.5 s to ignition (`LockSeconds`), the ignition time is committed and the two-phase plan is flown open loop up to it. The burn-only problem is seeded from that plan's burn and gets 12 iterations for its first solve (`SwapIterations`). Until it has its own plan, the old plan's burn, re-timed to the committed ignition, is published in its place, so there is never a moment without a plan. The anchor and the turn-rate anchor are those of the locked plan at ignition. At ignition the prediction horizon is zero and node 0 becomes the measured state, so nothing switches.
 
-**Re-solving in flight.** Each cycle seeds from the last published plan, resampled onto the new horizon. Position and velocity come from cubic Hermite segments; mass and controls are interpolated linearly. Node 0 is set to the measured state, the later masses are shifted by the same amount, and node 0's body axis is set to the last commanded attitude. The glide's duration is reduced by the time elapsed. A cold solve is seeded by `Seed3Dof`. It integrates the glide engine-off at the planned glide angle, finds the latest ignition from which a simulated retrograde burn at 70 % thrust (drag included) still stops above the target, ramps that burn onto the target, and slews the attitudes forward at the rate limit. Twenty refusals in a row in the glide drop back to the boostback's glide for a cold retry. See [re-solving in flight](index.md#re-solving-in-flight).
+**Re-solving in flight.** Each cycle seeds from the last published plan, resampled onto the new horizon. Position and velocity come from cubic Hermite segments; mass and controls are interpolated linearly. Node 0 is set to the measured state, the later masses are shifted by the same amount, and node 0's body axis is set to the last commanded attitude. The glide's duration is reduced by the time elapsed. A cold solve is seeded by `Seed3Dof`. It integrates the glide engine-off at the planned glide angle, finds the latest ignition from which a simulated retrograde burn at 70 % thrust (drag included) still stops above the target, ramps that burn onto the target, and slews the attitudes forward at the rate limit. Ten refusals in a row in the glide drop back to the boostback's glide for a cold retry. See [re-solving in flight](index.md#re-solving-in-flight).
 
 **Least-rolling-moment roll.** This is not in the problem. When `ThreeDofLeastRollMoment` is on (off by default), the flight side rolls the held wing direction towards the roll at which the air's rolling moment is zero and restoring (`UpdateGlideRoll`). The problem sees roll only through the body-axis table's roll reference, which the model takes when entry guidance engages.
 

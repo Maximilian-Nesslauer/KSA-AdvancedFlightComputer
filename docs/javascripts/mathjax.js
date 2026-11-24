@@ -1,6 +1,10 @@
 // MathJax settings for pymdownx.arithmatex (generic mode), per the Material for MkDocs docs.
 window.MathJax = {
+  loader: {
+    load: ["[tex]/boldsymbol"],
+  },
   tex: {
+    packages: { "[+]": ["boldsymbol"] },
     inlineMath: [["\\(", "\\)"]],
     displayMath: [["\\[", "\\]"]],
     processEscapes: true,

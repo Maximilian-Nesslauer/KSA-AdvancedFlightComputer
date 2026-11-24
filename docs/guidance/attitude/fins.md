@@ -69,8 +69,8 @@ The fins report **no authority**, rather than a guess, when
 
 - the dynamic pressure is under 50 Pa (`MinQPa`),
 - the airspeed is under 1 m/s,
-- the craft flies nose first, or
-- $|\alpha|$ or $|\beta|$ is over 20 deg (`KsaAeroSweep.BodyAngleMaxDeg`), the edge of the tables.
+- the craft flies nose first without nose-first surface tables (`SurfaceTable.NoseForce`/`NoseMoment`), or
+- $|\alpha|$ or $|\beta|$ is over 20 deg (`KsaAeroSweep.BodyAngleMaxDeg` engine-first, `KsaAeroSweep.NoseAngleMaxDeg` nose-first), the edge of the tables.
 
 Then every fin is sent home and the whole demand goes to the RCS.
 

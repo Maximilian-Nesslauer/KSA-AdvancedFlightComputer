@@ -1,8 +1,8 @@
 # Attitude control
 
 AFC points a craft in one of two ways.
-Most modes write an attitude target into the stock flight computer and let it steer.
-A returning booster gliding with its engine off, and touchdown guidance, steer the craft themselves.
+Some modes write an attitude target into the stock flight computer and let it steer.
+Ascent (by default, `AscentOwnAttitude`), a returning booster gliding with its engine off, and touchdown guidance steer the craft themselves.
 They work out a torque and spend it on the craft's actuators through AFC's own mixers.
 
 This section covers AFC's own path:
@@ -17,13 +17,13 @@ Who may write which control, and how AFC hands the craft back, is on [Vehicle co
 flowchart LR
     tgt([Target attitude<br/>and turning rate]) --> law[Attitude controller<br/>torque demand tau]
     air([Aero tables<br/>air moment]) --> law
+    law -->|ascent, UseGimbals| gim[Gimbal mixing]
+    law -->|remainder| joint[Joint fins + RCS<br/>programme]
+    joint --> fins[Fin mixing]
+    joint -->|shortfall| rcs[RCS mixing]
     plan([Touchdown plan<br/>torques + feedback]) --> gim
     plan --> rcs
     plan --> finplan[Plan's own<br/>fin deflections]
-    law --> joint[Joint fins + RCS<br/>programme]
-    joint --> fins[Fin mixing]
-    joint -->|what the fins<br/>leave short| rcs[RCS mixing]
-    gim[Gimbal mixing]
     fins --> surf[[Control surfaces]]
     finplan --> surf
     rcs --> thr[[RCS thrusters]]
@@ -32,7 +32,7 @@ flowchart LR
 
 ## Axes and symbols
 
-All the controller's vectors are in the **model body axes** (`KsaFrameBridge.BodyAxes`): $x$ and $y$ across the craft, and $z$ along the thrust axis, which is the roll axis.
+The report and mixer frames use **model body axes** (`KsaFrameBridge.BodyAxes`): $x$ and $y$ across the craft, and $z$ along the thrust axis, which is the roll axis. (`AttitudeController.Step` operates in KSA body axes, where $+x$ is along the nose/thrust axis, and projects onto model axes for inertia, mixers and reporting.)
 The same symbols are used on all four pages:
 
 | Symbol | Meaning | Unit |
@@ -75,13 +75,15 @@ For small errors $\boldsymbol{\theta}$ is the rotation vector itself.
 For large ones it saturates: its length peaks at 90 deg and falls back to zero for a target exactly behind.
 The reported error is $\arcsin(\min(|\boldsymbol{\theta}|, 1))$, so it never reads more than 90 deg.
 
-The error is split into a **roll** part along $z$ and a **pointing** part across it:
+The error is split into a **pointing** part across $z$ and a **roll** part along $z$:
 
 $$
-\boldsymbol{\theta}_\text{roll} = (\boldsymbol{\theta}\cdot\hat{\mathbf z})\,\hat{\mathbf z},
+\boldsymbol{\theta}_\text{point} = \boldsymbol{\theta} - (\boldsymbol{\theta}\cdot\hat{\mathbf z})\,\hat{\mathbf z},
 \qquad
-\boldsymbol{\theta}_\text{point} = \boldsymbol{\theta} - \boldsymbol{\theta}_\text{roll}
+\boldsymbol{\theta}_\text{roll} = \begin{cases} \mathbf{0}, & \text{if }\texttt{RollFree}, \\ \phi_\text{roll}\,\hat{\mathbf z}, & \text{otherwise.} \end{cases}
 $$
+
+Here $\phi_\text{roll} \in [-\pi, \pi]$ is the true signed roll angle (`RollAngle`, computed via $\operatorname{atan2}$ on a reference vector perpendicular to $\hat{\mathbf z}$), rather than $\sin\phi$, so a 180 deg heads-down roll does not stall.
 
 ### Rate error and its filter
 
@@ -103,10 +105,12 @@ The code writes the proportional part as a rate, $\boldsymbol{\omega}_c = (k_p/k
 The cap is applied to pointing and roll **separately**:
 
 $$
-\boldsymbol{\omega}_c = \operatorname{sat}_{\omega_\text{max}}\!\Big(\frac{k_p}{k_d}\boldsymbol{\theta}_\text{point}\Big) + \operatorname{sat}_{\omega_\text{max}}\!\Big(\frac{k_p}{k_d}\boldsymbol{\theta}_\text{roll}\Big),
+\boldsymbol{\omega}_c = \operatorname{sat}_{\omega_\text{max}}\!\Big(\frac{k_p}{k_d}\boldsymbol{\theta}_\text{point}\Big) + \operatorname{sat}_{\omega_{\text{roll,lim}}}\!\Big(\frac{k_{p,\text{roll}}}{k_{d,\text{roll}}}\boldsymbol{\theta}_\text{roll}\Big),
 \qquad
 \operatorname{sat}_{m}(\mathbf v) = \mathbf v \min\!\Big(1, \frac{m}{|\mathbf v|}\Big)
 $$
+
+When `RollBandwidthRadS` is set, roll uses its own $k_{p,\text{roll}}, k_{d,\text{roll}}$ for both feedback and integral. When `RollCaptureRateDegS` is set, roll uses its own capture cap $\omega_{\text{roll,max}}$, further limited by braking authority measured from lit gimbals and RCS every 0.5 s (`RollAuthority`, `RollBrakingShare = 0.5`): $\omega_{\text{roll,lim}} = \min\big(\omega_{\text{roll,max}},\ \max(\sqrt{2\cdot 0.5\,a_\text{roll}|\theta_\text{roll}|},\,\omega_\text{max})\big)$.
 
 So a large error is closed at a set rate rather than at the actuators' full torque.
 With the defaults the cap binds above about 8 deg of error.
@@ -134,8 +138,8 @@ $$
 - The second term moves the moment from the centre of mass the sweep saw to the present one.
 - $k$ is the game's moment limiter per pascal (`BodyAero6Dof.MomentLimiterPerPa`), measured on the craft. The integrator divides the air's whole moment by $1 + kq$, so the prediction does too.
 
-The angles are engine first: with $\hat{\mathbf u}$ the craft's velocity through the air in body axes, $\alpha = \operatorname{atan2}(u_z, -u_x)$ and $\beta = \operatorname{atan2}(u_y, -u_x)$.
-There is no feed-forward below 50 Pa, below 1 m/s, nose first, or outside $|\alpha|, |\beta| \le 20^\circ$, the edge of the tables.
+With $\hat{\mathbf u}$ the craft's velocity through the air in **KSA body axes** ($+x$ along nose/thrust, $-x$ engine first), engine-first flight reads the body tables at $\alpha = \operatorname{atan2}(u_z, -u_x)$ and $\beta = \operatorname{atan2}(u_y, -u_x)$ up to `KsaAeroSweep.BodyAngleMaxDeg` (20 deg). When the sweep provides nose-first tables (`NoseBodyAero` and `NoseBodyMoment`), nose-first flight ($u_x > 0$) reads them at $\alpha = \operatorname{atan2}(u_z, u_x)$ and $\beta = \operatorname{atan2}(u_y, u_x)$ up to `KsaAeroSweep.NoseAngleMaxDeg` (20 deg).
+There is no feed-forward below 50 Pa, below 1 m/s, nose first without nose-first tables, or outside $|\alpha|, |\beta| \le 20^\circ$, the edge of the tables.
 The report's `AirKnown` says which.
 
 The feed-forward cancels the air's moment before any error builds.
@@ -168,6 +172,13 @@ It is off because each return of the feedback kicked: in the harness a 0.5 deg d
 | `RateFilterS` | 0.2 | $T_f$ |
 | `IntegralWithinDeg` | 3.0 | $\theta_\text{int}$ |
 | `IntegralMaxDegS` | 8.0 | the integral's cap, deg s |
+| `UseSurfaces` | `true` | allow control surfaces (fins) in the joint allocation |
+| `UseGimbals` | `false` | spend torque on lit engine gimbals first (set `true` during ascent) |
+| `RollFree` | `false` | zero $\boldsymbol{\theta}_\text{roll}$ when roll is unconstrained |
+| `RollCaptureRateDegS` | `NaN` | separate roll capture cap $\omega_{\text{roll,max}}$ (ascent uses `AscentRollRateDegS = 30`) |
+| `RollBandwidthRadS` | `NaN` | separate roll bandwidth (ascent uses `AscentRollBandwidthRadS = 1.0`) |
+
+Ascent overrides the defaults with `AscentAttitudeBandwidthRadS = 2.0`, `AscentAttitudeDamping = 1.0`, `AscentRateFilterS = 0.05`, `AscentRollRateDegS = 30.0`, `AscentRollBandwidthRadS = 1.0`, `UseGimbals = true`, and `UseSurfaces = AscentAeroControl` (`false` by default).
 
 <!-- viz: attitude-controller 620 -->
 *Start the craft 73 deg off in roll and 5 deg off in pointing, switch the split capture cap on and off, and change the feed-forward's error to watch the integral take up the rest.*
@@ -257,7 +268,7 @@ They use a regularised minimum-norm solve with a saturation cascade, which has a
 
 - **Fins and RCS share one programme.** The attitude controller gives the fins' programme the RCS thrusters as extra **backup columns**: each thruster's full-duty torque, bounded 0...1, priced by its propellant. A degree of fin costs about a thousandth of a newton metre of shortfall, the best thruster 0.02 per newton metre. So the fins take every axis they can, the RCS takes what they cannot, and only then does any demand go unmet. Roll included: a fixed "fins first, roll last" order had left roll to the RCS where the fins could have taken it.
 - **The RCS is then solved again on its own** for what the fins will really give short of the demand, $\boldsymbol\tau - \boldsymbol\tau_\text{fins}$. The joint programme's duties are not flown; they only shape what the fins take.
-- **The gimbals are separate.** In the current build the attitude controller flies a craft with its engine off and never uses them. Touchdown guidance commands the gimbals and the RCS each with the plan's own torque, and its attitude feedback ([`AttitudeFeedback6Dof`](#where-the-controller-is-used)) shares its correction between them in proportion to the room each has left.
+- **Gimbals take torque first when `UseGimbals` is set.** During ascent (`AscentOwnAttitude`), `AttitudeController` predicts and commands gimbal torque first (`KsaGimbalControl.PredictLsq` / `SetLsq`), then passes the remainder $\boldsymbol\tau - \boldsymbol\tau_\text{gimbals}$ to fins (if `AscentAeroControl` is on) and RCS. Glides with the engine off leave `UseGimbals = false`. Touchdown guidance commands gimbals and RCS each with the plan's own torque, and its attitude feedback ([`AttitudeFeedback6Dof`](#where-the-controller-is-used)) shares its correction between them in proportion to the room each has left.
 
 ### Characterise: reach per axis each way
 
@@ -276,12 +287,13 @@ For the gimbals the equivalent is asking the allocator for far more torque than 
 
 | Phase | Torque from | Mixers | Notes |
 | --- | --- | --- | --- |
+| Ascent ([convex ascent](../scvx/ascent.md) and UPFG) | `AttitudeController` | gimbals + RCS (+ optional fins) | `AscentOwnAttitude` (on by default); `AscentAeroControl` enables fins (off by default); falls back to stock flight computer when off. |
 | Entry guidance's glide ([entry](../scvx/entry.md)) | `AttitudeController` | fins + RCS | `ThreeDofOwnAttitude`, on by default. Entry's own trim is off while it flies. |
 | Boostback's glide, engine off | `AttitudeController` | fins + RCS | `BoostbackGlideOwnAttitude`, on by default |
 | Touchdown guidance ([touchdown](../scvx/touchdown.md)) | the plan's torques plus `AttitudeFeedback6Dof` | gimbals, RCS; fins at the plan's own deflections | the coast before ignition flies the plan's RCS torque alone |
-| Ascent, boostback burn, deorbit, landing burns | stock flight computer | stock gimbals and RCS | AFC writes the target and its turning rate |
+| Boostback burn, deorbit, other landing burns | stock flight computer | stock gimbals and RCS | AFC writes the target and its turning rate |
 
-`GuidanceWindow.OwnsGlideAttitude` decides each step whether the controller flies.
+`GuidanceWindow.OwnsAttitude` decides each step whether the controller flies.
 While it does, the stock flight computer is held at Manual so it steers nothing, and the first step it does not fly, `AttitudeController.Release` sends the fins home and lets the RCS go.
 A glide holding a fixed roll may also turn that roll, at a limited rate, towards the nearest roll at which the air's rolling moment trims (`AttitudeController.TryLeastRollMoment`), and only for a real gain.
 
@@ -313,10 +325,10 @@ The rules for these writes are on [Vehicle control writes](../../control-ownersh
 | [AttitudeRate.cs](../../../AdvancedFlightComputer/Features/Guidance/Control/AttitudeRate.cs) | `KsaAttitudeRate.Set`, `OnUpdateAttitudeTarget` |
 | [AttitudeOwnership.cs](../../../AdvancedFlightComputer/Features/Guidance/Control/AttitudeOwnership.cs) | `AttitudeOwnership.Release` |
 | [AttitudeFeedback6Dof.cs](../../../AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/AttitudeFeedback6Dof.cs) | `AttitudeFeedback6Dof.Correct` |
-| [Autopilot.cs](../../../AdvancedFlightComputer/Features/Guidance/Modes/Autopilot.cs) | `GuidanceWindow.OwnsGlideAttitude`, `FlyOwnAttitude`, `StopOwnAttitude`, `SteerLandingBurnWithGimbal` |
+| [Autopilot.cs](../../../AdvancedFlightComputer/Features/Guidance/Modes/Autopilot.cs) | `GuidanceWindow.OwnsAttitude`, `FlyOwnAttitude`, `StopOwnAttitude`, `SteerLandingBurnWithGimbal` |
 | [ThreeDof.cs](../../../AdvancedFlightComputer/Features/Guidance/Modes/ThreeDof.cs) | entry guidance's glide, which hands its attitude to the controller |
 | [BoostbackGlide.cs](../../../AdvancedFlightComputer/Features/Guidance/Modes/BoostbackGlide.cs) | the boostback's glide, the same |
 | [SixDof.cs](../../../AdvancedFlightComputer/Features/Guidance/Modes/SixDof.cs) | `GuidanceWindow.ApplyPlanCommand`, `FlyPlanRcs`, `FlyPlanFins` |
-| [VehicleAutopilotState.cs](../../../AdvancedFlightComputer/Features/Guidance/Modes/VehicleAutopilotState.cs) | `ThreeDofOwnAttitude`, `BoostbackGlideOwnAttitude`, `AttitudeBandwidthRadS`, `SixDofTorqueMargin` |
+| [VehicleAutopilotState.cs](../../../AdvancedFlightComputer/Features/Guidance/Modes/VehicleAutopilotState.cs) | `AscentOwnAttitude`, `AscentAeroControl`, `ThreeDofOwnAttitude`, `BoostbackGlideOwnAttitude`, `AttitudeBandwidthRadS`, `SixDofTorqueMargin` |
 | [RcsLpSolver.cs](../../../AdvancedFlightComputer/Features/RcsTranslation/RcsLpSolver.cs) | `RcsLpSolver.Solve`, the simplex every programme here runs on |
 | [KsaAeroSweep.cs](../../../AdvancedFlightComputer/Features/Guidance/Adapters/KsaAeroSweep.cs) | `KsaAeroSweep.Result`: the body moment table and the fin tables |

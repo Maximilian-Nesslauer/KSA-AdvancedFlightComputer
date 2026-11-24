@@ -40,8 +40,7 @@ $$
 \begin{aligned}
 \dot{\mathbf r} &= \mathbf v \\
 \dot{\mathbf v} &= -\frac{\mu\,\mathbf r}{\lVert\mathbf r\rVert^3}
-  + \frac{T_L\big(p(h)\big)\,\mathbf u + T_S\big(t, p(h)\big)\,\hat{\mathbf u}}{m}
-  - \frac{\rho(h)\,S\,C_D(M,\alpha)\,\lVert\mathbf v_{\text{rel}}\rVert}{2m}\,\mathbf v_{\text{rel}} \\
+  + \frac{T_L\big(p(h)\big)\,\mathbf u + T_S\big(t, p(h)\big)\,\hat{\mathbf u} + \mathbf F_{\text{aero}}(\mathbf r,\mathbf v,\hat{\mathbf u})}{m} \\
 \dot m &= -\big(\dot m_L\,\lVert\mathbf u\rVert + \dot m_S(t)\big)
 \end{aligned}
 $$
@@ -54,7 +53,7 @@ $$
 
 **Solid motors** add thrust $T_S(t,p)$ and mass flow $\dot m_S(t)$ outside the throttle. They push along $\hat{\mathbf u}$ whatever its length, so the throttle steers them but cannot slow them. Both are read from a table sampled off KSA's burn model, against the stage's own clock and the back pressure. A stage with solids has its burn time pinned, so every node sits at a fixed second of the burn. See [Solids](#solid-motors).
 
-**Drag** acts straight against $\mathbf v_{\text{rel}}$ with reference area $S$. Its coefficient comes from the drag table swept off the whole stack on the pad, one table and one area for every stage, at Mach number $M = \lVert\mathbf v_{\text{rel}}\rVert/a_0$ (the sea-level speed of sound) and at the flown angle of attack. With
+**Aerodynamics (drag, lift and side force).** When the aero sweep provides a nose-first body-axis force table (`AscentAtmosphere.BodyForce` / `NoseBodyAero`), `AscentDynamics` evaluates the full aerodynamic force (axial drag plus lateral lift and side force) in the held-roll body axes (`RollAngleRad`), reading axial $C_x$ at the rounded angle of attack and lateral $C_y, C_z$ at the true angles softly bounded by $x / (1 + (x/A)^8)^{1/8}$ with $A = 35^\circ$. When no body-force table is available (or during the initial drag-only pass), $\mathbf F_{\text{aero}} = -\tfrac12\rho(h)\,S\,C_D(M,\alpha)\,\lVert\mathbf v_{\text{rel}}\rVert\,\mathbf v_{\text{rel}}$ acts straight against $\mathbf v_{\text{rel}}$ using the pad-swept drag table at Mach number $M = \lVert\mathbf v_{\text{rel}}\rVert/a_0$ (the sea-level speed of sound). With
 
 $$
 \mathbf w = \hat{\mathbf u} - (\hat{\mathbf u}\cdot\hat{\mathbf v}_{\text{rel}})\,\hat{\mathbf v}_{\text{rel}},
@@ -62,9 +61,7 @@ $$
 \qquad \alpha = \operatorname{atan2}\big(\lVert\mathbf w\rVert,\ \hat{\mathbf u}\cdot\hat{\mathbf v}_{\text{rel}}\big),
 $$
 
-the drag law reads $\lVert\mathbf w\rVert$ rounded to $\lVert\mathbf w\rVert^2/\sqrt{\lVert\mathbf w\rVert^2 + \epsilon^2}$, $\epsilon = 0.05$ (`AlphaRounding`). KSA's drag grows with $|\sin\alpha|$ from a corner at $\alpha = 0$, which a linearisation cannot follow. The rounding keeps nose-on drag exact and underestimates off-axis drag by at most $0.3\,\epsilon$ in $\sin\alpha$. On an airless body $\rho = p = 0$, so drag, $q$ and the aerodynamic limits drop out and every engine runs at its vacuum thrust.
-
-**Lift is not modelled.** The [q-alpha limit](#q-alpha) keeps it small.
+the drag law reads $\lVert\mathbf w\rVert$ rounded to $\lVert\mathbf w\rVert^2/\sqrt{\lVert\mathbf w\rVert^2 + \epsilon^2}$, $\epsilon = 0.05$ (`AlphaRounding`). KSA's drag grows with $|\sin\alpha|$ from a corner at $\alpha = 0$, which a linearisation cannot follow. The rounding keeps nose-on drag exact and underestimates off-axis drag by at most $0.3\,\epsilon$ in $\sin\alpha$. On an airless body $\rho = p = 0$, so aerodynamics, $q$ and the aerodynamic limits drop out and every engine runs at its vacuum thrust.
 
 Small regularisers keep the square roots smooth: $\lVert\mathbf r\rVert$ and $\lVert\mathbf v_{\text{rel}}\rVert$ take $10^{-8}$ under the root, and $\lVert\mathbf u\rVert$ takes $10^{-6}$ divided by the square of the stage's reference thrust.
 
@@ -419,6 +416,7 @@ The solve sits inside a job (`AscentPlanJob`) that tries again when a solve fail
 1. **Stage count.** A solve that is not usable adds the next stage and solves again, while there is one. A converged plan whose last stage burns only its shortest allowed burn drops that stage and solves again.
 2. **Max q.** When every seed climbed through $q_{\max}$ (the least seed peak above 98 % of it), the same stages are solved once more at $1.15$ times that peak, rounded up to 5 kPa, but never above the 195 kPa ceiling. The LAUNCH page says so.
 3. **Stages held at full thrust.** An upper stage that lights above the hand-over altitude burns wholly under UPFG, which flies full thrust. If the converged plan throttles such a stage below 90 % of what it can give, it is solved again with that stage held at 99 %, starting from the converged plan. If the held solve does not converge, the throttled plan is kept and the page says which stage UPFG will fly differently. A solid launch with a pad roll that did not converge gets the same held solve, since holding the throttle can make its problem feasible.
+4. **Lift and side-force continuation.** `AscentPlanJob` runs steps 1-3 with `DragOnly()` first, then runs a continuation pass with full body-axis lift and side force seeded from the converged drag-only plan. If the lift solve does not converge, the drag-only plan is kept with `LiftLeftOut = true`.
 
 Every problem is also written to the temp folder as JSON (`AscentProblemFile`), so a plan that fails in the game can be solved again offline with the test console's `--ascent-replay`.
 

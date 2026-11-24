@@ -2,7 +2,7 @@
 
 `KsaTvcAllocator` turns a body torque in newton metres into a deflection for every engine gimbal.
 Touchdown guidance flies its plan's torque through it, together with its attitude feedback's share.
-In the current build the attitude controller does not use it: it flies a craft whose engine is off.
+Ascent's attitude controller also uses it (`AttitudeController.Settings.UseGimbals`, calling `PredictLsq` and `SetLsq`), while glides with the engine off do not.
 
 The stock flight computer has its own allocation (`TvcAllocation.Solve`), but it takes a normalised demand per axis, not newton metres.
 A 6-DOF plan needs to command a torque it trusts and to know what the gimbals can give, so AFC has its own.
@@ -162,7 +162,7 @@ That is why touchdown guidance sizes its cone with `TorqueAlong` and not with `M
 | File | Main type or method |
 | --- | --- |
 | [TvcAllocator.cs](../../../AdvancedFlightComputer/Features/Guidance/Control/TvcAllocator.cs) | `KsaTvcAllocator.Solve`, `FillColumns`, `Redistribute`; `TvcAllocationResult` |
-| [GimbalControl.cs](../../../AdvancedFlightComputer/Features/Guidance/Control/GimbalControl.cs) | `KsaGimbalControl.SetLsq`, `ApplyLsq`, `PlanningGimbals`, `LitGimbalThrust` |
+| [GimbalControl.cs](../../../AdvancedFlightComputer/Features/Guidance/Control/GimbalControl.cs) | `KsaGimbalControl.SetLsq`, `PredictLsq`, `ApplyLsq`, `PlanningGimbals`, `LitGimbalThrust` |
 | [ThrustMoment.cs](../../../AdvancedFlightComputer/Features/Guidance/Control/ThrustMoment.cs) | `KsaThrustMoment.Rest`, `LateralAgainstGimbals` |
 | [LandingEngineLayout.cs](../../../AdvancedFlightComputer/Features/Guidance/Control/LandingEngineLayout.cs) | `LandingEngineLayout.Build`, the landing engine picker's off-axis check |
 | [EnginePerf.cs](../../../AdvancedFlightComputer/Features/Guidance/Control/EnginePerf.cs) | `KsaEnginePerf.ThrottleForThrust`, the throttle for the plan's thrust that sets each gimbal's thrust |

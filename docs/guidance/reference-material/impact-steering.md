@@ -39,7 +39,7 @@ That third one is the whole problem: there is a direction you can push the veloc
 - **Not every miss is reachable.** You can only produce what directions 1 and 2 can produce, so in general you get as close as possible rather than exactly there.
 - **The answer is not unique.** For a miss you *can* fix, add any amount of direction 3 and you get the same impact point. So infinitely many $\Delta v$ work.
 
-### "Minimum $\Delta v$" is the answer to the second point
+### "Minimum delta-v" is the answer to the second point
 
 Among all the pushes that get you as close as possible, take the **shortest one**. That is the whole definition, and it is what a pseudo-inverse computes. It puts zero along direction 3, because spending fuel there buys nothing.
 
@@ -184,7 +184,7 @@ $$
 
 Same order, as it must be. If a singular value ever came out wildly away from $t_f$, something is wrong.
 
-### $J$ is rank 2, and there is only one reason
+### J is rank 2, and there is only one reason
 
 It comes entirely from what the predictor **reports**, not from any constraint and not from the trajectory's shape. $\lVert p \rVert = R_{\text{target}}$ for *every* perturbed trajectory - that is the definition of a crossing point - so
 
@@ -427,7 +427,7 @@ Both laws answer: *what is the smallest instantaneous impulse, applied now, that
 - **Burn duration.** Both assume an impulse. A real boostback burn has duration, during which $r$ moves, so the achieved impact differs from the impulsive prediction.
 - **Cost along the trajectory.** No gravity loss, no drag loss during the burn, no throttle or attitude rate limit. $\lVert\Delta v\rVert$ is not propellant.
 - **When to burn.** $\sigma_i \sim t_f$, so the *same* miss costs less $\Delta v$ the earlier it is corrected. A law that only ever nulls the miss *now* is structurally blind to this, and it is where the real fuel saving lives.
-- **The null direction as a resource.** Minimum norm puts zero component along $\ker J$. But that direction is *free* with respect to the impact point - a spare degree of freedom that could be spent on entry velocity or attitude alignment. Both laws discard it. (`ImpactSteering.FreeDirection` and the **Min pitch** knob now spend it; see section 8.)
+- **The null direction as a resource.** Minimum norm puts zero component along $\ker J$. But that direction is *free* with respect to the impact point - a spare degree of freedom that could be spent on entry velocity or attitude alignment. Both laws discard it. (`ImpactSteering.FreeDirection` computes that null direction for the overlay, while the finite-burn shooter's **Min pitch** bound in `BoostbackShooter.Solve` constrains pitch directly.)
 
 Jo & Ahn's closed-form boost-back guidance is what encodes the finite-burn and fuel structure - the velocity-frame reparameterisation, the thrust-magnitude sphere, and the closed-form pick on the resulting great circle. Its $d$ vectors are **sensitivities of the impact point**, exactly the $J$ above, and the whole point of the drag-aware variant is to substitute this integrated $J$ for their Keplerian one.
 
@@ -445,19 +445,9 @@ The difference is not academic. On the reference arc the impulsive correction po
 
 `AdvancedFlightComputer/Features/Guidance/Modes/Boostback.cs` flies the plan on a **receding horizon**: re-solve from the live state every 2 s and fly the head of the freshest plan.
 
-**And then hands back.** The impulsive law's error scales with burn *duration*, so over the last five seconds it is very nearly exact - and unlike the plan it is cheap enough to re-solve at 10 Hz, so handing over keeps the loop *closed* through a window the plan would have to fly open. At T-2 s the command freezes and the rest runs on sensed dV against the dV owed at the freeze. Against an engine 3% down on thrust, `--shoot` measures:
+**Terminal re-solve and lock.** In the final five seconds (`BoostbackTerminalS = 5.0` s), instead of handing back to the impulsive law, `Boostback.cs` re-solves the `BoostbackShooter` plan itself at **5 Hz** (`BoostbackTerminalIntervalS = 0.2` s). Inside the last second (`BoostbackLockTgo = 1.0` s), re-solving stops and the standing linear tangent law flies to cutoff on the plan's own clock. Re-solving the finite-burn plan faster beat the older T-5 s impulsive handover on `--shoot` (182 m vs 549 m against -3% thrust, and 91 m vs 410 m against 25% drag bias).
 
-| | miss |
-|---|---|
-| one plan, open loop | 6.91 km |
-| plan, frozen for the last 5 s | 875 m |
-| **plan -> impulsive at T-5, froze T-2** | **538 m** |
-| ... and no freeze at all | 523 m |
-| *[ref]* plan re-solved to cutoff | 240 m |
-
-The reference row is the ceiling, and it says something worth not hiding: the impulsive law is an approximation and the plan is not, so re-solving the plan straight through would be more accurate still. What buys the handover its place is the one thing the check cannot model - its prediction is perfect, where the real terrain height under a moving impact point is low-passed and $J^{+}m$ is the ratio of two small numbers.
-
-So the impulsive law did not go away. It answers a question the shot does not - *is there anything worth lighting an engine for, and is there anything left to correct* - and it flies the end of the burn, where being an impulse is barely an approximation at all. What it no longer does is fly the *long* part.
+So the impulsive law (`ImpactSteering.Correction`) no longer flies the end of the burn. It answers a question the shot does not - *is there anything worth lighting an engine for, and is there anything left to correct* - and draws the steering arrow on the overlay.
 
 ---
 

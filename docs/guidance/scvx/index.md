@@ -76,7 +76,7 @@ A constraint that keeps a variable on a curved set, such as a unit vector $\lVer
 
 Each linearisation is exact at the reference and wrong away from it. The trust region decides how far away is still acceptable.
 
-All three planners get $A$ and $B$ by **forward-mode automatic differentiation**: the dynamics are written once in C# over dual numbers, and one sweep per input gives an exact column of the Jacobian. Nothing is differentiated by hand, and nothing by finite differences, except where a quantity comes from a table or a simulation. Touchdown's fin columns come from the fin tables, and the ascent's booster-return reserve from a flown booster.
+All three planners get $A$ and $B$ by **forward-mode automatic differentiation**: the dynamics are written once in C# over dual numbers, and one sweep per input gives an exact column of the Jacobian. Touchdown's linear RCS columns are written in closed form to skip three redundant passes through the aero tables, its fin columns are swept by forward-mode AD through the piecewise-linear fin tables, and only the ascent's booster-return reserve uses finite differences (from a flown booster).
 
 ## Discretisation
 
@@ -158,7 +158,7 @@ The 80 % rule stops the radius from growing when the step was not limited by it,
 Entry and touchdown call a plan converged when an accepted step barely moves the trajectory and the true defects are small:
 
 $$
-\max_k \big\lVert(\mathbf x^\star_k - \bar{\mathbf x}_k) \oslash \mathbf x_{\text{scale}}\big\rVert_\infty < \epsilon_{\text{step}},
+\max\Big(\max_k \big\lVert(\mathbf x^\star_k - \bar{\mathbf x}_k) \oslash \mathbf x_{\text{scale}}\big\rVert_\infty,\ \frac{\lvert\delta\sigma\rvert}{\sigma_{\text{scale}}}\Big) < \epsilon_{\text{step}},
 \qquad
 \max_k \big\lVert \mathbf d_k \oslash \mathbf x_{\text{scale}} \big\rVert_\infty < \epsilon_{\text{defect}} .
 $$
@@ -223,7 +223,7 @@ The same few moves make the constraints of all three problems convex. Each probl
 | State | position, velocity, mass | position, velocity, mass | position, velocity, mass, quaternion, body rate |
 | Phases | one per stage, joined at staging | glide, burn | coast (optional), burn |
 | Free durations | one per stage | glide, burn | coast, burn |
-| Nodes | 60 per stage | 12 glide + 17 burn | 50 down to 5, by a spacing target |
+| Nodes | 60 per stage | 30 (12 glide + 17 burn intervals); 20 burn-only | 50 down to 5, by a spacing target |
 | Virtual control | squared, $\rho_{vc} = 10^5$ | squared, $\rho_{vc} = 10^5$ | squared, $\rho_{vc} = 10^5$, staged |
 | Trust region | box, $\eta \in [5\times10^{-4},\,0.3]$ | box, $\eta \in [10^{-3},\,0.1]$ | box, $\eta \in [10^{-3},\,0.1]$, plus proximal term |
 | Stops when | predicted gain $< 10^{-5}$ and all gates met | step $< 8\times10^{-3}$, defect $< 10^{-3}$ | step $< 8\times10^{-3}$, defect $< 10^{-3}$ |

@@ -354,16 +354,16 @@ g13:   m . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
 g14:   . . . . . . m . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | 0
 g15:   . . . . . . . . . . . . m . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | 0
 g16:   . . . . . . . . . . . . . . . . . . m . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | 0
-g17:   k . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | -k*r_fx
+g17:   k . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | k*r_fx
 g18:   . m . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | -r_fy
 g19:   . . m . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | -r_fz
-g20:   . . . . . . k . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | -k*r_fx
+g20:   . . . . . . k . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | k*r_fx
 g21:   . . . . . . . m . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | -r_fy
 g22:   . . . . . . . . m . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | -r_fz
-g23:   . . . . . . . . . . . . k . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | -k*r_fx
+g23:   . . . . . . . . . . . . k . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | k*r_fx
 g24:   . . . . . . . . . . . . . m . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | -r_fy
 g25:   . . . . . . . . . . . . . . m . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | -r_fz
-g26:   . . . . . . . . . . . . . . . . . . k . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | -k*r_fx
+g26:   . . . . . . . . . . . . . . . . . . k . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | k*r_fx
 g27:   . . . . . . . . . . . . . . . . . . . m . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | -r_fy
 g28:   . . . . . . . . . . . . . . . . . . . . m . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | -r_fz
 g29:   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . | V_max
@@ -394,7 +394,7 @@ g53:   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
 g54:   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . m . . . . . . . . . . . . . . . . . . | 0
 g55:   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . m . . . . . . . . . . . . . . . . . | 0
 g56:   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . m . . . . . . . . . . . . . . . . | 0
-g57:   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . m . . | 0
+g57:   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . m . | 0
 g58:   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . m . . . . . . . . . . . . . . . | 0
 g59:   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . m . . . . . . . . . . . . . . | 0
 g60:   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . m . . . . . . . . . . . . . | 0
@@ -428,7 +428,7 @@ Interop notes worth knowing: Clarabel's CSC indices are `uintptr_t` (64-bit) whe
 
 ## Solver backends: Clarabel and SCS
 
-The assembled problem (`ConicProblem`) is solver-neutral, and `GfoldPlanner.Backend` runs it. Clarabel is permissively licensed, which is what let the project move to MIT - the ECOS backend that preceded it was GPLv3 and forced the whole work to be GPLv3. (An SCS backend was carried alongside it for a while as a cross-check; it has since been removed. `AdvancedFlightComputer.Guidance.Scvx` uses Clarabel for convex ascent and SCS for the 3-DOF entry and 6-DOF touchdown subproblems.)
+The assembled problem (`ConicProblem`) is solver-neutral, and `ClarabelSolver.Solve` runs it. Clarabel is permissively licensed, which is what let the project move to MIT - the ECOS backend that preceded it was GPLv3 and forced the whole work to be GPLv3. (An SCS backend was carried alongside it for a while as a cross-check; it has since been removed. `AdvancedFlightComputer.Guidance.Scvx` uses Clarabel for convex ascent and SCS for the 3-DOF entry and 6-DOF touchdown subproblems.)
 
 `ClarabelSolver` wants the equalities and the cone rows stacked into one matrix with a leading zero cone, which `SparseCcs.VStack` does. That stack is the one step of the conversion that can be silently wrong - CCS is column-major, so a vertical stack interleaves within every column rather than concatenating - and it is checked against a dense reference at the top of `--clarabel-smoke`.
 

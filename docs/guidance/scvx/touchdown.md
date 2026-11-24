@@ -398,7 +398,7 @@ The grid is uniform in each phase. Collocation is trapezoidal with no sub-steps:
 
 ### Virtual control
 
-$\boldsymbol\nu_k$ enters every state row of every interval. It is priced as a **squared two-norm**, $\rho_{vc}\sum_k\lVert\boldsymbol\nu_k\oslash\boldsymbol\nu_s\rVert^2$ with $\rho_{vc} = 10^5$, not the one-norm of [Virtual control](index.md#virtual-control). The squared price is not exact: a small virtual control repeated on every interval is cheap. So the price is staged:
+$\boldsymbol\nu_k$ enters every state row of every interval. It is priced as a **squared two-norm**, $\rho_{vc}\sum_k\lVert\boldsymbol\nu_k\oslash\boldsymbol\nu_s\rVert^2$ with $\rho_{vc} = 10^5$, not the textbook one-norm discussed in [Virtual control](index.md#virtual-control). The squared price is not exact: a small virtual control repeated on every interval is cheap. So the price is staged:
 
 - $\boldsymbol\nu_s$ is the state scale, except velocity, whose target scale is 5 m/s (`VirtualControlVelocityScaleMs`).
 - A cold start, a restart or a moved target prices velocity on the speed scale, loose. Each accepted re-solve tightens it by one of four geometric stages toward 5 m/s; a run of refusals loosens it again.
@@ -430,12 +430,12 @@ The proximal term $W_{\text{prox}}\lVert(\mathbf x-\bar{\mathbf x})\oslash\mathb
 The merit uses the true defect $\mathbf d_k$ of the trapezoid:
 
 $$
-\Phi = \frac{m_0 - m_{N-1}}{m_0} + J_{\text{smooth}} + \rho_{vc}\sum_k\lVert\mathbf d_k\oslash\boldsymbol\nu_s\rVert^2 + W_a\sum_k\frac{\max(0, T_k - a_{\max}m_k)}{T_{\max}} + W_{\omega\max}\sum_{k\ge1}\frac{\max(0,\lVert\boldsymbol\omega_k\rVert-\omega_{\max})}{1\ \text{rad/s}},
+\Phi = \frac{m_0 - m_{N-1}}{m_0} + J_{\text{smooth}} + \rho_{vc}\sum_k\lVert\mathbf d_k\oslash\boldsymbol\nu_s\rVert^2 + J_{\text{slacks}},
 $$
 
-with $J_{\text{smooth}}$ the rate, RCS and fin terms above. The prediction uses the same terms with $\boldsymbol\nu_k$ in place of $\mathbf d_k$ and the subproblem's acceleration slacks in place of the acceleration violations. It leaves out the turn-rate term. The ratio $\rho$ is actual over predicted improvement, as in [Accepting a step](index.md#accepting-a-step). When the predicted improvement is below $10^{-9}$, $\rho$ is $\pm1$ by the sign of the actual one.
+where $J_{\text{smooth}}$ holds the rate, RCS and fin smoothing terms above, and $J_{\text{slacks}}$ prices all five soft limits (acceleration, turn-rate, glide-slope, climb-rate and terminal position/velocity miss). On the initial reference (`TrueCost`), $J_{\text{slacks}}$ evaluates those five violations directly on the trajectory (`SoftLimitCost`). Inside `Iterate()`, both $\Phi_{\text{lin}}$ and $\Phi$ use the subproblem's exact convex slack costs (`AccelerationSlackCost + RateSlackCost + PathSlackCost`), while $\Phi$ replaces $\boldsymbol\nu_k$ with the true defect $\mathbf d_k$, so only dynamics linearisation error moves $\rho$. The ratio $\rho$ is actual over predicted improvement, as in [Accepting a step](index.md#accepting-a-step). When the predicted improvement is below $10^{-9}$, $\rho$ is $\pm1$ by the sign of the actual one.
 
-The glide-slope, climb-rate and terminal slacks and the proximal term are not in the merit.
+Only the proximal term is excluded from the merit.
 
 ### Convergence
 
@@ -489,7 +489,7 @@ The loop follows [Re-solving in flight](index.md#re-solving-in-flight).
 - **Cadence.** A re-solve is sent to the worker every 0.1 s, with up to 5 SCvx iterations inside the cycle budget. The cadence timer moves on only when a plan is published.
 - **Warm seed.** The last plan is resampled at the times the new grid wants, on a horizon that shrinks onto the same end time. Position and velocity come from the cubic through each interval's end states, the rest is interpolated linearly. The whole reference is then moved to the measured state: position by the offset plus the velocity offset times time, velocity and mass by their offsets. Node 0 takes the measured attitude and rates. Every node is put on the quaternion branch of node 0.
 - **Wide retry.** A refused re-solve is tried again at once from the same seed, with the trust region at 0.1, three times the iterations and the 120 ms budget. After two refused cycles in a row the retry is skipped, and the cheaper failure leaves the ladder and the restart rules to act.
-- **Cold solve.** Spread over frames, one SCvx iteration every 0.25 s of wall time, re-anchored at the craft before each. It is handed over only at the warm gate. After 12 iterations above that gate it asks for more nodes. After 6 refused iterations in a row it starts again from the craft's state. The seed is a straight line, the braking cubic `ColdSeed6Dof.Build` for the braking burn, or entry guidance's own glide and burn (`ColdSeed6Dof.BuildAlongPath`) for a plan with a coast.
+- **Cold solve.** On the worker thread (default, `SixDofThreaded` on), cold iterations run back-to-back (`ColdIterationIntervalS = 0`) and re-anchor at the craft before each; when `SixDofThreaded` is off, they are paced at one iteration every 0.25 s (`SixDofColdIntervalS`). It is handed over only at the warm gate. After 12 iterations above that gate it asks for more nodes. After 6 refused iterations in a row it starts again from the craft's state. The seed is a straight line, the braking cubic `ColdSeed6Dof.Build` for the braking burn, or entry guidance's own glide and burn (`ColdSeed6Dof.BuildAlongPath`) for a plan with a coast.
 - **Standby.** Under another mode's burn, `Ksa6DofGuidance.Track` re-solves back to back with 2 iterations, keeping its own latest trajectory whether or not it passed the gate.
 - **Model refresh.** The inertia, the moment limiter and the bias are read into the model once, at the start of each solve.
 
