@@ -6,8 +6,8 @@ The problem itself - state, dynamics, every constraint and how it is made convex
 
 For the development history and the specific traps encountered along the way, see [scvx-bridge-devnotes.md](scvx-bridge-devnotes.md).
 
-!!! note "Older than the problem page"
-    Some details below predate the current code. Where they differ, [Touchdown guidance (6-DOF)](scvx/touchdown.md) is current. In particular: a thrust tracker and an attitude feedback now act between re-solves; the defect gate now judges each state channel in its own units, weighted by how far ahead the interval is; the node count now follows a node-spacing target rather than altitude gates; and there is no planned hand-off to a hover controller, only fallback rules after the plan.
+!!! note "Architecture summary"
+    For the full mathematical formulation and current runtime parameters, see [Touchdown guidance (6-DOF)](scvx/touchdown.md). The solver runs through persistent `ClarabelWorkspace` (`IScvxConicWorkspace`) on a two-grid schedule (`N = 25` coast+burn to `N = 15` burn-only) with asynchronous `InitCold` initialisation on the worker thread, shared differentiable `EngineThrustTable(u, P)`, closed-form 2-term `MomentLimiter` plus rotational damping, `AttitudeFeedback6Dof` between re-solves, per-channel SI defect gates, and hover-aware climb-cut / emergency braking guards rather than a planned hover hand-off.
 
 ---
 
@@ -151,7 +151,8 @@ The last few metres are the worst case for this solver and the easiest for a sim
 | `AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/Dynamics6Dof.cs` | The nonlinear dynamics and their Jacobians |
 | `AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/Scvx6DofSubproblemScs.cs` | Builds one cone program per iteration |
 | `AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/Scvx6DofSolver.cs` | The SCvx loop: linearise, solve, ratio test, trust region |
-| `AdvancedFlightComputer/Features/Guidance/Conic/ScsWorkspace.cs` | SCS bindings and iterate-level warm starting |
+| `AdvancedFlightComputer/Features/Guidance/Conic/ClarabelWorkspace.cs` | Persistent Clarabel workspace (`IScvxConicWorkspace`) with zero-allocation numerical refills |
+| `AdvancedFlightComputer/Features/Guidance/Conic/ScsWorkspace.cs` | Optional SCS backend behind `IScvxConicWorkspace` |
 | `AdvancedFlightComputer/Features/Guidance/Adapters/KsaFrameBridge.cs` | Frame, body-axis and quaternion conversions |
 | `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/Ksa6DofSetup.cs` | Measures the live vehicle into a solver configuration |
 | `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/Ksa6DofGuidance.cs` | The MPC loop and the command interface |
@@ -163,4 +164,4 @@ The last few metres are the worst case for this solver and the easiest for a sim
 
 `tests/AdvancedFlightComputer.Guidance.Tests/Scvx` runs the solver headless against a JAX reference implementation and a set of behavioural checks - closed-loop MPC with injected dispersions, path-constraint enforcement, node-ladder transitions, defect behaviour against range, and solve-time distributions. `dotnet run --project tests/AdvancedFlightComputer.Guidance.Tests/Scvx -c Release -- --help` lists them.
 
-In flight, `SixDofLog` writes per-cycle telemetry, periodic whole-plan snapshots and an event log; `tools/readlog.py` summarises a run.
+In flight, `SixDofLog` writes per-cycle telemetry (`-cycle.csv`), periodic whole-plan snapshots (`-plan.csv`) and an event log (`-events.log`).

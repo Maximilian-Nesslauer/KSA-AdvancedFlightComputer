@@ -40,8 +40,7 @@ $$
 \begin{aligned}
 \dot{\mathbf r} &= \mathbf v \\
 \dot{\mathbf v} &= -\frac{\mu\,\mathbf r}{\lVert\mathbf r\rVert^3}
-  + \frac{T_L\big(p(h)\big)\,\mathbf u + T_S\big(t, p(h)\big)\,\hat{\mathbf u}}{m}
-  - \frac{\rho(h)\,S\,C_D(M,\alpha)\,\lVert\mathbf v_{\text{rel}}\rVert}{2m}\,\mathbf v_{\text{rel}} \\
+  + \frac{T_L\big(p(h)\big)\,\mathbf u + T_S\big(t, p(h)\big)\,\hat{\mathbf u} + \mathbf F_{\text{aero}}(\mathbf r,\mathbf v,\hat{\mathbf u})}{m} \\
 \dot m &= -\big(\dot m_L\,\lVert\mathbf u\rVert + \dot m_S(t)\big)
 \end{aligned}
 $$
@@ -54,7 +53,7 @@ $$
 
 **Solid motors** add thrust $T_S(t,p)$ and mass flow $\dot m_S(t)$ outside the throttle. They push along $\hat{\mathbf u}$ whatever its length, so the throttle steers them but cannot slow them. Both are read from a table sampled off KSA's burn model, against the stage's own clock and the back pressure. A stage with solids has its burn time pinned, so every node sits at a fixed second of the burn. See [Solids](#solid-motors).
 
-**Drag** acts straight against $\mathbf v_{\text{rel}}$ with reference area $S$. Its coefficient comes from the drag table swept off the whole stack on the pad, one table and one area for every stage, at Mach number $M = \lVert\mathbf v_{\text{rel}}\rVert/a_0$ (the sea-level speed of sound) and at the flown angle of attack. With
+**Aerodynamics (drag, lift and side force).** When the aero sweep provides a nose-first body-axis force table (`AscentAtmosphere.BodyForce` / `NoseBodyAero`), `AscentDynamics` evaluates the full aerodynamic force (axial drag plus lateral lift and side force) in the held-roll body axes (`RollAngleRad`), projecting lateral/normal forces onto the rotated plane normal $\hat{\mathbf n}(\varphi) = \texttt{PlaneNormal}(\varphi)$ whenever `PlaneTurn` is free so $\partial/\partial\varphi$ derivatives are exact. Axial $C_x$ is read at the rounded angle of attack and lateral $C_y, C_z$ at the true angles softly bounded by $x / (1 + (x/A)^8)^{1/8}$ with $A = 35^\circ$. Local Mach uses altitude-varying `KsaAscentAtmosphere.SpeedOfSound(altitude)` (delegating to `SampledAtmosphere.SpeedOfSoundAt(altitude)`). When no body-force table is available (or during the initial drag-only pass), $\mathbf F_{\text{aero}} = -\tfrac12\rho(h)\,S\,C_D(M,\alpha)\,\lVert\mathbf v_{\text{rel}}\rVert\,\mathbf v_{\text{rel}}$ acts straight against $\mathbf v_{\text{rel}}$ using the pad-swept drag table. With
 
 $$
 \mathbf w = \hat{\mathbf u} - (\hat{\mathbf u}\cdot\hat{\mathbf v}_{\text{rel}})\,\hat{\mathbf v}_{\text{rel}},
@@ -62,9 +61,7 @@ $$
 \qquad \alpha = \operatorname{atan2}\big(\lVert\mathbf w\rVert,\ \hat{\mathbf u}\cdot\hat{\mathbf v}_{\text{rel}}\big),
 $$
 
-the drag law reads $\lVert\mathbf w\rVert$ rounded to $\lVert\mathbf w\rVert^2/\sqrt{\lVert\mathbf w\rVert^2 + \epsilon^2}$, $\epsilon = 0.05$ (`AlphaRounding`). KSA's drag grows with $|\sin\alpha|$ from a corner at $\alpha = 0$, which a linearisation cannot follow. The rounding keeps nose-on drag exact and underestimates off-axis drag by at most $0.3\,\epsilon$ in $\sin\alpha$. On an airless body $\rho = p = 0$, so drag, $q$ and the aerodynamic limits drop out and every engine runs at its vacuum thrust.
-
-**Lift is not modelled.** The [q-alpha limit](#q-alpha) keeps it small.
+the drag law reads $\lVert\mathbf w\rVert$ rounded to $\lVert\mathbf w\rVert^2/\sqrt{\lVert\mathbf w\rVert^2 + \epsilon^2}$, $\epsilon = 0.05$ (`AlphaRounding`). KSA's drag grows with $|\sin\alpha|$ from a corner at $\alpha = 0$, which a linearisation cannot follow. The rounding keeps nose-on drag exact and underestimates off-axis drag by at most $0.3\,\epsilon$ in $\sin\alpha$. On an airless body $\rho = p = 0$, so aerodynamics, $q$ and the aerodynamic limits drop out and every engine runs at its vacuum thrust.
 
 Small regularisers keep the square roots smooth: $\lVert\mathbf r\rVert$ and $\lVert\mathbf v_{\text{rel}}\rVert$ take $10^{-8}$ under the root, and $\lVert\mathbf u\rVert$ takes $10^{-6}$ divided by the square of the stage's reference thrust.
 
@@ -76,7 +73,26 @@ $$
 \frac{d\mathbf x}{d\tau} = \sigma_i\,\mathbf f(\mathbf x,\mathbf u),\qquad \tau\in[0,1].
 $$
 
-Separations are instantaneous. The last node of one stage and the first node of the next are the same instant, joined by a jump: $\mathbf r$ and $\mathbf v$ carry through, and the mass drops by the structure the stage leaves behind. The plan has no coast phases.
+Separations are instantaneous. The last node of one stage and the first node of the next are the same instant, joined by a jump: $\mathbf r$ and $\mathbf v$ carry through, and the mass drops by the structure the stage leaves behind.
+
+**Variable-duration ballistic coast (`AscentStage.Coast`).** A stage list may include an explicit coast stage (`IsCoast = true`, `HasLiquid = false`, `IsPinned = false`, `CoastNodes = 25`, minimum 5) with free duration $\sigma_i \in [\sigma_{\min}, \sigma_{\max}]$ (default `[0, 1800]` s) and optional `LiquidCarriesOver` to chain propellant across the coast into a circularisation burn:
+
+- Coast dynamics apply zero thrust, $\dot m = 0$, nose-first relative airflow ($\alpha = 0$), and pin $\mathbf u_k = \mathbf 0$ by equality rows; smoothing, $q\alpha$, prograde and thrust-ceiling cones are omitted while $q \le q_{\max}$, mass floor and ground floor stay active.
+- Adjacent burn stages relax $\sigma_{\min}$ to $\min(\sigma_{\min,i}, 1.0 / t_u)$ to permit short circularisation burns.
+- For `LiquidCarriesOver` pre-coast burns, `ApoapsisCutoff` integrates up to 95 % of combined propellant until Keplerian $r_a \ge R_{\text{target}}$ or $\varepsilon \ge \varepsilon_{\text{target}}$, and `CoastDurationSeed` computes the analytical Keplerian coast time to $R_{\text{target}}$ (or apoapsis $\pi$):
+
+    $$
+    \varepsilon = \tfrac12 v^2 - \frac{1}{r},\quad a = -\frac{1}{2\varepsilon},\quad
+    e\cos E_0 = 1 - \frac{r}{a},\quad e\sin E_0 = \frac{\mathbf r\cdot\mathbf v}{\sqrt{a}},\quad M_0 = E_0 - e\sin E_0,
+    $$
+
+    $$
+    E_t = \begin{cases} \arccos\!\left(\dfrac{1 - R_{\text{target}}/a}{e}\right), & r_a > R_{\text{target}} \land r < R_{\text{target}} \\ \pi, & \text{otherwise} \end{cases},
+    \qquad
+    \Delta t = \operatorname{clamp}\!\big((M_t - M_0)\,a\sqrt{a},\ \sigma_{\min},\ \sigma_{\max}\big).
+    $$
+
+- In flight, coast stages pair with `AscentPhase.Coast` and apoapsis circularisation in `Modes/Ascent.cs` with time/phase-indexed stage lookup in `ConvexAscentProfile`.
 
 Which durations are free:
 
@@ -125,7 +141,7 @@ plus a prograde condition $(\mathbf r_f\times\mathbf v_f)\cdot\mathbf n(\varphi)
 | Constraint | Continuous form | In the subproblem | Code |
 | --- | --- | --- | --- |
 | [Lift-off direction](#lift-off-direction) | $\mathbf u(0)\parallel\hat{\mathbf e}_{\text{up}}$ | two linear rows | `AscentSubproblem.Solve` |
-| [Pad roll](#pad-roll-for-a-solid-launch) | vertical to $t_{\text{clear}} + 10$ s; $\lvert\dot{\hat{\mathbf u}}\rvert \le 5$ °/s in stage 1 | linear rows; one cone per interval | `AscentCase` |
+| [Pad roll](#pad-roll-for-a-solid-launch) | vertical to $t_{\text{clear}} + 10$ s; $\lvert\dot{\hat{\mathbf u}}\rvert \le 5$ deg/s in stage 1 | linear rows; one cone per interval | `AscentCase` |
 | [Dynamics](#dynamics-and-staging-links) | $\dot{\mathbf x} = \mathbf f$ | linearised trapezoid with virtual control | `AscentSubproblem.Solve` |
 | [Staging links](#dynamics-and-staging-links) | $\mathbf r,\mathbf v$ continuous, $m^+ = m^- - m_{\text{dry}} - R$ | linear equalities, exact | `AscentSubproblem.Solve` |
 | [Propellant](#propellant) | each load burned exactly, the last at most | linear rows, exact | `AscentCase.Loads` |
@@ -160,7 +176,7 @@ A solid first stage cannot throttle to wait for a roll, so with FORCE ROLL on a 
 $$
 \mathbf u(t)\parallel\hat{\mathbf e}_{\text{up}}(t)\quad\text{for } t \le t_{\text{clear}} + 10\text{ s},
 \qquad
-\big\lVert\dot{\hat{\mathbf u}}\big\rVert \le 5\ \text{°/s}\quad\text{in stage 1}.
+\big\lVert\dot{\hat{\mathbf u}}\big\rVert \le 5^\circ/\text{s}\quad\text{in stage 1}.
 $$
 
 $t_{\text{clear}}$ is the time to climb 50 m straight up from rest at the floor throttle, and $\hat{\mathbf e}_{\text{up}}(t)$ is the pad's zenith turning with the body. The vertical part is two linear rows per node, up to the first node at or after the deadline. The rate limit becomes a cone on each first-stage interval:
@@ -211,7 +227,7 @@ $$
 \hat{\bar{\mathbf u}}_k\cdot\mathbf u_k \ge \theta_{\min},
 $$
 
-which implies the floor, so it is conservative. With the ceiling it leaves a spherical cap. At a 99 % floor the thrust can turn $\arccos 0.99 = 8.1°$ per iteration; at 100 % the cap would close to a point and the direction could never move from the seed's.
+which implies the floor, so it is conservative. With the ceiling it leaves a spherical cap. At a 99 % floor the thrust can turn $\arccos 0.99 = 8.1^\circ$ per iteration; at 100 % the cap would close to a point and the direction could never move from the seed's.
 
 The floor $\theta_{\min}$ of each stage:
 
@@ -273,11 +289,11 @@ $$
 \qquad s^{q\alpha}_k \ge 0 .
 $$
 
-This is the planner's only angle-of-attack limit. It has no attitude-rate limit outside the [pad roll](#pad-roll-for-a-solid-launch): the [smoothing term](#objective) damps the node-to-node turn, and the flight's own 5 °/s command slew limit guards the rest.
+This is the planner's only angle-of-attack limit. It has no attitude-rate limit outside the [pad roll](#pad-roll-for-a-solid-launch): the [smoothing term](#objective) damps the node-to-node turn, and the flight's own 5 deg/s command slew limit guards the rest.
 
 ### Thrust with the airflow
 
-$\sin\alpha$ returns to zero at $180°$, so without this a stack that cannot throttle could meet the $q$ limit by firing against the airflow to bleed off speed. At the active nodes the thrust stays within $90°$ of the reference airflow:
+$\sin\alpha$ returns to zero at $180^\circ$, so without this a stack that cannot throttle could meet the $q$ limit by firing against the airflow to bleed off speed. At the active nodes the thrust stays within $90^\circ$ of the reference airflow:
 
 $$
 -\hat{\bar{\mathbf v}}_{\text{rel},k}\cdot\mathbf u_k \le s^{\text{pro}}_k,\qquad s^{\text{pro}}_k \ge 0 .
@@ -381,16 +397,16 @@ The smoothing penalises the rate of the control, not its size, so it does not bi
 | --- | --- |
 | [Linearisation](index.md#linearisation) | analytic, by forward-mode automatic differentiation (`Dual`): ten seeded sweeps per node, one per state and control component, give $\mathbf f$, $A$, $B$, $\mathbf w$, its Jacobians, $q$ and $\nabla q$. Only the booster need is a finite difference. |
 | [Discretisation](index.md#discretisation) | trapezoidal collocation, so the control enters at both ends of each interval like a first-order hold; no sub-steps in the subproblem; the true defect in the merit uses the same trapezoid with the true $\mathbf f$ |
-| [Free time](index.md#free-final-time-and-phases) | one $\sigma_i$ per stage in canonical time; trust scale 300 s (`SigmaTrustSeconds`); bounds as in [Phases and staging](#phases-and-staging) |
+| [Free time](index.md#free-final-time-and-phases) | one $\sigma_i$ per stage in canonical time; trust scale `StageSigScale(s)` = $\sigma_{\text{scale}}$ (300 s, `SigmaTrustSeconds`) on burn stages and $\max(\sigma_{\text{scale}}, \tfrac12(\sigma_{\max,s} - \sigma_{\min,s}))$ on coast stages |
 | [Virtual control](index.md#virtual-control) | on all seven rows of every collocation interval, none on staging links; **squared two-norm**, weight $10^5$, scaled by $\mathbf D$ |
-| [Trust region](index.md#trust-region) | hard box (infinity norm) on every node's $\mathbf x$ (scaled), $\mathbf u$ (unscaled), each free $\sigma_i$, $\varphi$ (0.05 rad per unit radius, `PlaneTurnTrust`) and each $\Delta R_j$ (0.2 of the lift-off mass per unit radius, `RecoveryTrust`). $\eta_0 = 0.10$, $\eta \in [5\times10^{-4},\ 0.30]$. |
+| [Trust region](index.md#trust-region) | hard box (infinity norm) on scaled $\mathbf x$, **acceleration-normalised** $\mathbf u$ with per-node scale $s_u(k) = \operatorname{clamp}(\min(u_{\text{cap}}(s,x),\ 6.0 / (T_{\text{full}}(s,x)/m_k)),\ 0.02,\ 1.0)$ (`ControlTrustScale`, preventing $180^\circ$ thrust flips on high-TWR g-limited stages), each free $\sigma_i$ (by `StageSigScale`), $\varphi$ (`PlaneTurnTrust` 0.05 rad) and $\Delta R_j$ (`RecoveryTrust` 0.2 $m_0$). $\eta_0 = 0.10$, $\eta \in [5\times10^{-4},\ 0.30]$. |
 | [Accepting a step](index.md#accepting-a-step) | accept on $\rho > 0$; shrink by 0.5 on $\rho < 0.25$, accepted or not; grow by 1.5 on $\rho \ge 0.7$ when the step used at least 80 % of the box. When the model predicts no gain ($\le 10^{-12}$), the true change alone decides. A failed cone solve shrinks the box and retries the same reference. |
-| Merit | the subproblem's objective term for term, with each approximation replaced by what it approximates: the true defect for $\boldsymbol\nu$ (squared, scaled), the true insertion miss for $s_j$, the true violation of the full (not backed-off) limit for each path slack, and the true booster shortfall |
+| Merit | the subproblem's objective term for term, with true defects, true insertion miss, true booster shortfall, aerodynamic path violations against full limits, and **`s_g`-only exact backoff merit** (`ExactBackoffMerit = true`, `RhoAccel = 100.0`): $J_{\text{accel}} = \rho_{\text{accel}}\sum_k \max(0,\ T_{\text{delivered},k}/(F_u a_{\max,s} m_k) - \beta_{\text{backoff}})$ with $\beta_{\text{backoff}} = 0.98$ |
 | [Convergence](index.md#convergence) | predicted gain below $10^{-5}$ (`PredictedTolerance`) **and** every gate met by the reference: scaled defect $< 10^{-4}$, worst path violation $< 2\times10^{-3}$ of its limit, worst insertion residual $< 2\times10^{-5}$ canonical, booster shortfall $< 10^{-4}\,m_0$, pad roll met. Never on step size alone. |
 | Stall and cap | six rejections or failures in a row at the smallest radius stop the solve (`StallMax`); 350 iterations at most (`MaxIterations`) |
 | [Scaling](index.md#scaling) | canonical units; trust scales 500 km and 1000 m/s on Earth, carried to other bodies as the same fraction of the body radius and of the canonical speed; mass 1 |
-| [Cone program](index.md#the-cone-program) | Clarabel, tolerance $10^{-8}$, at most 200 iterations (`SubproblemEps`, `SubproblemMaxIterations`); the smoothing and squared penalties go in as a quadratic objective; no warm start; rebuilt each iteration because the active nodes change |
-| [Re-solving in flight](index.md#re-solving-in-flight) | none: planned once on the pad, and UPFG closes the loop after the hand-over |
+| [Cone program](index.md#the-cone-program) | zero-allocation persistent `AscentSubproblem.Workspace` backed by `ClarabelWorkspace` (`SubproblemEps = 1e-6`, `UseClarabelPersistent = true`, `ClarabelIterativeRefinement = false`, `ClarabelEquilibrateMaxIter = -1`). Constant-signature assembly always emits all 3 `IU(k, 0..2)` entries (writing `0.0` instead of skipping) so `CcsAssembler.BeginRefill()` preserves exact CSC sparsity. Resets equilibration whenever any stage duration shifts by $\ge 2.0\times$ or $\le 0.5\times$, and enables terminal polish (`IR = true`, $\epsilon = 10^{-8}$) in the final 25 iterations when feasible. |
+| [Re-solving in flight](index.md#re-solving-in-flight) | planned once on the pad; UPFG closes the loop after hand-over, with proportional energy terminal cutoff |
 
 The trust floor sits below the script's $2\times10^{-3}$. Drag that grows with the angle of attack is curved in the thrust direction, and at the script's floor the plan crawled about a kilogram an iteration and stalled short of converging.
 
@@ -398,9 +414,9 @@ A stall is not always a failure. When the stalled reference passes every gate an
 
 ### Seeding
 
-The seed is a gravity turn flown through the same dynamics by RK4, 20 sub-steps per interval, so its defects are small from the first iteration. The vehicle rises vertically at its seed throttle. At 130 m/s air-relative (`PitchOverSpeed`) its air-relative velocity is turned by the kick angle toward downrange, as in the script. From then on it follows $\mathbf v_{\text{rel}}$, with the thrust projected into the target plane. Lower stages burn their loads, at full throttle or at the throttle the acceleration limit leaves. The last stage burns until the orbital energy reaches the target's (`SeedEnergyCutoff`), not for a fixed 80 % of its load.
+The seed is a gravity turn flown through the same dynamics by RK4, 20 sub-steps per interval, so its defects are small from the first iteration. The vehicle rises vertically at its seed throttle. At body-scaled pitch-over speed $v_{\text{pitch,eff}} = \min(v_{\text{pitch}}, 0.02\,v_{\text{target}})$ (`PitchOverSpeed`, 130 m/s on Earth) its air-relative velocity is turned by the kick angle toward downrange. For airless bodies (`VacuumAscentAtmosphere`), the kick scan widens to $[75^\circ, 85^\circ]$. From then on it follows $\mathbf v_{\text{rel}}$, with the thrust projected into the target plane. Lower stages burn their loads, at full throttle or at the throttle the acceleration limit leaves. The last stage burns until the orbital energy reaches the target's (`SeedEnergyCutoff`), not for a fixed 80 % of its load.
 
-The kick is searched: a log-spaced scan of 25 angles from 0.25° to 30°, slid up to four times when the best lands on an edge, then a golden section to $10^{-3}$°. A kick is scored on the insertion altitude and plane miss plus the path violation. The path term counts only what the best-behaved seed does not already have, so a vehicle that cannot meet $q_{\max}$ at full throttle is not driven to fly straight up. Seeds that blow up, fall 50 km below the mean radius or end retrograde are discarded. The lowest peak $q$ any seed flew is kept: it is close to the least this vehicle can manage, and the max-q retry uses it.
+The kick is searched: a log-spaced scan of 25 angles from 0.25 deg to 30 deg, slid up to four times when the best lands on an edge, then a golden section to $10^{-3}$ deg. A kick is scored on the insertion altitude and plane miss plus the path violation. The path term counts only what the best-behaved seed does not already have, so a vehicle that cannot meet $q_{\max}$ at full throttle is not driven to fly straight up. Seeds that blow up, fall 50 km below the mean radius or end retrograde are discarded. The lowest peak $q$ any seed flew is kept: it is close to the least this vehicle can manage, and the max-q retry uses it.
 
 A plan of the same stages can stand in for the seed. Its throttle is raised to this problem's floor and its burn times clamped into this problem's bounds, or the first subproblem could be infeasible.
 
@@ -419,6 +435,7 @@ The solve sits inside a job (`AscentPlanJob`) that tries again when a solve fail
 1. **Stage count.** A solve that is not usable adds the next stage and solves again, while there is one. A converged plan whose last stage burns only its shortest allowed burn drops that stage and solves again.
 2. **Max q.** When every seed climbed through $q_{\max}$ (the least seed peak above 98 % of it), the same stages are solved once more at $1.15$ times that peak, rounded up to 5 kPa, but never above the 195 kPa ceiling. The LAUNCH page says so.
 3. **Stages held at full thrust.** An upper stage that lights above the hand-over altitude burns wholly under UPFG, which flies full thrust. If the converged plan throttles such a stage below 90 % of what it can give, it is solved again with that stage held at 99 %, starting from the converged plan. If the held solve does not converge, the throttled plan is kept and the page says which stage UPFG will fly differently. A solid launch with a pad roll that did not converge gets the same held solve, since holding the throttle can make its problem feasible.
+4. **Lift and side-force continuation.** `AscentPlanJob` runs steps 1-3 with `DragOnly()` first, then runs a continuation pass with full body-axis lift and side force seeded from the converged drag-only plan. If the lift solve does not converge, the drag-only plan is kept with `LiftLeftOut = true`.
 
 Every problem is also written to the temp folder as JSON (`AscentProblemFile`), so a plan that fails in the game can be solved again offline with the test console's `--ascent-replay`.
 
@@ -437,6 +454,63 @@ A converged plan that fails this when its solve lands, solved under time warp or
 ### How the plan is flown
 
 The flight does not replay the plan's clock. It flies pitch and azimuth against air-relative speed, stage by stage: within a stage the index is the speed gained since that stage lit, and where speed dips the plan time runs on with the clock. A planned pad roll follows the elapsed solid burn instead. The throttle is the plan's fraction of the liquid engines' full thrust at the altitude flown, turned into a setting through the engines' own curve, and full whenever the plan is within 0.5 % of full. Above the hand-over altitude, once UPFG has converged, or when the plan runs out, the command blends onto UPFG's steering over 15 s. A solid launch with a planned pad roll stays on the plan until its first stage ends.
+
+## Closed-loop UPFG and terminal cutoff
+
+After hand-over from the open-loop convex ascent profile, `UpfgGuidance` closes the loop to orbit insertion, and `Modes/Ascent.cs` / `Modes/Autopilot.cs` enforce terminal energy cutoff and escape protection.
+
+### UPFG singularity guards and sensed velocity
+
+- **Non-gravitational sensed velocity:** Each cycle subtracts trapezoidal gravity from velocity change before updating velocity-to-go:
+
+    $$
+    \Delta\mathbf v_{\text{sensed}} = (\mathbf v - \mathbf v_{\text{prev}}) - \tfrac12(\mathbf g_{\text{prev}} + \mathbf g_{\text{curr}})\,\Delta t,
+    \qquad
+    \mathbf v_{\text{go}} \leftarrow \mathbf v_{\text{go}} - \Delta\mathbf v_{\text{sensed}}.
+    $$
+
+- **Radial range-to-go and denominator guards:** When $|\hat{\boldsymbol\lambda}\cdot\hat{\mathbf i}_z| < 0.15$, radial range-to-go clamps to $\operatorname{clamp}(\hat{\mathbf i}_z\cdot\mathbf r_{\text{go}}, -|S|, |S|)$ and clears `Converged = false` instead of dividing by a near-zero projection:
+
+    $$
+    r_{\text{go},z} = \begin{cases}
+    \dfrac{S - \hat{\boldsymbol\lambda}\cdot\mathbf r_{\text{go},xy}}{\hat{\boldsymbol\lambda}\cdot\hat{\mathbf i}_z}, & |\hat{\boldsymbol\lambda}\cdot\hat{\mathbf i}_z| \ge 0.15 \\[6pt]
+    \operatorname{clamp}(\hat{\mathbf i}_z\cdot\mathbf r_{\text{go}},\ -|S|,\ |S|), & |\hat{\boldsymbol\lambda}\cdot\hat{\mathbf i}_z| < 0.15
+    \end{cases}
+    $$
+
+    Denominator guards protect $\lambda_{\text{de}} = Q - SJ/L$ ($|\lambda_{\text{de}}| > 10^{-6}$), $\dot\phi = -\phi L / J$ ($|J| > 10^{-9}$) and the turning term in $\mathbf r_{\text{thrust}}$ ($\lVert\dot{\boldsymbol\lambda}\rVert > 10^{-12}$). `Converged` is cleared on any singularity, non-finite value or divergence.
+
+### Orbital escape cutoff invariant
+
+During `AscentPhase.ClosedLoop` or `AscentPhase.Terminal` for any bound target orbit ($a_{\text{target}} = R_{\text{body}} + 500(\text{Pe}_{\text{km}} + \text{Ap}_{\text{km}})$, $E_{\text{target}} = -\mu / (2\max(a_{\text{target}}, R_{\text{body}})) < 0$), `Modes/Ascent.cs` checks specific orbital energy $E_{\text{now}} = \tfrac12\lVert\mathbf v\rVert^2 - \mu/\lVert\mathbf r\rVert$ every step and cuts thrust immediately if
+
+$$
+E_{\text{now}} \ge 0 \quad\lor\quad \Big(E_{\text{target}} < -0.05\,\frac{\mu}{r} \;\land\; E_{\text{now}} > 0.25\,E_{\text{target}}\Big).
+$$
+
+The $-0.05\,\mu/r$ gate allows high-apogee near-escape transfers while strictly blocking accidental hyperbolic escape.
+
+### Proportional energy terminal cutoff
+
+Discrete physics-step cutoff quantization ($0.5\text{--}1.0\,\Delta t\,a_{\text{burn}}$) dominates high-warp orbit-insertion overshoot, with a smaller contribution from KSA's 1-step lagged Velocity Verlet gravity acceleration $\mathbf a_{\text{err}} \approx \Delta t\,(\mu/r^3)\mathbf v$. Within the final $3.0\text{ s}$ of `AscentPhase.Terminal` ($\Delta t = \operatorname{clamp}(\text{simSpeed}/60,\ 1/120,\ 1.0)$), `TerminalCutoffThrottle` computes:
+
+$$
+\Delta E_{\text{verlet}} = \Delta t\cdot\Big(\tfrac12\Delta t\,\frac{\mu}{r^3}v\Big)v,
+\qquad
+\Delta E_{\text{thrust}} = \Delta t\cdot a_{\text{burn}}\cdot\max(\mathbf v\cdot\hat{\mathbf u},\ 0.1 v),
+$$
+
+$$
+E_{\text{need}} = E_{\text{target}} - E_{\text{now}} - \Delta E_{\text{verlet}},
+\qquad
+f = \frac{E_{\text{need}}}{\Delta E_{\text{thrust}}}.
+$$
+
+- If $E_{\text{now}} \ge E_{\text{target}}$ or $E_{\text{need}} \le 0$: cut immediately (`EngineOn = false`, `CutoffDone = true`).
+- If $0 < E_{\text{need}} < \Delta E_{\text{thrust}}$: cut if $f < 0.5\,u_{\min}$; otherwise command $u = \operatorname{clamp}(u_{\text{base}} f,\ u_{\min},\ u_{\text{base}})$.
+- On degenerate/non-orbital cutoffs with $t_{\text{rem}} < \Delta t$, the same nearest-energy rule applies with $f = t_{\text{rem}} / \Delta t$.
+
+This holds apoapsis and semi-major-axis error well below $0.1\text{ km}$ across $1\times$, $4\times$ and $10\times$ time warp.
 
 ## Code map
 

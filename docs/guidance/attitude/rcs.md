@@ -112,7 +112,8 @@ It cannot be asked for a torque, it ignores what a thruster does to the other ax
 
 ## What you see in flight
 
-- **On a glide, the RCS fires only for what the fins cannot give.** It shares one programme with the fins (see [Fin mixing](fins.md#fins-and-rcs-in-one-programme)), so it fires when the fins are at their stops or still travelling, when the air is too thin for the fins, or when the craft is more than 20° off engine first.
+- **On a glide or ascent, the RCS fires only for what the gimbals and fins cannot give.** When gimbals are active, only the residual beyond the 1-step rate-limited gimbal torque reaches the downstream allocator; when fins are active, `AeroTorqueAllocator` solves the joint Fin+RCS programme directly without duplicate RCS allocation.
+- **Physical scaling in 6-DOF SCvx:** Under persistent `ClarabelWorkspace`, `RcsTorqueScale` uses the craft's physical RCS torque authority rather than gimbal scale.
 - **A booster's top thrusters push it sideways as they turn it.** Touchdown guidance plans with that push; the glides' attitude controller does not model it.
 - **Small, steady demands come out as occasional pulses**, not a constant puffing.
 - **Roll is the first to give way** when a demand is too big.
