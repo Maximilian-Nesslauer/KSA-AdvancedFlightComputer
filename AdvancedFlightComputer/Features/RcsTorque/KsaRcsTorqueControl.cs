@@ -9,7 +9,7 @@ namespace AdvancedFlightComputer.Features.RcsTorque;
 /// <summary>
 /// Gives a craft a torque from its RCS thrusters, the cheapest way its layout allows, for any mode that wants one. The caller asks for a torque in the vehicle's assembly axes; this solves <see cref="RcsTorqueAllocator"/> for each thruster's duty on the main thread, and the vehicle worker turns the duties into pulses.
 ///
-/// SEPARATE FROM THE STOCK FLIGHT COMPUTER. Nothing here reads its RCS mode, its thruster configuration, its authority figures or its attitude modes: the thrusters come from the craft's parts, their thrust and torque from their own nozzles (RcsWrenchTable.ComputeLive), and the state is keyed on the thruster modules. The one point of contact is where the pulses are delivered. Each thruster's pulse lives in its module state (ThrusterControllerState.CommandPulseTime), which stock rewrites for every thruster on every control step, zero when it fires nothing, so the pulses are written after it: from VehicleCommandSink, after FlightComputer.ComputeControl, taking the longer of stock's pulse and this one.
+/// SEPARATE FROM THE STOCK FLIGHT COMPUTER. Nothing here reads its RCS mode, its thruster configuration, its authority figures or its attitude modes: the thrusters come from the craft's parts, their thrust and torque from their own nozzles (RcsWrenchTable.ComputeLive), and the state is keyed on FlightComputer.BurnPlan. The one point of contact is where the pulses are delivered. Each thruster's pulse lives in its module state (ThrusterControllerState.CommandPulseTime), which stock rewrites for every thruster on every control step, zero when it fires nothing, so the pulses are written after it: from VehicleCommandSink, after FlightComputer.ComputeControl, taking the longer of stock's pulse and this one.
 ///
 /// WHY NOT STOCK'S RCS. Stock steers one axis at a time: every thruster tagged to an axis fires for the same time, t = impulse / that axis's authority, and only the tagged component of each thruster's torque counts (FlightComputer.SelectJetsToFire, ThrusterController.ComputeIntendedAction). It cannot be asked for a torque, it ignores what a thruster does to the other axes and the side force it brings, and it fires every tagged thruster whether or not a cheaper set would do.
 ///
@@ -33,10 +33,15 @@ internal static class KsaRcsTorqueControl
         public readonly double[] Duty;
         public readonly Dictionary<ThrusterController, int> Index;
 
-        public Pulses(ThrusterController[] modules, double[] duty)
+        public Pulses(ThrusterController[] modules, double[] duty, Dictionary<ThrusterController, int>? sharedIndex = null)
         {
             Modules = modules;
             Duty = duty;
+            if (sharedIndex != null)
+            {
+                Index = sharedIndex;
+                return;
+            }
             Index = new Dictionary<ThrusterController, int>(modules.Length, ReferenceEqualityComparer.Instance);
             for (int i = 0; i < modules.Length; i++)
                 Index[modules[i]] = i;
@@ -53,15 +58,15 @@ internal static class KsaRcsTorqueControl
         internal volatile int Reached;
 
         // The worker's own: the pulse each thruster fires in the current period, s after its start, and the time carried into the next.
+        internal ThrusterController[]? LastModules;
         internal double[] FireUntil = [];
         internal double[] Carry = [];
         internal UniverseTime PeriodStart;
         internal bool PeriodValid;
     }
 
-    /// <summary>Each craft's slot, and the same slot under each of its thruster modules, which is what the worker can see: the module states it is handed.</summary>
-    private static readonly ConditionalWeakTable<Vehicle, Slot> ByVehicle = new();
-    private static readonly ConditionalWeakTable<ThrusterController, Slot> ByThruster = new();
+    /// <summary>Each craft's slot, keyed on FlightComputer.BurnPlan because it is unique per vehicle, shared with the worker copy, and never shared across Vehicle.Split.</summary>
+    private static readonly ConditionalWeakTable<BurnPlan, Slot> ByBurnPlan = new();
 
     /// <summary>How many crafts have a command standing, so the worker looks for none when there are none.</summary>
     private static int _live;
@@ -74,6 +79,24 @@ internal static class KsaRcsTorqueControl
             Interlocked.Increment(ref _live);
         else if (was != null && cmd == null)
             Interlocked.Decrement(ref _live);
+    }
+
+    internal static void Reset()
+    {
+        ByBurnPlan.Clear();
+        Volatile.Write(ref _live, 0);
+    }
+
+    private static bool SameModules(ThrusterController[]? a, ThrusterController[] b)
+    {
+        if (a == null || a.Length != b.Length)
+            return false;
+        for (int i = 0; i < b.Length; i++)
+        {
+            if (!ReferenceEquals(a[i], b[i]))
+                return false;
+        }
+        return true;
     }
 
     /// <summary>The craft's staged thrusters, from its parts.</summary>
@@ -230,12 +253,23 @@ internal static class KsaRcsTorqueControl
     internal static Report Command(Vehicle vehicle, double3 torqueAsmb,
                                    double3 ax, double3 ay, double3 az, ReadOnlySpan<double> priority)
     {
-        if (vehicle == null)
-            return default;
-        Slot slot = ByVehicle.GetValue(vehicle, _ => new Slot());
-        slot.Owner = vehicle;
         RcsTorqueAllocator? alloc = Measure(vehicle, ax, ay, az, out ThrusterController[] modules);
-        if (alloc == null)
+        return Command(vehicle, torqueAsmb, ax, ay, az, priority, alloc, modules);
+    }
+
+    /// <summary>
+    /// Overload taking a pre-measured allocator and module list from <see cref="Measure"/> in the same frame (<paramref name="ax"/>, <paramref name="ay"/>, <paramref name="az"/>).
+    /// </summary>
+    internal static Report Command(Vehicle vehicle, double3 torqueAsmb,
+                                   double3 ax, double3 ay, double3 az, ReadOnlySpan<double> priority,
+                                   RcsTorqueAllocator? alloc, ThrusterController[] modules)
+    {
+        BurnPlan? plan = vehicle?.FlightComputer?.BurnPlan;
+        if (vehicle == null || plan == null)
+            return default;
+        Slot slot = ByBurnPlan.GetValue(plan, static _ => new Slot());
+        slot.Owner = vehicle;
+        if (alloc == null || modules.Length != alloc.Count)
         {
             Publish(slot, null);
             slot.Last = default;
@@ -252,10 +286,10 @@ internal static class KsaRcsTorqueControl
             return default;
         }
 
-        // The worker finds the slot through any of the craft's thrusters.
-        foreach (ThrusterController m in modules)
-            ByThruster.AddOrUpdate(m, slot);
-        Publish(slot, new Pulses(modules, duty));
+        Pulses? prev = slot.Cmd;
+        Dictionary<ThrusterController, int>? sharedIndex =
+            prev != null && SameModules(prev.Modules, modules) ? prev.Index : null;
+        Publish(slot, new Pulses(modules, duty, sharedIndex));
         slot.Last = new Report(true, new double3(dx, dy, dz),
             new double3(r.TorqueX, r.TorqueY, r.TorqueZ), new double3(r.ForceX, r.ForceY, r.ForceZ),
             r.FlowKgS, r.ShortfallNm, r.Firing, alloc.Count);
@@ -265,9 +299,11 @@ internal static class KsaRcsTorqueControl
     /// <summary>Stop firing for this craft. The worker writes nothing more, so stock's own command (none, unless the player fires RCS) stands from the next step.</summary>
     internal static void Release(Vehicle vehicle)
     {
-        if (vehicle != null && ByVehicle.TryGetValue(vehicle, out Slot? slot))
+        BurnPlan? plan = vehicle?.FlightComputer?.BurnPlan;
+        if (plan != null && ByBurnPlan.TryGetValue(plan, out Slot? slot))
         {
             Publish(slot, null);
+            slot.Owner = null;
             slot.Last = default;
             slot.Reached = 0;
         }
@@ -275,31 +311,22 @@ internal static class KsaRcsTorqueControl
 
     /// <summary>The last command's report for this craft, for the log and the panel.</summary>
     internal static Report Last(Vehicle vehicle)
-        => vehicle != null && ByVehicle.TryGetValue(vehicle, out Slot? slot) ? slot.Last : default;
+        => vehicle?.FlightComputer?.BurnPlan is { } plan && ByBurnPlan.TryGetValue(plan, out Slot? slot) ? slot.Last : default;
 
     /// <summary>How many thrusters the worker's last pass matched to this craft's duties (see Slot.Reached).</summary>
     internal static int Reached(Vehicle vehicle)
-        => vehicle != null && ByVehicle.TryGetValue(vehicle, out Slot? slot) ? slot.Reached : 0;
+        => vehicle?.FlightComputer?.BurnPlan is { } plan && ByBurnPlan.TryGetValue(plan, out Slot? slot) ? slot.Reached : 0;
 
     /// <summary>
-    /// Runs on the vehicle worker from VehicleCommandSink.Run, after stock has written this step's thruster commands: writes each thruster's pulse for the current period into its module state. Reads nothing from the flight computer; the thruster states it is handed say which craft this is.
+    /// Runs on the vehicle worker from VehicleCommandSink.Run, after stock has written this step's thruster commands: writes each thruster's pulse for the current period into its module state.
     /// </summary>
-    internal static void OnComputeControl(in FlightComputerNavigation nav,
+    internal static void OnComputeControl(FlightComputer fc, in FlightComputerNavigation nav,
                                           ref FlightComputerOutput outputs, ref VehicleCommandSink.Receipt receipt)
     {
         if (Volatile.Read(ref _live) <= 0)
             return;
 
-        // Which craft: the slot any of its thrusters was registered under, found through the read-only states so the search marks nothing changed.
-        Slot? st = null;
-        var find = outputs.Thrusters.ModulesAndReadOnlyStates.GetEnumerator();
-        while (find.MoveNext())
-        {
-            ThrusterController? module = find.Current.Module;
-            if (module != null && ByThruster.TryGetValue(module, out st))
-                break;
-        }
-        if (st == null)
+        if (fc.BurnPlan is not { } plan || !ByBurnPlan.TryGetValue(plan, out Slot? st))
             return;
 
         // ONE read of the published duties.
@@ -307,6 +334,8 @@ internal static class KsaRcsTorqueControl
         if (cmd == null)
         {
             st.PeriodValid = false;
+            Array.Clear(st.Carry);
+            st.LastModules = null;
             return;
         }
         // A craft out of control fires nothing, as with the player's inputs.
@@ -315,8 +344,9 @@ internal static class KsaRcsTorqueControl
             return;
 
         int n = cmd.Modules.Length;
-        if (st.FireUntil.Length != n)
+        if (!SameModules(st.LastModules, cmd.Modules))
         {
+            st.LastModules = cmd.Modules;
             st.FireUntil = new double[n];
             st.Carry = new double[n];
             st.PeriodValid = false;
@@ -330,7 +360,14 @@ internal static class KsaRcsTorqueControl
             elapsed = 0.0;
             for (int i = 0; i < n; i++)
             {
-                double want = Math.Clamp(cmd.Duty[i], 0.0, 1.0) * PeriodSec + st.Carry[i];
+                double d = Math.Clamp(cmd.Duty[i], 0.0, 1.0);
+                if (d <= 0.0)
+                {
+                    st.FireUntil[i] = 0.0;
+                    st.Carry[i] = 0.0;
+                    continue;
+                }
+                double want = d * PeriodSec + st.Carry[i];
                 double minPulse = Math.Max(cmd.Modules[i].MinimumPulseTime, 0f);
                 if (want > 0.0 && want >= minPulse)
                 {
@@ -363,8 +400,10 @@ internal static class KsaRcsTorqueControl
             if (left <= 1e-4)
                 continue;
             if (left > state.CommandPulseTime)
+            {
                 state.CommandPulseTime = (float)left;
-            state.CommandTime = nav.Time;
+                state.CommandTime = nav.Time;
+            }
             receipt.Command();
         }
         st.Reached = reached;

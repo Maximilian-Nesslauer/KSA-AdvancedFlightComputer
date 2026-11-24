@@ -136,6 +136,16 @@ internal static class AeroAllocatorCheck
         ok &= Check($"the scaled fins, all of the reach: gives {r.TorqueY:F0} of {bigReach:F0} N m, deflections {Text(d4)}",
                     r.TorqueY >= 0.98 * bigReach);
 
+        // Refinement chords crossing 0 deg and current[i] keep exact outward and change cost signs.
+        double[] cur4 = [4.0], wide = [30.0];
+        r = steep.Allocate(-15_000.0, 0.0, 0.0, priority, one, cur4, wide, default, default, default);
+        ok &= Check($"steep fin from +4 deg to -15 kN m across 0 deg: gives {r.TorqueX:F0} N m at {one[0]:F2} deg",
+                    r.Solved && Near(r.TorqueX, -15_000.0, 75.0) && Near(one[0], -20.0, 0.05));
+        double[] cur20 = [20.0];
+        r = steep.Allocate(0.0, 0.0, 0.0, priority, one, cur20, wide, default, default, default);
+        ok &= Check($"steep fin from +20 deg to zero demand returns to rest: gives {r.TorqueX:F0} N m at {one[0]:F2} deg",
+                    r.Solved && Math.Abs(one[0]) < 0.05 && Math.Abs(r.TorqueX) < 50.0);
+
         Console.WriteLine();
         Console.WriteLine(ok ? "PASS - the aero torque allocator" : "FAIL - the aero torque allocator");
         return ok ? 0 : 1;

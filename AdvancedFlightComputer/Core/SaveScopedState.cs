@@ -2,6 +2,7 @@ using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.RcsTorque;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using AdvancedFlightComputer.Features.Transfer;
 using AdvancedFlightComputer.Features.Ui.Console;
@@ -45,6 +46,7 @@ internal static class SaveScopedState
         OrbitToolForm.Reset();
         RcsExecutor.ResetUiCache();
         RcsCommandChannel.Reset();
+        KsaRcsTorqueControl.Reset();
         // Also disarms the AUTOSTAGE switch, so a loaded save does not stage until the player arms it again.
         StagingDetector.Reset();
         // The transfer calculation and its selection belong to the world that was loaded over.

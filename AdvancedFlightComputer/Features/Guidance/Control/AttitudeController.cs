@@ -176,7 +176,7 @@ internal static class AttitudeController
         }
 
         // One programme for fins and RCS (the RCS as the fins' backup): the fins are commanded, the RCS fired for what they will give short. Fins off (Settings.UseSurfaces) are held at rest and the RCS takes it all.
-        RcsTorqueAllocator rcsColumns = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out _);
+        RcsTorqueAllocator rcsColumns = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out ThrusterController[] rcsModules);
         KsaAeroTorqueControl.Report surfaces = default;
         if (settings.UseSurfaces)
             surfaces = KsaAeroTorqueControl.Command(vehicle, aero, remaining, mx, my, mz, RcsPriority, momentLimiterPerPa,
@@ -185,7 +185,7 @@ internal static class AttitudeController
             KsaAeroTorqueControl.Release(vehicle);
         double3 surfacesBody = surfaces.GivenNm.X * mx + surfaces.GivenNm.Y * my + surfaces.GivenNm.Z * mz;
         double3 rcsAsked = remaining - surfacesBody;
-        KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, RcsPriority);
+        KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, RcsPriority, rcsColumns, rcsModules);
 
         slot.Last = new Report(errorDeg, rateErrorDegS, !slot.Feedback,
             Model(demand, mx, my, mz), Model(air, mx, my, mz), surfaces.GivenNm, Model(rcsAsked, mx, my, mz),
