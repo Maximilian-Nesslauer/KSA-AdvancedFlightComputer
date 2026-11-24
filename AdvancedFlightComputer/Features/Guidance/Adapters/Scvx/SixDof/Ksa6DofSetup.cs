@@ -449,6 +449,11 @@ public static class Ksa6DofSetup
         return fins.ToArray();
     }
 
+    /// <summary>
+    /// The share of the RCS's torque and of the control surfaces' travel touchdown's plans may use (Scvx6DofConfig.PlanRcsShare, FinMinDeg/FinMaxDeg), under the gimbals' (PlanTorqueShare): the rest is for flying the plan, the RCS's through the attitude feedback (AttitudeFeedback6Dof), and a turn the air, the flaps and the thrusters cannot do with room to spare is planned on the gimbals with the engine lit. The body's own air moment is physics and is not scaled. A Starship's plan flipped it in the coast on the flaps and the RCS at their limits; the air held the flip back harder than the model said (1.6-1.7 MN m against 0.5-1.1 between 75 and 45 deg of tilt), the craft fell 26 deg behind, and it lit at 60 m (2026-11-24).
+    /// </summary>
+    internal const double PlanSurfaceShare = 0.5;
+
     private static BodyAero6Dof BodyAeroFor(Vehicle vehicle, KsaAeroSweep.Result aero, double momentLimiterPerPa, bool fins = true)
     {
         if (aero?.BodyAero == null || aero.Atmosphere == null || !(aero.ReferenceArea > 0.0))
@@ -610,8 +615,10 @@ public static class Ksa6DofSetup
         double torqueShare = Math.Clamp(1.0 - (double.IsFinite(torqueMargin) ? torqueMargin : 0.0), 0.5, 1.0);
         gimbalDeg = Math.Atan(Math.Tan(gimbalDeg * Math.PI / 180.0) * torqueShare) * 180.0 / Math.PI;
         tauRoll *= torqueShare;
-        double[] rcsPos = rcs?.MaxPosNm is { } pos ? Array.ConvertAll(pos, v => v * torqueShare) : null;
-        double[] rcsNeg = rcs?.MaxNegNm is { } neg ? Array.ConvertAll(neg, v => v * torqueShare) : null;
+        // THE RCS AND THE CONTROL SURFACES AT PlanSurfaceShare, under the gimbals' share: a turn the air, flaps and thrusters cannot do with room to spare is planned on the gimbals with the engine lit.
+        double surfaceShare = Math.Min(torqueShare, PlanSurfaceShare);
+        double[] rcsPos = rcs?.MaxPosNm is { } pos ? Array.ConvertAll(pos, v => v * surfaceShare) : null;
+        double[] rcsNeg = rcs?.MaxNegNm is { } neg ? Array.ConvertAll(neg, v => v * surfaceShare) : null;
         // A plan with a coast keeps the heading and the roll-rate limit like any other. Freeing them was tried on 2026-11-20 while the air's roll moment read 40 kN m against 22 of RCS; that was the sweep's moment without the game's limiter (BodyAero6Dof.MomentLimiterPerPa), and the booster felt about 11.
         bool coastPlan = false;
 
@@ -726,14 +733,15 @@ public static class Ksa6DofSetup
             GimbalArm = arm,
             GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) / torqueShare : 0.0,
             PlanTorqueShare = torqueShare,
+            PlanRcsShare = surfaceShare,
             TauRollMax = tauRoll,
             RollTorqueFollowsThrust = true,
             RcsMaxPosNm = rcsPos,
             RcsMaxNegNm = rcsNeg,
             RcsWeight = rcsWeight,
             // THE FINS (Dynamics6Dof.IFIN on): each one's range and rate, the plan's share of them (PlanTorqueShare), the rest kept for the feedback as for the gimbals and the RCS.
-            FinMinDeg = finTables.Length > 0 ? Array.ConvertAll(finTables, f => f.MinDeg * torqueShare) : null,
-            FinMaxDeg = finTables.Length > 0 ? Array.ConvertAll(finTables, f => f.MaxDeg * torqueShare) : null,
+            FinMinDeg = finTables.Length > 0 ? Array.ConvertAll(finTables, f => f.MinDeg * surfaceShare) : null,
+            FinMaxDeg = finTables.Length > 0 ? Array.ConvertAll(finTables, f => f.MaxDeg * surfaceShare) : null,
             FinRateDegS = finTables.Length > 0 ? Array.ConvertAll(finTables, f => f.RateDegS * torqueShare) : null,
             // The turn-rate limit (Scvx6DofConfig.RateMaxRadS).
             RateMaxRadS = Math.Max(rateMaxDegS, 0.0) * Math.PI / 180.0,

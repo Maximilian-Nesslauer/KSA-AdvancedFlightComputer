@@ -1700,8 +1700,9 @@ public sealed class Ksa6DofGuidance : IDisposable
                 for (int a = 0; a < 3; a++)
                 {
                     (double pos, double neg) = _cfg.RcsBounds(a);
-                    rcsPos[a] = pos / share;
-                    rcsNeg[a] = neg / share;
+                    double rcsShare = _cfg.PlanRcsShare > 0.0 ? _cfg.PlanRcsShare : share;
+                    rcsPos[a] = pos / rcsShare;
+                    rcsNeg[a] = neg / rcsShare;
                 }
             }
             // The gimbals' cone is centred where the plan's is (Scvx6DofConfig.GimbalTrimX/Y): the torque of the deflection that holds the engines' own moment, (L y T, -L x T).

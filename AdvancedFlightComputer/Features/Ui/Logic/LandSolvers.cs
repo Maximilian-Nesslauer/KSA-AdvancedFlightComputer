@@ -326,7 +326,7 @@ internal static class EntryMethods
 
     public static string Card(EntryMethod method) => method == EntryMethod.GlideBurn
         ? "From the current state through air: glides with the engine off, then flies the landing burn to the site. Starts from any fall through air, also a reloaded one."
-        : "From orbit or the top of the air: flies the entry belly first, banking to hold its planned drag, and hands over to BELLYFLOP to fall onto the site. No landing burn yet.";
+        : "From orbit or the top of the air: flies the entry belly first, banking to hold its planned drag, and hands over to BELLYFLOP to fall onto the site, and TOUCHDOWN for the flip and the landing burn. Engaged below the hand-over, it starts at BELLYFLOP.";
 
     public static readonly string[] Cards = { Card(EntryMethod.Orbital), Card(EntryMethod.GlideBurn) };
 
@@ -370,7 +370,7 @@ internal static class OrbitalEntryGuidance
 
     public const string CommitHint =
         "Measures the craft belly first, then flies the entry to the hand-over at HAND-OVER MACH, banking to hold the planned drag and turning towards the site with roll reversals. With BELLYFLOP on, bellyflop falls onto the site from there. "
-        + "Starts from orbit or from the air, with the engine off. There is no landing burn yet: the flight ends in impact.";
+        + "Starts from orbit or from the air, with the engine off. Engaged already past the hand-over (a fall in the low air), it skips the entry and starts at BELLYFLOP, holding the attitude it has until bellyflop's first plan.";
 
     public const string NoAirText = "NO AIR ON THIS BODY. ORBITAL ENTRY NEEDS AN ATMOSPHERE.";
 }

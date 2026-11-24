@@ -321,6 +321,13 @@ public static partial class GuidanceWindow
         if (st.Phase == OrbitalEntryPhase.Entry && e >= ef)
         {
             st.Phase = OrbitalEntryPhase.Holding;
+            // Past the hand-over before the entry ever planned: engaged in the bellyflop's own air, so bellyflop takes the craft at its first plan (BELLYFLOP DIRECT).
+            if (st.Solves == 0 && st.Plan == null && _s.OrbitalEntryBellyflop)
+            {
+                st.BellyflopDirect = true;
+                GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                    $"BELLYFLOP DIRECT: engaged past the hand-over, at Mach {mach:F2} and {alt / 1000:F1} km, {st.RangeM / 1000:F1} km to go: no entry, bellyflop takes the craft at its first plan; the attitude it has is held until then."));
+            }
             GuidanceLog.Info(vehicle, FormattableString.Invariant(
                 $"Orbital entry hand-over: Mach {mach:F2} at {alt / 1000:F1} km, {st.RangeM / 1000:F1} km to go, {st.CrossrangeM / 1000:F1} km across{(_s.OrbitalEntryBellyflop ? FormattableString.Invariant($" (bellyflop's fall {st.Bellyflop.TerminalRangeM / 1000:F1} km)") : "")}."));
         }
@@ -335,6 +342,12 @@ public static partial class GuidanceWindow
         {
             // Bellyflop flies the craft: no bank, no tracker. Its status is its own (StepBellyflop).
             bankDeg = 0.0;
+        }
+        else if (st.Phase == OrbitalEntryPhase.Holding && st.BellyflopDirect)
+        {
+            bankDeg = 0.0;
+            st.Tracker.Reset();
+            st.SetStatus(FormattableString.Invariant($"BELLYFLOP DIRECT: MACH {mach:F1} AT {alt / 1000:F1} KM, {st.RangeM / 1000:F1} KM TO GO. HOLDING THE ATTITUDE UNTIL BELLYFLOP'S FIRST PLAN."));
         }
         else if (st.Phase == OrbitalEntryPhase.Holding)
         {
@@ -414,6 +427,18 @@ public static partial class GuidanceWindow
         {
             nose = bfNose;
             belly = bfBelly;
+        }
+        // BELLYFLOP DIRECT, before bellyflop's first plan: the attitude the craft had when it got here, held still (the entry's angle of attack is 45 deg off a belly-first fall).
+        else if (st.Phase == OrbitalEntryPhase.Holding && st.BellyflopDirect && st.BellyIndex >= 0)
+        {
+            if (!st.HoldLatched)
+            {
+                st.HoldNoseCci = KsaFrameBridge.BodyNoseCci(vehicle);
+                st.HoldBellyCci = KsaAeroSweep.BellyAxes[st.BellyIndex].Transform(KsaFrameBridge.BodyToCci(vehicle));
+                st.HoldLatched = true;
+            }
+            nose = st.HoldNoseCci;
+            belly = st.HoldBellyCci;
         }
         st.RollRefCci = st.BellyIndex switch
         {

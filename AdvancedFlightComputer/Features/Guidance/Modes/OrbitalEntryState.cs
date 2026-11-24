@@ -47,6 +47,12 @@ public sealed class OrbitalEntryState
     public volatile EntryPlanner.Result Pending;
     public double NextSolveAt = double.NegativeInfinity;
     public int Solves, Refusals;
+    /// <summary>
+    /// BELLYFLOP DIRECT: engaged already past the hand-over (a save in the bellyflop, or a fall through the low air), so the entry is skipped and bellyflop takes the craft at its first plan; until then the attitude the craft had is held (HoldNoseCci, HoldBellyCci), not the entry's angle of attack.
+    /// </summary>
+    public bool BellyflopDirect;
+    public bool HoldLatched;
+    public Brutal.Numerics.double3 HoldNoseCci, HoldBellyCci;
     public string LastRefusal = "";
     public double LastSolveMs;
     public double PredictedStartS = double.NaN;
@@ -128,6 +134,7 @@ public sealed class OrbitalEntryState
         BellyIndex = -1;
         NextSolveAt = double.NegativeInfinity;
         Solves = Refusals = 0;
+        BellyflopDirect = HoldLatched = false;
         LastRefusal = "";
         LastSolveMs = 0;
         PredictedStartS = double.NaN;

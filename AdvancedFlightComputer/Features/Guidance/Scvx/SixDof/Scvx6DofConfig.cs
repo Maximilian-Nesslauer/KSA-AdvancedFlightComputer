@@ -352,6 +352,9 @@ public sealed class Scvx6DofConfig
     /// </summary>
     public double PlanTorqueShare { get; init; } = 1.0;
 
+    /// <summary>The share of the RCS's torque the RCS bounds are (Ksa6DofSetup.PlanSurfaceShare), at most PlanTorqueShare: the flight divides by it to recover the RCS's whole torque for the feedback. 1 for none kept.</summary>
+    public double PlanRcsShare { get; init; } = 1.0;
+
     private static double Bound(double[]? r, int a)
         => r is { } v && a < v.Length && double.IsFinite(v[a]) && v[a] > 0.0 ? v[a] : 0.0;
 
