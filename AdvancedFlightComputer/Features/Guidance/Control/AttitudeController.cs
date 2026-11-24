@@ -35,7 +35,7 @@ using AdvancedFlightComputer.Guidance.Numerics.Flight;
 ///
 /// SURFACE SMOOTHING (Settings.SurfaceSmoothS; off by default, and no flight uses it since 2026-11-22, when orbital entry went back to the one programme with an RCS dead band: the split spent the RCS on the jitter, at 2.4 times the propellant, where the flaps alone held the attitude). The torque demand is lagged over that time, and the RCS is given the fast part only as far as half its measured reach goes (SpareAccel's RCS reach); the surfaces are asked for the rest within one step's reach, and the RCS then takes whatever they leave: frequency-split allocation by reach, so with RCS to spare the jitter goes to it and the surfaces take the slow torque at their full rate, and with little RCS the surfaces take nearly all of it (KsaAeroTorqueControl.Command's smoothS). Needs AuthorityCapture, which measures the RCS's reach; without it the RCS takes none of the fast part. In thin air the RCS's flutter about a held attitude swung the flaps 10 deg every half second for next to no torque (2026-11-21).
 ///
-/// PHASE-PLANE RCS (Settings.PhasePlaneRcs; an orbital entry). Each model axis has one owner, as the stock flight computer gives each to its gimbals or its RCS: the surfaces once their spare torque after trim is what this law needs to hold the band (inertia x bandwidth^2 x band) or matches the RCS's, the RCS below that (thin air, a craft without surfaces). The surfaces fly their own axes on this law, alone, and hold only the trim on the RCS's. The RCS fires by the stock flight computer's phase plane (PhasePlaneRcs): it coasts inside switching lines drawn from its own braking authority, and on crossing one fires the one impulse that puts the craft on a slow drift back across the band - on its own axes with RcsAngleBandDeg, on the surfaces' only as a backup, past three times the band and while the error there still grows, so it never fires against the surfaces' own moves. A dead band on this law instead (2026-11-22) banged across it in thin air at 1.3 kg/s, against 0.6-0.75 continuous, and fired through every turn the flaps were flying; offline, the phase plane holds a calm axis on a twentieth of the dead band's impulse.
+/// PHASE-PLANE RCS (Settings.PhasePlaneRcs; an orbital entry). Each model axis has one owner, as the stock flight computer gives each to its gimbals or its RCS: the surfaces once their spare torque after trim is what this law needs to hold a 1 deg band (inertia x bandwidth^2 x 1 deg, OwnershipBandDeg, whatever the RCS's own band) or matches the RCS's, the RCS below that (thin air, a craft without surfaces). The surfaces fly their own axes on this law, alone, and hold only the trim on the RCS's. The RCS fires by the stock flight computer's phase plane (PhasePlaneRcs): it coasts inside switching lines drawn from its own braking authority, and on crossing one fires the one impulse that puts the craft on a slow drift back across the band - on its own axes with RcsAngleBandDeg, on the surfaces' only as a backup, past three times the band and while the error there still grows, so it never fires against the surfaces' own moves. A dead band on this law instead (2026-11-22) banged across it in thin air at 1.3 kg/s, against 0.6-0.75 continuous, and fired through every turn the flaps were flying; offline, the phase plane holds a calm axis on a twentieth of the dead band's impulse.
 ///
 /// THE DEADBAND (Settings.DeadbandDeg, off by default). Inside it, turning at under RateDeadbandDegS from the target's rate, the feedback stands down and only the feedforward and the integral fly; it comes back past the deadband and stands down again under half of it. Off since the integral and the filtered rate went in: each return of the feedback kicked, and in the harness a 0.5 deg deadband cost 50 kg of RCS holding a tilt where none cost 46, and 1 deg cost 234 (2026-11-20).
 ///
@@ -93,6 +93,8 @@ internal static class AttitudeController
         /// <summary>PHASE-PLANE RCS: each model axis's phase-plane state, whether the RCS owns it (else the surfaces), the thrusters' shortest pulse, s, and the surfaces' spare torque each axis after trim, N m (SpareAccel).</summary>
         public readonly PhasePlaneRcs.State[] RcsState = new PhasePlaneRcs.State[3];
         public readonly bool[] RcsOwns = new bool[3];
+        /// <summary>The RCS's steady work moved onto the surfaces, model axes (x, y, z), N m: on each axis the RCS owns, its torque integrated over RcsTrimShiftS, asked of the surfaces with the trim. Zero on the surfaces' own axes.</summary>
+        public double[] RcsTrimNm = new double[3];
         public double RcsMinPulseS;
         /// <summary>The smallest pulse the RCS can fire about each model axis, N m s: one thruster's torque on the axis times its shortest pulse, the least of those that turn the axis at all (stock's MinRotationalImpulse).</summary>
         public double3 RcsMinImpulseNms;
@@ -204,7 +206,8 @@ internal static class AttitudeController
         {
             // THE OWNER OF EACH AXIS, one at a time as the stock flight computer gives an axis to its gimbals or its RCS. The surfaces take it once their spare torque after trim is what this law needs to hold the band, inertia x bandwidth^2 x band (a 1 rad/s loop pushing back a 1 deg error asks 1 deg/s^2), or once they match the RCS, whichever comes first; they give it back under RcsOwnerLeaveShare of that. Flown on the flaps alone (2026-11-22), the belly flop held 0.13 deg (90th percentile) from 1 kPa, with about 1 deg/s^2 spare, and 5.7 deg below it with 0.6: a tenth of the RCS, stock's share for gimbals, handed the flaps the axes at 0.5 kPa, where they waggled. No RCS on an axis: the surfaces keep it.
             double3 aeroSpare = settings.UseSurfaces ? slot.AeroSpareNm : default;
-            double bandRad = settings.RcsAngleBandDeg * Math.PI / 180.0;
+            // The need is taken on a fixed band, not the RCS's: a wider RCS band is propellant saved, and must not hand the RCS more axes. On the RCS's band, widening it from 1 to 4 deg quadrupled the need, and the RCS kept a Starship's pitch and yaw to 1.1 kPa, holding the air's steady 100 kN m on pulses (2026-11-24).
+            double bandRad = OwnershipBandDeg * Math.PI / 180.0;
             for (int i = 0; i < 3; i++)
             {
                 double rcsReach = Math.Min(Axis(slot.RcsPlusNm, i), Axis(slot.RcsMinusNm, i));
@@ -218,7 +221,10 @@ internal static class AttitudeController
                     slot.RcsOwns[i] = slot.RcsOwns[i] ? !(aeroReach >= need) : aeroReach < RcsOwnerLeaveShare * need;
                 // A change of owner starts the RCS's phase plane afresh: its own and the surfaces' backup are different laws.
                 if (slot.RcsOwns[i] != owned)
+                {
                     slot.RcsState[i] = PhasePlaneRcs.State.Inside;
+                    slot.RcsTrimNm[i] = 0.0;
+                }
                 if (slot.RcsOwns[i])
                 {
                     rcsAxes |= 1 << i;
@@ -270,7 +276,7 @@ internal static class AttitudeController
             slot.GimbalsOwned = false;
         }
 
-        // PHASE-PLANE RCS: the surfaces are asked for the demand on the axes they own and only the trim (the air's moment and the gyroscopic torque) on the RCS's, alone; the RCS fires by the phase plane below.
+        // PHASE-PLANE RCS: the surfaces are asked for the demand on the axes they own and only the trim (the air's moment and the gyroscopic torque) on the RCS's, alone; the RCS fires by the phase plane below. On the RCS's axes the trim carries the RCS's own steady work too (RcsTrimNm): the air's moment the tables miss, which the RCS would otherwise hold on pulses all the way down.
         if (phasePlane)
         {
             double3 trim = gyro - air;
@@ -278,7 +284,7 @@ internal static class AttitudeController
             for (int i = 0; i < 3; i++)
             {
                 double3 m = i == 0 ? mx : i == 1 ? my : mz;
-                ask += double3.Dot(slot.RcsOwns[i] ? trim : remaining, m) * m;
+                ask += slot.RcsOwns[i] ? (double3.Dot(trim, m) + slot.RcsTrimNm[i]) * m : double3.Dot(remaining, m) * m;
             }
             remaining = ask;
         }
@@ -313,6 +319,18 @@ internal static class AttitudeController
             rcs = KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, rcsPriority, jetMapFallback: phasePlane);
         else
             KsaRcsTorqueControl.Release(vehicle);
+        // THE RCS'S STEADY WORK TO THE SURFACES: on each axis it owns, what it gives is integrated into the surfaces' trim there, so a moment the tables miss ends up on the flaps and the RCS keeps only what changes. A Starship's RCS held a steady 80-117 kN m of pitch on pulses through its whole entry, 2 t of propellant by Mach 19 (2026-11-24). Held to the surfaces' reach either way, so it does not wind up past what they can give; the step's holdS is the time the RCS's torque was held.
+        if (phasePlane && settings.UseSurfaces && dt > 0.0)
+        {
+            double k = Math.Min(Math.Max(dt, holdS) / RcsTrimShiftS, 1.0);
+            for (int i = 0; i < 3; i++)
+            {
+                if (!slot.RcsOwns[i])
+                    continue;
+                double reach = Math.Max(Math.Abs(Axis(slot.AeroSpareNm, i)) + Math.Abs(slot.RcsTrimNm[i]), 0.0);
+                slot.RcsTrimNm[i] = Math.Clamp(slot.RcsTrimNm[i] + k * Axis(rcs.GivenNm, i), -reach, reach);
+            }
+        }
         // Short of the demand by more than SaturatedShare of it: the actuators are at their limits. With the phase plane, only the surfaces' own axes count: the RCS's are held in a band, not to the demand.
         double3 givenBody = gimbalsBody + surfacesBody + rcs.GivenNm.X * mx + rcs.GivenNm.Y * my + rcs.GivenNm.Z * mz;
         if (phasePlane)
@@ -326,6 +344,12 @@ internal static class AttitudeController
             Model(gimbalsBody, mx, my, mz), spare, airAxisAccel, slot.Saturated, rcsAxes, rcsFiring);
         return slot.Last;
     }
+
+    /// <summary>The time the RCS's steady work on its own axes is moved onto the surfaces over, s (Slot.RcsTrimNm).</summary>
+    private const double RcsTrimShiftS = 10.0;
+
+    /// <summary>The band the ownership rule's need is reckoned on, deg: the 1 deg it was tuned at (2026-11-22), whatever the RCS's own band.</summary>
+    private const double OwnershipBandDeg = 1.0;
 
     /// <summary>The surfaces give an axis back to the RCS once their spare torque falls under this share of what took it (the ownership rule's need).</summary>
     private const double RcsOwnerLeaveShare = 0.7;
