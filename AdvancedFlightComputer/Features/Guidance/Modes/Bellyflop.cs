@@ -141,6 +141,7 @@ public static partial class GuidanceWindow
             {
                 bf.RefusedInRow = 0;
                 bf.Plan = p;
+                bf.Model = bf.PendingModel ?? bf.Model;
                 GuidanceLog.Debug(vehicle, $"Bellyflop solve {bf.Solves}: {text}.");
             }
             else
@@ -149,8 +150,16 @@ public static partial class GuidanceWindow
                 bf.RefusedInRow++;
                 bf.LastRefusal = res.Why.Length > 0 ? res.Why : "no plan";
                 // Before the take-over the entry is still flying to the hand-over, so a site out of reach from here is expected: said once in the game log, then in the debug log.
+                // Under bellyflop a refused plan is still shot from the craft's state, so its landing is what flying it gives: flown when nearer than the plan flown now would land from the same state. Flying the last converged plan on through a run of refusals (2026-11-24, from 15 km down) held its schedule from a state long gone: a 70 deg turn at 13 km, past the site, 1.4 km off.
+                bool better = flying && p != null && bf.PendingModel != null && p.MissM < bf.PendingFlownMissM;
+                if (better)
+                {
+                    bf.Plan = p;
+                    bf.Model = bf.PendingModel;
+                }
+                string flown = better ? FormattableString.Invariant($"; flown, the plan before would land {bf.PendingFlownMissM:F0} m off") : "";
                 if (flying || bf.Refusals == 1)
-                    GuidanceLog.Info(vehicle, $"Bellyflop solve {bf.Solves}: {text}{(flying ? "" : " (the entry still flies to the hand-over)")}.");
+                    GuidanceLog.Info(vehicle, $"Bellyflop solve {bf.Solves}: {text}{flown}{(flying ? "" : " (the entry still flies to the hand-over)")}.");
                 else
                     GuidanceLog.Debug(vehicle, $"Bellyflop solve {bf.Solves}: {text}.");
             }
@@ -168,13 +177,14 @@ public static partial class GuidanceWindow
                 bf.Warm = null;
             }
             BellyflopModel solveModel = model;
+            BellyflopPlan flownPlan = flying ? bf.Plan : null;
             double a0 = aNow, b0 = bNow, p0 = pNow;
             bf.NextSolveAt = now + Math.Max(_s.OrbitalEntryBellyflopResolveS, 0.25);
             bf.Worker.TryRun(bf, ct =>
             {
                 var r = bf.Planner.Solve(solveModel, cfg, x, now, a0, b0, p0, warm);
-                if (r.Plan != null && r.Plan.Converged)
-                    bf.Model = solveModel;
+                bf.PendingFlownMissM = flownPlan != null ? BellyflopPlanner.ShotMiss(solveModel, cfg, x, now, a0, b0, p0, flownPlan) : double.PositiveInfinity;
+                bf.PendingModel = solveModel;
                 bf.Pending = r;
             });
         }

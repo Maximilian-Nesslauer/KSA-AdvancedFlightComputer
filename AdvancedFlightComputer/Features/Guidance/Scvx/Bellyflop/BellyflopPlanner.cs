@@ -149,6 +149,28 @@ public sealed class BellyflopPlanner
         return new Result { Plan = plan, Why = why };
     }
 
+    /// <summary>
+    /// Where <paramref name="plan"/>'s controls, flown on from <paramref name="x0In"/> at <paramref name="now"/>, would land, m from the site: shot as a warm solve's reference is (its time to go, its controls by time, the first node at the craft's angles), so it compares with a new plan from the same state. Infinite once the plan has ended.
+    /// </summary>
+    public static double ShotMiss(BellyflopModel model, BellyflopConfig cfg, ReadOnlySpan<double> x0In, double now,
+                                  double alphaNow, double betaNow, double psiNow, BellyflopPlan plan)
+    {
+        int n = Math.Max(cfg.Nodes, 6);
+        if (!(plan.EndTime - now > cfg.SigmaMin))
+            return double.PositiveInfinity;
+        double sigma = Math.Clamp(plan.EndTime - now, cfg.SigmaMin, cfg.SigmaMax);
+        var u = new double[n, NU];
+        for (int k = 0; k < n; k++)
+        {
+            var (a, b, p) = plan.ControlAt(now + sigma * k / (n - 1));
+            u[k, 0] = a; u[k, 1] = b; u[k, 2] = p;
+        }
+        u[0, 0] = alphaNow; u[0, 1] = betaNow; u[0, 2] = psiNow;
+        var x = new double[n, NX];
+        Shoot(model, cfg, x0In.ToArray(), u, sigma, x);
+        return Miss(x, n);
+    }
+
     static double Ease(double from, double by) => Math.Abs(from) <= by ? 0.0 : from - Math.Sign(from) * by;
 
     /// <summary>
@@ -379,6 +401,25 @@ public sealed class BellyflopPlanner
         return on;
     }
 
+    /// <summary>
+    /// The cone's price per node and metre outside it: ConeWeight, but never so much that the nodes under the cone's top together outprice the dynamics. The cone is paid at every such node and a defect once: a craft outside the cone at 24 nodes paid 24 x 0.5 per metre, more than the 10 per metre of one node's position defect that moved the whole tail of the plan inside it, so every plan from 15 km down bought defects in step with its miss and was refused (harness, 2026-11-24). Held to ConeShareOfPenalty of one node's defect price in all.
+    /// </summary>
+    static double ConeNodePrice(BellyflopConfig cfg, bool[] cone)
+    {
+        int on = 0;
+        foreach (bool c in cone) if (c) on++;
+        double perKm = Math.Min(cfg.ConeWeight, cfg.ConeShareOfPenalty * cfg.PenaltyWeight / Math.Max(on, 1));
+        return perKm / 1000.0;
+    }
+
+    /// <summary>The crossrange term: CrossWeight per km of the mean |y| over the nodes.</summary>
+    static double CrossCost(BellyflopConfig cfg, double[,] x, int n)
+    {
+        double s = 0;
+        for (int k = 1; k < n; k++) s += Math.Abs(x[k, 1]);
+        return cfg.CrossWeight / 1000.0 * s / n;
+    }
+
     /// <summary>How far a node is outside the approach cone, m, on the octagon the subproblem uses.</summary>
     static double ConeExcess(BellyflopConfig cfg, double[,] x, int k)
     {
@@ -411,8 +452,9 @@ public sealed class BellyflopPlanner
         double coneExcess = 0;
         for (int k = 0; k < n; k++)
             if (cone[k]) coneExcess += ConeExcess(cfg, x, k);
-        j += cfg.ConeWeight * coneExcess / 1000.0;
+        j += ConeNodePrice(cfg, cone) * coneExcess;
         j += cfg.MissWeight * (Math.Abs(x[n - 1, 0]) + Math.Abs(x[n - 1, 1])) / 1000.0;
+        j += CrossCost(cfg, x, n);
         double pen = 0;
         for (int k = 0; k < n - 1; k++)
             for (int i = 0; i < NX; i++) pen += Math.Abs(def[k, i]) / XS[i];
@@ -425,7 +467,7 @@ public sealed class BellyflopPlanner
     // ---------------------------------------------------------------- subproblem
 
     /// <summary>
-    /// Variables: x (6N), u (3N), sigma, w (6(N-1)), |w| bounds t (6(N-1)), |psi| bounds y (N), the end's x and y split into positive and negative parts (4), the end altitude's slack pair (2), the approach cone's slack per node (N).
+    /// Variables: x (6N), u (3N), sigma, w (6(N-1)), |w| bounds t (6(N-1)), |psi| bounds y (N), the end's x and y split into positive and negative parts (4), the end altitude's slack pair (2), the approach cone's slack per node (N), the crossrange's magnitude per node (N).
     /// </summary>
     static (double[,], double[,], double)? BuildAndSolve(
         BellyflopModel model, BellyflopConfig cfg, double[] x0, double[,] xr, double[,] ur, double sr, Linearisation lin, double eta,
@@ -435,8 +477,8 @@ public sealed class BellyflopPlanner
         jLin = double.PositiveInfinity;
         int n = xr.GetLength(0), nI = n - 1;
         int iX = 0, iU = NX * n, iS = iU + NU * n, iW = iS + 1, iT = iW + NX * nI, iY = iT + NX * nI;
-        int iMx = iY + n, iMy = iMx + 2, iZa = iMy + 2, iC = iZa + 2;
-        int nv = iC + n;
+        int iMx = iY + n, iMy = iMx + 2, iZa = iMy + 2, iC = iZa + 2, iL = iC + n;
+        int nv = iL + n;
         int X(int k, int j) => iX + NX * k + j;
         int U(int k, int i) => iU + NU * k + i;
         int W(int k, int j) => iW + NX * k + j;
@@ -491,7 +533,10 @@ public sealed class BellyflopPlanner
         c[iMx] = c[iMx + 1] = c[iMy] = c[iMy + 1] = wm;
         c[iZa] = c[iZa + 1] = lam / XS[2];
         for (int k = 0; k < n; k++)
-            c[iC + k] = cone[k] ? cfg.ConeWeight / 1000.0 : 0.0;
+            c[iC + k] = cone[k] ? ConeNodePrice(cfg, cone) : 0.0;
+        double wc = cfg.CrossWeight / 1000.0 / n;
+        for (int k = 1; k < n; k++)
+            c[iL + k] = wc;
 
         // ---- Equalities ----
         int nEq = NX + NX * nI + 3;
@@ -593,6 +638,14 @@ public sealed class BellyflopPlanner
                     Le(r2 * floorM, (X(k, 0), sx), (X(k, 1), sy), (X(k, 2), -r2 * tanC), (iC + k, -1.0));
             }
         }
+        // The crossrange's magnitude at each node: |y_k| <= l_k.
+        for (int k = 0; k < n; k++)
+        {
+            Le(0, (iL + k, -1.0));
+            if (k == 0) continue;
+            Le(0, (X(k, 1), 1.0), (iL + k, -1.0));
+            Le(0, (X(k, 1), -1.0), (iL + k, -1.0));
+        }
         Le(cfg.SigmaMax, (iS, 1.0));
         Le(-cfg.SigmaMin, (iS, -1.0));
         // Trust region.
@@ -636,8 +689,10 @@ public sealed class BellyflopPlanner
             for (int j = 0; j < NX; j++) pen += Math.Abs(v[W(k, j)]) / XS[j];
         pen += (v[iZa] + v[iZa + 1]) / XS[2];
         jLin = jl + lam * pen;
+        for (int k = 1; k < n; k++)
+            jLin += wc * Math.Max(v[iL + k], 0.0);
         for (int k = 0; k < n; k++)
-            if (cone[k]) jLin += cfg.ConeWeight / 1000.0 * Math.Max(v[iC + k], 0.0);
+            if (cone[k]) jLin += ConeNodePrice(cfg, cone) * Math.Max(v[iC + k], 0.0);
         return (xc, uc, sc);
     }
 }

@@ -165,6 +165,9 @@ public sealed class BellyflopState
     public volatile BellyflopModel Model;
     /// <summary>The last plan whose dynamics closed, converged or not: the warm start of the next solve, so a plan refused only because the site is not yet in reach does not leave the next one to start cold.</summary>
     public volatile BellyflopPlan Warm;
+    /// <summary>Published with Pending, before it: the model it was solved with, and where the plan then flown would land from the same state (BellyflopPlanner.ShotMiss), m, infinite with none. A refused plan is flown under bellyflop when it lands nearer than that.</summary>
+    public volatile BellyflopModel PendingModel;
+    public double PendingFlownMissM = double.PositiveInfinity;
     /// <summary>The measured aero force over bellyflop's own model of it at the angles flown, low-passed: the model's force scale. 1 until measured.</summary>
     public double ForceScale = 1.0;
     public bool ForceScaleKnown;
@@ -187,6 +190,8 @@ public sealed class BellyflopState
         Plan = null;
         Pending = null;
         Model = null;
+        PendingModel = null;
+        PendingFlownMissM = double.PositiveInfinity;
         Warm = null;
         ForceScale = 1.0;
         ForceScaleKnown = false;

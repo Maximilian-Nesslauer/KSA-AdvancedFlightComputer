@@ -65,10 +65,11 @@ internal static class BellyflopCheck
     {
         int bad = 0;
         var cfg = new BellyflopConfig();
+        if (double.TryParse(Environment.GetEnvironmentVariable("AFC_BF_CROSS"), System.Globalization.CultureInfo.InvariantCulture, out double cw)) cfg.CrossWeight = cw;
         var model = Model();
         double a0 = 50 * Deg, y0 = 63 * Deg;
         double fall = new BellyflopPlanner().Solve(model, new BellyflopConfig { MissWeight = 0.0, ColdIterations = 1 }, HandOver(0, 0, 5.0, 38_000.0), 0.0, a0, 0, 0, null) is { Plan: { } pr } ? pr.X[pr.Nodes - 1, 0] : 70_000.0;
-        foreach (var (name, down, cross, yaw) in new[] { ("18 km beyond the fall, 10 km beside, banked 63", 18_000.0, 10_000.0, y0), ("18 km beyond, 10 km beside, the other way", 18_000.0, -10_000.0, y0), ("flat fall, 10 km beside, wings level", 0.0, 10_000.0, 0.0), ("28 km beyond, 20 km beside (harness, 2026-11-23)", 28_000.0, 20_000.0, 0.0) })
+        foreach (var (name, down, cross, yaw) in new[] { ("18 km beyond the fall, 10 km beside, banked 63", 18_000.0, 10_000.0, y0), ("18 km beyond, 10 km beside, the other way", 18_000.0, -10_000.0, y0), ("flat fall, 10 km beside, wings level", 0.0, 10_000.0, 0.0), ("28 km beyond, 20 km beside (harness, 2026-11-23)", 28_000.0, 20_000.0, 0.0), ("10 km short, 14 km beside (the edge of reach, as the harness 2026-11-24)", -10_000.0, 14_000.0, 0.0), ("15 km short, 10 km beside", -15_000.0, 10_000.0, 0.0) })
         {
             var truth = Model(1.0, 0.85);
             double[] x = HandOver(fall + down, cross, 5.0, 38_000.0);
@@ -77,16 +78,19 @@ internal static class BellyflopCheck
             double t = 0, nextPlan = 0, a = a0, b = 0, y = yaw;
             int solves = 0, refused = 0;
             var at = new Dictionary<int, double>();
-            double yaw30 = double.NaN, cross30 = double.NaN;
+            double yaw30 = double.NaN, cross30 = double.NaN, cross60 = double.NaN, cross120 = double.NaN;
             const double dt = 0.05;
             Span<double> k1 = stackalloc double[6], k2 = stackalloc double[6], k3 = stackalloc double[6], k4 = stackalloc double[6], xt = stackalloc double[6];
             while (truth.Altitude(x) > 0 && t < 900)
             {
                 if (t >= nextPlan)
                 {
+                    // As the mode flies it: a converged plan, or a refused one that lands nearer than the plan flown would from here.
+                    double flownMiss = plan != null ? BellyflopPlanner.ShotMiss(model, cfg, x, t, a, b, y, plan) : double.PositiveInfinity;
                     var res = planner.Solve(model, cfg, x, t, a, b, y, plan);
                     solves++;
-                    if (res.Plan != null && res.Plan.Converged) plan = res.Plan; else refused++;
+                    if (res.Plan != null && (res.Plan.Converged || res.Plan.MissM < flownMiss)) plan = res.Plan;
+                    if (res.Plan == null || !res.Plan.Converged) refused++;
                     nextPlan = t + 2.0;
                 }
                 if (plan != null)
@@ -97,6 +101,8 @@ internal static class BellyflopCheck
                     y += Math.Clamp(py - y, -cfg.YawRateDegS * Deg * dt, cfg.YawRateDegS * Deg * dt);
                 }
                 if (double.IsNaN(yaw30) && t >= 30) { yaw30 = y; cross30 = x[1]; }
+                if (double.IsNaN(cross60) && t >= 60) cross60 = x[1];
+                if (double.IsNaN(cross120) && t >= 120) cross120 = x[1];
                 foreach (int km in new[] { 12, 8, 4 })
                     if (!at.ContainsKey(km) && truth.Altitude(x) <= km * 1000.0)
                         at[km] = Math.Sqrt(x[0] * x[0] + x[1] * x[1]);
@@ -114,7 +120,7 @@ internal static class BellyflopCheck
             bool ok = miss <= 500 && plan != null;
             if (!ok) bad++;
             Console.WriteLine(FormattableString.Invariant(
-                $"  {(ok ? "ok  " : "FAIL")} {name}: lands {miss,5:F0} m off after {t:F0} s; {solves} solves, {refused} refused; off the site {at.GetValueOrDefault(12, double.NaN) / 1000:F2} / {at.GetValueOrDefault(8, double.NaN) / 1000:F2} / {at.GetValueOrDefault(4, double.NaN) / 1000:F2} km at 12 / 8 / 4 km up; yaw {yaw30 / Deg:F0} deg and {cross30 / 1000:F1} km across at 30 s"));
+                $"  {(ok ? "ok  " : "FAIL")} {name}: lands {miss,5:F0} m off after {t:F0} s; {solves} solves, {refused} refused; off the site {at.GetValueOrDefault(12, double.NaN) / 1000:F2} / {at.GetValueOrDefault(8, double.NaN) / 1000:F2} / {at.GetValueOrDefault(4, double.NaN) / 1000:F2} km at 12 / 8 / 4 km up; yaw {yaw30 / Deg:F0} deg at 30 s; across {cross30 / 1000:F1} / {cross60 / 1000:F1} / {cross120 / 1000:F1} km at 30 / 60 / 120 s"));
         }
         return bad;
     }
