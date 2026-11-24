@@ -717,7 +717,7 @@ public static partial class GuidanceWindow
 
         double r22 = 1.0 - 2.0 * (x[7] * x[7] + x[8] * x[8]);
         TvcAllocationResult a = KsaGimbalControl.Diagnostics(vehicle)?.LastAllocation ?? default;
-        KsaGimbalControl.GimbalTrace gimbal = KsaGimbalControl.Diagnostics(vehicle)?.Trace;
+        KsaGimbalControl.GimbalTrace? gimbal = KsaGimbalControl.Diagnostics(vehicle)?.Trace;
         KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Last(vehicle);
 
         AttitudeFeedback6Dof.Result fb = _s.Guidance.AttitudeCorrection;

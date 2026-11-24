@@ -249,7 +249,14 @@ internal static class KsaAeroTorqueControl
     /// <summary>Sends every surface on the vehicle home. Main thread.</summary>
     internal static void Release(Vehicle vehicle)
     {
-        if (vehicle == null || !ControlSurfaces.Any)
+        if (vehicle == null)
+            return;
+        if (Slots.TryGetValue(vehicle, out Slot slot))
+        {
+            slot.Last = default;
+            slot.Surfaces.Clear();
+        }
+        if (!ControlSurfaces.Any)
             return;
         var surfaces = new List<ControlSurface>();
         ControlSurfaces.Collect(vehicle, surfaces);

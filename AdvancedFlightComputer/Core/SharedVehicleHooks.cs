@@ -3,6 +3,7 @@ using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.RcsTorque;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using AdvancedFlightComputer.Features.Ui.Console;
 using HarmonyLib;
@@ -107,6 +108,7 @@ internal static class SharedVehicleHooks
         // A failed feature can still have loaded entries that the save observer will persist.
         VehicleDisposePatch.Remove(vehicle);
         RcsVehicleDisposePatch.Remove(vehicle);
+        KsaRcsTorqueControl.Release(vehicle);
         StagingConfig.RemoveVehicle(vehicle.Id);
 
         // Vehicle.Dispose has finished, so guidance releases only process resources.
