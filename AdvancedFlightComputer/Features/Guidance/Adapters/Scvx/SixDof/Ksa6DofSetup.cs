@@ -462,7 +462,7 @@ public static class Ksa6DofSetup
     /// <summary>
     /// The share of the RCS's torque and of the control surfaces' travel touchdown's plans may use (Scvx6DofConfig.PlanRcsShare, FinMinDeg/FinMaxDeg), under the gimbals' (PlanTorqueShare): the rest is for flying the plan, the RCS's through the attitude feedback (AttitudeFeedback6Dof), and a turn the air, the flaps and the thrusters cannot do with room to spare is planned on the gimbals with the engine lit. The body's own air moment is physics and is not scaled. A Starship's plan flipped it in the coast on the flaps and the RCS at their limits; the air held the flip back harder than the model said (1.6-1.7 MN m against 0.5-1.1 between 75 and 45 deg of tilt), the craft fell 26 deg behind, and it lit at 60 m (2026-11-24).
     /// </summary>
-    internal const double PlanSurfaceShare = 0.5;   // the default; PLAN RCS AND FLAPS sets it (TryBuild's surfaceShare)
+    internal const double PlanSurfaceShare = 0.75;   // the default; PLAN RCS AND FLAPS sets it (TryBuild's surfaceShare)
 
     private static BodyAero6Dof BodyAeroFor(Vehicle vehicle, KsaAeroSweep.Result aero, double momentLimiterPerPa, bool fins = true)
     {

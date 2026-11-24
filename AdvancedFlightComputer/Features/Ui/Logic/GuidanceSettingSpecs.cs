@@ -197,7 +197,7 @@ internal static class GuidanceSettingSpecs
 
     public static readonly SettingSpec SixDofNodes = new("SixDofNodes", "SOLVER POINTS", "", T, 50.0, 5.0, 50.0, "%.0f",
         "Number of points of the touchdown guidance plan.");
-    public static readonly SettingSpec SixDofSurfaceShare = new("SixDofSurfaceShare", "PLAN RCS AND FLAPS", "frac", T, 0.5, 0.1, 1.0, "%.2f",
+    public static readonly SettingSpec SixDofSurfaceShare = new("SixDofSurfaceShare", "PLAN RCS AND FLAPS", "frac", T, 0.75, 0.1, 1.0, "%.2f",
         "The share of the RCS's torque and of the control surfaces' travel touchdown's plans may use; the rest is left for flying the plan. Lower plans more gently and leaves turns the air, the flaps and the thrusters cannot do with room to spare to the gimbals, with the engine lit. Never above the gimbals' share.");
     public static readonly SettingSpec SixDofTiltDeg = new("SixDofTiltDeg", "MAX TILT", "deg", T, 120.0, 0.0, 180.0, "%.1f",
         "Largest tilt of the craft from vertical.");
