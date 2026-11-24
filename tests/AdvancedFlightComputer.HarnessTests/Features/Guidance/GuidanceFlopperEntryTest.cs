@@ -21,14 +21,15 @@ namespace AdvancedFlightComputer.HarnessTests;
 //
 // PACED: the entry and bellyflop solve on their own threads against the wall clock, every 2 s and 1 s of flight, so the flight runs at AFC_FLOPPER_PACE times real time (2 by default, as a player flies it under light warp).
 //
-// THE END is 100 m over the site's ground: there is no landing burn yet (bellyflop's flip is touchdown guidance's, not built), and the craft would hit at its terminal speed. The checks: the entry engages, bellyflop takes over between Mach 5.5 and 4 (HAND-OVER MACH 5), and the craft is within AFC_FLOPPER_MISS_M (1000 m) of the site there. The entry's CSV is in navbox-logs, named in the log lines.
+// THE END: with BELLYFLOP TO TOUCHDOWN (on, AFC_FLOPPER_TOUCHDOWN=0 for off) touchdown guidance takes the craft from bellyflop for the flip and the landing burn, and the flight ends at contact; the checks then add that touchdown took over and that the craft is down within AFC_FLOPPER_LAND_MISS_M (50 m) of the site at under 5 m/s. Off, it ends 100 m over the site's ground, where the craft would hit at its terminal speed. The checks: the entry engages, bellyflop takes over from BELLYFLOP FROM MACH down to Mach 4, and the craft is within AFC_FLOPPER_MISS_M (1000 m) of the site 100 m up. The entry's CSV is in navbox-logs, named in the log lines.
 public sealed class GuidanceFlopperEntryTest : AfcTest
 {
     public override string Name => "afc-guidance-flopper-entry";
     public override bool OptIn => true;
 
     private const BindingFlags PrivateStatic = BindingFlags.NonPublic | BindingFlags.Static;
-    private const string VehicleSave = "flopper";
+    /// <summary>The craft flown: the player's 'flopper' save, or AFC_FLOPPER_VEHICLE's (any belly-flop craft on the player's saves, a Starship say).</summary>
+    private static string VehicleSave => Environment.GetEnvironmentVariable("AFC_FLOPPER_VEHICLE") is { Length: > 0 } name ? name : "flopper";
     private const double StepS = 0.02;
     private const double SampleS = 10.0;
     private const double TimeoutS = 2400.0;
@@ -67,6 +68,8 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
         double missLimitM = Env("AFC_FLOPPER_MISS_M", 1000.0);
         // AFC_FLOPPER_HEAT_KWM2 sets MAX HEATING (0 off), to see what the limit does to the trajectory; unset keeps the default.
         double heatKwm2 = Env("AFC_FLOPPER_HEAT_KWM2", double.NaN);
+        bool touchdown = Env("AFC_FLOPPER_TOUCHDOWN", 1.0) != 0.0;
+        double landMissM = Env("AFC_FLOPPER_LAND_MISS_M", 50.0);
 
         FieldInfo ambient = typeof(GuidanceWindow).GetField("_s", PrivateStatic)!;
         object? previousAmbient = ambient.GetValue(null);
@@ -145,6 +148,15 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
                 return;
             }
             PhysicsBubble._forceOffRails = true;
+            // Its engines staged, as after the deorbit burn that brought it here, and not burning: touchdown guidance plans only with active engines.
+            int activated = 0;
+            foreach (EngineController engine in craft.Parts.Modules.Get<EngineController>())
+                if (!engine.IsActive)
+                {
+                    engine.SetIsActive(craft, true);
+                    activated++;
+                }
+            t.Info($"{activated} engine(s) activated for touchdown's flip");
             craft.Parts.RecomputeTotalFillFraction();
             craft.UpdateAfterPartTreeModification();
             Program.ControlledVehicle = craft;
@@ -156,6 +168,7 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
             state.EntryLogging = true;
             if (double.IsFinite(heatKwm2))
                 state.OrbitalEntryHeatMaxKWm2 = heatKwm2;
+            state.OrbitalEntryBellyflopTouchdown = touchdown;
             state.AutoStage = false;
             // As the console's ORBITAL ENTRY does (RequestOrbitalEntry): the next step engages it from the craft's state.
             state.OrbitalEntry.StopPending = false;
@@ -164,7 +177,7 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
             t.Info($"hand-over Mach {state.OrbitalEntryHandoverMach:F1} at {state.OrbitalEntryHandoverAltKm:F0} km, bellyflop solving from Mach {state.OrbitalEntryBellyflopArmMach:F0}, " +
                    $"pitch {state.OrbitalEntryBellyflopAngleMaxDeg:F0} down / {state.OrbitalEntryBellyflopPitchUpDeg:F0} up, bank {state.OrbitalEntryBellyflopBankMaxDeg:F0} deg");
 
-            Fly(t, craft, state, driver, home, ambient, pace, missLimitM);
+            Fly(t, craft, state, driver, home, ambient, pace, missLimitM, touchdown, landMissM);
         }
         finally
         {
@@ -182,7 +195,7 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
     }
 
     private static void Fly(TestContext t, Vehicle craft, VehicleAutopilotState state, SimDriver driver, IParentBody home,
-                            FieldInfo ambient, double pace, double missLimitM)
+                            FieldInfo ambient, double pace, double missLimitM, bool touchdown, double landMissM)
     {
         var wall = Stopwatch.StartNew();
         double sim = 0.0, nextSample = 0.0;
@@ -191,6 +204,10 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
         double endMiss = double.NaN, endSpeed = double.NaN;
         GuidanceWindow.OrbitalEntryPhase lastPhase = GuidanceWindow.OrbitalEntryPhase.Idle;
         bool ended = false;
+        // Touchdown guidance from the hand-over on: when it took the craft, from where, and where it came down.
+        double touchdownAt = double.NaN, touchdownAlt = double.NaN, touchdownRange = double.NaN;
+        double landMiss = double.NaN, landSpeed = double.NaN, nextTouchdownSample = 0.0;
+        bool landed = false;
 
         while (sim < TimeoutS)
         {
@@ -269,14 +286,35 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
                 t.Fail("engage", $"orbital entry did not engage in {EngageWaitS:F0} s: {st.Status}");
                 return;
             }
-            if (!double.IsNaN(engagedAt) && st.Phase == GuidanceWindow.OrbitalEntryPhase.Idle)
+            bool touchdownFlies = state.Active || state.EngagePending;
+            if (touchdownFlies && double.IsNaN(touchdownAt))
+            {
+                (touchdownAt, touchdownAlt, touchdownRange) = (sim, height, ground);
+                t.Info($"  t {sim,6:F1}  TOUCHDOWN TAKES OVER at {height:F0} m, {ground:F0} m from the site, {vSurface.Length():F0} m/s");
+            }
+            if (!double.IsNaN(touchdownAt) && sim >= nextTouchdownSample)
+            {
+                nextTouchdownSample = sim + 2.0;
+                double3 noseNow = double3.UnitX.Transform(KsaFrameBridge.BodyToCci(craft));
+                double tilt = Math.Acos(Math.Clamp(double3.Dot(noseNow, up), -1.0, 1.0)) * 180.0 / Math.PI;
+                t.Info($"  t {sim,6:F1}  touchdown {height,7:F0} m up {ground,6:F0} m off, {vSurface.Length(),5:F1} m/s ({double3.Dot(vSurface, up),6:F1} up), nose {tilt,5:F1} deg off vertical, throttle {state.LastThrottle:F2}  {state.Error}");
+            }
+            if (!double.IsNaN(engagedAt) && st.Phase == GuidanceWindow.OrbitalEntryPhase.Idle && !touchdownFlies && double.IsNaN(touchdownAt))
             {
                 t.Fail("flight", $"orbital entry ended at {sim:F0} s: {st.Status}");
                 return;
             }
-            if (height <= EndHeightM)
+            if (height <= EndHeightM && !ended)
             {
                 (endMiss, endSpeed, ended) = (ground, vSurface.Length(), true);
+                if (!touchdown)
+                    break;
+            }
+            if (touchdown && (craft.Situation.HasAnyContact() || (!double.IsNaN(touchdownAt) && !touchdownFlies) || height < 0.0
+                              || (double.IsNaN(touchdownAt) && height <= 50.0 && vSurface.Length() < 1.0)))
+            {
+                (landMiss, landSpeed, landed) = (ground, vSurface.Length(), craft.Situation.HasAnyContact());
+                t.Info($"  t {sim,6:F1}  {(landed ? "CONTACT" : "TOUCHDOWN ENDED")} {height:F1} m up, {ground:F1} m from the site at {landSpeed:F1} m/s");
                 break;
             }
         }
@@ -298,6 +336,12 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
         if (t.Check($"the flight reaches {EndHeightM:F0} m over the site", ended, $"stopped at {sim:F0} s"))
             t.Check($"within {missLimitM:F0} m of the site at {EndHeightM:F0} m up", endMiss <= missLimitM,
                 FormattableString.Invariant($"{endMiss:F0} m off at {endSpeed:F0} m/s"));
+        if (!touchdown)
+            return;
+        t.Check("touchdown guidance takes over from bellyflop", !double.IsNaN(touchdownAt),
+            double.IsNaN(touchdownAt) ? state.OrbitalEntry.Status : FormattableString.Invariant($"at {touchdownAlt:F0} m, {touchdownRange:F0} m from the site"));
+        t.Check($"down within {landMissM:F0} m of the site at under 5 m/s", landed && landMiss <= landMissM && landSpeed < 5.0,
+            landed ? FormattableString.Invariant($"{landMiss:F1} m off at {landSpeed:F1} m/s") : FormattableString.Invariant($"no contact: {landMiss:F0} m off at {landSpeed:F1} m/s"));
     }
 
     private static MethodInfo Method(string name) =>

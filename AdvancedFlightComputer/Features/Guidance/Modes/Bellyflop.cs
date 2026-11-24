@@ -225,10 +225,85 @@ public static partial class GuidanceWindow
             var plan = bf.Plan;
             double toGo = Math.Sqrt(x[0] * x[0] + x[1] * x[1]);
             string warn = bf.Refusals > 0 && bf.LastRefusal.Length > 0 ? " (LAST SOLVE REFUSED: " + bf.LastRefusal.ToUpperInvariant() + ")" : "";
+            string touchdown = bf.TouchdownStandby ? " TOUCHDOWN " + SixDofStandbyText(now).ToUpperInvariant() + "." : "";
             st.SetStatus(FormattableString.Invariant(
-                $"BELLYFLOP: {toGo / 1000:F1} KM TO GO AT {x14[2] / 1000:F1} KM, PLAN LANDS {plan?.MissM ?? double.NaN:F0} M FROM ITS AIM IN {(plan != null ? plan.EndTime - now : double.NaN):F0} s. PITCH {bf.PitchDeg:F0}, BANK {bf.BankDeg:F0}, YAW {bf.YawDeg:F0} DEG.") + warn,
+                $"BELLYFLOP: {toGo / 1000:F1} KM TO GO AT {x14[2] / 1000:F1} KM, PLAN LANDS {plan?.MissM ?? double.NaN:F0} M FROM ITS AIM IN {(plan != null ? plan.EndTime - now : double.NaN):F0} s. PITCH {bf.PitchDeg:F0}, BANK {bf.BankDeg:F0}, YAW {bf.YawDeg:F0} DEG.") + touchdown + warn,
                 warn: plan == null || warn.Length > 0);
+            StepBellyflopTouchdown(vehicle, parent, st, x14, now);
         }
+    }
+
+    /// <summary>Time constant of the low-pass on bellyflop's commanded angles, s (BellyflopAttitude): a re-solve's worth, so a new plan is blended in over about a second.</summary>
+    private const double BellyflopCommandSmoothS = 0.5;
+
+    /// <summary>Share of the engines' full thrust the burn-time seed assumes on average, less gravity.</summary>
+    private const double BellyflopBurnSeedThrottle = 0.7;
+
+    /// <summary>
+    /// THE HAND-OVER TO TOUCHDOWN, as entry guidance's glide hands over before its ignition (StepEntryTouchdownOwn): from TOUCHDOWN FROM seconds before bellyflop's plan reaches the ground, touchdown guidance solves on standby from the measured state, with a coast to the ignition it chooses, the flip on the craft's whole-sphere aero (KsaAeroSweep.Result.SphereBodyAero) and the landing burn; at its first plan the hand-over is asked for, and taken on the next step ahead of the claim (CheckPendingBellyflopTouchdownHandoff). The engine is off until touchdown's plan lights it.
+    /// </summary>
+    private static void StepBellyflopTouchdown(Vehicle vehicle, IParentBody parent, OrbitalEntryState st, double[] x14, double now)
+    {
+        var bf = st.Bellyflop;
+        BellyflopPlan plan = bf.Plan;
+        if (!_s.OrbitalEntryBellyflopTouchdown || plan == null || !(plan.EndTime - now <= _s.OrbitalEntryBellyflopTouchdownS) || now < bf.TouchdownHandoffRetryAt)
+            return;
+        double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+        // The seeds: a burn that stops the craft at BellyflopBurnSeedThrottle of its thrust less gravity, and a coast to it at the speed it falls now.
+        double speed = Math.Sqrt(x14[3] * x14[3] + x14[4] * x14[4] + x14[5] * x14[5]);
+        double radius = siteCci.Length() + x14[2];
+        double ambientPa = KsaEnginePerf.AmbientPressureAt(parent, radius - parent.MeanRadius);
+        double thrust = KsaEnginePerf.ActiveThrustCapability(vehicle, ambientPa);
+        double gravity = parent.Mu / (radius * radius), accel = thrust / Math.Max(vehicle.TotalMass, 1.0);
+        // Refused only where full thrust cannot hold the craft up; whether it can stop in time is touchdown's to plan. At 70 % of it, the flopper's 753 kN were refused all the way down (harness, 2026-11-24).
+        if (!(accel - gravity > 0.5))
+        {
+            LogSixDofStandbyRefusal(vehicle, FormattableString.Invariant($"Touchdown guidance cannot take the flip: {thrust / 1000:F0} kN of active engines cannot stop the craft."));
+            return;
+        }
+        double decel = Math.Max(BellyflopBurnSeedThrottle * accel - gravity, 0.3 * (accel - gravity));
+        double burn = Math.Max(speed / decel, SixDofStandbyMinSeedS);
+        double sink = Math.Max(-x14[5], 1.0);
+        double coast = Math.Max((x14[2] - 0.5 * speed * burn) / sink, 0.0);
+        if (!bf.TouchdownStandby)
+        {
+            GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                $"Touchdown guidance preparing for the flip {plan.EndTime - now:F0} s before bellyflop's ground: planning the coast and the burn from {x14[2]:F0} m at {speed:F0} m/s, a {coast:F0} s coast and a {burn:F1} s burn to seed."));
+            StopSixDofStandby();
+            _s.SixDofStandbyRetryAt = now;
+            _s.SixDofStandbyPredicted = false;
+            _s.SixDofCoastPending = true;
+            bf.TouchdownStandby = true;
+        }
+        _s.SixDofCoastSeedS = coast;
+        StepSixDofStandby(vehicle, parent, siteCci, x14, now, burn);
+        if (bf.TouchdownHandoff == null && SixDofStandbyReady(now))
+            bf.TouchdownHandoff = FormattableString.Invariant($"HANDOVER FROM BELLYFLOP: TOUCHDOWN AT {x14[2]:F0} m, {plan.EndTime - now:F0} s FROM BELLYFLOP'S GROUND.");
+    }
+
+    /// <summary>
+    /// The hand-over to touchdown asked for by the last bellyflop step, taken here ahead of the claim, as the glide's (CheckPendingEntryTouchdownHandoff): touchdown guidance engages from its standby, which then claims the craft from orbital entry. A craft it cannot take stays with bellyflop.
+    /// </summary>
+    private static void CheckPendingBellyflopTouchdownHandoff(Vehicle vehicle)
+    {
+        var st = _s.OrbitalEntry;
+        string handoff = st.Bellyflop.TouchdownHandoff;
+        st.Bellyflop.TouchdownHandoff = null;
+        if (handoff == null || st.Phase != OrbitalEntryPhase.Bellyflop || !_s.SixDofCoastPending || HasTouchedDown(vehicle))
+            return;
+        if (!Can6DofTake(vehicle, out string why) || !StandbyEnginesStillMatch(vehicle))
+        {
+            GuidanceLog.Info(vehicle, "Touchdown guidance cannot take the flip: " + (why ?? "ENGINE CONFIGURATION CHANGED.") + " Bellyflop keeps it.");
+            StopSixDofStandby();
+            _s.SixDofCoastPending = false;
+            st.Bellyflop.TouchdownStandby = false;
+            st.Bellyflop.TouchdownHandoffRetryAt = SimNow() + 5.0;
+            return;
+        }
+        if (!SixDofStandbyReady(SimNow()))
+            return;
+        GuidanceLog.Info(vehicle, handoff);
+        Engage6Dof(vehicle, fromBrakingBurn: true, tookBurn: false);
     }
 
     /// <summary>
@@ -244,7 +319,21 @@ public static partial class GuidanceWindow
             return false;
         var frame = BellyflopSiteFrame(parent, out _);
         double[] x14 = KsaFrameBridge.ToModelState(vehicle, frame);
-        var (a, b, p) = plan.ControlAt(now);
+        // THE COMMAND IS SMOOTH BY CONSTRUCTION, as entry guidance's glide learned (ThreeDof.cs): a first-order low-pass over the plans, from the angles flown at the take-over, so a new plan each second does not step the target the fins chase. Read BellyflopCommandSmoothS ahead, so the plan's own ramps come through without the filter's lag. Flown straight off the newest plan (2026-11-24), the fins stood at 13-32 deg and saturated 27-38 % of the time, against 3-5 deg and 3-6 % in the entry.
+        var (ta, tb, tp) = plan.ControlAt(now + BellyflopCommandSmoothS);
+        if (!double.IsFinite(bf.CmdAt))
+        {
+            const double toRad = Math.PI / 180.0;
+            (bf.CmdAlpha, bf.CmdBeta, bf.CmdPsi) = double.IsFinite(bf.PitchDeg) && double.IsFinite(bf.BankDeg) && double.IsFinite(bf.YawDeg)
+                ? (bf.PitchDeg * toRad, bf.BankDeg * toRad, bf.YawDeg * toRad) : (ta, tb, tp);
+            bf.CmdAt = now;
+        }
+        double k = 1.0 - Math.Exp(-Math.Clamp(now - bf.CmdAt, 0.0, 1.0) / BellyflopCommandSmoothS);
+        bf.CmdAt = now;
+        bf.CmdAlpha += k * (ta - bf.CmdAlpha);
+        bf.CmdBeta += k * (tb - bf.CmdBeta);
+        bf.CmdPsi += k * (tp - bf.CmdPsi);
+        double a = bf.CmdAlpha, b = bf.CmdBeta, p = bf.CmdPsi;
         if (!model.Axes(x14.AsSpan(0, 6), a, b, p, out V3 nose, out _, out V3 belly, out _))
             return false;
         noseCci = frame.VecToCci(KsaBellyflopSetup.ToDouble3(nose)).NormalizeOrZero();

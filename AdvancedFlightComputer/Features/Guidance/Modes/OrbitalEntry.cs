@@ -102,6 +102,12 @@ public static partial class GuidanceWindow
         var st = _s.OrbitalEntry;
         if (_s.OwnAttitudeFlying && _s.OwnAttitudeVehicle is { } flown)
             StopOwnAttitude(flown);
+        // Touchdown's standby for the flip goes with it.
+        if (st.Bellyflop.TouchdownStandby)
+        {
+            StopSixDofStandby();
+            _s.SixDofCoastPending = false;
+        }
         OrbitalEntryLog.Stop(st);
         st.Reset();
         st.Phase = OrbitalEntryPhase.Idle;

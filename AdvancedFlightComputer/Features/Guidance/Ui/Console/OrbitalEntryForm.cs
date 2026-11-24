@@ -87,6 +87,9 @@ public static partial class GuidanceWindow
         {
             GaugeRow(Specs.OrbitalEntryBellyflopArmMach, ref _s.OrbitalEntryBellyflopArmMach);
             GaugeRow(Specs.OrbitalEntryBellyflopAimUprangeM, ref _s.OrbitalEntryBellyflopAimUprangeM);
+            GaugeRowCheck(Specs.OrbitalEntryBellyflopTouchdown, ref _s.OrbitalEntryBellyflopTouchdown);
+            using (new ImGuiDisabledScope(!_s.OrbitalEntryBellyflopTouchdown))
+                GaugeRow(Specs.OrbitalEntryBellyflopTouchdownS, ref _s.OrbitalEntryBellyflopTouchdownS);
         }
     }
 

@@ -436,6 +436,9 @@ public static class Ksa6DofSetup
                         DeflectionDeg = table.DeflectionDeg,
                         Force = table.Force,
                         Moment = table.Moment,
+                        // Over every air direction too, where the sweep had a whole-sphere pass and the body has one to match.
+                        SphereForce = aero.SphereBodyAero != null && table.SphereForce.Length == table.DeflectionDeg.Length ? table.SphereForce : [],
+                        SphereMoment = aero.SphereBodyAero != null && table.SphereMoment.Length == table.DeflectionDeg.Length ? table.SphereMoment : [],
                         MinDeg = surface.MinDeg,
                         MaxDeg = surface.MaxDeg,
                         RateDegS = surface.RateDegS,
@@ -458,6 +461,9 @@ public static class Ksa6DofSetup
             Atmosphere = aero.Atmosphere,
             Force = aero.BodyAero,
             Moment = aero.BodyMoment,
+            // Every air direction past the engine-first table's fade, where the sweep flew the whole sphere (a belly-flop's tables): the flip.
+            SphereForce = aero.SphereBodyAero,
+            SphereMoment = aero.SphereBodyMoment,
             ReferenceArea = aero.ReferenceArea,
             ReferenceLength = aero.ReferenceLength,
             ModelToTable = [mx.X, my.X, mz.X, mx.Y, my.Y, mz.Y, mx.Z, my.Z, mz.Z],

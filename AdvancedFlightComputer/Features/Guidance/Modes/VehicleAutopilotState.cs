@@ -1803,6 +1803,9 @@ public sealed class VehicleAutopilotState
     public double OrbitalEntryHandoverMach = 5.0;
     /// <summary>Fly the terminal descent from the hand-over with bellyflop (docs/guidance/bellyflop-design.md): the entry aims at the ground through its predicted fall.</summary>
     public bool OrbitalEntryBellyflop = true;
+    /// <summary>Bellyflop hands the craft to touchdown guidance for the flip and the landing burn (BELLYFLOP TO TOUCHDOWN): its standby solves from OrbitalEntryBellyflopTouchdownS before bellyflop's plan reaches the ground, and takes the craft at its first plan.</summary>
+    public bool OrbitalEntryBellyflopTouchdown = true;
+    public double OrbitalEntryBellyflopTouchdownS = 45.0;
     /// <summary>The Mach bellyflop starts solving from, in the background.</summary>
     public double OrbitalEntryBellyflopArmMach = 10.0;
     /// <summary>Bellyflop's largest pitch from belly-first, deg.</summary>

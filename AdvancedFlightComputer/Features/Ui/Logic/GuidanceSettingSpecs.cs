@@ -293,6 +293,8 @@ internal static class GuidanceSettingSpecs
         "Bellyflop starts solving in the background from this Mach and takes over at its first plan that reaches the site. Its belly-first tables reach Mach 8; above it, it plans with their Mach 8 values.");
     public static readonly SettingSpec OrbitalEntryBellyflopAimUprangeM = new("OrbitalEntryBellyflopAimUprangeM", "BELLYFLOP AIM SHORT", "m", P, 200.0, 0.0, 5000.0, "%.0f",
         "How far short of the site, along the bearing to it, bellyflop aims its fall: the ground the flip and landing burn cover after it, so they end on the site rather than past it. A fixed distance for now; the entry's aim takes it into account.");
+    public static readonly SettingSpec OrbitalEntryBellyflopTouchdownS = new("OrbitalEntryBellyflopTouchdownS", "TOUCHDOWN FROM", "s", P, 45.0, 5.0, 300.0, "%.0f",
+        "How long before bellyflop's plan reaches the ground touchdown guidance starts solving on standby for the flip and the landing burn. It takes the craft at its first plan.");
     public static readonly SettingSpec OrbitalEntryBellyflopAngleMaxDeg = new("OrbitalEntryBellyflopAngleMaxDeg", "BELLYFLOP PITCH DOWN", "deg", E, 20.0, 2.0, 45.0, "%.0f",
         "Bellyflop's largest pitch nose down past belly-first: the airflow's angle on the belly towards the tail.");
     public static readonly SettingSpec OrbitalEntryBellyflopPitchUpDeg = new("OrbitalEntryBellyflopPitchUpDeg", "BELLYFLOP PITCH UP", "deg", E, 55.0, 2.0, 80.0, "%.0f",
@@ -321,6 +323,8 @@ internal static class GuidanceSettingSpecs
         "Fly the entry attitude with AFC's own attitude controller (surfaces and RCS). Off steers through the stock flight computer.");
     public static readonly BoolSpec OrbitalEntryBellyflop = new("OrbitalEntryBellyflop", "BELLYFLOP", P, true,
         "Fly the terminal descent from the hand-over belly first with bellyflop, the entry aiming at the ground through its predicted fall. Off, the entry aims the hand-over at the site and holds its attitude from there.");
+    public static readonly BoolSpec OrbitalEntryBellyflopTouchdown = new("OrbitalEntryBellyflopTouchdown", "BELLYFLOP TO TOUCHDOWN", P, true,
+        "Hand the craft from bellyflop to touchdown guidance for the flip and the landing burn: touchdown plans the coast, the flip and the burn on the craft's whole-sphere aero from TOUCHDOWN FROM, and takes the craft at its first plan. Off, bellyflop falls on to the ground.");
     public static readonly BoolSpec OrbitalEntryUseRcs = new("OrbitalEntryUseRcs", "ENTRY RCS", E, true,
         "Let OWN ATTITUDE fire the RCS during orbital entry. Off steers on the flaps alone, which give nothing in air too thin for them (under 50 Pa).");
 
@@ -352,8 +356,8 @@ internal static class GuidanceSettingSpecs
     /// <summary>The limits of the orbital entry plan, on LAND > ENTRY > ORBITAL ENTRY.</summary>
     public static readonly SettingSpec[] LandOrbitalEntryPlayer = { OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2 };
     /// <summary>The HAND-OVERS of orbital entry: where it ends, and bellyflop after it.</summary>
-    public static readonly SettingSpec[] LandOrbitalHandOvers = { OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach, OrbitalEntryBellyflopArmMach, OrbitalEntryBellyflopAimUprangeM };
-    public static readonly BoolSpec[] LandOrbitalHandOverBools = { OrbitalEntryBellyflop };
+    public static readonly SettingSpec[] LandOrbitalHandOvers = { OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach, OrbitalEntryBellyflopArmMach, OrbitalEntryBellyflopAimUprangeM, OrbitalEntryBellyflopTouchdownS };
+    public static readonly BoolSpec[] LandOrbitalHandOverBools = { OrbitalEntryBellyflop, OrbitalEntryBellyflopTouchdown };
     /// <summary>What DEORBIT ONLY does after its entry burn, under AFTER DEORBIT.</summary>
     public static readonly BoolSpec[] LandDeorbitOnlyBools = { OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit };
     /// <summary>The GNC fold of ORBITAL ENTRY: the attitude it flies and the bank it may use.</summary>
@@ -512,7 +516,7 @@ internal static class GuidanceSettingSpecs
         ThreeDofBurnCeiling, ThreeDofTrackKp, ThreeDofTrackKd, ThreeDofTrackTiltDeg, ThreeDofRcsDeadbandDeg,
         TermTouchdownRate, TermConstAltM, TermQuadK, TermMaxDescRate, TermMaxTiltDeg, TermNudgeStep,
         TermKpV, TermKiV, TermKdV, TermKpL, TermKiL, TermKdL,
-        OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach, OrbitalEntryBellyflopArmMach, OrbitalEntryBellyflopAimUprangeM, OrbitalEntryBellyflopAngleMaxDeg, OrbitalEntryBellyflopPitchUpDeg, OrbitalEntryBellyflopBankMaxDeg, OrbitalEntryBellyflopResolveS,
+        OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach, OrbitalEntryBellyflopArmMach, OrbitalEntryBellyflopAimUprangeM, OrbitalEntryBellyflopTouchdownS, OrbitalEntryBellyflopAngleMaxDeg, OrbitalEntryBellyflopPitchUpDeg, OrbitalEntryBellyflopBankMaxDeg, OrbitalEntryBellyflopResolveS,
         OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
         OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryReversalBandDeg, OrbitalEntryRollRateDegS, OrbitalEntryTrackRollRateDegS,
         OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryRcsDeadbandDeg, OrbitalEntryTrackOmega, OrbitalEntryGainDragFloor, OrbitalEntryMeasureSmoothS, OrbitalEntryCorridorWeight, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
@@ -524,7 +528,7 @@ internal static class GuidanceSettingSpecs
         FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, AscentOwnAttitude, AscentAeroControl, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
         VehicleHeightAuto, LegsAutoDeploy, ParkIdleEngines, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
         SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ThreeDofFromGlide, ThreeDofSixDofHandover, ThreeDofNewAttitude,
-        OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude, OrbitalEntryUseRcs, OrbitalEntryBellyflop,
+        OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAfterDeorbit, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude, OrbitalEntryUseRcs, OrbitalEntryBellyflop, OrbitalEntryBellyflopTouchdown,
     };
 
     #endregion

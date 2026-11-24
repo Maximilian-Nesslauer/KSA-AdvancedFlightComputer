@@ -10,7 +10,9 @@ namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 ///
 /// NO HELD ROLL NEEDED. Unlike the 3-DOF point mass, the 6-DOF knows its roll: the air velocity is turned into the model's body axes by the plan's own quaternion, and into the tables' axes - the game's body axes - by the fixed rotation <see cref="ModelToTable"/>. Alpha and beta follow (BodyAeroTable's convention), and the force and moment come back the same way.
 ///
-/// FADED OUT where the tables mean nothing: below <see cref="FadeSpeedLowMs"/> - near the ground the airflow's direction is set by a few metres a second of drift - and past <see cref="FadeTiltEndRad"/> off engine first, where the tables, sampled to 20 deg each way, end. A hard switch there would put a jump in the dynamics that the solver cannot converge across; the fade is a smoothstep in both, so the force and its slopes stay continuous. The caller makes up the faded share of the force from the whole-sphere tables (Dynamics6Dof.Params.Aero); the moment fades to none.
+/// FADED OUT where the tables mean nothing: below <see cref="FadeSpeedLowMs"/> - near the ground the airflow's direction is set by a few metres a second of drift - and past <see cref="FadeTiltEndRad"/> off engine first, where the tables, sampled to 20 deg each way, end. A hard switch there would put a jump in the dynamics that the solver cannot converge across; the fade is a smoothstep in both, so the force and its slopes stay continuous.
+///
+/// PAST THE FADE, THE WHOLE SPHERE (<see cref="SphereForce"/>, KsaAeroSweep.Result.SphereBodyAero), where the sweep has one: force, moment and fins over every air direction, so a belly-flop's flip from belly first is flown on the air it meets, with the moment its gimbals turn it against. The fine table keeps the tilts it covers and the sphere takes the share it fades out of. Without a sphere the caller makes up that share from the roll-averaged tables (Dynamics6Dof.Params.Aero), and the moment fades to none.
 /// </summary>
 public sealed class BodyAero6Dof
 {
@@ -22,6 +24,10 @@ public sealed class BodyAero6Dof
 
     /// <summary>The body-axis moment coefficients, C = M / (q S L), about <see cref="MomentComShift"/>'s origin, in the game's body axes; null for none.</summary>
     public BodyAeroTable? Moment { get; init; }
+
+    /// <summary>The same over every air direction (BodyAeroTable.Sphere), in the same axes and about the same centre of mass, or null for none: past the fine tables' fade they carry the force and moment.</summary>
+    public BodyAeroTable? SphereForce { get; init; }
+    public BodyAeroTable? SphereMoment { get; init; }
 
     /// <summary>Reference area and length the coefficients are scaled by, m^2 and m.</summary>
     public required double ReferenceArea { get; init; }
@@ -50,6 +56,9 @@ public sealed class BodyAero6Dof
         public required double[] DeflectionDeg { get; init; }
         public required BodyAeroTable[] Force { get; init; }
         public required BodyAeroTable[] Moment { get; init; }
+        /// <summary>The same over every air direction (the body's sphere frame), per deflection; empty for none.</summary>
+        public BodyAeroTable[] SphereForce { get; init; } = [];
+        public BodyAeroTable[] SphereMoment { get; init; } = [];
         public double MinDeg { get; init; }
         public double MaxDeg { get; init; }
         public double RateDegS { get; init; }
@@ -59,11 +68,11 @@ public sealed class BodyAero6Dof
     /// A control surface's coefficients at a deflection: straight between its swept deflections, held at its ends. On a swept deflection itself the slope is the mean of the two either side, so a plan linearised there - at rest, most of all, where the drag a fin adds bends the curve whichever way it turns - is told the curve's middle, not one side of it. A fin at rest that is not being differentiated adds nothing and reads no table.
     /// </summary>
     public static void FinCoefficients(FinTable fin, bool moment, Dual deg, Dual mach, Dual alpha, Dual beta,
-                                       out Dual c0, out Dual c1, out Dual c2)
+                                       out Dual c0, out Dual c1, out Dual c2, bool sphere = false)
     {
         c0 = c1 = c2 = default;
         double[] d = fin.DeflectionDeg;
-        BodyAeroTable[] t = moment ? fin.Moment : fin.Force;
+        BodyAeroTable[] t = sphere ? (moment ? fin.SphereMoment : fin.SphereForce) : (moment ? fin.Moment : fin.Force);
         int n = d.Length;
         if (n < 2 || t.Length != n || (deg.V == 0.0 && deg.D == 0.0))
             return;
@@ -135,31 +144,33 @@ public sealed class BodyAero6Dof
         Dual uy = (m[3] * bx + m[4] * by + m[5] * bz) / speed;
         Dual uz = (m[6] * bx + m[7] * by + m[8] * bz) / speed;
 
-        // Engine first is u along -x; the tilt off it fades the tables out.
+        // Engine first is u along -x; the tilt off it fades the fine tables out, and the whole sphere, where there is one, takes what they leave.
         Dual cosTilt = -ux;
         double cosEnd = Math.Cos(FadeTiltEndRad), cosStart = Math.Cos(FadeTiltStartRad);
-        if (!(cosTilt.V > cosEnd))
+        bool sphere = SphereForce != null;
+        Dual wTilt = cosTilt.V > cosEnd ? SmoothStep((cosTilt - cosEnd) / (cosStart - cosEnd)) : new Dual(0.0);
+        if (!(wTilt.V > 0.0) && !sphere)
             return;
-        Dual wTilt = SmoothStep((cosTilt - cosEnd) / (cosStart - cosEnd));
         Dual wSpeed = SmoothStep((speed - FadeSpeedLowMs) / (FadeSpeedHighMs - FadeSpeedLowMs));
-        weight = wTilt * wSpeed;
+        Dual wSphere = sphere ? 1.0 - wTilt : new Dual(0.0);
+        weight = (wTilt + wSphere) * wSpeed;
 
-        Dual alpha = Dual.Atan2(uz, -ux);
-        Dual beta = Dual.Atan2(uy, -ux);
         Dual mach = Atmosphere.Mach(speed);
-        Dual qs = 0.5 * Atmosphere.Density(altitude) * speed2 * ReferenceArea * weight;
+        Dual qs = 0.5 * Atmosphere.Density(altitude) * speed2 * ReferenceArea * wSpeed;
 
-        Dual fm = Clamp(mach, Force.MachMin, Force.MachMax);
-        Force.Coefficients(fm, alpha, beta, out Dual cx, out Dual cy, out Dual cz);
-        // The control surfaces at their deflections: their force joins the body's, and their moment below.
-        Dual fcl = default, fcm = default, fcn = default;
+        // The coefficients, force and moment with the control surfaces', as a blend of the two tables by their shares.
+        Dual cx = default, cy = default, cz = default, fcl = default, fcm = default, fcn = default;
         int fins = Math.Min(Fins.Length, finDeg.Length);
-        for (int i = 0; i < fins; i++)
+        if (wTilt.V > 0.0)
         {
-            FinCoefficients(Fins[i], false, finDeg[i], mach, alpha, beta, out Dual dx, out Dual dy, out Dual dz);
-            cx += dx; cy += dy; cz += dz;
-            FinCoefficients(Fins[i], true, finDeg[i], mach, alpha, beta, out Dual dl, out Dual dm, out Dual dn);
-            fcl += dl; fcm += dm; fcn += dn;
+            Dual alpha = Dual.Atan2(uz, -ux);
+            Dual beta = Dual.Atan2(uy, -ux);
+            AddCoefficients(Force, Moment, false, wTilt, mach, alpha, beta, fins, finDeg, ref cx, ref cy, ref cz, ref fcl, ref fcm, ref fcn);
+        }
+        if (wSphere.V > 0.0)
+        {
+            BodyAeroTable.SphereAngles(SphereForce!.Frame, ux, uy, uz, out Dual lambda, out Dual mu);
+            AddCoefficients(SphereForce, SphereMoment, true, wSphere, mach, lambda, mu, fins, finDeg, ref cx, ref cy, ref cz, ref fcl, ref fcm, ref fcn);
         }
         Dual Fx = qs * cx, Fy = qs * cy, Fz = qs * cz;
 
@@ -177,17 +188,10 @@ public sealed class BodyAero6Dof
         Dual Mz = ComShiftX * Fy - ComShiftY * Fx;
         if (ReferenceLength > 0.0)
         {
-            Dual cl = fcl, cm = fcm, cn = fcn;
-            if (Moment != null)
-            {
-                Dual mm = Clamp(mach, Moment.MachMin, Moment.MachMax);
-                Moment.Coefficients(mm, alpha, beta, out Dual bl, out Dual bm, out Dual bn);
-                cl += bl; cm += bm; cn += bn;
-            }
             Dual qsl = qs * ReferenceLength;
-            Mx += qsl * cl;
-            My += qsl * cm;
-            Mz += qsl * cn;
+            Mx += qsl * fcl;
+            My += qsl * fcm;
+            Mz += qsl * fcn;
         }
         // As the game's integrator applies it (MomentLimiterPerPa): the whole moment about the centre of mass, divided by one factor.
         if (MomentLimiterPerPa > 0.0)
@@ -200,6 +204,29 @@ public sealed class BodyAero6Dof
         tx = m[0] * Mx + m[3] * My + m[6] * Mz;
         ty = m[1] * Mx + m[4] * My + m[7] * Mz;
         tz = m[2] * Mx + m[5] * My + m[8] * Mz;
+    }
+
+    /// <summary>One table set's force and moment coefficients, the body's and its fins' at their deflections, at its angles, added in at a share.</summary>
+    private void AddCoefficients(BodyAeroTable force, BodyAeroTable? moment, bool sphere, Dual share, Dual mach, Dual a, Dual b,
+                                 int fins, ReadOnlySpan<Dual> finDeg,
+                                 ref Dual cx, ref Dual cy, ref Dual cz, ref Dual cl, ref Dual cm, ref Dual cn)
+    {
+        force.Coefficients(Clamp(mach, force.MachMin, force.MachMax), a, b, out Dual x, out Dual y, out Dual z);
+        Dual l = default, m = default, n = default;
+        for (int i = 0; i < fins; i++)
+        {
+            FinCoefficients(Fins[i], false, finDeg[i], mach, a, b, out Dual dx, out Dual dy, out Dual dz, sphere);
+            x += dx; y += dy; z += dz;
+            FinCoefficients(Fins[i], true, finDeg[i], mach, a, b, out Dual dl, out Dual dm, out Dual dn, sphere);
+            l += dl; m += dm; n += dn;
+        }
+        if (moment != null && ReferenceLength > 0.0)
+        {
+            moment.Coefficients(Clamp(mach, moment.MachMin, moment.MachMax), a, b, out Dual bl, out Dual bm, out Dual bn);
+            l += bl; m += bm; n += bn;
+        }
+        cx += share * x; cy += share * y; cz += share * z;
+        cl += share * l; cm += share * m; cn += share * n;
     }
 
     private static Dual SmoothStep(Dual s)

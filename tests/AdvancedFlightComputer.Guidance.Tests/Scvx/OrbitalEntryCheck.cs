@@ -112,8 +112,22 @@ internal static class OrbitalEntryCheck
         }
         // Belly -Z at 60 deg from nose-first: u = cos 60 x + sin 60 (-z).
         BodyAeroTable.Angles(BodyAeroFrame.Belly(0, -1), Math.Cos(Math.PI / 3), 0, -Math.Sin(Math.PI / 3), out double ab, out double bb);
-        bool ok = worst < 1e-9 && old < 1e-12 && Math.Abs(ab * 180 / Math.PI - 30) < 1e-9 && Math.Abs(bb) < 1e-12;
-        Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} table frames: round trip {worst:E1} deg, against the old formulas {old:E1} rad, belly-flop 60 deg reads alpha {ab * 180 / Math.PI:F2}");
+        // The whole sphere (BodyAeroTable.Sphere) about a belly frame's axes: every longitude round and latitude off the poles comes back, engine first reads 0, belly first 90, nose first 180.
+        var sf = new BodyAeroFrame(-1, 0, 0, 0, 0, 1, 0, -1, 0);
+        double sphereWorst = 0;
+        for (double l = -175; l <= 180; l += 15)
+            for (double m = -75; m <= 75; m += 15)
+            {
+                var (sx, sy, sz) = BodyAeroTable.SphereDirection(l * Math.PI / 180, m * Math.PI / 180, sf);
+                BodyAeroTable.SphereAngles(sf, sx, sy, sz, out double l2, out double m2);
+                sphereWorst = Math.Max(sphereWorst, Math.Max(Math.Abs(l2 * 180 / Math.PI - l), Math.Abs(m2 * 180 / Math.PI - m)));
+            }
+        BodyAeroTable.SphereAngles(sf, -1, 0, 0, out double lEngine, out _);
+        BodyAeroTable.SphereAngles(sf, 0, 0, 1, out double lBelly, out _);
+        BodyAeroTable.SphereAngles(sf, 1, 0, 0, out double lNose, out _);
+        bool ok = worst < 1e-9 && old < 1e-12 && Math.Abs(ab * 180 / Math.PI - 30) < 1e-9 && Math.Abs(bb) < 1e-12
+                  && sphereWorst < 1e-9 && Math.Abs(lEngine) < 1e-12 && Math.Abs(lBelly * 180 / Math.PI - 90) < 1e-9 && Math.Abs(Math.Abs(lNose * 180 / Math.PI) - 180) < 1e-9;
+        Console.WriteLine($"  {(ok ? "ok  " : "FAIL")} table frames: round trip {worst:E1} deg, against the old formulas {old:E1} rad, belly-flop 60 deg reads alpha {ab * 180 / Math.PI:F2}; whole sphere round trip {sphereWorst:E1} deg, engine/belly/nose first at {lEngine * 180 / Math.PI:F0}/{lBelly * 180 / Math.PI:F0}/{Math.Abs(lNose) * 180 / Math.PI:F0}");
         return ok ? 0 : 1;
     }
 

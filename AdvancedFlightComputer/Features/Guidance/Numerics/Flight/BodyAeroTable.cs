@@ -14,6 +14,8 @@ namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 ///
 /// A BELLY-FIRST TABLE (<see cref="BodyAeroFrame.Belly"/>, an orbital entry's) takes its angles about a side of the body: with the belly axis b leading (u . b &gt; 0), alpha = atan2(u . x, u . b), towards the nose, and beta = atan2(u . c, u . b) about the remaining axis c. Alpha is 90 deg less the entry's angle of attack from nose-first, so a belly-flop at 60 deg reads alpha 30. The general form of all three is <see cref="BodyAeroFrame"/>: a leading axis and the two axes the angles tilt towards.
 ///
+/// A WHOLE-SPHERE TABLE (<see cref="Sphere"/>, KsaAeroSweep.Result.SphereBodyAero) covers every air direction, for a craft that turns through them, a belly-flop's flip above all: its two angles are a longitude about the frame's lead axis towards its alpha axis, lambda = atan2(u . a, u . l), all the way round (0 lead first, 90 alpha-axis first, 180 the other end first), and a latitude towards its beta axis, mu = atan2(u . b, sqrt((u . l)^2 + (u . a)^2)), -90 to 90. Its only singular points are the air straight along the beta axis, a craft flying flat sideways. The longitude grid runs past +-180 with the values wrapped, so the fit is continuous round the back. See <see cref="SphereAngles(in BodyAeroFrame, double, double, double, out double, out double)"/>.
+///
 /// The same class holds the moment table (KsaAeroSweep.Result.BodyMoment): three body-axis values per node again, there C_l, C_m, C_n = torque / (q S L) about the centre of mass the sweep saw.
 ///
 /// One cubic B-spline fits all three coefficients over (Mach, alpha, beta), so the value and its exact gradient come in one pass; <see cref="Coefficients(Dual, Dual, Dual, out Dual, out Dual, out Dual)"/> feeds them to the AD sweep by the chain rule, as AeroTable does.
@@ -70,6 +72,9 @@ public sealed class BodyAeroTable
     /// <summary>The air's component along the leading axis: positive where the table's side leads.</summary>
     public double LeadOf(double ux, double uy, double uz) => Frame.LeadOf(ux, uy, uz);
 
+    /// <summary>A whole-sphere table: its angles are the longitude and latitude of <see cref="SphereAngles(in BodyAeroFrame, double, double, double, out double, out double)"/>, not alpha and beta.</summary>
+    public bool Sphere { get; }
+
     /// <summary>The coefficients as given, row-major over (Mach, alpha, beta): for a problem file to write out.</summary>
     public double[] Values { get; }
 
@@ -81,8 +86,9 @@ public sealed class BodyAeroTable
     }
 
     /// <param name="frame">The axes the angles are taken about: engine first, nose first or a belly side.</param>
-    public BodyAeroTable(double[] machGrid, double[] alphaGridDeg, double[] betaGridDeg, double[] coefficients, BodyAeroFrame frame)
+    public BodyAeroTable(double[] machGrid, double[] alphaGridDeg, double[] betaGridDeg, double[] coefficients, BodyAeroFrame frame, bool sphere = false)
     {
+        Sphere = sphere;
         if (machGrid is null || alphaGridDeg is null || betaGridDeg is null || coefficients is null)
             throw new ArgumentNullException(nameof(coefficients));
         int n = machGrid.Length * alphaGridDeg.Length * betaGridDeg.Length;
@@ -186,6 +192,33 @@ public sealed class BodyAeroTable
         cy = c0 * xy + c1 * yy + c2 * zy;
         cz = c0 * xz + c1 * yz + c2 * zz;
         return true;
+    }
+
+    /// <summary>The whole-sphere angles (radians) of an air direction in body axes (any length) about a frame: the longitude lambda about the lead axis towards the alpha axis, all the way round, and the latitude mu towards the beta axis.</summary>
+    public static void SphereAngles(in BodyAeroFrame frame, double ux, double uy, double uz, out double lambdaRad, out double muRad)
+    {
+        double l = frame.LeadOf(ux, uy, uz), a = frame.AlphaOf(ux, uy, uz), b = frame.BetaOf(ux, uy, uz);
+        lambdaRad = Math.Atan2(a, l);
+        muRad = Math.Atan2(b, Math.Sqrt(l * l + a * a));
+    }
+
+    /// <summary>The same as <see cref="Dual"/>s.</summary>
+    public static void SphereAngles(in BodyAeroFrame frame, Dual ux, Dual uy, Dual uz, out Dual lambda, out Dual mu)
+    {
+        Dual l = ux * frame.LX + uy * frame.LY + uz * frame.LZ;
+        Dual a = ux * frame.AX + uy * frame.AY + uz * frame.AZ;
+        Dual b = ux * frame.BX + uy * frame.BY + uz * frame.BZ;
+        lambda = Dual.Atan2(a, l);
+        mu = Dual.Atan2(b, Dual.Sqrt(l * l + a * a + 1e-24));
+    }
+
+    /// <summary>The body-axis air direction, unit, at a whole-sphere longitude and latitude (radians) about a frame: the inverse of <see cref="SphereAngles(in BodyAeroFrame, double, double, double, out double, out double)"/>.</summary>
+    public static (double ux, double uy, double uz) SphereDirection(double lambdaRad, double muRad, in BodyAeroFrame frame)
+    {
+        double cl = Math.Cos(lambdaRad) * Math.Cos(muRad), ca = Math.Sin(lambdaRad) * Math.Cos(muRad), cb = Math.Sin(muRad);
+        return (cl * frame.LX + ca * frame.AX + cb * frame.BX,
+                cl * frame.LY + ca * frame.AY + cb * frame.BY,
+                cl * frame.LZ + ca * frame.AZ + cb * frame.BZ);
     }
 
     /// <summary>The body-axis air velocity direction, unit, for an alpha and beta: the inverse of the definition in the type summary, about the nose for a nose-first table.</summary>

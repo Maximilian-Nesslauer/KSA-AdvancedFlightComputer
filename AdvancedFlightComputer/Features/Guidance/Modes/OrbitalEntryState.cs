@@ -184,6 +184,14 @@ public sealed class BellyflopState
     public double TerminalShortM = double.NaN, TerminalLongM = double.NaN;
     /// <summary>Pitch, bank and yaw flown now, deg (the airflow on the belly), for the log and the status.</summary>
     public double PitchDeg = double.NaN, BankDeg = double.NaN, YawDeg = double.NaN;
+    /// <summary>The hand-over to touchdown guidance asked for this step (its log line), taken on the next step ahead of the claim (CheckPendingBellyflopTouchdownHandoff); null for none.</summary>
+    public string TouchdownHandoff;
+    /// <summary>The pitch, bank and yaw commanded, rad, low-passed off the plans (BellyflopAttitude), and when last stepped; NaN until bellyflop flies.</summary>
+    public double CmdAlpha = double.NaN, CmdBeta = double.NaN, CmdPsi = double.NaN, CmdAt = double.NaN;
+    /// <summary>Touchdown's standby is solving for the flip (StepBellyflopTouchdown).</summary>
+    public bool TouchdownStandby;
+    /// <summary>Sim time before which a touchdown that refused the flip is not started again.</summary>
+    public double TouchdownHandoffRetryAt = double.NegativeInfinity;
 
     public void Reset()
     {
@@ -204,5 +212,9 @@ public sealed class BellyflopState
         TerminalRangeM = 0;
         TerminalShortM = TerminalLongM = double.NaN;
         PitchDeg = BankDeg = YawDeg = double.NaN;
+        TouchdownHandoff = null;
+        CmdAlpha = CmdBeta = CmdPsi = CmdAt = double.NaN;
+        TouchdownStandby = false;
+        TouchdownHandoffRetryAt = double.NegativeInfinity;
     }
 }
