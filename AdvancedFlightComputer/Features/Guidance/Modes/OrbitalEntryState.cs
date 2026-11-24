@@ -188,6 +188,8 @@ public sealed class BellyflopState
     public string TouchdownHandoff;
     /// <summary>The pitch, bank and yaw commanded, rad, low-passed off the plans (BellyflopAttitude), and when last stepped; NaN until bellyflop flies.</summary>
     public double CmdAlpha = double.NaN, CmdBeta = double.NaN, CmdPsi = double.NaN, CmdAt = double.NaN;
+    /// <summary>Their rates, rad/s, the filter's second state.</summary>
+    public double CmdAlphaRate, CmdBetaRate, CmdPsiRate;
     /// <summary>Touchdown's standby is solving for the flip (StepBellyflopTouchdown).</summary>
     public bool TouchdownStandby;
     /// <summary>Sim time before which a touchdown that refused the flip is not started again.</summary>
@@ -214,6 +216,7 @@ public sealed class BellyflopState
         PitchDeg = BankDeg = YawDeg = double.NaN;
         TouchdownHandoff = null;
         CmdAlpha = CmdBeta = CmdPsi = CmdAt = double.NaN;
+        CmdAlphaRate = CmdBetaRate = CmdPsiRate = 0.0;
         TouchdownStandby = false;
         TouchdownHandoffRetryAt = double.NegativeInfinity;
     }

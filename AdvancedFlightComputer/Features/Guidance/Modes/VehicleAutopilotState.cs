@@ -1859,7 +1859,7 @@ public sealed class VehicleAutopilotState
     /// <summary>Let AFC's own attitude controller fire the RCS during orbital entry; off flies on the surfaces alone.</summary>
     public bool OrbitalEntryUseRcs = true;
     /// <summary>The phase-plane RCS's angle band in orbital entry, deg, whole width (the stock flight computer's Balanced is 1): on the RCS's own axes; three times it on the flaps' as their backup.</summary>
-    public double OrbitalEntryRcsDeadbandDeg = 1.0;
+    public double OrbitalEntryRcsDeadbandDeg = 4.0;
 
     #region Status texts and their marks
 

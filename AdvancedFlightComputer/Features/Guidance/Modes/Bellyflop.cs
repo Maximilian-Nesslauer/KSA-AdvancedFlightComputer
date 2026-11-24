@@ -233,8 +233,11 @@ public static partial class GuidanceWindow
         }
     }
 
-    /// <summary>Time constant of the low-pass on bellyflop's commanded angles, s (BellyflopAttitude): a re-solve's worth, so a new plan is blended in over about a second.</summary>
-    private const double BellyflopCommandSmoothS = 0.5;
+    /// <summary>Natural frequency of the critically damped filter on bellyflop's commanded angles, rad/s (BellyflopAttitude): a step settles in about 2 s, and a turn the plan starts at 7 deg/s asks at most about 5 deg/s^2, inside what the flaps spare at Mach 5.</summary>
+    private const double BellyflopCommandOmega = 2.0;
+
+    /// <summary>The flip's share of touchdown's burn-time seed, s: 90 deg at about 15 deg/s.</summary>
+    private const double BellyflopFlipSeedS = 6.0;
 
     /// <summary>Share of the engines' full thrust the burn-time seed assumes on average, less gravity.</summary>
     private const double BellyflopBurnSeedThrottle = 0.7;
@@ -262,9 +265,10 @@ public static partial class GuidanceWindow
             return;
         }
         double decel = Math.Max(BellyflopBurnSeedThrottle * accel - gravity, 0.3 * (accel - gravity));
-        double burn = Math.Max(speed / decel, SixDofStandbyMinSeedS);
+        // The burn has the flip in it: the coast's seed holds the craft belly first, so the burn must turn it 90 deg as well as stop it. Seeded with the stop alone (2 s for the Starship at 51 m/s), every cold solve had to turn the craft in the burn's last intervals at 2 rad/s, lengthened the burn 0.2 s an iteration, and was restarted as stalled before it got there (2026-11-24).
+        double burn = Math.Max(speed / decel, SixDofStandbyMinSeedS) + BellyflopFlipSeedS;
         double sink = Math.Max(-x14[5], 1.0);
-        double coast = Math.Max((x14[2] - 0.5 * speed * burn) / sink, 0.0);
+        double coast = Math.Max((x14[2] - sink * BellyflopFlipSeedS - 0.5 * speed * (burn - BellyflopFlipSeedS)) / sink, 0.0);
         if (!bf.TouchdownStandby)
         {
             GuidanceLog.Info(vehicle, FormattableString.Invariant(
@@ -319,20 +323,33 @@ public static partial class GuidanceWindow
             return false;
         var frame = BellyflopSiteFrame(parent, out _);
         double[] x14 = KsaFrameBridge.ToModelState(vehicle, frame);
-        // THE COMMAND IS SMOOTH BY CONSTRUCTION, as entry guidance's glide learned (ThreeDof.cs): a first-order low-pass over the plans, from the angles flown at the take-over, so a new plan each second does not step the target the fins chase. Read BellyflopCommandSmoothS ahead, so the plan's own ramps come through without the filter's lag. Flown straight off the newest plan (2026-11-24), the fins stood at 13-32 deg and saturated 27-38 % of the time, against 3-5 deg and 3-6 % in the entry.
-        var (ta, tb, tp) = plan.ControlAt(now + BellyflopCommandSmoothS);
+        // THE COMMAND IS SMOOTH BY CONSTRUCTION, as entry guidance's glide learned (ThreeDof.cs): a critically damped second-order filter over the plans (BellyflopCommandOmega), from the angles flown at the take-over and at rest, so the command, its rate and its acceleration are all continuous: a new plan each second does not step the target, and a turn the plan starts does not step its rate. Read 2/omega ahead, the filter's lag on a ramp, so the plan's own turns come through on time. Flown straight off the newest plan, the fins stood at 13-32 deg and saturated 27-38 % of the time, against 3-5 deg and 3-6 % in the entry; through a first-order filter the plan's first turn, a 90 deg yaw at the take-over, still stepped the rate to 7 deg/s, and the craft rocked 33 deg in bank for 15 s with the flaps at their stops and the RCS at 80-116 kg/s (2026-11-24).
+        double lead = 2.0 / BellyflopCommandOmega;
+        var (ta, tb, tp) = plan.ControlAt(now + lead);
         if (!double.IsFinite(bf.CmdAt))
         {
             const double toRad = Math.PI / 180.0;
             (bf.CmdAlpha, bf.CmdBeta, bf.CmdPsi) = double.IsFinite(bf.PitchDeg) && double.IsFinite(bf.BankDeg) && double.IsFinite(bf.YawDeg)
                 ? (bf.PitchDeg * toRad, bf.BankDeg * toRad, bf.YawDeg * toRad) : (ta, tb, tp);
+            bf.CmdAlphaRate = bf.CmdBetaRate = bf.CmdPsiRate = 0.0;
             bf.CmdAt = now;
         }
-        double k = 1.0 - Math.Exp(-Math.Clamp(now - bf.CmdAt, 0.0, 1.0) / BellyflopCommandSmoothS);
+        double span = Math.Clamp(now - bf.CmdAt, 0.0, 1.0);
         bf.CmdAt = now;
-        bf.CmdAlpha += k * (ta - bf.CmdAlpha);
-        bf.CmdBeta += k * (tb - bf.CmdBeta);
-        bf.CmdPsi += k * (tp - bf.CmdPsi);
+        const double maxStep = 0.02;
+        double w = BellyflopCommandOmega;
+        for (double done = 0.0; done < span - 1e-9;)
+        {
+            double h = Math.Min(maxStep, span - done);
+            done += h;
+            // Semi-implicit: the rate first, then the angle with the new rate.
+            bf.CmdAlphaRate += h * (w * w * (ta - bf.CmdAlpha) - 2.0 * w * bf.CmdAlphaRate);
+            bf.CmdBetaRate += h * (w * w * (tb - bf.CmdBeta) - 2.0 * w * bf.CmdBetaRate);
+            bf.CmdPsiRate += h * (w * w * (tp - bf.CmdPsi) - 2.0 * w * bf.CmdPsiRate);
+            bf.CmdAlpha += h * bf.CmdAlphaRate;
+            bf.CmdBeta += h * bf.CmdBetaRate;
+            bf.CmdPsi += h * bf.CmdPsiRate;
+        }
         double a = bf.CmdAlpha, b = bf.CmdBeta, p = bf.CmdPsi;
         if (!model.Axes(x14.AsSpan(0, 6), a, b, p, out V3 nose, out _, out V3 belly, out _))
             return false;
