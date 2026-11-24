@@ -141,6 +141,7 @@ public static partial class GuidanceWindow
         using (new ImGuiDisabledScope(_s.SixDofFloorAuto))
             GaugeRow(Specs.SixDofThrottleFloor, ref _s.SixDofThrottleFloor);
         GaugeRow(Specs.LandingPlanFloorMargin, ref _s.LandingPlanFloorMargin);
+        GaugeRow(Specs.SixDofSurfaceShare, ref _s.SixDofSurfaceShare);
 
         GaugeRow(Specs.SixDofGlideSlopeDeg, ref _s.SixDofGlideSlopeDeg);
 

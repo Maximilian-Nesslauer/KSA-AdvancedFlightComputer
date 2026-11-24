@@ -197,6 +197,8 @@ internal static class GuidanceSettingSpecs
 
     public static readonly SettingSpec SixDofNodes = new("SixDofNodes", "SOLVER POINTS", "", T, 50.0, 5.0, 50.0, "%.0f",
         "Number of points of the touchdown guidance plan.");
+    public static readonly SettingSpec SixDofSurfaceShare = new("SixDofSurfaceShare", "PLAN RCS AND FLAPS", "frac", T, 0.5, 0.1, 1.0, "%.2f",
+        "The share of the RCS's torque and of the control surfaces' travel touchdown's plans may use; the rest is left for flying the plan. Lower plans more gently and leaves turns the air, the flaps and the thrusters cannot do with room to spare to the gimbals, with the engine lit. Never above the gimbals' share.");
     public static readonly SettingSpec SixDofTiltDeg = new("SixDofTiltDeg", "MAX TILT", "deg", T, 120.0, 0.0, 180.0, "%.1f",
         "Largest tilt of the craft from vertical.");
     public static readonly SettingSpec SixDofThrottleFloor = new("SixDofThrottleFloor", "THROTTLE FLOOR", "frac", T, 0.40, 0.0, 1.0, "%.3f",
@@ -467,7 +469,7 @@ internal static class GuidanceSettingSpecs
     {
         SixDofNodes, SixDofTiltDeg, SixDofThrottleFloor, SixDofSigmaSeed, SixDofSigmaSamples, SixDofGlideSlopeDeg,
         SixDofVzMaxMs, SixDofNodeDtTarget, SixDofColdIntervalS, SixDofReplanSec, SixDofRateDampShare,
-        SixDofControlSmooth, SixDofProximal, SixDofTrackKp, SixDofTrackKd, LandingPlanFloorMargin,
+        SixDofControlSmooth, SixDofProximal, SixDofTrackKp, SixDofTrackKd, LandingPlanFloorMargin, SixDofSurfaceShare,
     };
     public static readonly BoolSpec[] TuningSixDofBools =
     {
@@ -475,7 +477,7 @@ internal static class GuidanceSettingSpecs
         SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ScvxClarabel,
     };
     public static readonly SettingSpec[] TuningSixDofLimits =
-        { SixDofTiltDeg, SixDofThrottleFloor, SixDofGlideSlopeDeg, SixDofVzMaxMs, LandingPlanFloorMargin };
+        { SixDofTiltDeg, SixDofThrottleFloor, SixDofGlideSlopeDeg, SixDofVzMaxMs, LandingPlanFloorMargin, SixDofSurfaceShare };
     public static readonly BoolSpec[] TuningSixDofLimitBools = { SixDofFloorAuto, SixDofVzEnabled };
     public static readonly SettingSpec[] TuningSixDofTracking = { SixDofTrackKp, SixDofTrackKd, SixDofReplanSec };
     public static readonly BoolSpec[] TuningSixDofTrackingBools = { SixDofTrack, SixDofBiasEnabled };

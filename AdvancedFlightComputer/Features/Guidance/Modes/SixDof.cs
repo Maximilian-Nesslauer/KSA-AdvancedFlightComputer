@@ -543,7 +543,7 @@ public static partial class GuidanceWindow
                                    gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight, rateMaxDegS: _s.SixDofRateMaxDegS,
                                    coastIntervals: _s.SixDofCoastPending ? CoastIntervalsFor(nodes) : 0,
                                    scaleFrom: _s.SixDofCoastPending ? _s.SixDofCoastScaleState : null,
-                                   momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow))
+                                   momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -1454,6 +1454,16 @@ public static partial class GuidanceWindow
         }
 
         bool firstBrakingCommand = false;
+        // A direct engage waits for the flaps' tables, flying the no-plan law meanwhile (TouchdownWaitsForSurfaces).
+        if (_s.EngagePending && !(_s.SixDofStandby && _s.Guidance != null))
+        {
+            EnsureBoostbackAero(vehicle, parent);
+            if (TouchdownWaitsForSurfaces(vehicle, out string waitWhy))
+            {
+                FlyWithoutPlan(vehicle, parent, siteCci, x, waitWhy);
+                return;
+            }
+        }
         if (_s.EngagePending)
         {
             _s.EngagePending = false;
@@ -1916,6 +1926,26 @@ public static partial class GuidanceWindow
     private const double MomentBiasCap = 2.0;
     private const double MomentBiasStaleS = 10.0;
 
+    /// <summary>
+    /// TOUCHDOWN WAITS FOR THE FLAPS' TABLES: true while the craft has control surfaces and the sweep touchdown would plan on (VehicleAutopilotState.Aero) has not finished sweeping them, up to SurfaceWaitMaxS after it was taken. A sweep hands over its body tables first and its surfaces seconds later (KsaAeroSweep.Result.Surfaces, written when they are all done); planned before then, touchdown had no flaps to trim a belly-flopper's -0.9 MN m with, and every cold solve stalled and started again, every half second, from a bellyflop save (2026-11-24).
+    /// </summary>
+    internal static bool TouchdownWaitsForSurfaces(Vehicle vehicle, out string why)
+    {
+        why = "";
+        KsaAeroSweep.Result aero = _s.Aero;
+        if (aero == null || !ControlSurfaces.Any || System.Threading.Volatile.Read(ref aero.Surfaces).Length > 0)
+            return false;
+        var surfaces = new List<ControlSurface>();
+        ControlSurfaces.Collect(vehicle, surfaces);
+        if (surfaces.Count == 0 || !(SimNow() - aero.SampledAt < SurfaceWaitMaxS))
+            return false;
+        why = FormattableString.Invariant($"TOUCHDOWN WAITING FOR THE {surfaces.Count} CONTROL SURFACES' TABLES");
+        return true;
+    }
+
+    /// <summary>The longest touchdown waits for a sweep's control surfaces, s of sim time after the sweep was taken: past it, one that never finished is planned without them.</summary>
+    private const double SurfaceWaitMaxS = 90.0;
+
     /// <summary>How often the AERO CHECK is logged, s (LogAeroCheck).</summary>
     private const double AeroCheckEveryS = 1.0;
 
@@ -2204,7 +2234,7 @@ public static partial class GuidanceWindow
                                      gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight, rateMaxDegS: _s.SixDofRateMaxDegS,
                                      coastIntervals: _s.SixDofCoastPending ? CoastIntervalsFor(engageNodes) : 0,
                                      scaleFrom: _s.SixDofCoastPending ? _s.SixDofCoastScaleState : null,
-                                     momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow);
+                                     momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare);
     }
 
     /// <summary>

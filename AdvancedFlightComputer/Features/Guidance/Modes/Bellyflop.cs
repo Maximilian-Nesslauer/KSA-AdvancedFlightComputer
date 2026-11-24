@@ -399,6 +399,20 @@ public static partial class GuidanceWindow
             LogSixDofStandbyRefusal(vehicle, FormattableString.Invariant($"Touchdown guidance cannot take the flip: {thrust / 1000:F0} kN of active engines cannot stop the craft."));
             return;
         }
+        // Not before the flaps' tables are in (TouchdownWaitsForSurfaces): bellyflop flies on meanwhile.
+        if (!bf.TouchdownStandby)
+        {
+            EnsureBoostbackAero(vehicle, parent);
+            if (TouchdownWaitsForSurfaces(vehicle, out string waitWhy))
+            {
+                if (!bf.SurfaceWaitLogged)
+                {
+                    GuidanceLog.Info(vehicle, "Touchdown guidance: " + waitWhy.ToLowerInvariant() + " before it plans the flip; bellyflop flies on.");
+                    bf.SurfaceWaitLogged = true;
+                }
+                return;
+            }
+        }
         double decel = Math.Max(BellyflopBurnSeedThrottle * accel - gravity, 0.3 * (accel - gravity));
         // The burn has the flip in it: the coast's seed holds the craft belly first, so the burn must turn it 90 deg as well as stop it. Seeded with the stop alone (2 s for the Starship at 51 m/s), every cold solve had to turn the craft in the burn's last intervals at 2 rad/s, lengthened the burn 0.2 s an iteration, and was restarted as stalled before it got there (2026-11-24).
         double burn = Math.Max(speed / decel, SixDofStandbyMinSeedS) + BellyflopFlipSeedS;

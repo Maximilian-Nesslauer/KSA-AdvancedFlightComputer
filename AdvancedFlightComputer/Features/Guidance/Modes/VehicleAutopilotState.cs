@@ -914,6 +914,8 @@ public sealed class VehicleAutopilotState
     // 6-DOF SCvx state.
     public int SixDofNodes = 50;
     public double SixDofTiltDeg = 120.0;
+    /// <summary>The share of the RCS's torque and the control surfaces' travel touchdown's plans may use (PLAN RCS AND FLAPS; Ksa6DofSetup.TryBuild's surfaceShare).</summary>
+    public double SixDofSurfaceShare = 0.5;
     public double SixDofThrottleFloor = 0.40;
     public bool SixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     public double SixDofSigmaSeed = 20.0;

@@ -197,6 +197,8 @@ public sealed class BellyflopState
     public double CmdAlpha = double.NaN, CmdBeta = double.NaN, CmdPsi = double.NaN, CmdAt = double.NaN;
     /// <summary>The bank limit the flaps' roll trim allowed the last plan, deg (Bellyflop.LimitBellyflopBankToRollTrim); NaN until worked out.</summary>
     public double BankHoldDeg = double.NaN;
+    /// <summary>Touchdown's wait for the flaps' tables has been logged (Bellyflop.StepBellyflopTouchdown).</summary>
+    public bool SurfaceWaitLogged;
     /// <summary>Their rates, rad/s, the filter's second state.</summary>
     public double CmdAlphaRate, CmdBetaRate, CmdPsiRate;
     /// <summary>Touchdown's standby is solving for the flip (StepBellyflopTouchdown).</summary>
@@ -227,6 +229,7 @@ public sealed class BellyflopState
         CmdAlpha = CmdBeta = CmdPsi = CmdAt = double.NaN;
         CmdAlphaRate = CmdBetaRate = CmdPsiRate = 0.0;
         BankHoldDeg = double.NaN;
+        SurfaceWaitLogged = false;
         TouchdownStandby = false;
         TouchdownHandoffRetryAt = double.NegativeInfinity;
     }
