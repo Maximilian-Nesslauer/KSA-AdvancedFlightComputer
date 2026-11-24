@@ -309,6 +309,7 @@ internal static class StagingConfig
         Vehicle vehicle, int sequenceNumber, out double delay)
     {
         delay = 0.0;
+        LoadVehicleOverrides(vehicle.Id);
         return store.TryGetValue(vehicle.Id, out var overrides) && overrides.TryGetValue(sequenceNumber, out delay);
     }
 
@@ -399,6 +400,32 @@ internal static class StagingConfig
         _vehicleEngineOverrides.Remove(vehicleId);
         _vehicleDecouplerOverrides.Remove(vehicleId);
         _failedVehicleLoads.Remove(vehicleId);
+    }
+
+    public static void RenameVehicle(string oldId, string newId)
+    {
+        if (string.IsNullOrEmpty(oldId) || string.IsNullOrEmpty(newId) || oldId == newId)
+            return;
+        LoadVehicleOverrides(oldId);
+        if (_vehicleEngineOverrides.Remove(oldId, out var eng))
+            _vehicleEngineOverrides[newId] = eng;
+        if (_vehicleDecouplerOverrides.Remove(oldId, out var dec))
+            _vehicleDecouplerOverrides[newId] = dec;
+        if (_dirtyVehicles.Remove(oldId))
+            _dirtyVehicles.Add(newId);
+        if (_failedVehicleLoads.Remove(oldId))
+            _failedVehicleLoads.Add(newId);
+        try
+        {
+            string oldPath = GetVehiclePath(oldId);
+            string newPath = GetVehiclePath(newId);
+            if (File.Exists(oldPath) && !File.Exists(newPath))
+                File.Move(oldPath, newPath);
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Warning($"[AFC] Could not rename staging overrides file from '{oldId}' to '{newId}': {ex.Message}");
+        }
     }
 
     private static void LoadSequenceDelays(Dictionary<string, string> raw, Dictionary<int, double> target)

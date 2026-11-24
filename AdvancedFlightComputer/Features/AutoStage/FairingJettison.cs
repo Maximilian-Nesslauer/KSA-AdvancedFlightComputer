@@ -186,9 +186,10 @@ internal static class FairingJettison
             return false;
         bool air = parent.GetPhysicalAtmosphere() is { Height: > 0.0 };
         double q = vehicle.ComputeDynamicPressure();
-        // PhysicsEnvironment.RecomputePositionalValues reads the terrain below the craft only inside the physics radius,
+        // PhysicsEnvironment.RecomputePositionalValues reads the terrain and ocean below the craft only inside the physics radius,
         // the top of the air or of the highest terrain. Above it no terrain is higher than the highest one.
-        double ground = env.InPhysicsRadius && env.TerrainRadius > 0.0 ? env.TerrainRadius : parent.MaxTerrainRadius;
+        double surface = Math.Max(env.TerrainRadius, env.OceanRadius);
+        double ground = env.InPhysicsRadius && surface > 0.0 ? surface : parent.MaxTerrainRadius;
         // The whole vehicle clears the terrain, so the bounding sphere comes off the height of its centre.
         double clearance = r.Length() - ground - vehicle.BoundingSphereRadiusBody;
         state.FairingGateQ = q;
