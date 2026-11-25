@@ -17,7 +17,7 @@ public static partial class GuidanceWindow
         PhaseLabel: EntryPhaseLabel,
         Commit: (vehicle, orbit, parent) => RequestEntryGuidance(vehicle),
         Stop: StopEntryGuidance,
-        Diagnostics: new ModeDiagnostics(GuidanceModeId.EntryHere, "ENTRY", DrawEntryDiagnostics),
+        Diagnostics: new ModeDiagnostics(GuidanceModeId.EntryHere, EntryMethods.GlideBurnLabel, DrawEntryDiagnostics),
         Readout: EntryReadout,
         StopText: s => EntryGuidance.StopText(EntryStageOf(s), s.ControlAcquired));
 
@@ -104,7 +104,9 @@ public static partial class GuidanceWindow
     }
 
     private static string EntryText(string text)
-        => text.StartsWith("ENTRY GUIDANCE", StringComparison.OrdinalIgnoreCase) ? text : "ENTRY GUIDANCE: " + text;
+        => text.StartsWith("ENTRY GUIDANCE", StringComparison.OrdinalIgnoreCase) || text.StartsWith(EntryMethods.GlideBurnLabel, StringComparison.OrdinalIgnoreCase)
+            ? text
+            : EntryMethods.GlideBurnLabel + ": " + text;
 
     // The countdown that matters in each phase: the planned ignition in the glide, the burn left in the burn, and the boostback's time to impact while the first plan of the glide is solved. Only the boostback glide writes GlideTgo, so a burn without a plan shows no number rather than a frozen one.
     private static ModeLiveReadout EntryReadout(Vehicle vehicle, VehicleAutopilotState s)
@@ -158,7 +160,7 @@ public static partial class GuidanceWindow
     {
         _s.ThreeDofEngagePending = false;
         if (ThreeDofLive)
-            Disengage3Dof("ENTRY GUIDANCE STOPPED");
+            Disengage3Dof("RETRO BURN STOPPED");
         else if (!BoostbackLive)
             ResetLandingEngineSelection();
     }

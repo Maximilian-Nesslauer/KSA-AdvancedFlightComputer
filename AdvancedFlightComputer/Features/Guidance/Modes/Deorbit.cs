@@ -149,6 +149,7 @@ public static partial class GuidanceWindow
             return;
         }
         ClaimVehicle(GuidanceMode.Landing, vehicle);
+        ClearAim(_s.OrbitalEntry);
         _s.CutoffDone = false;
         _s.StagingActive = false;
         _s.HasCommand = false;
@@ -281,6 +282,7 @@ public static partial class GuidanceWindow
 
     private static void RestartDeorbitPlanning(string status)
     {
+        ClearAim(_s.OrbitalEntry);
         ClearDeorbitPlanState();
         _s.DeorbitNextValidationTick = GuidanceClock.NowMs + DeorbitSettleMs;
         _s.LandingPhase = LandingPhase.DeorbitPlanning;
@@ -310,7 +312,8 @@ public static partial class GuidanceWindow
         DeorbitRequest request = _s.DeorbitRequest;
         if (request.Settings.EntryPeriapsis.HasValue)
             return PlanEntryBurn(vehicle, request);
-        _s.DeorbitPlanner = new DeorbitPlanner(request);
+        // LAND > ENTRY/BRAKING flies the braking burn from where the craft is, with no deorbit burn: the planner takes a direct approach only.
+        _s.DeorbitPlanner = new DeorbitPlanner(request, brakingOnly: _s.DeorbitBrakingOnly);
         _s.DeorbitNextValidationTick = GuidanceClock.NowMs + DeorbitRevalidateMs;
         StateVectors captured = request.Source.StateVectors;
         string thrust = request.Engines.Length == 0 ? "NO USABLE ENGINE"
@@ -326,6 +329,10 @@ public static partial class GuidanceWindow
 
     private static bool PlanEntryBurn(Vehicle vehicle, DeorbitRequest request)
     {
+        // AIM AT SITE times the burn for the orbital entry that follows (OrbitalEntryAim), whether ENTRY AFTER DEORBIT hands the craft over or the player engages it; off, DEORBIT ONLY burns at the next chance.
+        // The aim no longer waits on ENTRY AFTER DEORBIT: a save that kept that switch off (2026-11-25, starship_entry_ksc) turned the aim off with it, and the entry met the air 11,300 km from the site.
+        if (_s.OrbitalEntryAimDeorbit)
+            return PlanAimedEntryBurn(vehicle, request.Parent, request);
         _s.DeorbitPlan = EntryDeorbitPlanner.Plan(request, out string reason, _s.DeorbitEntryMeasuredPreparation, SimNow());
         if (_s.DeorbitPlan is not { } entry)
         {

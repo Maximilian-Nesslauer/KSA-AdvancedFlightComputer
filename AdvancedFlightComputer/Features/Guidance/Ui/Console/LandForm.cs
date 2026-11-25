@@ -43,8 +43,6 @@ public static partial class GuidanceWindow
         _landHoverFlies = descent.Known ? LandSolvers.HoverFlies(in descent) : HoverFliesByThrust(vehicle);
     }
 
-    private static readonly List<TableMark> _landTableMarks = new();
-
     // A site row has the room for a degree value to three decimals, the precision of Fmt.LatLon. The narrowest field at interface scale 1 that shows a value such as "-80.600" whole, so a long body name yields first.
     private const string SiteCellFormat = "%.3f";
     private const float SiteFieldLeast = 78f;
@@ -52,7 +50,41 @@ public static partial class GuidanceWindow
     private static bool LandFlies => _s.Active || _s.EngagePending || _s.SixDofStandby || EntryLive(_s) || DescentLive || BoostbackLive;
 
     private static LandSolver LandSolverOf(LandWay way)
-        => way == LandWay.FromOrbit ? LandSolvers.Shown(LandSolvers.Chosen(false, _s.UseSixDofLanding), LandingMachineLive) : LandSolverRoute;
+        => way == LandWay.FromOrbit || (way == LandWay.Entry && !PageHasAir) ? LandSolvers.Shown(LandSolvers.Chosen(false, _s.UseSixDofLanding), LandingMachineLive)
+            : way is LandWay.Entry or LandWay.Glide ? LandSolver.Entry
+            : LandSolverRoute;
+
+    /// <summary>Whether the body under the craft has air, as the console read it this frame: it decides orbital entry or the braking burn.</summary>
+    private static bool PageHasAir => Ui.Console.AfcConsole.Frame.Situation.HasAir;
+
+    /// <summary>The way's GLIDE row chose FLIP LANDING, for the commit and the flying page.</summary>
+    internal static bool GlideFlipChosen(LandWay way) => GlideFlips(way);
+
+    /// <summary>FLIP LANDING flies: on GLIDE, or on LAND NOW where a glide flies first. Orbital entry flies it, from bellyflop past its hand-over.</summary>
+    private static bool FlipWay(LandWay way) => (way == LandWay.FromHere && LandSolverRoute == LandSolver.Entry && _s.LandFlip) || (way == LandWay.Glide && _s.EntryFlip);
+
+    /// <summary>The way's path starts with orbital entry: ENTRY/BRAKING where there is air, or LAND NOW's FLIP LANDING.</summary>
+    private static bool OrbitalEntryWay(LandWay way) => (way == LandWay.Entry && PageHasAir) || FlipWay(way);
+
+    /// <summary>LAND NOW's RETRO BURN: the 3-DOF's glide and landing burn.</summary>
+    private static bool RetroWay(LandWay way) => (way == LandWay.FromHere && LandSolverRoute == LandSolver.Entry && !_s.LandFlip) || (way == LandWay.Glide && !_s.EntryFlip);
+
+    /// <summary>The picture of orbital entry, for a way whose path starts with it.</summary>
+    internal static bool OrbitalEntryPictureFor(Vehicle vehicle, LandWay way) => OrbitalEntryWay(way);
+
+    /// <summary>
+    /// The craft has an engine to land on, active or not: an entry hands it to bellyflop and touchdown. With none (a capsule), orbital entry holds its attitude after the hand-over and the pilot flies the rest.
+    /// </summary>
+    private static bool LandEngineOnCraft(Vehicle vehicle)
+    {
+        if (vehicle?.Parts?.States == null
+            || !ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>.TryGetFrom(vehicle.Parts.States, out var engines))
+            return false;
+        foreach (var engine in engines.ModulesAndStates)
+            if (engine.Module.Rockets is { Length: > 0 })
+                return true;
+        return false;
+    }
 
     // LandSolvers.EntryApplies for this craft, with the time of its fall from the sink rate, the height over the ground below and the local gravity.
     private static bool EntryFliesFirst(Vehicle vehicle)
@@ -76,11 +108,27 @@ public static partial class GuidanceWindow
         if (vehicle.Orbit?.Parent == null)
             return default;
         ClearLandFact();
-        // Entry guidance is not a pick of the player. While no landing mode flies, the page sets it from the situation of the craft, and a flying mode sets it through FollowLiveLanding.
+        // On LAND NOW a glide is not a pick of the player: while no landing mode flies, the page sets it from the situation of the craft, and a flying mode sets it through FollowLiveLanding. The player picks how it falls (FLIP LANDING or RETRO BURN).
+        // The deorbit's next step is the body's: orbital entry where there is air, the braking burn where there is none, and ENTRY/BRAKING flies it with no deorbit burn first. An entry ends in bellyflop and touchdown when the craft has an engine to land on.
         if (!LandFlies)
-            _s.UseThreeDofLanding = EntryFliesFirst(vehicle);
+        {
+            // GLIDE with RETRO BURN is the player's pick of the 3-DOF, from any fall.
+            _s.UseThreeDofLanding = (way == LandWay.Glide && !_s.EntryFlip) || EntryFliesFirst(vehicle);
+            bool air = HasPhysicalAtmosphere(vehicle.Orbit.Parent);
+            if (way is LandWay.FromOrbit or LandWay.Entry && !DeorbitTargetLocked)
+            {
+                _s.DeorbitOnly = air;
+                _s.DeorbitBrakingOnly = way == LandWay.Entry;
+            }
+            if (!OrbitalEntryLive && !_s.OrbitalEntry.EngagePending)
+            {
+                _s.OrbitalEntryBellyflop = LandEngineOnCraft(vehicle);
+                // LAND NOW engages orbital entry only for its FLIP LANDING; DEORBIT and ENTRY/BRAKING by their own GLIDE row.
+                _s.OrbitalEntryFlip = way is LandWay.FromHere or LandWay.Glide || _s.EntryFlip;
+            }
+        }
         LandSolver solver = LandSolverOf(way);
-        DescentFacts descent = LandWays.HasSolver(way) ? ReadDescentFacts(vehicle) : default;
+        DescentFacts descent = LandWays.HasSolver(way) || way is LandWay.Entry or LandWay.Glide ? ReadDescentFacts(vehicle) : default;
         DescentFacts judged = _s.Active || _s.SixDofStandby ? default : descent;
         ReadHoverAnswer(vehicle, in judged);
         NoteLandFacts(way, solver, in judged, HasPhysicalAtmosphere(vehicle.Orbit.Parent));
@@ -103,29 +151,23 @@ public static partial class GuidanceWindow
         DrawLandMethodRows(vehicle, way, in situation, in read);
     }
 
+    /// <summary>The rows of the deorbit burn where an orbital entry follows it: the periapsis the burn lowers the orbit to, and whether its time is chosen for the site (OrbitalEntryAim). A braking burn's approach is in the GNC fold.</summary>
     internal static void DrawDeorbitFinishRows(LandWay way)
     {
-        if (way == LandWay.FromOrbit)
+        if (way != LandWay.FromOrbit || !PageHasAir)
+            return;
+        using (new ImGuiDisabledScope(DeorbitTargetLocked))
         {
-            using (new ImGuiDisabledScope(DeorbitTargetLocked))
-            {
-                int selected = ConsoleUi.ChoiceRow("AFTER DEORBIT", "AfcDeorbitFinish",
-                    DeorbitFinishLabels, _s.DeorbitOnly ? 1 : 0);
-                if (selected >= 0)
-                    _s.DeorbitOnly = selected == 1;
-                if (_s.DeorbitOnly)
-                    ConsoleUi.InputDoubleRow("ENTRY PERIAPSIS".AsSpan(), "##AfcEntryPeriapsis"u8,
-                        ref _s.DeorbitEntryPeriapsisKm, 1.0, 10.0, "%.1f"u8, unit: "km");
-            }
+            ConsoleUi.InputDoubleRow("ENTRY PERIAPSIS".AsSpan(), "##AfcEntryPeriapsis"u8,
+                ref _s.DeorbitEntryPeriapsisKm, 1.0, 10.0, "%.1f"u8, unit: "km");
+            GaugeRowCheck(Specs.OrbitalEntryAimDeorbit, ref _s.OrbitalEntryAimDeorbit);
         }
     }
-
-    private static readonly string[] DeorbitFinishLabels = ["LAND", "ENTRY BURN ONLY"];
 
     internal static void DrawLandSiteRows(Vehicle vehicle, LandWay way, in SituationFacts situation, bool pickSite)
     {
         IParentBody parent = vehicle.Orbit?.Parent;
-        if (parent == null || way == LandWay.Hover || way == LandWay.FromOrbit && _s.DeorbitOnly)
+        if (parent == null || way == LandWay.Hover)
             return;
         using (ConsoleUi.Dim(DeorbitTargetLocked || (way == LandWay.Boostback && situation.Where == CraftSituation.Ground && NoStageHome)))
         {
@@ -203,22 +245,271 @@ public static partial class GuidanceWindow
         ConsoleUi.EndRow();
     }
 
+    /// <summary>
+    /// The path of the way, and above it the one choice the player makes in it: on LAND NOW, where a glide flies first, how the craft falls to its landing burn (FLIP LANDING or RETRO BURN). What stands against the landing burn stands under the path, as does the G-FOLD fallback.
+    /// </summary>
     internal static void DrawLandMethodRows(Vehicle vehicle, LandWay way, in SituationFacts situation, in LandRead read)
     {
-        if (vehicle.Orbit?.Parent == null || (way == LandWay.FromOrbit && _s.DeorbitOnly))
+        if (vehicle.Orbit?.Parent == null || way == LandWay.Hover)
             return;
         LandSolver solver = LandSolverOf(way);
-        bool table = LandWays.HasSolver(way);
-        if (table)
-            DrawLandSolverTable(vehicle, way, solver, in situation, read.Descent);
-        ChainStep[] chain = LandChain.For(way, solver, situation.Where, situation.HasAir, _s.ThreeDofFromGlide, _s.ThreeDofSixDofHandover, BelowBrakingStart(vehicle), _landHoverFlies);
-        bool shows = LandChain.Shows(chain);
-        if (shows)
-            ConsoleUi.ChainStrip(chain, WayCannotFly(vehicle, way, solver, in situation));
-        else if (table)
-            ConsoleUi.ChainRowRoom();
-        if (shows || table)
-            ConsoleUi.Gap();
+        bool canLand = LandEngineOnCraft(vehicle);
+        // The glide is a choice where one follows: on LAND NOW where the craft falls through air, and after an orbital entry on a craft with an engine to land on.
+        if (situation.HasAir && (way == LandWay.FromHere ? solver == LandSolver.Entry : way == LandWay.Glide || way is LandWay.FromOrbit or LandWay.Entry && canLand))
+            DrawGlideRow(way);
+        ChainStep[] chain = LandChain.For(way, solver, situation.Where, situation.HasAir, GlideFlips(way), canLand, BelowBrakingStart(vehicle), _landHoverFlies, KsaParachutes.Count(vehicle) > 0);
+        if (LandChain.Shows(chain))
+            DrawPathStrip(way, chain, WayCannotFly(vehicle, way, solver, in situation), situation.HasAir);
+        DrawPathNotes(way, solver, in situation, read.Descent);
+        ConsoleUi.Gap();
+    }
+
+    /// <summary>
+    /// The path while the way flies, above its live rows, with the step flying now in brackets: the same path the form drew before the press. The steps are not buttons here; the PLAN row opens the form with them.
+    /// </summary>
+    private static void DrawLivePath(Vehicle vehicle, LandWay way)
+    {
+        if (way == LandWay.Hover)
+            return;
+        SituationFacts situation = Ui.Console.ConsoleFrame.ReadFacts(vehicle);
+        LandSolver solver = LandSolverOf(way);
+        ChainStep[] chain = LandChain.For(way, solver, situation.Where, situation.HasAir, LiveGlideFlips(way), LandEngineOnCraft(vehicle), BelowBrakingStart(vehicle), _landHoverFlies, KsaParachutes.Count(vehicle) > 0);
+        if (LandChain.Shows(chain))
+            ConsoleUi.ChainStrip(chain, live: LiveStepIndex(chain));
+    }
+
+    /// <summary>
+    /// The glide of the path that flies: none while the retro burn flies (it is the glide), the one orbital entry was engaged with while it flies or waits, else the way's own GLIDE choice. The page's choice can differ from what flies: GLIDE picks the after-entry row, which an entry took at its engage.
+    /// </summary>
+    private static bool LiveGlideFlips(LandWay way)
+        => EntryLive(_s) ? false
+            : OrbitalEntryLive || _s.OrbitalEntry.EngagePending ? _s.OrbitalEntryFlip
+            : GlideFlips(way);
+
+    /// <summary>
+    /// The LAND way of the path step that flies now, the step the way starts from: DEORBIT for the deorbit's burn and coast, ENTRY/BRAKING for orbital entry and the braking burn, GLIDE for bellyflop and the retro burn, LAND NOW for touchdown and G-FOLD, HOVER, BOOSTBACK; null while nothing flies. The console turns LAND to it when it changes (FollowLiveLanding), and its page counts as flying.
+    /// </summary>
+    internal static LandWay? LiveLandWay()
+    {
+        if (_s.Active || _s.EngagePending)
+            return LandWay.FromHere;
+        if (_s.LandingPhase is LandingPhase.TerminalHover or LandingPhase.TerminalCoast or LandingPhase.TerminalBrake)
+            return LandWay.Hover;
+        if (EntryLive(_s))
+            return LandWay.Glide;
+        if (OrbitalEntryLive || _s.OrbitalEntry.EngagePending)
+            return _s.OrbitalEntry.Phase == OrbitalEntryPhase.Bellyflop || _s.OrbitalEntry.BellyflopDirect ? LandWay.Glide : LandWay.Entry;
+        switch (_s.LandingPhase)
+        {
+            case LandingPhase.Prep or LandingPhase.Burn:
+                return LandWay.Entry;
+            case LandingPhase.GfoldDescent:
+                return LandWay.FromHere;
+            case not (LandingPhase.Idle or LandingPhase.Done):
+                return LandWay.FromOrbit;
+        }
+        return _s.BoostbackPhase is BoostbackPhase.Idle or BoostbackPhase.Done ? null : LandWay.Boostback;
+    }
+
+    /// <summary>Where in the path the craft is: the step of the mode that flies now, found by its name in <paramref name="chain"/>; -1 while nothing flies or the step is not in this way's path.</summary>
+    private static int LiveStepIndex(ChainStep[] chain)
+    {
+        string live = LiveStepText();
+        if (live.Length == 0)
+            return -1;
+        for (int i = 0; i < chain.Length; i++)
+            if (chain[i].Text == live)
+                return i;
+        return -1;
+    }
+
+    /// <summary>The name in the path of what flies now, the mode closest to the ground first: touchdown guidance, the hover, the retro burn, orbital entry and its bellyflop, the deorbit's phases, the boostback's.</summary>
+    private static string LiveStepText()
+    {
+        if (_s.Active || _s.EngagePending)
+            return LandSolvers.Label(LandSolver.Touchdown);
+        if (_s.LandingPhase is LandingPhase.TerminalHover or LandingPhase.TerminalCoast or LandingPhase.TerminalBrake)
+            return "HOVER";
+        if (EntryLive(_s))
+            return EntryMethods.GlideBurnLabel;
+        if (OrbitalEntryLive || _s.OrbitalEntry.EngagePending)
+            return _s.OrbitalEntry.Phase switch
+            {
+                OrbitalEntryPhase.Bellyflop => LandChain.Bellyflop,
+                OrbitalEntryPhase.Holding when _s.OrbitalEntry.ChutesArmed => LandChain.Parachutes,
+                OrbitalEntryPhase.Holding when _s.OrbitalEntryBellyflop => EntryMethods.OrbitalLabel,
+                OrbitalEntryPhase.Holding => LandChain.Hold,
+                _ => EntryMethods.OrbitalLabel,
+            };
+        switch (_s.LandingPhase)
+        {
+            case LandingPhase.DeorbitPlanning or LandingPhase.DeorbitCoast or LandingPhase.DeorbitNodePending or LandingPhase.DeorbitBurn:
+                return SituationText.IsFalling(Ui.Console.AfcConsole.Frame.Situation.Where) ? LandChain.StockBurnIfNeeded : LandChain.StockBurn;
+            case LandingPhase.TransferPlanning or LandingPhase.TransferCoast or LandingPhase.Coast:
+                return "COAST";
+            case LandingPhase.Prep or LandingPhase.Burn:
+                return EntryMethods.BrakingLabel;
+            case LandingPhase.GfoldDescent:
+                return LandSolvers.Label(LandSolver.Gfold);
+        }
+        return _s.BoostbackPhase switch
+        {
+            BoostbackPhase.Separation => "SETTLE",
+            BoostbackPhase.Rotation => "SLEW",
+            BoostbackPhase.Boostback => "BURN",
+            BoostbackPhase.Glide => "GLIDE",
+            _ => "",
+        };
+    }
+
+    // The step of the path whose settings show under it, by its name; empty for none. Not kept: the page opens with the path alone.
+    private static string _landStepOpen = "";
+
+    /// <summary>
+    /// The path, each step with settings a button: a click shows that step's settings under the path, the same values as in the folds below (HANDOVER, GNC), and a second click hides them. The Player rows draw first, then the Expert rows of the step, as a GNC fold draws them.
+    /// </summary>
+    private static void DrawPathStrip(LandWay way, ChainStep[] chain, bool cannotFly, bool hasAir)
+    {
+        Span<bool> clickable = stackalloc bool[chain.Length];
+        int open = -1;
+        for (int i = 0; i < chain.Length; i++)
+        {
+            clickable[i] = LandChain.HasSettings(chain[i].Text);
+            if (clickable[i] && chain[i].Text == _landStepOpen)
+                open = i;
+        }
+        int clicked = ConsoleUi.ChainStrip(chain, cannotFly, "AfcLandPath", open, clickable, LiveStepIndex(chain));
+        if (clicked >= 0)
+        {
+            open = clicked == open ? -1 : clicked;
+            _landStepOpen = open >= 0 ? chain[open].Text : "";
+            ConsoleUi.ShapeChanged = true;
+        }
+        ConsoleUi.NoteShape("AfcLandStep", open + 1);
+        if (open < 0)
+            return;
+        string before = open > 0 ? chain[open - 1].Text : "";
+        ImGui.PushID("AfcLandStep");
+        try
+        {
+            ConsoleUi.SectionHead(chain[open].Text);
+            DrawStepRows(way, chain[open].Text, before, hasAir);
+            using (TierScope.Push(UiTier.Expert))
+                DrawStepRows(way, chain[open].Text, before, hasAir);
+        }
+        finally
+        {
+            ImGui.PopID();
+        }
+    }
+
+    /// <summary>The settings of one step of the path, in the scope of the tier drawn now. <paramref name="before"/> is the step before it, whose hand-over to this one this step's rows set.</summary>
+    private static void DrawStepRows(LandWay way, string step, string before, bool hasAir)
+    {
+        float innerW = ConsoleStyle.ContentAvailWidth();
+        switch (step)
+        {
+            case LandChain.StockBurn or LandChain.StockBurnIfNeeded when hasAir:
+                if (TierScope.IsPrimaryPass)
+                    DrawDeorbitFinishRows(LandWay.FromOrbit);
+                DrawEntryAimRows();
+                break;
+            case LandChain.StockBurn or LandChain.StockBurnIfNeeded:
+            case EntryMethods.BrakingLabel:
+                DrawApproachSection(innerW);
+                break;
+            case EntryMethods.OrbitalLabel:
+                if (EntryRetro)
+                    GaugeRow(Specs.OrbitalEntryRetroAimShortKm, ref _s.OrbitalEntryRetroAimShortKm);
+                GaugeRow(Specs.OrbitalEntryQMaxKPa, ref _s.OrbitalEntryQMaxKPa);
+                GaugeRow(Specs.OrbitalEntryGMax, ref _s.OrbitalEntryGMax);
+                GaugeRow(Specs.OrbitalEntryHeatMaxKWm2, ref _s.OrbitalEntryHeatMaxKWm2);
+                GaugeRow(Specs.OrbitalEntryHandoverMach, ref _s.OrbitalEntryHandoverMach);
+                GaugeRow(Specs.OrbitalEntryHandoverAltKm, ref _s.OrbitalEntryHandoverAltKm);
+                DrawOrbitalEntryAttitudeRows();
+                DrawOrbitalEntryBankRows();
+                break;
+            case LandChain.Bellyflop:
+                GaugeRow(Specs.OrbitalEntryBellyflopArmMach, ref _s.OrbitalEntryBellyflopArmMach);
+                GaugeRow(Specs.OrbitalEntryBellyflopAimUprangeM, ref _s.OrbitalEntryBellyflopAimUprangeM);
+                GaugeRow(Specs.OrbitalEntryBellyflopPitchUpDeg, ref _s.OrbitalEntryBellyflopPitchUpDeg);
+                GaugeRow(Specs.OrbitalEntryBellyflopAngleMaxDeg, ref _s.OrbitalEntryBellyflopAngleMaxDeg);
+                GaugeRow(Specs.OrbitalEntryBellyflopBankMaxDeg, ref _s.OrbitalEntryBellyflopBankMaxDeg);
+                break;
+            case EntryMethods.GlideBurnLabel:
+                if (way == LandWay.Boostback)
+                    using (new ImGuiDisabledScope(ThreeDofLive))
+                    {
+                        GaugeRow(Specs.ThreeDofStandbyQkPa, ref _s.ThreeDofStandbyQkPa);
+                        GaugeRow(Specs.ThreeDofEngageQkPa, ref _s.ThreeDofEngageQkPa);
+                        GaugeRow(Specs.ThreeDofEngageTgoS, ref _s.ThreeDofEngageTgoS);
+                    }
+                DrawBurnLimitRow();
+                DrawGlideAttitudeRows();
+                break;
+            case "TOUCHDOWN":
+                if (before == EntryMethods.GlideBurnLabel)
+                    GaugeRow(Specs.ThreeDofSixDofTimeS, ref _s.ThreeDofSixDofTimeS);
+                else if (before == LandChain.Bellyflop)
+                    GaugeRow(Specs.OrbitalEntryBellyflopTouchdownS, ref _s.OrbitalEntryBellyflopTouchdownS);
+                DrawBurnLimitRow();
+                break;
+            case "G-FOLD":
+            case "HOVER":
+                GaugeRow(Specs.GfoldHoverHandoffAltM, ref _s.GfoldHoverHandoffAltM);
+                break;
+            case "BURN":
+                DrawBoostbackBurnSection();
+                break;
+            case "GLIDE":
+                DrawBoostbackGlideSection();
+                break;
+        }
+    }
+
+    /// <summary>The way's GLIDE row chose FLIP LANDING: LAND NOW's own (RETRO BURN by default), or the glide's own, on GLIDE and after an orbital entry (FLIP LANDING by default).</summary>
+    private static bool GlideFlips(LandWay way) => way == LandWay.FromHere ? _s.LandFlip : _s.EntryFlip;
+
+    /// <summary>The GLIDE row: FLIP LANDING or RETRO BURN, kept with the craft, one for LAND NOW and one for after an orbital entry, each with its own default. On LAND NOW either can be picked while the other flies: the commit then takes the craft over, after the question of the footer.</summary>
+    private static void DrawGlideRow(LandWay way)
+    {
+        bool flip = GlideFlips(way);
+        // MODE / USE / END, as the landing table names a mode: END is the mode each hands to, as it declares it.
+        var rows = new string[EntryMethods.GlideLabels.Length][];
+        Span<TableMark> marks = stackalloc TableMark[rows.Length];
+        for (int i = 0; i < rows.Length; i++)
+        {
+            var facts = new PathFacts(way, HasAir: true, Flip: i == 1);
+            GuidanceModeId mode = i == 1 ? GuidanceModeId.OrbitalEntry : GuidanceModeId.EntryHere;
+            string end = GuidanceModes.NextOf(mode, in facts) is GuidanceModeId next ? GuidanceModes.Of(next)?.MethodLabel ?? "" : "";
+            rows[i] = EntryMethods.GlideRow(i, end);
+            marks[i] = LandSolvers.MethodMark(i, false, false);
+        }
+        int picked = ConsoleUi.ChoiceTable("AfcLandGlide", LandSolvers.TableHeads, rows, flip ? 1 : 0, cards: EntryMethods.GlideCards, marks: marks, radio: true);
+        if (picked >= 0 && (picked == 1) != flip)
+        {
+            if (way == LandWay.FromHere)
+                _s.LandFlip = picked == 1;
+            else
+                _s.EntryFlip = picked == 1;
+            ConsoleUi.ShapeChanged = true;
+        }
+    }
+
+    /// <summary>Under the path: what stands against the powered end (LandSolvers.NoteOf), and why touchdown guidance is held while G-FOLD flies.</summary>
+    private static void DrawPathNotes(LandWay way, LandSolver solver, in SituationFacts situation, in DescentFacts descent)
+    {
+        bool powered = LandWays.HasSolver(way) && solver != LandSolver.Entry;
+        var facts = new LandNowFacts(way, solver, situation.HasAir, DeorbitTargetLocked, LandingMachineLive, _s.Active || _s.SixDofStandby ? default : descent, situation.Body);
+        RowNote note = powered ? LandSolvers.NoteOf(solver, in facts) : RowNote.None;
+        string text = note.Text.Length > 0 && note.Text != LandSolvers.HeldNote ? LandSolvers.Label(solver) + ": " + note.Text : "";
+        ConsoleUi.NoteShape("AfcLandPathNote", text.Length);
+        if (text.Length > 0)
+            ConsoleUi.Sentence(text.AsSpan(), note.Stops ? ConsoleUi.WarnInk : Ui.Canvas.Palette.WarnDim.F4);
+        string line = powered ? LandSolvers.HeldLine(in facts) : "";
+        ConsoleUi.NoteShape("AfcLandHeld", line.Length);
+        if (line.Length > 0)
+            ConsoleUi.Sentence(line.AsSpan(), ConsoleStyle.TextLabel);
     }
 
     private static bool WayCannotFly(Vehicle vehicle, LandWay way, LandSolver solver, in SituationFacts situation)
@@ -235,6 +526,7 @@ public static partial class GuidanceWindow
         IParentBody parent = orbit?.Parent;
         if (parent == null)
             return;
+        DrawLivePath(vehicle, way);
         DrawLegsNote(vehicle, way);
         DrawLandWay(vehicle, orbit, parent, parent.MeanRadius, innerW, way);
     }
@@ -254,7 +546,7 @@ public static partial class GuidanceWindow
         return open;
     }
 
-    internal static void DrawLandPlanLine(LandWay way) => ConsoleUi.MutedWrapped(FlightView.LandPlanLine(way, way == LandWay.FromHere ? LandDrawnSolver : LandSolverOf(way), DeorbitTargetLocked, _landHoverFlies));
+    internal static void DrawLandPlanLine(LandWay way) => ConsoleUi.MutedWrapped(FlightView.LandPlanLine(way, way == LandWay.FromHere ? LandDrawnSolver : LandSolverOf(way), DeorbitTargetLocked, _landHoverFlies, OrbitalEntryWay(way)));
 
     // The footer of the last frame holds PICK SITE with the gold fill, so the eye finds one press and this one stands dim.
     private static bool _footerPicksSite;
@@ -306,48 +598,6 @@ public static partial class GuidanceWindow
             NoteLandFact(PageText.NoSteeringFact, danger: true, calm: true);
         else if (f.OverPowered)
             NoteLandFact(PageText.OverPoweredFact(f.FeasibleFloor), danger: true, next: ConsolePage.Tune, calm: true);
-    }
-
-    /// <summary>
-    /// The table of the powered-descent solver, on DEORBIT and LAND NOW. The method word of a row has the colour that the same word has on the chain under it. It shows TOUCHDOWN, with ENTRY above it on LAND NOW where entry guidance flies first (LandSolvers.EntryApplies), and G-FOLD while its fallback descent flies. The player picks none of them. What stands against a row stands on that row (LandSolvers.NoteOf) in the warning colour, full on the chosen row and dim on any other (LandSolvers.MarksOf). A held row says why on its hover card, and one sentence stands under the table (LandSolvers.HeldLine). A row that is held or cannot fly on this body is dim unless it is the chosen row.
-    /// </summary>
-    private static void DrawLandSolverTable(Vehicle vehicle, LandWay way, LandSolver chosen, in SituationFacts situation, in DescentFacts descent)
-    {
-        bool hasAir = situation.HasAir;
-        string body = situation.Body;
-        bool entryFirst = chosen == LandSolver.Entry;
-        string[] heldBySolver = LandSolvers.Held(way, DeorbitTargetLocked, LandingMachineLive, hasAir, entryFirst);
-        LandSolver[] solvers = LandSolvers.RowsOf(way, LandingMachineLive, entryFirst);
-        var facts = new LandNowFacts(way, chosen, hasAir, DeorbitTargetLocked, LandingMachineLive, descent, body);
-        bool hoverFlies = _landHoverFlies;
-        var rows = new string[solvers.Length][];
-        var cards = new string[solvers.Length];
-        var held = new string[solvers.Length];
-        var dim = new bool[solvers.Length];
-        _landTableMarks.Clear();
-        for (int i = 0; i < solvers.Length; i++)
-        {
-            LandSolver solver = solvers[i];
-            RowNote note = LandSolvers.NoteOf(solver, in facts);
-            rows[i] = LandSolvers.TableRow(solver, _s.GfoldHoverHandoffAltM, hoverFlies, hasAir, note.Text);
-            cards[i] = LandSolvers.Card(solver, _s.GfoldHoverHandoffAltM, _s.ThreeDofSixDofHandover, _s.ThreeDofSixDofTimeS, hoverFlies, hasAir, _landHoverKnown);
-            held[i] = heldBySolver[(int)solver];
-            dim[i] = LandSolvers.RowIsDim(solver, hasAir, held[i].Length > 0);
-            LandSolvers.MarksOf(solver, i, solver == chosen, in note, hasAir, _landTableMarks);
-            _landTableMarks.Add(LandSolvers.MethodMark(i, WayCannotFly(vehicle, way, solver, in situation), held[i].Length > 0 && solver != chosen));
-        }
-        int picked = ConsoleUi.ChoiceTable("AfcLandSolver", LandSolvers.TableHeads, rows, Array.IndexOf(solvers, chosen), held, cards, PageText.SolverTip, dim, CollectionsMarshal.AsSpan(_landTableMarks), radio: true);
-        if (picked >= 0)
-            (_s.UseThreeDofLanding, _s.UseSixDofLanding) = LandSolvers.Apply(solvers[picked], _s.UseSixDofLanding);
-
-        string line = LandSolvers.HeldLine(in facts);
-        ConsoleUi.NoteShape("AfcLandHeld", line.Length);
-        if (line.Length > 0)
-            ConsoleUi.Sentence(line.AsSpan(), ConsoleStyle.TextLabel);
-        string fallback = LandSolvers.FallbackLine(in facts);
-        ConsoleUi.NoteShape("AfcLandFallback", fallback.Length);
-        if (fallback.Length > 0)
-            ConsoleUi.MutedWrapped(fallback);
     }
 
     internal static void PickLandSolver(Vehicle vehicle, LandSolver solver)
@@ -470,6 +720,8 @@ public static partial class GuidanceWindow
             DrawLegsNote(vehicle, way);
             if (way == LandWay.Boostback || way == LandWay.FromHere)
                 DrawLiftNote(vehicle, way, roomOnly: way == LandWay.FromHere && LandDrawnSolver != LandSolver.Entry);
+            else if (way == LandWay.Glide && RetroWay(way))
+                DrawLiftNote(vehicle, LandWay.FromHere, roomOnly: false);
         }
         else if (way == LandWay.FromOrbit && DescentLive && Ui.Console.ConsoleFrame.ReadFacts(vehicle).Where == CraftSituation.Orbit)
             DrawPassStrip(big: false);
@@ -492,16 +744,28 @@ public static partial class GuidanceWindow
             case LandWay.FromOrbit:
                 doubles = Specs.LandFromOrbitExpert;
                 bools = Specs.LandFromOrbitExpertBools;
+                wayParts = [new FoldPart(FoldNames.Approach, !PageHasAir, InExpert(() => DrawApproachSection(innerW))), new FoldPart(FoldNames.EntryAim, PageHasAir && _s.OrbitalEntryAimDeorbit, InExpert(DrawEntryAimRows))];
+                break;
+            case LandWay.Entry when !PageHasAir:
+                doubles = Specs.LandFromOrbitExpert;
+                bools = Specs.LandFromOrbitExpertBools;
                 wayParts = [new FoldPart(FoldNames.Approach, true, InExpert(() => DrawApproachSection(innerW)))];
                 break;
             case LandWay.Boostback:
                 doubles = Specs.LandBoostbackExpert;
                 wayParts = [new FoldPart(FoldNames.Burn, true, InExpert(DrawBoostbackBurnSection)), new FoldPart(FoldNames.Glide, true, InExpert(DrawBoostbackGlideSection))];
                 break;
+            case LandWay.Entry:
+            case LandWay.FromHere or LandWay.Glide when FlipWay(way):
+                doubles = Specs.LandOrbitalEntryExpert;
+                bools = Specs.LandOrbitalEntryExpertBools;
+                wayParts = [new FoldPart(FoldNames.Attitude, true, InExpert(DrawOrbitalEntryAttitudeRows)), new FoldPart(FoldNames.Bank, true, InExpert(DrawOrbitalEntryBankRows))];
+                break;
+            case LandWay.Glide:
             case LandWay.FromHere when LandSolverRoute == LandSolver.Entry:
                 doubles = Specs.LandEntryExpert;
                 bools = Specs.LandEntryExpertBools;
-                wayParts = [new FoldPart(FoldNames.BurnLimit, true, InExpert(DrawBurnLimitRow))];
+                wayParts = [new FoldPart(FoldNames.BurnLimit, true, InExpert(DrawBurnLimitRow)), new FoldPart(FoldNames.Attitude, true, InExpert(DrawGlideAttitudeRows))];
                 break;
             case LandWay.FromHere when LandSolverRoute == LandSolver.Touchdown:
                 doubles = Specs.LandTouchdownExpert;
@@ -539,6 +803,14 @@ public static partial class GuidanceWindow
 
     private static void DrawBurnLimitRow() => GaugeRow(Specs.LandingAccelLimitG, ref _s.LandingAccelLimitG);
 
+    /// <summary>GNC > ATTITUDE of RETRO BURN: which attitude control flies the glide.</summary>
+    private static void DrawGlideAttitudeRows()
+    {
+        GaugeRowCheck(Specs.ThreeDofNewAttitude, ref _s.ThreeDofNewAttitude);
+        using (new ImGuiDisabledScope(!_s.ThreeDofNewAttitude))
+            GaugeRow(Specs.ThreeDofRcsDeadbandDeg, ref _s.ThreeDofRcsDeadbandDeg);
+    }
+
     private static string SitePlace(IParentBody parent)
         => NoSitePicked(parent) ? string.Create(Fmt.Inv, $"{_s.SiteLatDeg:F3}, {_s.SiteLonDeg:F3}") : "SITE";
 
@@ -558,14 +830,14 @@ public static partial class GuidanceWindow
         bool siteRows = way != LandWay.Hover && !noSite;
         bool ground = vehicle.Situation.HasAnyContact();
         bool impact = way == LandWay.Boostback && !ground && (_s.HasImpact || _s.Impact.Status == ImpactStatus.NoImpactWithinHorizon);
-        bool deorbit = way is LandWay.FromOrbit or LandWay.FromHere && (DescentLive || _s.DeorbitRequest != null);
+        bool deorbit = way is LandWay.FromOrbit or LandWay.Entry or LandWay.FromHere && (DescentLive || _s.DeorbitRequest != null);
         bool feasibilityAlone = !siteRows && !impact && !deorbit;
         ConsoleUi.PartsFold(PageText.Numbers, LandNumbersFoldId,
         [
             new FoldPart(FoldNames.Distance, siteRows, () => GaugeRowText("DISTANCE TO SITE", Fmt.Distance(AngleBetween(orbit.StateVectors.PositionCci, SiteDirCciAt(parent, 0)) * parent.MeanRadius))),
             new FoldPart(FoldNames.Terrain, siteRows, () => GaugeRowText("SITE TERRAIN", SiteTerrainText(parent))),
             new FoldPart(FoldNames.Impact, impact, DrawBoostbackImpactDetails),
-            new FoldPart(FoldNames.Feasibility, LandWays.HasSolver(way) && (descent.Known || FirstSolveStops(way, solver)), () => DrawDescentRows(way, solver, in descent, noSite, feasibilityAlone)),
+            new FoldPart(FoldNames.Feasibility, (LandWays.HasSolver(way) || way is LandWay.Entry or LandWay.Glide) && (descent.Known || FirstSolveStops(way, solver)), () => DrawDescentRows(way, solver, in descent, noSite, feasibilityAlone)),
             new FoldPart(FoldNames.Deorbit, deorbit, DrawDeorbitFigures),
         ], 0, foldsOpen, PageText.NumbersTip, value.Length > 0 ? PageText.Numbers + ": " + value : "");
     }
@@ -665,6 +937,16 @@ public static partial class GuidanceWindow
             case LandWay.Boostback:
                 DrawBoostbackContent(vehicle, orbit, parent, innerW, liftNote);
                 break;
+            case LandWay.Entry when PageHasAir:
+            case LandWay.FromHere or LandWay.Glide when FlipWay(way):
+                DrawOrbitalEntryContent(vehicle, innerW);
+                break;
+            case LandWay.Glide:
+                Draw3DofLandingContent(vehicle, innerW, liftNote);
+                break;
+            case LandWay.Entry:
+                DrawDescentContent(innerW);
+                break;
             case LandWay.FromHere:
                 switch (LandDrawnSolver)
                 {
@@ -688,8 +970,9 @@ public static partial class GuidanceWindow
     private static void DrawHandOversFold(LandWay way, IParentBody parent, bool openByDefault, bool hoverCanFly)
     {
         LandSolver solver = LandSolverOf(way);
-        bool entryRows = way == LandWay.Boostback || (way == LandWay.FromHere && solver == LandSolver.Entry);
-        bool shows = entryRows ? HasPhysicalAtmosphere(parent) : LandWays.HasSolver(way) && solver == LandSolver.Gfold;
+        bool orbital = OrbitalEntryWay(way);
+        bool entryRows = way == LandWay.Boostback || RetroWay(way);
+        bool shows = entryRows || orbital ? HasPhysicalAtmosphere(parent) : LandWays.HasSolver(way) && solver == LandSolver.Gfold;
         ConsoleUi.NoteShape(HandOversFoldId, shows ? 1 : 0);
         if (!shows)
         {
@@ -697,14 +980,20 @@ public static partial class GuidanceWindow
                 ConsoleUi.FoldEmpty(PageText.NoHandOversLabel, PageText.NoHandOversTip(solver));
             return;
         }
-        string label = entryRows
-            ? PageText.HandOversLabel(_s.ThreeDofFromGlide, _s.ThreeDofEngageTgoS, _s.ThreeDofSixDofHandover, _s.ThreeDofSixDofTimeS, _s.ThreeDofEngageQkPa)
+        string label = orbital ? PageText.OrbitalHandOversLabel(_s.OrbitalEntryHandoverMach, _s.OrbitalEntryHandoverAltKm, EntryFlips ? LandChain.Bellyflop : EntryRetro ? EntryMethods.GlideBurnLabel : KsaParachutes.Count(Program.ControlledVehicle) > 0 ? LandChain.Parachutes : "HOLD ATTITUDE")
+            : entryRows
+            ? PageText.HandOversLabel(_s.ThreeDofEngageTgoS, _s.ThreeDofSixDofTimeS, _s.ThreeDofEngageQkPa)
             : PageText.HoverHandOverLabel(_s.GfoldHoverHandoffAltM, hoverCanFly, _landHoverKnown);
-        if (!ConsoleUi.Fold(label, HandOversFoldId, openByDefault, entryRows ? PageText.HandOversTip : PageText.HoverHandOverTip))
+        if (!ConsoleUi.Fold(label, HandOversFoldId, openByDefault, orbital ? PageText.OrbitalHandOversTip : entryRows ? PageText.HandOversTip : PageText.HoverHandOverTip))
             return;
         ImGui.PushID(HandOversFoldId);
         try
         {
+            if (orbital)
+            {
+                DrawOrbitalEntryHandOverRows();
+                return;
+            }
             if (!entryRows)
             {
                 // The hover handoff decides where G-FOLD stops flying, so it is part of what the landing does, and it gets changed per craft. On a craft that cannot hover it does nothing now, and a lighter craft can use it.
@@ -715,19 +1004,15 @@ public static partial class GuidanceWindow
                     GaugeRow(Specs.GfoldHoverHandoffAltM, ref _s.GfoldHoverHandoffAltM);
                 return;
             }
-            using (new ImGuiDisabledScope(ThreeDofLive))
-            {
-                GaugeRowCheck(Specs.ThreeDofFromGlide, ref _s.ThreeDofFromGlide);
-                using (new ImGuiDisabledScope(!_s.ThreeDofFromGlide))
+            // RETRO BURN takes a boostback glide, and TOUCHDOWN the end of its burn, always: the path says so. These rows say when.
+            if (way == LandWay.Boostback)
+                using (new ImGuiDisabledScope(ThreeDofLive))
                 {
                     GaugeRow(Specs.ThreeDofStandbyQkPa, ref _s.ThreeDofStandbyQkPa);
                     GaugeRow(Specs.ThreeDofEngageQkPa, ref _s.ThreeDofEngageQkPa);
                     GaugeRow(Specs.ThreeDofEngageTgoS, ref _s.ThreeDofEngageTgoS);
                 }
-            }
-            GaugeRowCheck(Specs.ThreeDofSixDofHandover, ref _s.ThreeDofSixDofHandover);
-            using (new ImGuiDisabledScope(!_s.ThreeDofSixDofHandover))
-                GaugeRow(Specs.ThreeDofSixDofTimeS, ref _s.ThreeDofSixDofTimeS);
+            GaugeRow(Specs.ThreeDofSixDofTimeS, ref _s.ThreeDofSixDofTimeS);
         }
         finally
         {

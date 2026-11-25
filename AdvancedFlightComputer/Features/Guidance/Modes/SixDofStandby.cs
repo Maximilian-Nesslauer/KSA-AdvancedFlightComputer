@@ -46,6 +46,17 @@ public static partial class GuidanceWindow
     private const double BrakingStandbyBudgetMs = 1000.0;
 
     private const double BrakingHandoffAngleRad = 5.0 * Math.PI / 180.0;
+
+    /// <summary>
+    /// THE TURN-AWAY: the latest a hand-over to touchdown guidance from a mode that flies the craft's attitude itself (bellyflop, entry's glide) may come, so touchdown has the craft before its plan asks for an attitude the other mode does not fly: TurnAwayLeadS before the first time touchdown's standby plan is more than TurnAwayDeg from the attitude flown now (Ksa6DofGuidance.TurnAwayTime); +infinity with no plan. Any craft: the plan says when it turns. A Starship's plans, with its whole-sphere aero, began turning it for the flip within their first seconds, on the air and the flaps, while bellyflop held it belly first until 5 s before ignition; re-solved from the craft bellyflop held, they drifted off and were refused, and the standby never took it (harness, 2026-11-24).
+    /// </summary>
+    internal static double SixDofTurnAwayDue(double[] state, double now)
+        => _s.Guidance?.Published is { } plan
+            ? Ksa6DofGuidance.TurnAwayTime(plan, state, now, TurnAwayDeg * Math.PI / 180.0) - TurnAwayLeadS
+            : double.PositiveInfinity;
+
+    private const double TurnAwayDeg = 5.0;
+    private const double TurnAwayLeadS = 1.0;
     private const double BrakingHandoffRateRadS = 3.0 * Math.PI / 180.0;
 
     /// <summary>True when the standby has a converged plan fresh enough to be handed the burn.</summary>
@@ -98,7 +109,7 @@ public static partial class GuidanceWindow
             BrakingSeed = braking, LongBudgetMs = braking ? BrakingStandbyBudgetMs : 0.0,
         };
         // A standby that takes the craft before ignition plans the coast too, from entry guidance's time to ignition, seeded along entry's plan.
-        guidance.ColdSeedPath = _s.SixDofCoastPending ? EntrySeedPath(now) : null;
+        guidance.ColdSeedPath = _s.SixDofCoastPending ? EntrySeedPath(now) ?? BellyflopSeedPath(now) : null;
         guidance.BeginCold(x, xf, sigmaSeed, _s.SixDofCoastPending ? _s.SixDofCoastSeedS : double.NaN, now);
         _s.Guidance = guidance;
         _s.Worker = new Ksa6DofSolveWorker();
@@ -334,7 +345,10 @@ public static partial class GuidanceWindow
 
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
         UpdateMomentLimiter(vehicle, now);
-        _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz).WithMomentLimiter(_s.MomentLimiterPerPa);
+        _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz).WithMomentLimiter(_s.MomentLimiterPerPa)
+            .WithMomentBias(_s.SixDofStandbyPredicted ? _s.MomentBiasPerPa : UpdateMomentBias(vehicle, x, now));
+        if (!_s.SixDofStandbyPredicted)
+            LogAeroCheck(vehicle, x, now, "standby");
         // Back to back, not on the flying cadence: the craft is not following this plan, so the solve has to keep moving to keep up.
         _s.Worker.TryDispatchTrack(_s.Guidance, x, now, SixDofStandbyTrackIterations);
     }

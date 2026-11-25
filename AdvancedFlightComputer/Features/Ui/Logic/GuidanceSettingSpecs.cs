@@ -145,11 +145,11 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec GfoldHoverHandoffAltM = new("GfoldHoverHandoffAltM", "HOVER FROM", "m", P, 10.0, 0.0, 1e5, "%.1f",
         "Height where G-FOLD hands the descent to the hover.");
     public static readonly SettingSpec LandingAccelLimitG = new("LandingAccelLimitG", "MAX BURN ACCEL", "g", E, 3.0, 0.0, 100.0, "%.2f",
-        "Largest thrust acceleration in the ENTRY and TOUCHDOWN plans, one value for both. 0 switches the limit off.");
+        "Largest thrust acceleration in the RETRO BURN and TOUCHDOWN plans, one value for both. 0 switches the limit off.");
     public static readonly SettingSpec LegsDeployBufferS = new("LegsDeployBufferS", "BUFFER", "s", P, 1.0, 0.0, 60.0, "%.1f",
         "Time the legs are fully down before the touchdown. A landing deploys them when its time to the touchdown is DEPLOY TIME plus this: the time of the plan that flies the landing, or without a plan the fall time of the legs to the ground.");
     public static readonly SettingSpec LandingPlanFloorMargin = new("LandingPlanFloorMargin", "PLAN MIN THROTTLE MARGIN", "frac", T, 0.05, 0.0, 0.5, "%.2f",
-        "Throttle margin above the real engine minimum in the ENTRY and TOUCHDOWN plans, kept for thrust feedback. One value for both, 0 plans on the minimum itself.");
+        "Throttle margin above the real engine minimum in the RETRO BURN and TOUCHDOWN plans, kept for thrust feedback. One value for both, 0 plans on the minimum itself.");
 
     public static readonly BoolSpec DeorbitArrivalAngleEnabled = new("DeorbitArrivalAngleEnabled", "SET DEORBIT ARRIVAL ANGLE", E, false,
         "Plans the deorbit for a given flight path angle at the braking point.");
@@ -197,6 +197,8 @@ internal static class GuidanceSettingSpecs
 
     public static readonly SettingSpec SixDofNodes = new("SixDofNodes", "SOLVER POINTS", "", T, 50.0, 5.0, 50.0, "%.0f",
         "Number of points of the touchdown guidance plan.");
+    public static readonly SettingSpec SixDofSurfaceShare = new("SixDofSurfaceShare", "PLAN RCS AND FLAPS", "frac", T, 0.75, 0.1, 1.0, "%.2f",
+        "The share of the RCS's torque and of the control surfaces' travel touchdown's plans may use; the rest is left for flying the plan. Lower plans more gently and leaves turns the air, the flaps and the thrusters cannot do with room to spare to the gimbals, with the engine lit. Never above the gimbals' share.");
     public static readonly SettingSpec SixDofTiltDeg = new("SixDofTiltDeg", "MAX TILT", "deg", T, 120.0, 0.0, 180.0, "%.1f",
         "Largest tilt of the craft from vertical.");
     public static readonly SettingSpec SixDofThrottleFloor = new("SixDofThrottleFloor", "THROTTLE FLOOR", "frac", T, 0.40, 0.0, 1.0, "%.3f",
@@ -252,9 +254,9 @@ internal static class GuidanceSettingSpecs
     #region Entry guidance (3-DOF)
 
     public static readonly SettingSpec ThreeDofEngageTgoS = new("ThreeDofEngageTgoS", "AT IMPACT T-", "s", P, 45.0, 0.0, 1e4, "%.1f",
-        "Predicted time to impact at which ENTRY takes over a boostback glide if the air has not reached AT DYNAMIC PRESSURE first.");
+        "Predicted time to impact at which RETRO BURN takes over a boostback glide if the air has not reached AT DYNAMIC PRESSURE first.");
     public static readonly SettingSpec ThreeDofEngageQkPa = new("ThreeDofEngageQkPa", "AT DYNAMIC PRESSURE", "kPa", P, 1.0, 0.0, 100.0, "%.2f",
-        "Dynamic pressure at which ENTRY takes over a falling boostback glide: from there entry guidance flies the whole descent. 0 for the time to impact alone.");
+        "Dynamic pressure at which RETRO BURN takes over a falling boostback glide: from there it flies the whole descent. 0 for the time to impact alone.");
     public static readonly SettingSpec ThreeDofSixDofTimeS = new("ThreeDofSixDofTimeS", "AT BURN LEFT", "s", P, 30.0, 0.0, 1e3, "%.1f",
         "Burn left in the plan at which TOUCHDOWN takes over the burn, once its standby plan is ready.");
     public static readonly SettingSpec ThreeDofSmoothTau = new("ThreeDofSmoothTau", "COMMAND SMOOTHING", "s", T, 0.05, 0.0, 60.0, "%.2f",
@@ -272,10 +274,112 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec ThreeDofTrackTiltDeg = new("ThreeDofTrackTiltDeg", "TRACK MAX TILT", "deg", T, 10.0, 0.0, 30.0, "%.1f",
         "Largest tilt off the axis of the plan the burn feedback may command.");
 
-    public static readonly BoolSpec ThreeDofFromGlide = new("ThreeDofFromGlide", "ENTRY ON GLIDE", P, true,
-        "ENTRY takes over a boostback glide at AT IMPACT T- and flies the glide and the landing burn. Off, the glide continues until another mode takes the craft or it is stopped, and no landing burn is planned.");
-    public static readonly BoolSpec ThreeDofSixDofHandover = new("ThreeDofSixDofHandover", "TOUCHDOWN FOR BURN END", P, true,
-        "TOUCHDOWN flies the last seconds of the burn and models the turn of the craft. Off, ENTRY flies the burn to touchdown.");
+    // ---- Orbital entry (LAND > ENTRY > ORBITAL ENTRY): its limits on the page, its hand-over and bellyflop in HAND-OVERS, its attitude and bank in the GNC fold, its tracking and re-plans on TUNE > LANDING, and the aim of DEORBIT ONLY's entry burn on DEORBIT ----
+    public static readonly SettingSpec OrbitalEntryQMaxKPa = new("OrbitalEntryQMaxKPa", "MAX DYNAMIC PRESSURE", "kPa", P, 16.0, 0.0, 1e3, "%.1f",
+        "The orbital entry plan stays above the altitude at which the air's dynamic pressure would pass this. 0 switches the limit off.");
+    public static readonly SettingSpec OrbitalEntryGMax = new("OrbitalEntryGMax", "MAX LOAD", "g", P, 2.5, 0.0, 50.0, "%.2f",
+        "The orbital entry plan stays above the altitude at which drag and lift together would pass this load. 0 switches the limit off.");
+    public static readonly SettingSpec OrbitalEntryHeatMaxKWm2 = new("OrbitalEntryHeatMaxKWm2", "MAX HEATING", "kW/m^2", P, 440.0, 0.0, 1e5, "%.0f",
+        "Stagnation heating limit for the orbital entry plan, from the Sutton-Graves estimate on NOSE RADIUS: the game does not heat the craft yet, so this is an estimate of what a heat shield would see, and it keeps the plan higher where the heating peaks. 440 is the Space Shuttle's: STS-2's reference heating, 63.8 Btu/ft^2-s on a 1 ft sphere (NASA TM-84580), in this estimate at a 1 m nose. A craft that cannot loft that high flies as near it as it can. 0 switches the limit off.");
+    public static readonly SettingSpec OrbitalEntryNoseRadiusM = new("OrbitalEntryNoseRadiusM", "NOSE RADIUS", "m", E, 1.0, 0.05, 100.0, "%.2f",
+        "Nose radius for the heating estimate: a blunter nose heats less.");
+    public static readonly SettingSpec OrbitalEntryBankMinDeg = new("OrbitalEntryBankMinDeg", "PLAN MIN BANK", "deg", E, 15.0, 0.0, 89.0, "%.0f",
+        "The smallest bank the plan uses, so some lift always points sideways for the roll reversals to turn with.");
+    public static readonly SettingSpec OrbitalEntryBankMaxDeg = new("OrbitalEntryBankMaxDeg", "PLAN MAX BANK", "deg", E, 100.0, 1.0, 180.0, "%.0f",
+        "The largest bank the plan uses.");
+    public static readonly SettingSpec OrbitalEntryOverbankDeg = new("OrbitalEntryOverbankDeg", "TRACKER MAX BANK", "deg", E, 120.0, 1.0, 180.0, "%.0f",
+        "The largest bank the tracker may command: further than PLAN MAX BANK, so it has room to absorb a spike in lift or a climb the plan did not foresee.");
+    public static readonly SettingSpec OrbitalEntryRollRateDegS = new("OrbitalEntryRollRateDegS", "ROLL RATE", "deg/s", E, 5.0, 0.5, 90.0, "%.1f",
+        "The roll rate of a reversal, and the fastest the attitude controller closes a roll error at during entry (never under 10 deg/s); the plan uses half of it. Tracking slews at TRACKING ROLL RATE.");
+    public static readonly SettingSpec OrbitalEntryTrackRollRateDegS = new("OrbitalEntryTrackRollRateDegS", "TRACKING ROLL RATE", "deg/s", E, 5.0, 0.5, 90.0, "%.1f",
+        "The roll rate the tracker slews the bank at while it tracks the drag; reversals use ROLL RATE.");
+    public static readonly SettingSpec OrbitalEntryHandoverAltKm = new("OrbitalEntryHandoverAltKm", "HAND-OVER ALTITUDE", "km", P, 38.0, 1.0, 200.0, "%.1f",
+        "Where orbital entry guidance ends, with HAND-OVER MACH: BELLYFLOP takes over there, or with it off the craft holds its entry attitude.");
+    public static readonly SettingSpec OrbitalEntryHandoverMach = new("OrbitalEntryHandoverMach", "HAND-OVER MACH", "", P, 5.0, 0.2, 20.0, "%.2f",
+        "Airspeed over the sea-level speed of sound at the hand-over, as the aero tables measure Mach: where orbital entry guidance's plan ends. BELLYFLOP takes over at its first plan that reaches the site, from BELLYFLOP FROM MACH on, and the entry holds its attitude here until one comes.");
+    public static readonly SettingSpec OrbitalEntryBellyflopArmMach = new("OrbitalEntryBellyflopArmMach", "BELLYFLOP FROM MACH", "", P, 10.0, 0.5, 20.0, "%.1f",
+        "Bellyflop starts solving in the background from this Mach and takes over at its first plan that reaches the site. Its belly-first tables reach Mach 8; above it, it plans with their Mach 8 values.");
+    public static readonly SettingSpec OrbitalEntryBellyflopAimUprangeM = new("OrbitalEntryBellyflopAimUprangeM", "BELLYFLOP AIM SHORT", "m", P, 200.0, 0.0, 5000.0, "%.0f",
+        "How far short of the site, along the bearing to it, bellyflop aims its fall: the ground the flip and landing burn cover after it, so they end on the site rather than past it. A fixed distance for now; the entry's aim takes it into account.");
+    public static readonly SettingSpec OrbitalEntryRetroAimShortKm = new("OrbitalEntryRetroAimShortKm", "RETRO AIM SHORT", "km", P, 30.0, 0.0, 300.0, "%.0f",
+        "How far short of the site the entry aims its hand-over when RETRO BURN follows it: the ground the retro burn's glide covers from the hand-over, engine first, to its landing burn. A fixed distance, an estimate not yet flown; the retro burn's own plan takes the rest.");
+    public static readonly SettingSpec OrbitalEntryBellyflopTouchdownS = new("OrbitalEntryBellyflopTouchdownS", "TOUCHDOWN FROM", "s", P, 45.0, 5.0, 300.0, "%.0f",
+        "How long before bellyflop's plan reaches the ground touchdown guidance starts solving on standby for the flip and the landing burn. It takes the craft a second before touchdown's plan turns 5 deg away from the attitude bellyflop flies, or 5 s before touchdown's ignition at the latest.");
+    public static readonly SettingSpec OrbitalEntryBellyflopAngleMaxDeg = new("OrbitalEntryBellyflopAngleMaxDeg", "BELLYFLOP PITCH DOWN", "deg", E, 20.0, 2.0, 45.0, "%.0f",
+        "Bellyflop's largest pitch nose down past belly-first: the airflow's angle on the belly towards the tail.");
+    public static readonly SettingSpec OrbitalEntryBellyflopPitchUpDeg = new("OrbitalEntryBellyflopPitchUpDeg", "BELLYFLOP PITCH UP", "deg", E, 55.0, 2.0, 80.0, "%.0f",
+        "Bellyflop's largest pitch nose up from belly-first, the airflow's angle on the belly towards the nose: 90 deg less the angle of attack from nose-first. Above the entry's own (40 deg of angle of attack is 50 here), bellyflop can take over from the entry and glide on as it does, easing to belly-first as the range allows.");
+    public static readonly SettingSpec OrbitalEntryBellyflopBankMaxDeg = new("OrbitalEntryBellyflopBankMaxDeg", "BELLYFLOP BANK", "deg", E, 45.0, 2.0, 45.0, "%.0f",
+        "Bellyflop's largest bank from belly-first, its sideways reach. Yaw is held to the bearing to the site at the take-over, and turned only once bank is at this limit. The belly-first tables reach 45 deg.");
+    public static readonly SettingSpec OrbitalEntryBellyflopResolveS = new("OrbitalEntryBellyflopResolveS", "BELLYFLOP RE-SOLVE", "s", T, 1.0, 0.25, 10.0, "%.2f",
+        "Seconds between bellyflop's re-solves, each warm from the plan before.");
+    public static readonly SettingSpec OrbitalEntryStartDragMs2 = new("OrbitalEntryStartDragMs2", "START DRAG", "m/s^2", E, 0.02, 0.01, 20.0, "%.2f",
+        "Drag at which the tracker takes hold, latched once reached. Above the air the craft holds its entry attitude lift-up.");
+    public static readonly SettingSpec OrbitalEntryAoaDeg = new("OrbitalEntryAoaDeg", "ENTRY AoA", "deg", E, 55.0, 0.0, 180.0, "%.0f",
+        "Angle of attack from nose-first: the trim angle nearest this where a Mach row has several, and the angle flown where it has none.");
+    public static readonly SettingSpec OrbitalEntryAoaMinDeg = new("OrbitalEntryAoaMinDeg", "TRIM AoA MIN", "deg", E, 40.0, 0.0, 180.0, "%.0f",
+        "Lowest pitch-trim angle of attack the schedule accepts.");
+    public static readonly SettingSpec OrbitalEntryAoaMaxDeg = new("OrbitalEntryAoaMaxDeg", "TRIM AoA MAX", "deg", E, 70.0, 0.0, 180.0, "%.0f",
+        "Highest angle of attack the schedule flies: towards 90 deg a belly-flop has almost no lift left, and so no crossrange.");
+    public static readonly SettingSpec OrbitalEntryBellyAxis = new("OrbitalEntryBellyAxis", "BELLY AXIS", "", E, 0.0, 0.0, 5.0, "%.0f",
+        "Which body axis faces the air belly first: 0 the craft's own belly (+Z), 1 -Z, 2 +Z, 3 -Y, 4 +Y, 5 the best of the four by the sweep.");
+    public static readonly SettingSpec OrbitalEntryResolveS = new("OrbitalEntryResolveS", "RE-SOLVE EVERY", "s", T, 2.0, 0.25, 60.0, "%.2f",
+        "Seconds between orbital entry re-solves, each warm from the plan before.");
+    public static readonly BoolSpec OrbitalEntryTrimAoa = new("OrbitalEntryTrimAoa", "TRIM AoA", E, false,
+        "Fly the pitch-trim angle of attack at each Mach, from the belly-first sweep. Off flies ENTRY AoA throughout.");
+    public static readonly BoolSpec OrbitalEntryOwnAttitude = new("OrbitalEntryOwnAttitude", "OWN ATTITUDE", E, true,
+        "Fly the entry attitude with AFC's own attitude controller (surfaces and RCS). Off steers through the stock flight computer.");
+    public static readonly BoolSpec OrbitalEntryUseRcs = new("OrbitalEntryUseRcs", "ENTRY RCS", E, true,
+        "Let OWN ATTITUDE fire the RCS during orbital entry. Off steers on the flaps alone, which give nothing in air too thin for them (under 50 Pa).");
+
+    public static readonly SettingSpec OrbitalEntryRcsDeadbandDeg = new("OrbitalEntryRcsDeadbandDeg", "RCS DEAD BAND", "deg", E, 4.0, 0.0, 20.0, "%.1f",
+        "The width of the band the RCS holds an axis in, for orbital entry and bellyflop: it coasts across it, firing one small pulse at each edge, as the stock flight computer's attitude dead band (Balanced 1 deg). On axes the flaps fly, the RCS watches a band three times wider and fires only when the flaps are losing. 4 deg by default, to leave the flaps the work: at 1 deg a Starship entry burned 5 t of RCS propellant, 2.3 t of it above Mach 20 where the flaps can do nothing. Wider saves propellant and lets the attitude wander more.");
+    public static readonly SettingSpec OrbitalEntryTrackOmega = new("OrbitalEntryTrackOmega", "DRAG TRACKING", "rad/s", T, 0.03, 0.01, 2.0, "%.3f",
+        "Natural frequency of the drag and sink-rate loop that holds the plan's drag: higher pulls the drag onto the plan's faster, at the cost of more bank activity.");
+    public static readonly SettingSpec OrbitalEntryMeasureSmoothS = new("OrbitalEntryMeasureSmoothS", "DRAG FILTER", "s", T, 4.0, 0.0, 30.0, "%.1f",
+        "The time the tracker smooths the measured drag and sink rate over before it feeds back on them: longer passes less of the drag's flutter to the bank, but too long with a stiff DRAG TRACKING makes the loop swing.");
+    public static readonly SettingSpec OrbitalEntryGainDragFloor = new("OrbitalEntryGainDragFloor", "GAIN DRAG FLOOR", "m/s²", T, 10.0, 0.1, 50.0, "%.1f",
+        "The least drag the tracking gains are worked out at. Below it, in thin air where the bank buys little, the loop slows in proportion to the drag instead of banging the bank about; the re-plans take up the rest.");
+    public static readonly SettingSpec OrbitalEntryReversalBandDeg = new("OrbitalEntryReversalBandDeg", "REVERSAL BAND", "deg", E, 5.0, 0.5, 45.0, "%.1f",
+        "The heading error to the site, the angle between the ground track and the way to the site, at which the bank reverses. It narrows below 2 km/s, to half at 1 km/s, so the craft lines up on the site at the end. Wider means fewer reversals.");
+    public static readonly SettingSpec OrbitalEntryCorridorWeight = new("OrbitalEntryCorridorWeight", "CORRIDOR MARGIN", "", T, 1.0, 0.0, 100.0, "%.2f",
+        "How hard the plan keeps its range to go near the middle of the corridor, against the heat load that pushes it to the high-energy edge. 0 plans for heat alone, with no margin left at the end.");
+    public static readonly SettingSpec OrbitalEntrySmoothS = new("OrbitalEntrySmoothS", "COMMAND SMOOTHING", "s", T, 0.0, 0.0, 60.0, "%.1f",
+        "Time constant of the low-pass on the vertical lift over drag the tracker asks for: a new plan, or a reference that changes faster than the craft can follow, is eased in rather than flipping the bank between its limits. 0 switches it off.");
+    public static readonly BoolSpec OrbitalEntryEngageInAir = new("OrbitalEntryEngageInAir", "ENGAGE IN AIR", E, true,
+        "The tracker takes hold as soon as the craft is below the top of the atmosphere, whatever the drag; off, it waits for START DRAG.");
+    public static readonly SettingSpec OrbitalEntryAimFraction = new("OrbitalEntryAimFraction", "AIM IN CORRIDOR", "", E, 0.5, 0.0, 1.0, "%.2f",
+        "Where the deorbit burn aims the site in the corridor at the start of the air: 0 the short end (most drag), 1 the long end (the glide), 0.5 the middle, the most margin both ways.");
+    public static readonly SettingSpec OrbitalEntryAimMaxCrossKm = new("OrbitalEntryAimMaxCrossKm", "AIM MAX CROSSRANGE", "km", E, 200.0, 1.0, 5000.0, "%.0f",
+        "The farthest the site may sit off a pass's ground track for the aimed burn to take that pass. A burn cannot turn the orbit plane.");
+    public static readonly SettingSpec OrbitalEntryAimHorizonH = new("OrbitalEntryAimHorizonH", "AIM HORIZON", "h", E, 24.0, 0.1, 240.0, "%.1f",
+        "How far ahead the aimed entry burn is searched for.");
+    public static readonly BoolSpec OrbitalEntryAimDeorbit = new("OrbitalEntryAimDeorbit", "AIM AT SITE", P, true,
+        "The deorbit burn before an orbital entry is timed so the site sits at AIM IN CORRIDOR of the entry's corridor when the craft reaches the air. Off, it burns at the next chance.");
+    /// <summary>The GLIDE row of LAND NOW: FLIP LANDING (bellyflop, then touchdown guidance for the flip and the burn) or RETRO BURN (the engine-first glide and landing burn, then touchdown guidance).</summary>
+    public static readonly BoolSpec LandFlip = new("LandFlip", "FLIP LANDING", P, false,
+        "How LAND NOW falls through the air to the landing burn: RETRO BURN (the default) glides engine first and lights the engine for the landing burn; FLIP LANDING falls belly first with bellyflop and flips under power in touchdown guidance's plan. Touchdown guidance flies the end of either.");
+    /// <summary>The GLIDE row after an orbital entry, on DEORBIT and ENTRY/BRAKING: FLIP LANDING (bellyflop) by default, as the entry has flown, or RETRO BURN.</summary>
+    public static readonly BoolSpec EntryFlip = new("EntryFlip", "FLIP AFTER ENTRY", P, true,
+        "How the craft falls to its landing burn after an orbital entry: FLIP LANDING (the default) falls belly first with bellyflop and flips under power in touchdown guidance's plan; RETRO BURN turns engine first at the hand-over and glides to the landing burn. Touchdown guidance flies the end of either.");
+
+    /// <summary>The limits of the orbital entry plan, on LAND > ENTRY > ORBITAL ENTRY.</summary>
+    public static readonly SettingSpec[] LandOrbitalEntryPlayer = { OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2 };
+    /// <summary>The HAND-OVERS of orbital entry: where it ends, and bellyflop after it.</summary>
+    public static readonly SettingSpec[] LandOrbitalHandOvers = { OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach, OrbitalEntryBellyflopArmMach, OrbitalEntryBellyflopAimUprangeM, OrbitalEntryBellyflopTouchdownS };
+    /// <summary>The GNC fold of ORBITAL ENTRY: the attitude it flies and the bank it may use.</summary>
+    public static readonly SettingSpec[] LandOrbitalEntryExpert =
+    {
+        OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis, OrbitalEntryNoseRadiusM,
+        OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryReversalBandDeg, OrbitalEntryRollRateDegS, OrbitalEntryTrackRollRateDegS,
+        OrbitalEntryStartDragMs2, OrbitalEntryRcsDeadbandDeg, OrbitalEntryBellyflopAngleMaxDeg, OrbitalEntryBellyflopPitchUpDeg, OrbitalEntryBellyflopBankMaxDeg,
+    };
+    public static readonly BoolSpec[] LandOrbitalEntryExpertBools = { OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryOwnAttitude, OrbitalEntryUseRcs };
+
+    public static readonly BoolSpec ThreeDofNewAttitude = new("ThreeDofNewAttitude", "NEW ATTITUDE CONTROL", E, true,
+        "Fly RETRO BURN's glide with orbital entry's attitude control: each axis flown by the flaps or by the RCS, whichever has the authority, the RCS coasting across GLIDE RCS DEAD BAND as the stock flight computer does, and turns planned on what the craft can do. Off flies the flaps and RCS together as before. The landing burn is not affected.");
+    public static readonly SettingSpec ThreeDofRcsDeadbandDeg = new("ThreeDofRcsDeadbandDeg", "GLIDE RCS DEAD BAND", "deg", E, 1.0, 0.0, 20.0, "%.1f",
+        "Under NEW ATTITUDE CONTROL, the band the RCS holds an axis in during the glide (stock's Balanced is 1 deg): it coasts across it and fires one small pulse at each edge. Wider saves propellant and lets the attitude wander more.");
 
     #endregion
 
@@ -317,9 +421,8 @@ internal static class GuidanceSettingSpecs
 
     /// <summary>The HANDOVER settings of a boostback glide and of entry guidance: who takes the glide and who takes the end of the burn.</summary>
     public static readonly SettingSpec ThreeDofStandbyQkPa = new("ThreeDofStandbyQkPa", "PLANS FROM", "kPa", P, 0.5, 0.0, 100.0, "%.2f",
-        "Dynamic pressure at which ENTRY starts planning on standby, the craft holding the planned glide, so it has a plan ready when it takes over at AT DYNAMIC PRESSURE.");
+        "Dynamic pressure at which RETRO BURN starts planning on standby, the craft holding the planned glide, so it has a plan ready when it takes over at AT DYNAMIC PRESSURE.");
     public static readonly SettingSpec[] LandHandOvers = { ThreeDofStandbyQkPa, ThreeDofEngageQkPa, ThreeDofEngageTgoS, ThreeDofSixDofTimeS };
-    public static readonly BoolSpec[] LandHandOverBools = { ThreeDofFromGlide, ThreeDofSixDofHandover };
 
     public static readonly SettingSpec[] LandGfoldPlayer = { GfoldHoverHandoffAltM };
 
@@ -327,10 +430,10 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec[] LandLegs = { LegsDeployBufferS };
     public static readonly BoolSpec[] LandLegsBools = { LegsAutoDeploy };
 
-    public static readonly SettingSpec[] LandFromOrbitExpert = { BrakingAltitudeKm, DeorbitArrivalDescentDeg, DescentRate, LandingVerticalGateM };
+    public static readonly SettingSpec[] LandFromOrbitExpert = { BrakingAltitudeKm, DeorbitArrivalDescentDeg, DescentRate, LandingVerticalGateM, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH };
     public static readonly BoolSpec[] LandFromOrbitExpertBools = { DeorbitArrivalAngleEnabled, LandingGimbalSteers };
-    public static readonly SettingSpec[] LandEntryExpert = { LandingAccelLimitG };
-    public static readonly BoolSpec[] LandEntryExpertBools = Array.Empty<BoolSpec>();
+    public static readonly SettingSpec[] LandEntryExpert = { LandingAccelLimitG, ThreeDofRcsDeadbandDeg };
+    public static readonly BoolSpec[] LandEntryExpertBools = { ThreeDofNewAttitude };
     public static readonly SettingSpec[] LandTouchdownExpert = { LandingAccelLimitG };
     public static readonly SettingSpec[] LandGfoldExpert = Array.Empty<SettingSpec>();
 
@@ -360,7 +463,7 @@ internal static class GuidanceSettingSpecs
     {
         SixDofNodes, SixDofTiltDeg, SixDofThrottleFloor, SixDofSigmaSeed, SixDofSigmaSamples, SixDofGlideSlopeDeg,
         SixDofVzMaxMs, SixDofNodeDtTarget, SixDofColdIntervalS, SixDofReplanSec, SixDofRateDampShare,
-        SixDofControlSmooth, SixDofProximal, SixDofTrackKp, SixDofTrackKd, LandingPlanFloorMargin,
+        SixDofControlSmooth, SixDofProximal, SixDofTrackKp, SixDofTrackKd, LandingPlanFloorMargin, SixDofSurfaceShare,
     };
     public static readonly BoolSpec[] TuningSixDofBools =
     {
@@ -368,7 +471,7 @@ internal static class GuidanceSettingSpecs
         SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ScvxClarabel,
     };
     public static readonly SettingSpec[] TuningSixDofLimits =
-        { SixDofTiltDeg, SixDofThrottleFloor, SixDofGlideSlopeDeg, SixDofVzMaxMs, LandingPlanFloorMargin };
+        { SixDofTiltDeg, SixDofThrottleFloor, SixDofGlideSlopeDeg, SixDofVzMaxMs, LandingPlanFloorMargin, SixDofSurfaceShare };
     public static readonly BoolSpec[] TuningSixDofLimitBools = { SixDofFloorAuto, SixDofVzEnabled };
     public static readonly SettingSpec[] TuningSixDofTracking = { SixDofTrackKp, SixDofTrackKd, SixDofReplanSec };
     public static readonly BoolSpec[] TuningSixDofTrackingBools = { SixDofTrack, SixDofBiasEnabled };
@@ -381,11 +484,17 @@ internal static class GuidanceSettingSpecs
 
     public static readonly SettingSpec[] TuningHover = { TermQuadK, TermKpV, TermKiV, TermKdV, TermKpL, TermKiL, TermKdL };
 
+    public static readonly SettingSpec[] TuningOrbitalEntry =
+    {
+        OrbitalEntryTrackOmega, OrbitalEntryMeasureSmoothS, OrbitalEntryGainDragFloor, OrbitalEntrySmoothS, OrbitalEntryCorridorWeight,
+        OrbitalEntryResolveS, OrbitalEntryBellyflopResolveS,
+    };
+
     public static readonly SettingSpec[] TuningLanding = Distinct(
-        Concat(Concat(TuningApproach, TuningThreeDof), Concat(Concat(TuningGfold, TuningSixDof), TuningHover)));
+        Concat(Concat(Concat(TuningApproach, TuningOrbitalEntry), TuningThreeDof), Concat(Concat(TuningGfold, TuningSixDof), TuningHover)));
 
     public static readonly SettingSpec[] AllTuning = Distinct(
-        Concat(Concat(Concat(TuningAscent, TuningBoostback), Concat(TuningApproach, TuningThreeDof)),
+        Concat(Concat(Concat(TuningAscent, TuningBoostback), Concat(Concat(TuningApproach, TuningOrbitalEntry), TuningThreeDof)),
             Concat(Concat(TuningGfold, TuningSixDof), TuningHover)));
 
     public static readonly BoolSpec[] AllTuningBools = TuningSixDofBools;
@@ -406,9 +515,13 @@ internal static class GuidanceSettingSpecs
         SixDofSigmaSamples, SixDofGlideSlopeDeg, SixDofVzMaxMs, SixDofNodeDtTarget, SixDofColdIntervalS,
         SixDofReplanSec, SixDofRateDampShare, SixDofControlSmooth, SixDofProximal, SixDofTrackKp, SixDofTrackKd,
         ThreeDofStandbyQkPa, ThreeDofEngageQkPa, ThreeDofEngageTgoS, ThreeDofSixDofTimeS, ThreeDofSmoothTau, ThreeDofTurnAccelDegS2, ThreeDofGlideCeiling,
-        ThreeDofBurnCeiling, ThreeDofTrackKp, ThreeDofTrackKd, ThreeDofTrackTiltDeg,
+        ThreeDofBurnCeiling, ThreeDofTrackKp, ThreeDofTrackKd, ThreeDofTrackTiltDeg, ThreeDofRcsDeadbandDeg,
         TermTouchdownRate, TermConstAltM, TermQuadK, TermMaxDescRate, TermMaxTiltDeg, TermNudgeStep,
         TermKpV, TermKiV, TermKdV, TermKpL, TermKiL, TermKdL,
+        OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach, OrbitalEntryBellyflopArmMach, OrbitalEntryBellyflopAimUprangeM, OrbitalEntryRetroAimShortKm, OrbitalEntryBellyflopTouchdownS, OrbitalEntryBellyflopAngleMaxDeg, OrbitalEntryBellyflopPitchUpDeg, OrbitalEntryBellyflopBankMaxDeg, OrbitalEntryBellyflopResolveS,
+        OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
+        OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryReversalBandDeg, OrbitalEntryRollRateDegS, OrbitalEntryTrackRollRateDegS,
+        OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryRcsDeadbandDeg, OrbitalEntryTrackOmega, OrbitalEntryGainDragFloor, OrbitalEntryMeasureSmoothS, OrbitalEntryCorridorWeight, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
     };
 
     public static readonly BoolSpec[] AllBools =
@@ -416,7 +529,8 @@ internal static class GuidanceSettingSpecs
         GLimitEnabled, AutoLaunch, MatchTargetArgPe, ArgPeFixed, OptimiseInsertion, InsertBeforeApoapsis,
         FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, AscentOwnAttitude, AscentAeroControl, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
         VehicleHeightAuto, LegsAutoDeploy, ParkIdleEngines, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
-        SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ThreeDofFromGlide, ThreeDofSixDofHandover, ScvxClarabel,
+        SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ScvxClarabel, ThreeDofNewAttitude,
+        OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude, OrbitalEntryUseRcs, LandFlip, EntryFlip,
     };
 
     #endregion

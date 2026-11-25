@@ -87,7 +87,7 @@ internal static partial class AfcConsole
     {
         Open(page);
         CraftActivity a = Frame.Activity;
-        if (page == ConsolePage.Land && FlightView.FlyingWay(in a) is LandWay way)
+        if (page == ConsolePage.Land && (GuidanceWindow.LiveLandWay() ?? FlightView.FlyingWay(in a)) is LandWay way)
             LandWay = way;
     }
 
@@ -199,6 +199,7 @@ internal static partial class AfcConsole
         UiConfig.SetDefault(KeyExpertOpen, false);
         UiConfig.SetDefault(UiConfig.KeyHoverNumpad, false);
         UiConfig.SetDefault(UiConfig.KeyShowDiagnostics, false);
+        UiConfig.SetDefault(ScreenLog.Key, false);
         PlannerRoute.LoadPreference();
         GuidanceWindow.LoadOverlayPreferences();
 
@@ -225,6 +226,8 @@ internal static partial class AfcConsole
         UiConfig.Set(KeyWide, Wide);
         UiConfig.Remove(KeyLegacyBoosterStep);
         UiConfig.Set(KeyLandWay, ConsolePages.EnumKey(LandWay));
+        // The METHOD row of the old LAND > ENTRY is gone: the body decides orbital entry or the braking burn.
+        UiConfig.Remove("console_entry_method");
         UiConfig.Set(KeyTuneSet, ConsolePages.EnumKey(TuneSet));
         UiConfig.Set(KeyTuneLanding, ConsolePages.EnumKey(TuneLanding));
         UiConfig.Set(KeyTuneDiagnostics, ConsolePages.EnumKey(TuneDiagnostics));
@@ -415,7 +418,7 @@ internal static partial class AfcConsole
             && MultiPassRegistry.TryGet(subject.Id, out MultiPassExecution? exec) && !OrbitToolCatalog.IsTool(exec.Intent.TypeKey);
         HeadDrawer.Refresh(subject, force: false);
         ConsoleHead.BuildLines(Frame);
-        // LAND follows a hand-over of the landing with its way, as the solver follows it. The page itself never changes.
+        // LAND turns to the way of the path step that flies when that step changes (an engage or a hand-over, GuidanceWindow.FollowLiveWay), once. The page itself never changes.
         if (GuidanceWindow.ConsumeFollowedLandWay() is LandWay followed && followed != LandWay)
         {
             LandWay = followed;
@@ -496,7 +499,7 @@ internal static partial class AfcConsole
                 || (Page == ConsolePage.Tune && TuneSet == TuneSet.Diag
                     && TuneDiagnostics is TuneDiagnostics.Boostback or TuneDiagnostics.Aero),
             GuidanceWindow.GuidancePage.Deorbit => Page == ConsolePage.Land && LandWay == LandWay.FromOrbit,
-            GuidanceWindow.GuidancePage.Land => Page == ConsolePage.Land && LandWay == LandWay.FromHere,
+            GuidanceWindow.GuidancePage.Land => Page == ConsolePage.Land && LandWay is LandWay.FromHere or LandWay.Entry or LandWay.Glide,
             GuidanceWindow.GuidancePage.Hover => Page == ConsolePage.Land && LandWay == LandWay.Hover,
             _ => false,
         };
@@ -550,6 +553,14 @@ internal static partial class AfcConsole
         catch (Exception ex)
         {
             LogHelper.WarnOnce("afc-separation-band:" + ex.GetType().Name, $"[AFC] AFC separation band draw failed: {ex}");
+        }
+        try
+        {
+            AeroDataBandWindow.Draw(Frame);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce("afc-aero-data-band:" + ex.GetType().Name, $"[AFC] AFC aero data band draw failed: {ex}");
         }
     }
 

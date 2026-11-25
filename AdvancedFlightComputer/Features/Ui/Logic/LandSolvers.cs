@@ -19,7 +19,7 @@ internal enum LiveLanding { None, Boostback, Entry, Touchdown, Gfold, Hover }
 /// </summary>
 internal static class LandSolvers
 {
-    public static readonly string[] Labels = { "ENTRY", "TOUCHDOWN", "G-FOLD" };
+    public static readonly string[] Labels = { EntryMethods.GlideBurnLabel, "TOUCHDOWN", "G-FOLD" };
 
     public static readonly string[] TableHeads = { "MODE", "USE", "END" };
 
@@ -30,18 +30,18 @@ internal static class LandSolvers
     public const string HeldNote = "HELD";
 
     public const string GfoldHoldsRow = "TOUCHDOWN HELD: G-FOLD ACTIVE.";
-    public const string EntryTakesOver = " ENTRY can take it over.";
+    public const string EntryTakesOver = " " + EntryMethods.GlideBurnLabel + " can take it over.";
 
     public static string Label(LandSolver solver) => solver switch
     {
-        LandSolver.Entry => "ENTRY",
+        LandSolver.Entry => EntryMethods.GlideBurnLabel,
         LandSolver.Touchdown => "TOUCHDOWN",
         _ => "G-FOLD",
     };
 
     public static string How(LandSolver solver) => solver switch
     {
-        LandSolver.Entry => "GLIDE + BURN (ENTRY)",
+        LandSolver.Entry => "ENGINE-OFF GLIDE (" + EntryMethods.GlideBurnLabel + ")",
         LandSolver.Touchdown => "POWERED (TOUCHDOWN)",
         _ => "POINT MASS (G-FOLD)",
     };
@@ -101,9 +101,8 @@ internal static class LandSolvers
     public static string HeldLine(in LandNowFacts f)
         => f.Way != LandWay.FromOrbit && f.GfoldFlies ? GfoldHoldsRow : "";
 
-    public const string TouchdownFallback = "If TOUCHDOWN has no plan for this craft, G-FOLD flies the descent where it can: no air, gimballed engine. Else LAND refuses the craft.";
 
-    public const string EntryFirst = "ENTRY flies the fall through air first and hands its burn to TOUCHDOWN.";
+    public const string EntryFirst = EntryMethods.GlideBurnLabel + " flies the fall through air first and hands its burn to TOUCHDOWN.";
 
     /// <summary>A fall shorter than this goes to touchdown guidance directly, s, because entry guidance needs the time for its glide plan.</summary>
     public const double EntryMinFallS = 60.0;
@@ -114,9 +113,6 @@ internal static class LandSolvers
     public static bool EntryApplies(bool hasAir, CraftSituation where, bool thrust, double fallS)
         => hasAir && !thrust && (where is CraftSituation.FallingAir or CraftSituation.CoastingUp) && fallS >= EntryMinFallS;
 
-    /// <summary>The braking burn of DEORBIT + LAND (GuidanceWindow.StepBrakingHandover) and touchdown guidance in the air (GuidanceWindow.FallBackToGfold) hand a craft that touchdown guidance has no plan for to G-FOLD when G-FOLD can fly it, so the table says so while TOUCHDOWN is chosen.</summary>
-    public static string FallbackLine(in LandNowFacts f)
-        => f.Chosen == LandSolver.Touchdown && LandWays.HasSolver(f.Way) ? TouchdownFallback : "";
 
     public static void MarksOf(LandSolver solver, int row, bool chosen, in RowNote note, bool hasAir, List<TableMark> marks)
     {
@@ -255,7 +251,7 @@ internal static class LandSolvers
         string fromHere = ConsolePages.CueTarget(ConsolePage.Land, ConsolePages.EnumKey(LandWay.FromHere));
         return live switch
         {
-            LiveLanding.Entry => new StatusLine(Severity.Cue, "AFC: ENTRY", fromHere),
+            LiveLanding.Entry => new StatusLine(Severity.Cue, "AFC: " + EntryMethods.GlideBurnLabel, fromHere),
             LiveLanding.Touchdown => new StatusLine(Severity.Cue, previous == LiveLanding.Entry
                 ? "HANDOVER: TOUCHDOWN"
                 : "AFC: TOUCHDOWN", fromHere),
@@ -273,9 +269,9 @@ internal enum EntryStage { Requested, Glide, Burn }
 /// </summary>
 internal static class EntryGuidance
 {
-    public const string MethodLabel = "ENTRY GUIDANCE";
-    public const string CommitVerb = "ENTRY";
-    public const string StopLabel = "STOP ENTRY";
+    public const string MethodLabel = EntryMethods.GlideBurnLabel;
+    public const string CommitVerb = EntryMethods.GlideBurnLabel;
+    public const string StopLabel = "STOP " + EntryMethods.GlideBurnLabel;
 
     /// <summary>Ahead of the boostback (50), which a glide hands to entry guidance, and behind touchdown guidance (10), which takes its burn.</summary>
     public const int StopOrder = 15;
@@ -284,21 +280,23 @@ internal static class EntryGuidance
 
     public static GuidanceModeDescriptor Descriptor()
         => GuidanceModes.Registered(GuidanceModeId.EntryHere, ConsolePage.Land, MethodLabel, StopOrder, Phases,
-            CommitVerb, StopLabel, FallbackOutcome, FallbackDetail, "ENTRY GUIDANCE");
+            CommitVerb, StopLabel, FallbackOutcome, FallbackDetail, EntryMethods.GlideBurnLabel,
+            steps: f => f.HasAir ? [new ChainStep(EntryMethods.GlideBurnLabel)] : [new ChainStep("NO PLAN, ENGINE OFF", Warn: true), new ChainStep(LandChain.Impact, Danger: true)],
+            next: f => f.HasAir ? GuidanceModeId.SixDofHere : null);
 
     // The descriptor texts are read only when the stage texts of StopText are missing, so they hold for every stage.
     private const string FallbackOutcome = "ENGINE LIT IN BURN, ELSE CUT";
     private const string FallbackDetail =
-        "Ends entry guidance. In the landing burn the engine stays lit. In the glide it is cut.";
+        "Ends RETRO BURN. In the landing burn the engine stays lit. In the glide it is cut.";
 
     public static (string Outcome, string Detail) StopText(EntryStage stage, bool controlAcquired)
     {
         if (stage == EntryStage.Requested)
             return ("NOTHING STARTED, ENGINE UNCHANGED",
-                "Cancels the entry guidance request before it starts. The engine is not touched.");
+                "Cancels the RETRO BURN request before it starts. The engine is not touched.");
         if (!controlAcquired)
             return ("ENGINE UNCHANGED",
-                "Ends entry guidance. It holds no control yet. The engine is not touched.");
+                "Ends RETRO BURN. It holds no control yet. The engine is not touched.");
         return stage == EntryStage.Burn
             ? ("ENGINE LIT", "Engine stays lit at the last throttle. AFC stops steering.")
             : ("ENGINE OFF", "Engine stays off. AFC stops steering.");
@@ -310,4 +308,90 @@ internal static class EntryGuidance
 
     public const string NoAirText =
         "NO AIR: NO PLAN, ENGINE OFF. STOP, THEN USE TOUCHDOWN.";
+}
+
+/// <summary>The names of the landing path's air steps, as plain rules: ORBITAL ENTRY from orbit or the top of the air, and the two ways of falling to the landing burn, FLIP LANDING (bellyflop) and RETRO BURN (the 3-DOF's engine-first glide and landing burn). Touchdown guidance flies the end of both.</summary>
+internal static class EntryMethods
+{
+    public const string OrbitalLabel = "ORBITAL ENTRY";
+
+    /// <summary>The 3-DOF's name in the console: its engine-first glide, then its landing burn.</summary>
+    public const string GlideBurnLabel = "RETRO BURN";
+
+    public const string FlipLabel = "FLIP LANDING";
+
+    public const string BrakingLabel = "BRAKING BURN";
+
+    /// <summary>The GLIDE row of LAND NOW, in the order of <see cref="GuidanceSettingSpecs.LandFlip"/> off, on.</summary>
+    public static readonly string[] GlideLabels = { GlideBurnLabel, FlipLabel };
+
+    /// <summary>The MODE column of the GLIDE table, as the landing table of the console names a mode: how it flies, then the mode in brackets. In the order of <see cref="GlideLabels"/>.</summary>
+    public static readonly string[] GlideModes = { "ENGINE FIRST (" + GlideBurnLabel + ")", "BELLY FIRST (" + FlipLabel + ")" };
+
+    /// <summary>The USE column: the craft each suits. A retro burn needs a craft that glides stable engine first, a flip landing one that falls belly first on its flaps.</summary>
+    public static readonly string[] GlideUses = { "TAIL-STABLE", "BELLY FLAPS" };
+
+    /// <summary>A row of the GLIDE table: MODE, USE, and END, the mode it hands to (its declared next mode).</summary>
+    public static string[] GlideRow(int index, string end) => new[] { GlideModes[index], GlideUses[index], end };
+
+    public static readonly string[] GlideCards =
+    {
+        "Glides engine first with the engine off, then lights it for the landing burn. TOUCHDOWN flies the last seconds of the burn.",
+        "Falls belly first with BELLYFLOP onto a point short of the site, then TOUCHDOWN flips the craft under power and flies the landing burn. Above the hand-over it flies ORBITAL ENTRY first.",
+    };
+}
+
+/// <summary>Where orbital entry guidance is when the stop is pressed.</summary>
+internal enum OrbitalEntryStage { Requested, Sweeping, Entry, Holding, Bellyflop }
+
+/// <summary>
+/// The shell rules of orbital entry guidance (Modes/OrbitalEntry.cs, with bellyflop as its last phase), a mode that registers through GuidanceWindow.RegisterMode: its descriptor and its stop texts, which follow what GuidanceWindow.StopOrbitalEntry does.
+/// </summary>
+internal static class OrbitalEntryGuidance
+{
+    public const string MethodLabel = EntryMethods.OrbitalLabel;
+    public const string CommitVerb = EntryMethods.OrbitalLabel;
+    public const string StopLabel = "STOP ORBITAL ENTRY";
+
+    /// <summary>Ahead of the deorbit (40), whose entry burn hands the craft to it, and behind RETRO BURN (15) and touchdown guidance (10), which fly lower.</summary>
+    public const int StopOrder = 35;
+
+    public static readonly string[] Phases = { "SWEEP", "ENTRY", "HOLD", "BELLYFLOP" };
+
+    public static GuidanceModeDescriptor Descriptor()
+        => GuidanceModes.Registered(GuidanceModeId.OrbitalEntry, ConsolePage.Land, MethodLabel, StopOrder, Phases,
+            CommitVerb, StopLabel, "ENGINE UNCHANGED", "Ends orbital entry guidance. AFC stops steering. The engine is not touched.", EntryMethods.OrbitalLabel,
+            steps: Steps, next: Next);
+
+    /// <summary>
+    /// Orbital entry's steps: the entry, then bellyflop where it flips (bellyflop is its last phase). LAND NOW's FLIP LANDING starts at bellyflop. A craft with no engine to land on ends in its parachutes, armed at the hand-over, or in a hold that the pilot flies on from.
+    /// </summary>
+    private static ChainStep[] Steps(PathFacts f)
+    {
+        if (f.Way is LandWay.FromHere or LandWay.Glide)
+            return [new ChainStep(LandChain.Bellyflop)];
+        if (!f.CanLand)
+            return f.Chutes
+                ? [new ChainStep(EntryMethods.OrbitalLabel), new ChainStep(LandChain.Parachutes)]
+                : [new ChainStep(EntryMethods.OrbitalLabel), new ChainStep(LandChain.Hold), new ChainStep(LandChain.YouFly, Warn: true)];
+        return f.Flip ? [new ChainStep(EntryMethods.OrbitalLabel), new ChainStep(LandChain.Bellyflop)] : [new ChainStep(EntryMethods.OrbitalLabel)];
+    }
+
+    /// <summary>After bellyflop touchdown guidance takes the craft for the flip and the burn; after a plain entry RETRO BURN; a craft with no engine to land on ends the path here.</summary>
+    private static GuidanceModeId? Next(PathFacts f)
+        => !f.CanLand ? null : f.Flip || f.Way is LandWay.FromHere or LandWay.Glide ? GuidanceModeId.SixDofHere : GuidanceModeId.EntryHere;
+
+    public static (string Outcome, string Detail) StopText(OrbitalEntryStage stage) => stage switch
+    {
+        OrbitalEntryStage.Requested => ("NOTHING STARTED", "Cancels the ORBITAL ENTRY request before it starts."),
+        OrbitalEntryStage.Sweeping => ("NOTHING FLOWN YET", "Ends orbital entry guidance while it measures the craft. AFC stops steering."),
+        OrbitalEntryStage.Bellyflop => ("ATTITUDE FREE", "Ends BELLYFLOP. AFC stops steering and the craft falls as it is."),
+        _ => ("ATTITUDE FREE", "Ends orbital entry guidance. AFC stops steering. The engine is not touched."),
+    };
+
+    public const string CommitHint =
+        "Measures the craft belly first, then flies the entry to the hand-over at HAND-OVER MACH, banking to hold the planned drag and turning towards the site with roll reversals. With BELLYFLOP on, bellyflop falls onto the site from there. "
+        + "Starts from orbit or from the air, with the engine off. Engaged already past the hand-over (a fall in the low air), it skips the entry and starts at BELLYFLOP, holding the attitude it has until bellyflop's first plan.";
+
+    public const string NoAirText = "NO AIR ON THIS BODY. ORBITAL ENTRY NEEDS AN ATMOSPHERE.";
 }

@@ -721,7 +721,7 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
     }
 
     // VehicleSpawner.SpawnFromSave with an attitude: it spawns at identity, which would put the booster on its side.
-    private static Vehicle Spawn(string saveId, CelestialSystem system, IParentBody parent, string id, Orbit orbit, doubleQuat body2Cce,
+    internal static Vehicle Spawn(string saveId, CelestialSystem system, IParentBody parent, string id, Orbit orbit, doubleQuat body2Cce,
                                  bool freshDesign)
     {
         VehicleSave? save = null;

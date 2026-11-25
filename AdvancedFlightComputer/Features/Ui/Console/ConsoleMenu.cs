@@ -84,6 +84,10 @@ internal static class ConsoleMenu
         if (ImGui.MenuItem($"{key} OPENS AFC", "", ref route, AfcConsole.Enabled))
             PlannerRoute.SetRouting(route);
 
+        bool logShown = ScreenLog.Shown;
+        if (ImGui.MenuItem("LOG LINES ON SCREEN", "", ref logShown, true))
+            ScreenLog.Set(logShown);
+
         if (ImGui.MenuItem("RESET WINDOW POSITION"))
             AfcConsole.ResetWindowPlace();
 

@@ -48,7 +48,7 @@ public static partial class GuidanceWindow
         bool boostbackUi = PageShown(GuidancePage.Boostback) || BoostbackLive;
         bool landingUi = PageShown(GuidancePage.Land) || PageShown(GuidancePage.Hover) || LandingMachineLive
             || _s.LandingPhase == LandingPhase.TerminalHover || _s.Active || _s.EngagePending;
-        bool descentUi = landingUi || PageShown(GuidancePage.Deorbit) || DescentLive || EntryLive(_s);
+        bool descentUi = landingUi || PageShown(GuidancePage.Deorbit) || DescentLive || EntryLive(_s) || OrbitalEntryLive;
 
         // World-space overlays, each its own full-screen window, drawn after the console so they layer correctly. Each also does nothing unless its own toggle is on.
         if (ascentUi)
@@ -64,6 +64,9 @@ public static partial class GuidanceWindow
         // The landing site marker shows whenever a descent or a boostback is watched or flown: the burn aims the predicted impact point at this same site, so the marker is the other half of the miss line the boostback overlay draws and the thing a retarget click moves.
         if (descentUi || boostbackUi)
             DrawLandingSiteMarker(viewport, parent);
+
+        // Orbital entry's pop-out of the ENTRY TRAJ picture of LAND > ENTRY: while it flies, until closed.
+        DrawEntryTrajWindow(vehicle, parent);
 
         // Clickable retargeting: while armed, a world click sets the new landing site.
         HandleRetargetClick(viewport, parent);

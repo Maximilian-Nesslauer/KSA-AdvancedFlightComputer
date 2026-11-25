@@ -50,6 +50,14 @@ public sealed class ConsolePagesTest : AfcTest
                 AfcConsole.Page == ConsolePage.Land && AfcConsole.LandWay == LandWay.Boostback);
 
             AfcConsole.LandWay = LandWay.FromOrbit;
+            AfcConsole.Navigate(ConsolePages.CueTarget(ConsolePage.Land, ConsolePages.EnumKey(LandWay.Entry)));
+            t.Check("a LAND/ENTRY cue opens ENTRY/BRAKING", AfcConsole.Page == ConsolePage.Land && AfcConsole.LandWay == LandWay.Entry);
+
+            UiConfig.Set("console_entry_method", "GLIDEBURN");
+            AfcConsole.SavePreferences();
+            t.Check("the old ENTRY METHOD key is dropped: the body decides entry or braking", UiConfig.GetString("console_entry_method", "") == "");
+
+            AfcConsole.LandWay = LandWay.FromOrbit;
             AfcConsole.Navigate(ConsolePages.RecoverAlias + "/AFTERSEPARATION");
             t.Check("an old booster cue after separation opens LAND > BOOSTBACK",
                 AfcConsole.Page == ConsolePage.Land && AfcConsole.LandWay == LandWay.Boostback);

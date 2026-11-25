@@ -543,7 +543,7 @@ public static partial class GuidanceWindow
                                    gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight, rateMaxDegS: _s.SixDofRateMaxDegS,
                                    coastIntervals: _s.SixDofCoastPending ? CoastIntervalsFor(nodes) : 0,
                                    scaleFrom: _s.SixDofCoastPending ? _s.SixDofCoastScaleState : null,
-                                   momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow))
+                                   momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -1454,6 +1454,16 @@ public static partial class GuidanceWindow
         }
 
         bool firstBrakingCommand = false;
+        // A direct engage waits for the flaps' tables, flying the no-plan law meanwhile (TouchdownWaitsForSurfaces).
+        if (_s.EngagePending && !(_s.SixDofStandby && _s.Guidance != null))
+        {
+            EnsureBoostbackAero(vehicle, parent);
+            if (TouchdownWaitsForSurfaces(vehicle, out string waitWhy))
+            {
+                FlyWithoutPlan(vehicle, parent, siteCci, x, waitWhy);
+                return;
+            }
+        }
         if (_s.EngagePending)
         {
             _s.EngagePending = false;
@@ -1809,7 +1819,9 @@ public static partial class GuidanceWindow
         // It changes as propellant drains, and a stale value is a SYSTEMATIC torque error that MPC structurally cannot correct - re-anchoring the state does not fix the model.
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
         UpdateMomentLimiter(vehicle, now);
-        _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz).WithMomentLimiter(_s.MomentLimiterPerPa);
+        _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz).WithMomentLimiter(_s.MomentLimiterPerPa)
+            .WithMomentBias(UpdateMomentBias(vehicle, x, now));
+        LogAeroCheck(vehicle, x, now, "flying");
 
         // The first command after braking handover uses the plan the braking mode checked.
         if (!firstBrakingCommand && now - _s.LastReplan >= cadence)
@@ -1857,6 +1869,137 @@ public static partial class GuidanceWindow
         _s.MomentLimiterPerPa = double.IsFinite(_s.MomentLimiterPerPa) && _s.MomentLimiterPerPa > 0.0
             ? 0.7 * _s.MomentLimiterPerPa + 0.3 * perPa
             : perPa;
+    }
+
+    /// <summary>
+    /// THE MOMENT-ERROR INTEGRATOR: the error of touchdown guidance's air moment, learnt in flight and fed back into its model (BodyAero6Dof.MomentBias*PerPa), as the force's is (AccelBias). Every MomentBiasEveryS, at the craft's state with the surfaces where they are: the game's moment as its integrator applies it (KsaAeroSweep.TryLiveAero at its substep) less the model's without the error it already carries, per pascal of dynamic pressure, smoothed over MomentBiasTauS; held to MomentBiasCap times the larger of the two moments. Per pascal, so the plan scales it with the air: none at the end of the burn. Any craft: the tables' error, the limiter's and the flaps' interference alike. A Starship's flip was planned on a moment 0.5 to 1.2 MN m off the game's between 115 and 45 deg of tilt, the flaps credited three times what they gave, and it fell 21 deg behind its plan (2026-11-24). Not below MomentBiasMinPa, where the moment is too small to read. Main thread: it reads the craft.
+    /// </summary>
+    internal static double3 UpdateMomentBias(Vehicle vehicle, double[] x, double now)
+    {
+        Ksa6DofGuidance g = _s.Guidance;
+        if (g == null || x == null || now - _s.MomentBiasAt < MomentBiasEveryS)
+            return _s.MomentBiasPerPa;
+        // Not learnt for a while (another descent, a reload): start from none.
+        if (!(now - _s.MomentBiasAt <= MomentBiasStaleS))
+            _s.MomentBiasPerPa = default;
+        double dt = double.IsFinite(_s.MomentBiasAt) && now - _s.MomentBiasAt <= MomentBiasStaleS ? Math.Min(now - _s.MomentBiasAt, 1.0) : MomentBiasEveryS;
+        _s.MomentBiasAt = now;
+        try
+        {
+            float3 airF = PhysicsStates.ComputeAirVelocityBody(vehicle.BubbleOrigin, vehicle.KinematicStates, vehicle.PhysicsEnvironment);
+            double3 air = double3.Unpack(in airF);
+            double q = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * air.LengthSquared();
+            if (!(q > MomentBiasMinPa))
+                return _s.MomentBiasPerPa;
+            if (!KsaAeroSweep.TryLiveAero(vehicle, out _, out double3 tGameBody, vehicle.KinematicMeasurements.DeltaTime))
+                return _s.MomentBiasPerPa;
+            var surfaces = new List<ControlSurface>();
+            Ksa6DofSetup.FinsFor(vehicle, _s.Aero, surfaces);
+            var flown = new double[g.FinCount];
+            for (int i = 0; i < Math.Min(flown.Length, surfaces.Count); i++)
+                flown[i] = surfaces[i].DeflectionDeg;
+            Span<double> w = stackalloc double[6];
+            if (!g.ModelAeroWrench(x, flown, w))
+                return _s.MomentBiasPerPa;
+            KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+            var game = new double3(double3.Dot(tGameBody, mx), double3.Dot(tGameBody, my), double3.Dot(tGameBody, mz));
+            // The model's own, without the error it already carries.
+            double3 model = new double3(w[3], w[4], w[5]) - g.ModelMomentBiasPerPa * q;
+            double3 target = (game - model) / q;
+            double3 b = _s.MomentBiasPerPa + Math.Min(dt / MomentBiasTauS, 1.0) * (target - _s.MomentBiasPerPa);
+            double cap = MomentBiasCap * Math.Max(game.Length(), model.Length()) / q;
+            if (b.Length() > cap && cap > 0.0)
+                b *= cap / b.Length();
+            if (double.IsFinite(b.X) && double.IsFinite(b.Y) && double.IsFinite(b.Z))
+                _s.MomentBiasPerPa = b;
+        }
+        catch (Exception)
+        {
+            // A bad read keeps the last estimate.
+        }
+        return _s.MomentBiasPerPa;
+    }
+
+    private const double MomentBiasEveryS = 0.1;
+    private const double MomentBiasTauS = 1.0;
+    private const double MomentBiasMinPa = 300.0;
+    private const double MomentBiasCap = 2.0;
+    private const double MomentBiasStaleS = 10.0;
+
+    /// <summary>
+    /// TOUCHDOWN WAITS FOR THE FLAPS' TABLES: true while the craft has control surfaces and the sweep touchdown would plan on (VehicleAutopilotState.Aero) has not finished sweeping them, up to SurfaceWaitMaxS after it was taken. A sweep hands over its body tables first and its surfaces seconds later (KsaAeroSweep.Result.Surfaces, written when they are all done); planned before then, touchdown had no flaps to trim a belly-flopper's -0.9 MN m with, and every cold solve stalled and started again, every half second, from a bellyflop save (2026-11-24).
+    /// </summary>
+    internal static bool TouchdownWaitsForSurfaces(Vehicle vehicle, out string why)
+    {
+        why = "";
+        KsaAeroSweep.Result aero = _s.Aero;
+        if (aero == null || !ControlSurfaces.Any || System.Threading.Volatile.Read(ref aero.Surfaces).Length > 0)
+            return false;
+        var surfaces = new List<ControlSurface>();
+        ControlSurfaces.Collect(vehicle, surfaces);
+        if (surfaces.Count == 0 || !(SimNow() - aero.SampledAt < SurfaceWaitMaxS))
+            return false;
+        why = FormattableString.Invariant($"TOUCHDOWN WAITING FOR THE {surfaces.Count} CONTROL SURFACES' TABLES");
+        return true;
+    }
+
+    /// <summary>The longest touchdown waits for a sweep's control surfaces, s of sim time after the sweep was taken: past it, one that never finished is planned without them.</summary>
+    private const double SurfaceWaitMaxS = 90.0;
+
+    /// <summary>How often the AERO CHECK is logged, s (LogAeroCheck).</summary>
+    private const double AeroCheckEveryS = 1.0;
+
+    /// <summary>
+    /// AERO CHECK: touchdown guidance's air model against the game's own, at the craft's state as it is, for a craft with whole-sphere tables (a belly-flopper). Every AeroCheckEveryS, in the game log and the 6-DOF event log: the force in model body axes, kN, and the moment, kN m, the model gives (Ksa6DofGuidance.ModelAeroWrench) with the flaps where they are now, and apart, the body's with them at rest and so the flaps' share, against the game's (KsaAeroSweep.TryLiveAero) as the sweep measures it (no moment limiter) and as the integrator applies it (at its substep); the flaps as flown and as the plan commands them. A Starship's touchdown plan held the air and its flaps to about nothing belly first while the craft felt -1.1 to -1.2 MN m on model x, which bellyflop's flaps had been trimming (2026-11-24): this says which of the body's tables and the flaps' is wrong. Main thread: it reads the craft. Not on a predicted state.
+    /// </summary>
+    internal static void LogAeroCheck(Vehicle vehicle, double[] x, double now, string phase)
+    {
+        Ksa6DofGuidance g = _s.Guidance;
+        if (g == null || x == null || _s.Aero?.SphereBodyAero == null || now - _s.AeroCheckAt < AeroCheckEveryS)
+            return;
+        _s.AeroCheckAt = now;
+        try
+        {
+            if (!KsaAeroSweep.TryLiveAero(vehicle, out double3 fGame, out double3 tGame))
+                return;
+            double dt = vehicle.KinematicMeasurements.DeltaTime;
+            bool applied = KsaAeroSweep.TryLiveAero(vehicle, out _, out double3 tApplied, dt);
+            var surfaces = new List<ControlSurface>();
+            Ksa6DofSetup.FinsFor(vehicle, _s.Aero, surfaces);
+            int nf = g.FinCount;
+            var flown = new double[nf];
+            for (int i = 0; i < Math.Min(nf, surfaces.Count); i++)
+                flown[i] = surfaces[i].DeflectionDeg;
+            Span<double> wFlown = stackalloc double[6], wRest = stackalloc double[6];
+            if (!g.ModelAeroWrench(x, flown, wFlown) || !g.ModelAeroWrench(x, ReadOnlySpan<double>.Empty, wRest))
+                return;
+            // The model's force, site frame, into its body axes: R's transpose, R from the state's quaternion (body to site).
+            double qw = x[Dynamics6Dof.IQ], qx = x[Dynamics6Dof.IQ + 1], qy = x[Dynamics6Dof.IQ + 2], qz = x[Dynamics6Dof.IQ + 3];
+            double qn = Math.Sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+            qw /= qn; qx /= qn; qy /= qn; qz /= qn;
+            double r00 = 1 - 2 * (qy * qy + qz * qz), r01 = 2 * (qx * qy - qw * qz), r02 = 2 * (qx * qz + qw * qy);
+            double r10 = 2 * (qx * qy + qw * qz), r11 = 1 - 2 * (qx * qx + qz * qz), r12 = 2 * (qy * qz - qw * qx);
+            double r20 = 2 * (qx * qz - qw * qy), r21 = 2 * (qy * qz + qw * qx), r22 = 1 - 2 * (qx * qx + qy * qy);
+            double3 Body(Span<double> w) => new(r00 * w[0] + r10 * w[1] + r20 * w[2], r01 * w[0] + r11 * w[1] + r21 * w[2], r02 * w[0] + r12 * w[1] + r22 * w[2]);
+            KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+            double3 Model(double3 v) => new(double3.Dot(v, mx), double3.Dot(v, my), double3.Dot(v, mz));
+            double3 fModel = Body(wFlown), tModel = new(wFlown[3], wFlown[4], wFlown[5]), tBody = new(wRest[3], wRest[4], wRest[5]);
+            static string K(double3 v) => FormattableString.Invariant($"{v.X / 1e3:F0} {v.Y / 1e3:F0} {v.Z / 1e3:F0}");
+            string Deg(double[] d) => d == null || d.Length == 0 ? "none" : string.Join(" ", Array.ConvertAll(d, v => v.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)));
+            double speed = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
+            double tilt = Math.Acos(Math.Clamp(r22, -1.0, 1.0)) * 180.0 / Math.PI;
+            string text = FormattableString.Invariant(
+                $"AERO CHECK ({phase}) at {x[2]:F0} m, {speed:F1} m/s, tilt {tilt:F1} deg: force model {K(fModel)} kN, game {K(Model(fGame))} kN; ")
+                + FormattableString.Invariant($"moment model {K(tModel)} kN m (body {K(tBody)}, flaps {K(tModel - tBody)}), game {K(Model(tGame))} kN m")
+                + (applied ? $" (applied {K(Model(tApplied))})" : "")
+                + $"; flaps flown {Deg(flown)} deg, plan {Deg(g.FinDeflectionDeg)}; model limiter {_s.MomentLimiterPerPa * 1e3:F3} per kPa; moment error learnt {K(g.ModelMomentBiasPerPa * (0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * speed * speed))} kN m (in the model above).";
+            GuidanceLog.Info(vehicle, text);
+            SixDofLog.Event(_s, now, text);
+        }
+        catch (Exception ex)
+        {
+            GuidanceLog.Info(vehicle, $"AERO CHECK failed: {ex.Message}");
+        }
     }
 
     /// <summary>Pitch and yaw before roll when the RCS cannot give the whole of the plan's torque: model z is the roll axis.</summary>
@@ -2091,7 +2234,7 @@ public static partial class GuidanceWindow
                                      gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight, rateMaxDegS: _s.SixDofRateMaxDegS,
                                      coastIntervals: _s.SixDofCoastPending ? CoastIntervalsFor(engageNodes) : 0,
                                      scaleFrom: _s.SixDofCoastPending ? _s.SixDofCoastScaleState : null,
-                                     momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow);
+                                     momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare);
     }
 
     /// <summary>
@@ -2204,7 +2347,7 @@ public static partial class GuidanceWindow
         if (_s.SixDofSpreadCold && !_s.SixDofFixedTime && !_s.SixDofGfoldSeed)
         {
             _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
-            _s.Guidance.ColdSeedPath = _s.SixDofCoastPending ? EntrySeedPath(now) : null;
+            _s.Guidance.ColdSeedPath = _s.SixDofCoastPending ? EntrySeedPath(now) ?? BellyflopSeedPath(now) : null;
             _s.Guidance.BeginCold(x, xf, _s.SixDofEntrySigmaSeed, _s.SixDofCoastPending ? _s.SixDofCoastSeedS : double.NaN, now);
             _s.Converging = true;
             _s.Worker = _s.SixDofThreaded ? new Ksa6DofSolveWorker() : null;

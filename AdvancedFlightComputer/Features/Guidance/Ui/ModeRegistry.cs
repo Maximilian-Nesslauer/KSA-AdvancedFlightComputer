@@ -72,6 +72,7 @@ public static partial class GuidanceWindow
             return;
         _afcModesRegistered = true;
         RegisterMode(EntryGuidance.Descriptor(), EntryModeHooks());
+        RegisterMode(OrbitalEntryGuidance.Descriptor(), OrbitalEntryModeHooks());
     }
 
     private static GuidanceModeHooks HooksOf(GuidanceModeId id)

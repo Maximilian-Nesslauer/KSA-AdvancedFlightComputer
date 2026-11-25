@@ -52,12 +52,17 @@ internal static class GuidanceFeature
     internal static void ApplyDriverPatches(Harmony harmony)
     {
         harmony.Patch(GameReflection.Vehicle_PrepareWorker!,
-            prefix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnPrepareWorker)));
+            prefix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnPrepareWorker)),
+            postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnPrepareWorkerDone)));
+        // HAND FLYING's PILOT buttons on the stock gauges (HandFlying, Content/HandFlyingPanel.xml).
+        HandFlying.ApplyPatches(harmony);
         harmony.Patch(GameReflection.FlightComputer_UpdateAttitudeTarget!,
             postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnUpdateAttitudeTarget)));
         harmony.Patch(AccessTools.Method(typeof(Vehicle), nameof(Vehicle.UpdateAfterPartTreeModification), Type.EmptyTypes),
             postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnPartTreeModified)));
         GuidanceWindow.ApplyProbePowerWarpPatch(harmony);
+        // The editor's belly-flop balance window draws from the vehicle editor's own UI pass.
+        harmony.CreateClassProcessor(typeof(EditorBalanceWindow)).Patch();
 
         SaveLoadObserver.SaveLoaded += OnSaveLoaded;
         SaveLoadObserver.SaveWritten += CraftSettings.OnSaveWritten;
@@ -115,6 +120,19 @@ internal static class GuidanceFeature
     // Runs on the main thread inside Universe.PrepareVehicleWorkers for every vehicle. See the handle in GameReflection for why this is the site.
     private static void OnPrepareWorker(Vehicle __instance) => StepVehicle(__instance);
 
+    // The rotation keys hand flying hid from stock for the step go back, so a key held stays held.
+    private static void OnPrepareWorkerDone(Vehicle __instance)
+    {
+        try
+        {
+            HandFlying.AfterPrepare(__instance);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce($"hand-flying-keys:{ex.GetType().Name}", $"[AFC] Hand flying could not give the keys back: {ex}");
+        }
+    }
+
     private static void OnPartTreeModified(Vehicle __instance)
     {
         if (SharedVehicleHooks.GuidanceEnabled && VehicleAutopilotState.TryGet(__instance, out var state))
@@ -133,6 +151,8 @@ internal static class GuidanceFeature
             GuidanceWindow.DrainRequests(vehicle);
             GuidanceWindow.ApplyAutopilot(vehicle);
             GuidanceWindow.StepSucceeded(vehicle);
+            // HAND FLYING after the modes, so a mode that took the craft this step has it, and the keys are read before stock copies them to the worker.
+            HandFlying.Step(vehicle);
             // After the modes stepped, so it reads the claim and the phase this step left. It catches its own faults, which never count as a failed step.
             GuidanceWindow.StepLandingLegs(vehicle);
         }

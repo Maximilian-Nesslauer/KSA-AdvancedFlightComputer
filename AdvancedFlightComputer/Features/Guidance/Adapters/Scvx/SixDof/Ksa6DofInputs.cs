@@ -18,9 +18,12 @@ using Brutal.Numerics;
 /// <param name="Iyy">Body-y inertia, kg m^2.</param>
 /// <param name="Izz">Body-z (roll) inertia, kg m^2.</param>
 /// <param name="MomentLimiterPerPa">The game's air moment limiter as measured now (BodyAero6Dof.MomentLimiterPerPa), per Pa; NaN leaves the model's.</param>
-public sealed record Ksa6DofInputs(double3 AccelBias, double Ixx, double Iyy, double Izz, double MomentLimiterPerPa = double.NaN)
+/// <param name="MomentBiasPerPa">The air moment's measured error per pascal of dynamic pressure, model body axes, N m/Pa (BodyAero6Dof.MomentBias*PerPa; SixDof's moment-error integrator); zero for none.</param>
+public sealed record Ksa6DofInputs(double3 AccelBias, double Ixx, double Iyy, double Izz, double MomentLimiterPerPa = double.NaN, double3 MomentBiasPerPa = default)
 {
     public Ksa6DofInputs WithMomentLimiter(double perPa) => this with { MomentLimiterPerPa = perPa };
+
+    public Ksa6DofInputs WithMomentBias(double3 perPa) => this with { MomentBiasPerPa = perPa };
 
     /// <summary>Nothing measured yet: no bias, and whatever inertia the config was built with.</summary>
     public static readonly Ksa6DofInputs None = new(default, 0.0, 0.0, 0.0);

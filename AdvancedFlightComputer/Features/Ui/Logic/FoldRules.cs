@@ -37,6 +37,8 @@ internal static class FoldNames
     public const string Impact = "IMPACT";
     public const string Feasibility = "FEASIBILITY";
     public const string Deorbit = "DEORBIT";
+    public const string Bank = "BANK";
+    public const string EntryAim = "ENTRY AIM";
 }
 
 internal static class FoldRules

@@ -42,12 +42,15 @@ internal static class SituationVerbs
         GuidanceModeId.GfoldHere => LandSolvers.Label(LandSolver.Gfold),
         GuidanceModeId.SixDofHere => LandSolvers.Label(LandSolver.Touchdown),
         GuidanceModeId.EntryHere => LandSolvers.Label(LandSolver.Entry),
+        GuidanceModeId.OrbitalEntry => EntryMethods.OrbitalLabel,
         _ => "HOVER",
     };
 
     public static string DeorbitFlies(GuidanceModeId mode) => "TAKE OVER replaces the deorbit with " + VerbName(mode) + ".";
 
     public const string EntryNeedsAir = "No air. Use TOUCHDOWN.";
+
+    public const string OrbitalEntryNeedsAir = "No air on this body.";
 
     public const string GfoldNoAir = "G-FOLD needs an airless body.";
 
@@ -68,7 +71,7 @@ internal static class SituationVerbs
         VerbFit fit = ForSituation(mode, in g);
         if (!fit.Fits)
             return fit;
-        if (g.NoSiteNote.Length > 0 && mode is GuidanceModeId.DeorbitLand or GuidanceModeId.Boostback or GuidanceModeId.EntryHere or GuidanceModeId.SixDofHere or GuidanceModeId.GfoldHere)
+        if (g.NoSiteNote.Length > 0 && mode is GuidanceModeId.DeorbitLand or GuidanceModeId.Boostback or GuidanceModeId.EntryHere or GuidanceModeId.OrbitalEntry or GuidanceModeId.SixDofHere or GuidanceModeId.GfoldHere)
             return new VerbFit(g.NoSiteNote, Plain: true, NextPicksSite: true);
         if (g.FarSiteNote.Length > 0 && mode is GuidanceModeId.SixDofHere or GuidanceModeId.GfoldHere)
             return new VerbFit(g.FarSiteNote, NextPicksSite: true);
@@ -93,6 +96,7 @@ internal static class SituationVerbs
             GuidanceModeId.GfoldHere => FirstOf(FromHere(g.Where), g.HasAir ? new VerbFit(GfoldNeedsNoAir, NextSolver: LandSolver.Touchdown) : VerbFit.Yes),
             GuidanceModeId.SixDofHere => FromHere(g.Where),
             GuidanceModeId.EntryHere => FirstOf(FromHere(g.Where), g.HasAir ? VerbFit.Yes : new VerbFit(EntryNeedsAir, NextSolver: LandSolver.Touchdown)),
+            GuidanceModeId.OrbitalEntry => OrbitalEntry(in g),
             _ => VerbFit.Yes,
         };
     }
@@ -107,6 +111,14 @@ internal static class SituationVerbs
         CraftSituation.Orbit => new VerbFit(DeorbitFirst, ConsolePage.Land, LandWay.FromOrbit),
         CraftSituation.Escaping => new VerbFit(NoImpact, Plain: true),
         _ => VerbFit.Yes,
+    };
+
+    // Orbital entry starts from orbit too: it holds its entry attitude above the air and takes hold where the air begins.
+    private static VerbFit OrbitalEntry(in CommitGates g) => g.Where switch
+    {
+        CraftSituation.Ground => Grounded,
+        CraftSituation.Escaping => new VerbFit(NoImpact, Plain: true),
+        _ => g.HasAir ? VerbFit.Yes : new VerbFit(OrbitalEntryNeedsAir, Plain: true),
     };
 
     private static VerbFit Launch(CraftSituation where) => where switch
@@ -143,6 +155,8 @@ internal static class SituationVerbs
             LandWay.FromOrbit => GuidanceModeId.DeorbitLand,
             LandWay.Boostback => GuidanceModeId.Boostback,
             LandWay.FromHere => GuidanceModeId.SixDofHere,
+            LandWay.Glide => GuidanceModeId.EntryHere,
+            LandWay.Entry => hasAir ? GuidanceModeId.OrbitalEntry : GuidanceModeId.DeorbitLand,
             _ => GuidanceModeId.Hover,
         };
         var gates = new CommitGates(false, false, "", "", false, Where: where, HasAir: hasAir, BelowBrakingStart: belowBrakingStart, NoStageHome: noStageHome);

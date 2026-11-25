@@ -199,6 +199,13 @@ public sealed class Ksa6DofGuidance : IDisposable
         if (inputs.Ixx > 0.0) _dyn.Ixx = inputs.Ixx;
         if (_dyn.BodyAero != null && inputs.MomentLimiterPerPa >= 0.0 && double.IsFinite(inputs.MomentLimiterPerPa))
             _dyn.BodyAero.MomentLimiterPerPa = inputs.MomentLimiterPerPa;
+        // The air moment's measured error (SixDof's moment-error integrator), as the force's is AccelBias.
+        if (_dyn.BodyAero != null && double.IsFinite(inputs.MomentBiasPerPa.X) && double.IsFinite(inputs.MomentBiasPerPa.Y) && double.IsFinite(inputs.MomentBiasPerPa.Z))
+        {
+            _dyn.BodyAero.MomentBiasXPerPa = inputs.MomentBiasPerPa.X;
+            _dyn.BodyAero.MomentBiasYPerPa = inputs.MomentBiasPerPa.Y;
+            _dyn.BodyAero.MomentBiasZPerPa = inputs.MomentBiasPerPa.Z;
+        }
         if (inputs.Iyy > 0.0) _dyn.Iyy = inputs.Iyy;
         if (inputs.Izz > 0.0) _dyn.Izz = inputs.Izz;
 
@@ -235,6 +242,17 @@ public sealed class Ksa6DofGuidance : IDisposable
         Dynamics6Dof.AeroForce(x, _dyn, out double fx, out double fy, out double fz);
         double m = x[Dynamics6Dof.IM];
         return new double3(fx / m, fy / m, fz / m);
+    }
+
+    /// <summary>The air moment's error the model holds now, per pascal, model body axes (BodyAero6Dof.MomentBias*PerPa): what its wrench already carries.</summary>
+    public double3 ModelMomentBiasPerPa => _dyn.BodyAero is { } b ? new double3(b.MomentBiasXPerPa, b.MomentBiasYPerPa, b.MomentBiasZPerPa) : default;
+
+    /// <summary>The model's aerodynamic wrench at state x with the fins at <paramref name="finDeg"/> (Dynamics6Dof.AeroWrenchAt): force site frame, N, then moment model body axes, N m. False with no aero model.</summary>
+    public bool ModelAeroWrench(double[] x, ReadOnlySpan<double> finDeg, Span<double> wrench)
+    {
+        if ((_dyn.Aero == null && _dyn.BodyAero == null) || x == null || x.Length < NX)
+            return false;
+        return Dynamics6Dof.AeroWrenchAt(x, _dyn, finDeg, wrench);
     }
 
     /// <summary>Lateral (pitch/yaw) torque the model allows per newton of axial thrust, N m/N: the gimbal arm times the cone's tangent.</summary>
@@ -565,11 +583,35 @@ public sealed class Ksa6DofGuidance : IDisposable
     }
 
     /// <summary>Price the next solve for <paramref name="timeToGo"/> seconds of horizon. Called with the horizon each solve is about to run over.</summary>
-    private void PriceForHorizon(double timeToGo)
+    private void PriceForHorizon(double timeToGo, double sigma = double.NaN, double coast = 0.0)
     {
         _pricingTimeToGo = timeToGo;
+        _pricingNearIntervals = double.IsFinite(sigma) ? NearIntervals(sigma, coast) : 0;
         ApplyPricing();
     }
+
+    /// <summary>
+    /// THE NEAR TERM PRICED AS THE GATE HOLDS IT. The intervals starting within NearPricingS of node 0, for a solve over this burn and coast: on a warm re-solve (a pricing stage above 0) they are priced at the refined price whatever the time to go, since the flight's gate holds them to its tolerance in full. Priced on the time to go alone, a Starship's coast flip, handed over 19 s from the end, was planned at a loose price, its re-solves carried 1-2 m of phantom displacement into those intervals against the 1 m gate, and every refusal loosened the price further (2026-11-24). Cold solves keep the loose start (stage 0).
+    /// </summary>
+    private int NearIntervals(double sigma, double coast)
+    {
+        int nc = _cfg.CoastIntervals, burn = _n - 1 - nc;
+        int k = 0;
+        while (k < _n - 1)
+        {
+            double t = k < nc ? k * coast / Math.Max(nc, 1) : coast + (k - nc) * sigma / Math.Max(burn, 1);
+            if (t >= NearPricingS)
+                break;
+            k++;
+        }
+        return k;
+    }
+
+    /// <summary>How far ahead the near-term price reaches, s (NearIntervals): the gate's full-strength horizon and the first seconds past it, where the refusals sat.</summary>
+    public double NearPricingS { get; set; } = 3.0;
+
+    private int _pricingNearIntervals;
+    private int _pricingNearApplied = -1;
 
     private void ApplyPricing()
     {
@@ -584,10 +626,13 @@ public sealed class Ksa6DofGuidance : IDisposable
             PricingVelocityMs = _cfg.XScale[Dynamics6Dof.IV];
             return;
         }
+        // The near term on a warm re-solve: at the refined price (NearIntervals).
+        int nearIntervals = PricingStage > 0 ? _pricingNearIntervals : 0;
         // Unchanged since the last solve: nothing to re-price.
-        if (f == _pricingApplied)
+        if (f == _pricingApplied && nearIntervals == _pricingNearApplied)
             return;
         _pricingApplied = f;
+        _pricingNearApplied = nearIntervals;
         var scale = new double[NX];
         for (int i = 0; i < NX; i++)
         {
@@ -597,7 +642,17 @@ public sealed class Ksa6DofGuidance : IDisposable
             scale[i] = tight > 0.0 && loose > tight ? loose * Math.Pow(tight / loose, f) : tight;
         }
         PricingVelocityMs = scale[Dynamics6Dof.IV] > 0.0 ? scale[Dynamics6Dof.IV] : _cfg.XScale[Dynamics6Dof.IV];
-        _solver.SetVirtualControlScale(scale);
+        double[] nearScale = null;
+        if (nearIntervals > 0)
+        {
+            nearScale = new double[NX];
+            for (int i = 0; i < NX; i++)
+            {
+                double tight = i < _vcTarget.Length ? _vcTarget[i] : 0.0;
+                nearScale[i] = tight > 0.0 ? Math.Min(tight, scale[i] > 0.0 ? scale[i] : tight) : 0.0;
+            }
+        }
+        _solver.SetVirtualControlScale(scale, nearScale, nearIntervals);
     }
 
     /// <summary>Cold solve from a straight-line seed. ~1.7 s, so do it during a coast.</summary>
@@ -731,17 +786,21 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// Burn time the NEW solve will use. The seed is stretched onto it, so this must be the same value handed to Reseed or Initialize - a different one re-times the whole reference and reintroduces exactly the fault this removes.
     /// </param>
     private void BuildShiftedSeed(double[] x0, double simNow, double sigmaNew,
-                                  out double[] xs, out double[] us, out double elapsed, double coastNew = 0.0)
+                                  out double[] xs, out double[] us, out double elapsed, double coastNew = 0.0, bool fromWork = false)
     {
-        double dtOld = Math.Max(_planSigma / (_n - 1 - _cfg.CoastIntervals), 1e-9);
-        elapsed = Math.Max(0.0, simNow - _solveTime);
+        // The trajectory shifted: the published plan, or the last attempt where it carries on from one (Update after a refusal).
+        double[] baseX = fromWork ? _workX : _planX, baseU = fromWork ? _workU : _planU;
+        double baseSigma = fromWork ? _workSigma : _planSigma, baseCoast = fromWork ? _workCoast : _planCoast;
+        double baseTime = fromWork ? _workTime : _solveTime;
+        double dtOld = Math.Max(baseSigma / (_n - 1 - _cfg.CoastIntervals), 1e-9);
+        elapsed = Math.Max(0.0, simNow - baseTime);
 
         // Recorded, not used: the seed no longer shifts by whole nodes. Current because it is the quantity the refusal correlation was measured against, so logs from either side of this change stay comparable.
         LastSeedShift = (int)(elapsed / dtOld);
 
         xs = new double[_n * NX];
         us = new double[_n * NU];
-        ResamplePlan(_planX, _planU, _n, _cfg.CoastIntervals, _planSigma, _planCoast, elapsed,
+        ResamplePlan(baseX, baseU, _n, _cfg.CoastIntervals, baseSigma, baseCoast, elapsed,
                      _n, _cfg.CoastIntervals, sigmaNew, coastNew, xs, us);
 
         // Seed node 0 with the MEASURED state, and carry the rest of the reference with it: position by the offset plus the velocity offset times time, velocity and mass by their offsets - the same re-anchoring the spread cold solve does between its iterations (ColdReferenceShift). It is what the equality will force at node 0 anyway, and starting the reference there means even a cycle that accepts no step still hands back a plan anchored at the vehicle.
@@ -985,6 +1044,33 @@ public sealed class Ksa6DofGuidance : IDisposable
     ///  This is the number that decides whether a WARM start is still worth having. A warm start is an advantage only while the vehicle is near its plan; past some drift the stale plan is a WORSE seed than a straight line from the current state, because the straight line is at least self-consistent while the stale one asserts a trajectory the vehicle is no longer on. At that point re-solving from it is paying to use a bad guess.
     /// </summary>
     public double PlanDriftM { get; private set; }
+
+    /// <summary>
+    /// The first sim time from <paramref name="now"/> at which <paramref name="plan"/> asks for an attitude more than <paramref name="maxAngleRad"/> from <paramref name="state"/>'s (the attitude flown now), read every <paramref name="stepS"/> along the plan (slerped between nodes, as MatchesHandoffAttitude); +infinity when it never does. The hand-overs to touchdown guidance are taken a little before it (SixDofStandby's TURN-AWAY): until then the mode flying the craft holds the attitude the plan wants.
+    /// </summary>
+    internal static double TurnAwayTime(Ksa6DofPlan plan, double[] state, double now, double maxAngleRad, double stepS = 0.1)
+    {
+        if (plan == null || plan.Nodes < 2 || state == null || state.Length < NX)
+            return double.PositiveInfinity;
+        double stateNorm = 0.0;
+        for (int i = 0; i < 4; i++) stateNorm += state[IQ + i] * state[IQ + i];
+        stateNorm = Math.Sqrt(stateNorm);
+        if (!(stateNorm > 0.0))
+            return double.PositiveInfinity;
+        double cosHalf = Math.Cos(maxAngleRad / 2.0);
+        Span<double> target = stackalloc double[4];
+        for (double t = Math.Max(now - plan.SolveTime, 0.0); t < plan.Duration; t += Math.Max(stepS, 0.01))
+        {
+            (int k, double f) = plan.Locate(t);
+            int a = k * NX, b = a + NX;
+            Slerp(plan.X.AsSpan(a + IQ, 4), plan.X.AsSpan(b + IQ, 4), f, target);
+            double dot = 0.0;
+            for (int i = 0; i < 4; i++) dot += target[i] * state[IQ + i];
+            if (Math.Abs(dot) < stateNorm * cosHalf)
+                return plan.SolveTime + t;
+        }
+        return double.PositiveInfinity;
+    }
 
     internal static bool MatchesHandoffAttitude(Ksa6DofPlan plan, double[] state, double now,
                                                 double maxAngleRad, double maxRateRadS)
@@ -1298,8 +1384,11 @@ public sealed class Ksa6DofGuidance : IDisposable
 
         // SIGMA FIRST, because the seed is stretched onto it rather than shifted by whole nodes - BuildShiftedSeed needs the horizon it is resampling to.
         //  FIXED TIME: count the COMMITTED burn time down rather than letting the solver re-choose it every cycle. Re-choosing is what made successive plans change shape instead of merely advancing, and it is what let the regularisers stretch sigma to make themselves cheaper.
-        double elapsed = Math.Max(0.0, simNow - _solveTime);
-        (double burnLeft, double coast) = Shorten(_planSigma, _planCoast, elapsed, simNow);
+        // AFTER A REFUSAL, CARRY ON FROM THE LAST ATTEMPT, as Track does: a refused re-solve's iterations are kept, and the next one starts from where it stopped, shifted to now and re-anchored at the measured state, in the trust region it reached. Seeded again from the published plan each cycle, every attempt started from the same ever older plan with the same few iterations and stopped at the same mismatch: a Starship's re-solves were refused 15 times in a row at 1.2 to 1.6 m against the 1 m gate, with the craft 1 m off its plan, and the restart that followed never converged (2026-11-24). A published plan is the newest again (_workTime is not past _solveTime), so a healthy loop is unchanged.
+        bool fromWork = _consecutiveFailures > 0 && _workX.Length == _planX.Length && _workTime > _solveTime && !FixedTime;
+        LastFromWork = fromWork;
+        double elapsed = Math.Max(0.0, simNow - (fromWork ? _workTime : _solveTime));
+        (double burnLeft, double coast) = fromWork ? Shorten(_workSigma, _workCoast, elapsed, simNow) : Shorten(_planSigma, _planCoast, elapsed, simNow);
         double sigma;
         if (FixedTime)
         {
@@ -1312,22 +1401,25 @@ public sealed class Ksa6DofGuidance : IDisposable
             sigma = Math.Max(_cfg.SigmaMin, burnLeft);
         }
 
-        BuildShiftedSeed(x0, simNow, sigma, out double[] xs, out double[] us, out _, coast);
+        BuildShiftedSeed(x0, simNow, sigma, out double[] xs, out double[] us, out _, coast, fromWork);
         // A cycle whose predecessor refused gets the larger budget, so it can take the second and third iterations that let SCvx shrink its way to an accepted step. A healthy cycle never reaches the deadline at all.
         double budget = _consecutiveFailures > 0 ? RecoveryCycleBudgetMs : CycleBudgetMs;
 
         FellBack = false;
-        LastTrustRegionStart = WarmTrustRegion;
-        PriceForHorizon(sigma + coast);
-        _solver.Reseed(x0, xs, us, sigma, trustRegion: WarmTrustRegion, coastSigma: coast);
+        // Carrying on, in the trust region the last attempt reached; a fresh cycle in the warm one.
+        double region = fromWork ? Math.Clamp(_solver.TrustRegion, WarmTrustRegion, _solver.TrustRegionMax) : WarmTrustRegion;
+        LastTrustRegionStart = region;
+        PriceForHorizon(sigma + coast, sigma, coast);
+        _solver.Reseed(x0, xs, us, sigma, trustRegion: region, coastSigma: coast);
         if (Finish(x0, simNow, maxIterations, budgetMs: budget))
         {
             _consecutiveFailures = 0;
             SetPricingStage(PricingStage + 1);
             return true;
         }
-        // A plan the tight price will not let through is looser-priced next cycle rather than lost.
-        if (_consecutiveFailures >= 1 && PricingStage > 0)
+        KeepAttempt(simNow);
+        // A plan the tight price will not let through is looser-priced next cycle rather than lost - but NOT one the gate refused for its phantom force: a looser price buys more of it, and the next attempt was refused further off (1.6 to 2.2 m over 15 cycles on a Starship's coast, 2026-11-24).
+        if (_consecutiveFailures >= 1 && PricingStage > 0 && !LastGateRefusal)
             SetPricingStage(PricingStage - 1);
 
         // WIDE-TRUST-REGION RETRY, but NOT on every failure.
@@ -1344,7 +1436,7 @@ public sealed class Ksa6DofGuidance : IDisposable
         FellBack = true;
         _consecutiveFailures++;
         LastTrustRegionStart = _solver.TrustRegionMax;
-        PriceForHorizon(sigma + coast);
+        PriceForHorizon(sigma + coast, sigma, coast);
         _solver.Reseed(x0, xs, us, sigma, trustRegion: _solver.TrustRegionMax, coastSigma: coast);
         if (Finish(x0, simNow, maxIterations * 3, budgetMs: RecoveryCycleBudgetMs))
         {
@@ -1352,8 +1444,25 @@ public sealed class Ksa6DofGuidance : IDisposable
             SetPricingStage(PricingStage + 1);
             return true;
         }
+        KeepAttempt(simNow);
         return false;
     }
+
+    /// <summary>Keeps a refused attempt's trajectory as the working one, for the next re-solve to carry on from (Update, Track).</summary>
+    private void KeepAttempt(double simNow)
+    {
+        _workX = (double[])_solver.ReferenceX.Clone();
+        _workU = (double[])_solver.ReferenceU.Clone();
+        _workSigma = _solver.Sigma;
+        _workCoast = _solver.CoastSigma;
+        _workTime = simNow;
+    }
+
+    /// <summary>The last Finish refused its plan at the gate (its dynamics outside the tolerances), rather than finding none.</summary>
+    public bool LastGateRefusal { get; private set; }
+
+    /// <summary>The last Update carried on from a refused attempt rather than the published plan.</summary>
+    public bool LastFromWork { get; private set; }
 
     /// <summary>
     /// A re-solve for a craft something else is flying - the 6-DOF standby under the 3-DOF's burn - that carries on from its OWN latest trajectory rather than from the published plan.
@@ -1396,10 +1505,12 @@ public sealed class Ksa6DofGuidance : IDisposable
         FellBack = false;
         double region = Math.Clamp(_solver.TrustRegion, WarmTrustRegion, _solver.TrustRegionMax);
         LastTrustRegionStart = region;
-        PriceForHorizon(sigma + coast);
+        PriceForHorizon(sigma + coast, sigma, coast);
         _solver.Reseed(x0, xs, us, sigma, trustRegion: region, coastSigma: coast);
         bool ok = Finish(x0, simNow, maxIterations, budgetMs: RecoveryCycleBudgetMs);
-        SetPricingStage(ok ? PricingStage + 1 : PricingStage - 1);
+        // Not loosened for a gate refusal (see Update).
+        if (ok || !LastGateRefusal)
+            SetPricingStage(ok ? PricingStage + 1 : PricingStage - 1);
 
         _workX = (double[])_solver.ReferenceX.Clone();
         _workU = (double[])_solver.ReferenceU.Clone();
@@ -1444,6 +1555,7 @@ public sealed class Ksa6DofGuidance : IDisposable
     private bool Finish(double[] x0, double simNow, int maxIterations, bool cold = false,
                         double budgetMs = 0.0)
     {
+        LastGateRefusal = false;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         Status = _solver.Solve(maxIterations, budgetMs > 0.0 ? budgetMs : CycleBudgetMs);
         LastSolveMs = sw.Elapsed.TotalMilliseconds;
@@ -1530,6 +1642,7 @@ public sealed class Ksa6DofGuidance : IDisposable
         // The cold case is folded into the tolerances themselves rather than compared against a second number - see DefectTolerances.
         if (!(LastGatedRatio <= 1.0))
         {
+            LastGateRefusal = true;
             Error = $"plan is not physical - {LastGatedDefectChannelName} " +
                     $"({LastGatedDefectGroup}) is {LastGatedRatio:F1}x its tolerance at " +
                     $"interval {LastGatedDefectNode} of {_n - 1}: " +
@@ -1665,8 +1778,9 @@ public sealed class Ksa6DofGuidance : IDisposable
                 for (int a = 0; a < 3; a++)
                 {
                     (double pos, double neg) = _cfg.RcsBounds(a);
-                    rcsPos[a] = pos / share;
-                    rcsNeg[a] = neg / share;
+                    double rcsShare = _cfg.PlanRcsShare > 0.0 ? _cfg.PlanRcsShare : share;
+                    rcsPos[a] = pos / rcsShare;
+                    rcsNeg[a] = neg / rcsShare;
                 }
             }
             // The gimbals' cone is centred where the plan's is (Scvx6DofConfig.GimbalTrimX/Y): the torque of the deflection that holds the engines' own moment, (L y T, -L x T).

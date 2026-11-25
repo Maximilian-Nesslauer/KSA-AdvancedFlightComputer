@@ -78,10 +78,11 @@ internal static class LaunchPage
 }
 
 /// <summary>
-/// LAND: the four ways down, from high energy to the ground, each one phase lower than the one before
-/// it. DEORBIT flies the whole chain from orbit, BOOSTBACK turns a spent booster back to its site,
-/// LAND NOW flies the powered descent from where the craft is (entry guidance, touchdown guidance or
-/// G-FOLD) and HOVER sinks to the ground.
+/// LAND: the five ways down, from high energy to the ground, each one the step of the landing path
+/// it starts from. DEORBIT flies the whole path from orbit (the burn, then orbital entry where there is
+/// air or the braking burn where there is none, then touchdown), BOOSTBACK turns a spent booster back to
+/// its site, ENTRY/BRAKING flies the same path with no deorbit burn, LAND NOW flies the landing from where
+/// the craft is (FLIP LANDING or RETRO BURN through air, else touchdown guidance) and HOVER sinks to the ground.
 /// </summary>
 internal static class LandPage
 {
@@ -97,6 +98,9 @@ internal static class LandPage
         LandWay way = AfcConsole.LandWay;
         if (ctx.Flying)
         {
+            // The ways stay on top while a landing flies, so every step of the path can be looked at; a pick of one that does not fly shows its form on the next frame.
+            DrawWayRow(in ctx);
+            way = AfcConsole.LandWay;
             LandRead live = GuidanceWindow.ReadLandForm(ctx.Subject, way);
             GuidanceWindow.DrawLandPicture(ctx.Subject, ctx.PictureHeight, way);
             GuidanceWindow.DrawLandLive(ctx.Subject, ctx.Width, way);
@@ -104,7 +108,6 @@ internal static class LandPage
             {
                 ctx.PlanHead();
                 GuidanceWindow.DrawLandPlanLine(way);
-                DrawWayRow(in ctx);
                 GuidanceWindow.DrawLandInputRows(ctx.Subject, way, in ctx.Frame.Situation, in live, pickSite: false);
                 GuidanceWindow.DrawLandPage(ctx.Subject, ctx.Width, way, ctx.FoldsOpen, in live, flying: true);
             }
@@ -117,6 +120,7 @@ internal static class LandPage
             ctx.ToInputs();
             GuidanceWindow.DrawDeorbitFinishRows(way);
             GuidanceWindow.DrawLandSiteRows(ctx.Subject, way, in ctx.Frame.Situation, pickSite: true);
+            // Every path but the hover ends in touchdown guidance, which lights the landing group: also an entry's, at bellyflop's hand-over.
             GuidanceWindow.DrawLandEngineRows(ctx.Subject);
             ctx.ToPicture();
             GuidanceWindow.DrawLandMethodRows(ctx.Subject, way, in ctx.Frame.Situation, in read);
@@ -126,7 +130,7 @@ internal static class LandPage
         }
 
         GuidanceModeId? mode = ConsolePages.ModeIdFor(ConsolePage.Land, way,
-            GuidanceWindow.LandSolverRoute, GuidanceWindow.CurrentAscentChoice());
+            GuidanceWindow.LandSolverRoute, GuidanceWindow.CurrentAscentChoice(), ctx.Frame.Situation.HasAir, GuidanceWindow.GlideFlipChosen(way));
         CommitSpec commit = Commit(in ctx, mode);
         GuidanceWindow.NoteFooterPicksSite(commit.NextLeads && commit.Secondary!.Verb is PageText.PickSite or PageText.PickArmed);
         return GuidanceWindow.LandWayCannotFly(ctx.Subject, way, in ctx.Frame.Situation) ? commit with { MarkDim = true } : commit;
@@ -143,6 +147,10 @@ internal static class LandPage
         }
         if (mode == GuidanceModeId.DeorbitLand)
             return PageKit.GuidanceCommit(in ctx, mode, GuidanceWindow.PressTimingText(), "");
+        if (mode == GuidanceModeId.OrbitalEntry)
+            return PageKit.GuidanceCommit(in ctx, mode, "", GuidanceWindow.EntryBodyAirless(ctx.Subject)
+                ? OrbitalEntryGuidance.NoAirText + "\n\n" + OrbitalEntryGuidance.CommitHint
+                : OrbitalEntryGuidance.CommitHint);
         if (mode != GuidanceModeId.EntryHere)
             return PageKit.GuidanceCommit(in ctx, mode, "", "");
         return GuidanceWindow.EntryBodyAirless(ctx.Subject)

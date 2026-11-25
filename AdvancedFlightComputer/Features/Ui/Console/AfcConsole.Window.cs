@@ -265,8 +265,8 @@ internal static partial class AfcConsole
             return false;
         CraftActivity a = Frame.Activity;
         if (Page is ConsolePage.Launch or ConsolePage.Land)
-            return Frame.GuidanceOn && (FlightView.PageFlies(Page, LandWay, GuidanceWindow.LandSolverRoute, GuidanceWindow.CurrentAscentChoice(), in a, Frame.TransferPasses)
-                || (Page == ConsolePage.Land && FlightView.PickHolds(LandWay, in a)));
+            return Frame.GuidanceOn && (FlightView.PageFlies(Page, LandWay, GuidanceWindow.LandSolverRoute, GuidanceWindow.CurrentAscentChoice(), in a, Frame.TransferPasses, Frame.Situation.HasAir, GuidanceWindow.GlideFlipChosen(LandWay))
+                || (Page == ConsolePage.Land && (FlightView.PickHolds(LandWay, in a) || GuidanceWindow.LiveLandWay() == LandWay)));
         bool ownSource = Page switch
         {
             ConsolePage.Orbit => OrbitToolsPanel.Enabled && (OrbitToolsPanel.Source == null || ReferenceEquals(OrbitToolsPanel.Source, subject)),

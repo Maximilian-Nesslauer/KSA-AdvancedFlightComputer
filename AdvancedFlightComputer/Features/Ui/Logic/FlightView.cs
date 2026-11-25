@@ -39,12 +39,12 @@ internal static class FlightView
         _ => a.RegisteredModeLive == mode,
     };
 
-    public static bool PageFlies(ConsolePage page, LandWay way, LandSolver solver, AscentChoice ascent, in CraftActivity a, bool transferPasses) => page switch
+    public static bool PageFlies(ConsolePage page, LandWay way, LandSolver solver, AscentChoice ascent, in CraftActivity a, bool transferPasses, bool hasAir = true, bool flip = false) => page switch
     {
         ConsolePage.Orbit => a.MultiPassActive && !transferPasses,
         ConsolePage.Transfer => a.MultiPassActive && transferPasses,
         ConsolePage.Rcs => a.RcsFlying || a.StockAutoOnNode,
-        _ => ConsolePages.ModeIdFor(page, way, solver, ascent) is GuidanceModeId mode && ModeFlies(mode, in a),
+        _ => ConsolePages.ModeIdFor(page, way, solver, ascent, hasAir, flip) is GuidanceModeId mode && ModeFlies(mode, in a),
     };
 
     public static bool PickHolds(LandWay way, in CraftActivity a) => FlyingWay(in a) == way;
@@ -53,6 +53,8 @@ internal static class FlightView
     {
         if (a.SixDofEngaged || a.LandingMachineLive || a.RegisteredModeLive == GuidanceModeId.EntryHere)
             return LandWay.FromHere;
+        if (a.RegisteredModeLive == GuidanceModeId.OrbitalEntry)
+            return LandWay.Entry;
         if (a.HoverLive)
             return LandWay.Hover;
         if (a.DescentLive)
@@ -102,12 +104,14 @@ internal static class FlightView
             : armed ? "The armed launch reads this form at the window."
             : "LOCKED: PLAN SOLVING.";
 
-    public static string LandPlanLine(LandWay way, LandSolver solver, bool siteLocked, bool hoverFlies = true)
+    public static string LandPlanLine(LandWay way, LandSolver solver, bool siteLocked, bool hoverFlies = true, bool orbitalEntry = false)
     {
         if (way == LandWay.Hover)
             return "Hover reads its limits in GNC. The rest applies at the next landing.";
         if (siteLocked)
             return "LOCKED: SITE, APPROACH, METHOD (DEORBIT ACTIVE). STOP TO EDIT.";
+        if (orbitalEntry)
+            return OrbitalEntryPlanLine;
         if (way == LandWay.Boostback)
             return "Boostback reads SITE and HANDOVER live.";
         return solver switch
@@ -117,6 +121,8 @@ internal static class FlightView
             _ => hoverFlies ? "G-FOLD reads SITE and the hover handover live." : "G-FOLD reads SITE live.",
         };
     }
+
+    public const string OrbitalEntryPlanLine = "Orbital entry reads SITE and its limits at each re-plan. The belly axis and trim apply at the next start.";
 
     public const string PassesPlanLine = "LOCKED: PASSES QUEUED. EDITS APPLY AT NEXT PLAN.";
 }

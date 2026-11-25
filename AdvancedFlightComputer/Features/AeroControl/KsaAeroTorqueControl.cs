@@ -32,10 +32,16 @@ internal static class KsaAeroTorqueControl
     /// <summary>What the best RCS thruster's torque costs against the surfaces' shortfall, per N m (a shortfall costs one at priority 1, a degree of surface about a thousandth): the RCS is spent before any demand goes unmet, and only on what the surfaces cannot give.</summary>
     private const double BackupPricePerNm = 0.02;
 
+    /// <summary>The share of the backup's pure-axis reach the fast part may count on in frequency-split allocation (Command's smoothS): the axes share thrusters, and the rest is kept for what the surfaces fall short of.</summary>
+    private const double BackupFastShare = 0.5;
+
     private sealed class Slot
     {
         public readonly List<ControlSurface> Surfaces = new();
         public Report Last;
+        /// <summary>The smoothing's own state (Command's smoothS): the lagged torque the surfaces are asked for, N m in the command's frame, and whether it has been started.</summary>
+        public double3 LaggedNm;
+        public bool LaggedKnown;
     }
 
     private static readonly ConditionalWeakTable<Vehicle, Slot> Slots = new();
@@ -62,12 +68,9 @@ internal static class KsaAeroTorqueControl
             return null;
         // Retrograde-first, as the body table: u is the craft's velocity through the air in body axes, alpha = atan2(u_z, -u_x), beta = atan2(u_y, -u_x). Nose first (an ascent, #216), about the nose instead, from the surfaces' nose-first tables where the sweep has them.
         double3 u = air / speed;
-        bool nose = u.X > 0.0 && HasNoseTables(aero);
-        double lead = nose ? 1.0 : -1.0;
-        double alpha = Math.Atan2(u.Z, lead * u.X), beta = Math.Atan2(u.Y, lead * u.X);
+        // Engine first, nose first (an ascent) or belly first (an orbital entry): the surfaces' tables for whichever set the air is in (KsaAeroSweep.TryPickTables).
+        bool inTable = KsaAeroSweep.TryPickTables(aero, u, surfacesToo: true, out KsaAeroSweep.TableSet set, out double alpha, out double beta);
         double mach = aero.Atmosphere.Mach(speed);
-        double limit = (nose ? KsaAeroSweep.NoseAngleMaxDeg : KsaAeroSweep.BodyAngleMaxDeg) * Math.PI / 180.0;
-        bool inTable = lead * u.X > 0.0 && Math.Abs(alpha) <= limit && Math.Abs(beta) <= limit;
         condition = new Report(0, default, 0.0, default, mach, q, alpha * 180.0 / Math.PI, beta * 180.0 / Math.PI, inTable);
         if (!inTable || !(q > MinQPa))
             return null;
@@ -77,20 +80,9 @@ internal static class KsaAeroTorqueControl
         double divisor = 1.0 + (double.IsFinite(momentLimiterPerPa) && momentLimiterPerPa > 0.0 ? momentLimiterPerPa * q : 0.0);
         float3 comNow = vehicle.CenterOfMassAsmbF;
         double3 shift = aero.BodyMomentComAsmb - new double3(comNow.X, comNow.Y, comNow.Z);
-        AeroTorqueAllocator allocator = Build(aero, live, mach, q, alpha, beta, divisor, shift, ax, ay, az, surfaces, nose);
+        AeroTorqueAllocator allocator = Build(aero, live, mach, q, alpha, beta, divisor, shift, ax, ay, az, surfaces, set);
         condition = condition with { Surfaces = surfaces.Count };
         return allocator;
-    }
-
-    /// <summary>Whether every swept surface has its nose-first tables (KsaAeroSweep.SurfaceTable.NoseForce): a sweep an ascent asked for.</summary>
-    private static bool HasNoseTables(KsaAeroSweep.Result aero)
-    {
-        if (aero?.Surfaces == null || aero.Surfaces.Length == 0)
-            return false;
-        foreach (KsaAeroSweep.SurfaceTable t in aero.Surfaces)
-            if (t.NoseForce.Length != t.DeflectionDeg.Length || t.NoseMoment.Length != t.DeflectionDeg.Length)
-                return false;
-        return true;
     }
 
     /// <summary>
@@ -99,6 +91,12 @@ internal static class KsaAeroTorqueControl
     internal static AeroTorqueAllocator Build(KsaAeroSweep.Result aero, IReadOnlyList<ControlSurface> live,
                                               double mach, double q, double alpha, double beta, double divisor, double3 comShift,
                                               double3 ax, double3 ay, double3 az, List<ControlSurface> surfaces, bool noseFirst = false)
+        => Build(aero, live, mach, q, alpha, beta, divisor, comShift, ax, ay, az, surfaces, noseFirst ? KsaAeroSweep.TableSet.Nose : KsaAeroSweep.TableSet.Tail);
+
+    /// <summary>The same from a table set's surface tables (KsaAeroSweep.TableSet), alpha and beta about that set's frame.</summary>
+    internal static AeroTorqueAllocator Build(KsaAeroSweep.Result aero, IReadOnlyList<ControlSurface> live,
+                                              double mach, double q, double alpha, double beta, double divisor, double3 comShift,
+                                              double3 ax, double3 ay, double3 az, List<ControlSurface> surfaces, KsaAeroSweep.TableSet set)
     {
         surfaces.Clear();
         if (aero?.Surfaces == null || !(aero.ReferenceArea > 0.0) || !(aero.ReferenceLength > 0.0))
@@ -110,7 +108,7 @@ internal static class KsaAeroTorqueControl
         foreach (ControlSurface surface in live)
             foreach (KsaAeroSweep.SurfaceTable table in aero.Surfaces)
                 if (ReferenceEquals(table.Part, surface.Part) && table.DeflectionDeg.Length > 1
-                    && (!noseFirst || table.NoseForce.Length == table.DeflectionDeg.Length))
+                    && table.ForceTables(set).Length == table.DeflectionDeg.Length)
                 {
                     rows.Add((surface, table));
                     break;
@@ -127,8 +125,10 @@ internal static class KsaAeroTorqueControl
             var force = new double[3 * n];
             for (int k = 0; k < n; k++)
             {
-                (noseFirst ? t.NoseForce[k] : t.Force[k]).Coefficients(mach, alpha, beta, out double cx, out double cy, out double cz);
-                (noseFirst ? t.NoseMoment[k] : t.Moment[k]).Coefficients(mach, alpha, beta, out double cl, out double cm, out double cn);
+                AdvancedFlightComputer.Guidance.Numerics.Flight.BodyAeroTable ft = t.ForceTables(set)[k], mt = t.MomentTables(set)[k];
+                double mk = Math.Clamp(mach, ft.MachMin, ft.MachMax);
+                ft.Coefficients(mk, alpha, beta, out double cx, out double cy, out double cz);
+                mt.Coefficients(mk, alpha, beta, out double cl, out double cm, out double cn);
                 var f = new double3(qs * cx, qs * cy, qs * cz);
                 // About the present centre of mass, M_now = M_swept + (r_swept - r_now) x F, then the game's limiter on the whole of it.
                 double3 m = (new double3(qsl * cl, qsl * cm, qsl * cn) + double3.Cross(shift, f)) / divisor;
@@ -164,12 +164,20 @@ internal static class KsaAeroTorqueControl
     /// </summary>
     /// <param name="stepS">The time to the next command, s: each surface is asked only for what its rate reaches by then, from where it is now (AeroTorqueAllocator.Allocate). Not positive: anywhere in its range.</param>
     /// <param name="backup">The RCS thrusters in the frame (mx, my, mz) (KsaRcsTorqueControl.Measure), to share the demand with in one programme: the surfaces then take the axes the RCS finds dear. The RCS is not fired here; the caller gives it what the surfaces leave.</param>
+    /// <param name="smoothS">With a backup that can give torque: FREQUENCY-SPLIT allocation, BY REACH. The demand is lagged over smoothS, s; the backup is given the fast part (demand less the lag) only as far as it can give it - BackupFastShare of its pure-axis reach, <paramref name="backupReachPlusNm"/> and <paramref name="backupReachMinusNm"/> - and the surfaces are asked for all the rest, alone and within one step's reach. The caller gives the backup what the surfaces then leave. A weak backup leaves the surfaces nearly the whole demand, unlagged; a strong one takes the jitter off them. On the 2026-11-22 belly flop, with the whole fast part sent to the RCS however large, the attitude error through reversals was 9.5 deg at the 90th percentile against 2.7 the flight before, and the RCS burned 2.4 times the propellant. Lagging the torque, not the deflections, leaves the surfaces their full rate: a lagged torque is one a step's travel reaches, where a lag of the deflections towards an answer one step away (held 30 deg/s flaps to about 1 deg/s, 2026-11-21) or across the whole range (one whole-range programme and its refinement, 140-700 ms a step, 2026-11-22) was either slow in the air or slow on the main thread. The lag restarts each step from what the surfaces give (back-calculation), so it never winds up past their reach, nor lags behind what they took for the backup. 0: none, one programme with the backup.</param>
+    /// <param name="backupReachPlusNm">The backup's largest pure torque about each axis of (mx, my, mz), positive way, N m (AttitudeController's measured RCS reach). Zero: it takes none of the fast part.</param>
+    /// <param name="backupReachMinusNm">The same, negative way, as a magnitude.</param>
     internal static Report Command(Vehicle vehicle, KsaAeroSweep.Result aero, double3 torqueAsmb,
                                    double3 mx, double3 my, double3 mz, ReadOnlySpan<double> priority, double momentLimiterPerPa,
-                                   double stepS = 0.0, RcsTorqueAllocator backup = null)
+                                   double stepS = 0.0, RcsTorqueAllocator backup = null, double smoothS = 0.0,
+                                   double3 backupReachPlusNm = default, double3 backupReachMinusNm = default)
     {
+        using var _perf = new AdvancedFlightComputer.Core.PerfTracker.Scope("Fins.Command");
         Slot slot = SlotOf(vehicle);
-        AeroTorqueAllocator allocator = Measure(vehicle, aero, mx, my, mz, momentLimiterPerPa, slot.Surfaces, out Report condition);
+        AeroTorqueAllocator allocator;
+        Report condition;
+        using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Fins.Measure"))
+            allocator = Measure(vehicle, aero, mx, my, mz, momentLimiterPerPa, slot.Surfaces, out condition);
         if (allocator == null)
         {
             Release(vehicle);
@@ -186,9 +194,46 @@ internal static class KsaAeroTorqueControl
             now[i] = slot.Surfaces[i].DeflectionDeg;
             reach[i] = stepS > 0.0 && slot.Surfaces[i].RateDegS > 0.0 ? slot.Surfaces[i].RateDegS * stepS : 0.0;
         }
-        BackupColumns(backup, out double[] backupTorque, out double[] backupCost);
-        AeroTorqueAllocator.Result r = allocator.Allocate(dx, dy, dz, priority, deflection, now, reach,
-                                                          backupTorque, backupCost, new double[backupCost.Length]);
+        bool smooth = smoothS > 0.0 && stepS > 0.0 && backup != null && backup.Count > 0;
+        AeroTorqueAllocator.Result r;
+        if (smooth)
+        {
+            // The slow part for the surfaces: a first-order lag of the demand (backward Euler of T df/dt = demand - f), started from what they give where they are.
+            if (!slot.LaggedKnown)
+            {
+                AeroTorqueAllocator.Result held = allocator.Evaluate(now, 0.0, 0.0, 0.0);
+                slot.LaggedNm = new double3(held.TorqueX, held.TorqueY, held.TorqueZ);
+                slot.LaggedKnown = true;
+            }
+            double k = stepS / (smoothS + stepS);
+            var demand = new double3(dx, dy, dz);
+            slot.LaggedNm += k * (demand - slot.LaggedNm);
+            // The fast part the backup can take, axis by axis; the surfaces are asked for the rest.
+            double3 fast = demand - slot.LaggedNm;
+            static double Take(double want, double plus, double minus)
+                => Math.Clamp(want, -BackupFastShare * Math.Max(minus, 0.0), BackupFastShare * Math.Max(plus, 0.0));
+            var backupTakes = new double3(Take(fast.X, backupReachPlusNm.X, backupReachMinusNm.X),
+                                          Take(fast.Y, backupReachPlusNm.Y, backupReachMinusNm.Y),
+                                          Take(fast.Z, backupReachPlusNm.Z, backupReachMinusNm.Z));
+            double3 ask = demand - backupTakes;
+            using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Fins.Allocate"))
+                r = allocator.Allocate(ask.X, ask.Y, ask.Z, priority, deflection, now, reach, default, default, default);
+            if (r.Solved)
+            {
+                // Back-calculation: the lag goes on from what the surfaces give, so what they took past it for the backup, or fell short of, is not lagged again.
+                slot.LaggedNm = new double3(r.TorqueX, r.TorqueY, r.TorqueZ);
+                // Reported against the whole demand, so the shortfall is what the backup is left.
+                r = allocator.Evaluate(deflection, dx, dy, dz);
+            }
+        }
+        else
+        {
+            slot.LaggedKnown = false;
+            BackupColumns(backup, out double[] backupTorque, out double[] backupCost);
+            using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Fins.Allocate"))
+                r = allocator.Allocate(dx, dy, dz, priority, deflection, now, reach,
+                                       backupTorque, backupCost, new double[backupCost.Length]);
+        }
         if (!r.Solved)
         {
             Release(vehicle);
@@ -255,6 +300,8 @@ internal static class KsaAeroTorqueControl
         {
             slot.Last = default;
             slot.Surfaces.Clear();
+            // Sent home, the surfaces start the next smoothing from what they give where they are, not from a stale lagged torque.
+            slot.LaggedKnown = false;
         }
         if (!ControlSurfaces.Any)
             return;

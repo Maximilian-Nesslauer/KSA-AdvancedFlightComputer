@@ -32,6 +32,11 @@ public static class Ksa6DofSetup
     public const double VirtualControlVelocityScaleMs = 5.0;
 
     /// <summary>
+    /// The scale position's virtual control is priced on once a plan is refined, m (the pricing stage ramps it from XScale, as velocity's): 5 m, Maxi's measurement in #265. Left on XScale, about 2 km on a Starship's 15 s coast, a metre of phantom displacement cost next to nothing and its re-solves carried 1-2 m of it into the intervals the 1 m gate holds, refused 15 times in a row (2026-11-24). Offline in #265 the same change took 10-15 s landings' misses from 2-4 m to 0.2-0.8 m at about the same fuel; tight from a cold solve's first iteration it cost 1.3 t, which the pricing stage's loose start keeps out.
+    /// </summary>
+    public const double VirtualControlPositionScaleM = 5.0;
+
+    /// <summary>
     /// The roll acceleration at full thrust, rad/s^2, under which the gimbals count as giving no roll torque and the plan leaves the roll free (Scvx6DofConfig.TerminalRollFree). 0.002 rad/s^2 takes 40 s at full thrust to remove a roll rate of 0.08 rad/s, so a craft under it cannot stop the roll it enters with during a touchdown burn. One gimballed engine on the thrust line gives a thousandth of this or less, engines on a ring a hundred times more.
     /// </summary>
     public const double RollAuthorityFloorRadS2 = 0.002;
@@ -436,6 +441,14 @@ public static class Ksa6DofSetup
                         DeflectionDeg = table.DeflectionDeg,
                         Force = table.Force,
                         Moment = table.Moment,
+                        // Over every air direction too, where the sweep had a whole-sphere pass and the body has one to match.
+                        SphereForce = aero.SphereBodyAero != null && table.SphereForce.Length == table.DeflectionDeg.Length ? table.SphereForce : [],
+                        SphereMoment = aero.SphereBodyAero != null && table.SphereMoment.Length == table.DeflectionDeg.Length ? table.SphereMoment : [],
+                        // Belly first and on the flip band too, where the body has them to match (BodyAero6Dof.BellyForce, BandForce).
+                        BellyForce = aero.BellyBodyAero != null && table.BellyForce.Length == table.DeflectionDeg.Length ? table.BellyForce : [],
+                        BellyMoment = aero.BellyBodyAero != null && table.BellyMoment.Length == table.DeflectionDeg.Length ? table.BellyMoment : [],
+                        BandForce = aero.BandBodyAero != null && table.BandForce.Length == table.DeflectionDeg.Length ? table.BandForce : [],
+                        BandMoment = aero.BandBodyAero != null && table.BandMoment.Length == table.DeflectionDeg.Length ? table.BandMoment : [],
                         MinDeg = surface.MinDeg,
                         MaxDeg = surface.MaxDeg,
                         RateDegS = surface.RateDegS,
@@ -445,6 +458,11 @@ public static class Ksa6DofSetup
                 }
         return fins.ToArray();
     }
+
+    /// <summary>
+    /// The share of the RCS's torque and of the control surfaces' travel touchdown's plans may use (Scvx6DofConfig.PlanRcsShare, FinMinDeg/FinMaxDeg), under the gimbals' (PlanTorqueShare): the rest is for flying the plan, the RCS's through the attitude feedback (AttitudeFeedback6Dof), and a turn the air, the flaps and the thrusters cannot do with room to spare is planned on the gimbals with the engine lit. The body's own air moment is physics and is not scaled. A Starship's plan flipped it in the coast on the flaps and the RCS at their limits; the air held the flip back harder than the model said (1.6-1.7 MN m against 0.5-1.1 between 75 and 45 deg of tilt), the craft fell 26 deg behind, and it lit at 60 m (2026-11-24).
+    /// </summary>
+    internal const double PlanSurfaceShare = 0.75;   // the default; PLAN RCS AND FLAPS sets it (TryBuild's surfaceShare)
 
     private static BodyAero6Dof BodyAeroFor(Vehicle vehicle, KsaAeroSweep.Result aero, double momentLimiterPerPa, bool fins = true)
     {
@@ -458,6 +476,14 @@ public static class Ksa6DofSetup
             Atmosphere = aero.Atmosphere,
             Force = aero.BodyAero,
             Moment = aero.BodyMoment,
+            // Every air direction past the engine-first table's fade, where the sweep flew the whole sphere (a belly-flop's tables): the flip.
+            SphereForce = aero.SphereBodyAero,
+            SphereMoment = aero.SphereBodyMoment,
+            // A belly-flopper's belly-first tables and the flip band between them and engine first, read before the whole sphere.
+            BellyForce = aero.BellyBodyAero,
+            BellyMoment = aero.BellyBodyMoment,
+            BandForce = aero.BandBodyAero,
+            BandMoment = aero.BandBodyMoment,
             ReferenceArea = aero.ReferenceArea,
             ReferenceLength = aero.ReferenceLength,
             ModelToTable = [mx.X, my.X, mz.X, mx.Y, my.Y, mz.Y, mx.Z, my.Z, mz.Z],
@@ -490,7 +516,7 @@ public static class Ksa6DofSetup
                                 KsaAeroSweep.Result aero = null, bool? keptRollFree = null, bool bodyAero = true,
                                 bool gimbalRateLimit = true, Dynamics6Dof.RcsModel rcs = null, double rcsWeight = 0.0,
                                 double rateMaxDegS = 0.0, int coastIntervals = 0, double[] scaleFrom = null,
-                                double momentLimiterPerPa = 0.0, double torqueMargin = 0.0, bool fins = true)
+                                double momentLimiterPerPa = 0.0, double torqueMargin = 0.0, bool fins = true, double surfaceShare = PlanSurfaceShare)
     {
         cfg = null!;
         dyn = null!;
@@ -604,8 +630,10 @@ public static class Ksa6DofSetup
         double torqueShare = Math.Clamp(1.0 - (double.IsFinite(torqueMargin) ? torqueMargin : 0.0), 0.5, 1.0);
         gimbalDeg = Math.Atan(Math.Tan(gimbalDeg * Math.PI / 180.0) * torqueShare) * 180.0 / Math.PI;
         tauRoll *= torqueShare;
-        double[] rcsPos = rcs?.MaxPosNm is { } pos ? Array.ConvertAll(pos, v => v * torqueShare) : null;
-        double[] rcsNeg = rcs?.MaxNegNm is { } neg ? Array.ConvertAll(neg, v => v * torqueShare) : null;
+        // THE RCS AND THE CONTROL SURFACES AT PlanSurfaceShare, under the gimbals' share: a turn the air, flaps and thrusters cannot do with room to spare is planned on the gimbals with the engine lit.
+        surfaceShare = Math.Min(torqueShare, Math.Clamp(double.IsFinite(surfaceShare) ? surfaceShare : PlanSurfaceShare, 0.05, 1.0));
+        double[] rcsPos = rcs?.MaxPosNm is { } pos ? Array.ConvertAll(pos, v => v * surfaceShare) : null;
+        double[] rcsNeg = rcs?.MaxNegNm is { } neg ? Array.ConvertAll(neg, v => v * surfaceShare) : null;
         // A plan with a coast keeps the heading and the roll-rate limit like any other. Freeing them was tried on 2026-11-20 while the air's roll moment read 40 kN m against 22 of RCS; that was the sweep's moment without the game's limiter (BodyAero6Dof.MomentLimiterPerPa), and the booster felt about 11.
         bool coastPlan = false;
 
@@ -720,14 +748,15 @@ public static class Ksa6DofSetup
             GimbalArm = arm,
             GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) / torqueShare : 0.0,
             PlanTorqueShare = torqueShare,
+            PlanRcsShare = surfaceShare,
             TauRollMax = tauRoll,
             RollTorqueFollowsThrust = true,
             RcsMaxPosNm = rcsPos,
             RcsMaxNegNm = rcsNeg,
             RcsWeight = rcsWeight,
             // THE FINS (Dynamics6Dof.IFIN on): each one's range and rate, the plan's share of them (PlanTorqueShare), the rest kept for the feedback as for the gimbals and the RCS.
-            FinMinDeg = finTables.Length > 0 ? Array.ConvertAll(finTables, f => f.MinDeg * torqueShare) : null,
-            FinMaxDeg = finTables.Length > 0 ? Array.ConvertAll(finTables, f => f.MaxDeg * torqueShare) : null,
+            FinMinDeg = finTables.Length > 0 ? Array.ConvertAll(finTables, f => f.MinDeg * surfaceShare) : null,
+            FinMaxDeg = finTables.Length > 0 ? Array.ConvertAll(finTables, f => f.MaxDeg * surfaceShare) : null,
             FinRateDegS = finTables.Length > 0 ? Array.ConvertAll(finTables, f => f.RateDegS * torqueShare) : null,
             // The turn-rate limit (Scvx6DofConfig.RateMaxRadS).
             RateMaxRadS = Math.Max(rateMaxDegS, 0.0) * Math.PI / 180.0,
@@ -744,7 +773,7 @@ public static class Ksa6DofSetup
             // Velocity's virtual control priced on its own scale, the rest on XScale; see VirtualControlVelocityScaleMs.
             VirtualControlScale =
             [
-                0, 0, 0,
+                VirtualControlPositionScaleM, VirtualControlPositionScaleM, VirtualControlPositionScaleM,
                 VirtualControlVelocityScaleMs, VirtualControlVelocityScaleMs, VirtualControlVelocityScaleMs,
                 0, 0, 0, 0,
                 0, 0, 0,

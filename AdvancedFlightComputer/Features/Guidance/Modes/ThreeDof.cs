@@ -73,6 +73,7 @@ public static partial class GuidanceWindow
         _s.SixDofCoastScaleState = null;
         _s.LandingGroupWaiting = false;
         _s.LandingGroupRefusal = "";
+        _s.ThreeDofAeroWaiting = false;
         if (!vehicle.IsControllable)
             return RefuseEntry(vehicle, vehicle.NoControlTooltip.ToString());
         IParentBody parent = vehicle.Orbit?.Parent;
@@ -102,7 +103,15 @@ public static partial class GuidanceWindow
         KsaAeroSweep.Result aero = _s.Aero;
         if (aero?.Table == null || aero.Atmosphere == null
             || _s.AeroStale(LiveBoxExtents(vehicle), KsaAeroSweep.LiveMeshHash(vehicle), parent))
+        {
+            // A sweep that runs (started just now on a craft with none, as after a reload) is waited for: the request stays pending, and the engage runs again when the sweep is in. A sweep that failed refuses.
+            if (_s.AeroJob != null)
+            {
+                _s.ThreeDofAeroWaiting = true;
+                return false;
+            }
             return RefuseEntry(vehicle, "AERO MODEL UNAVAILABLE.");
+        }
         double3 site = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         KsaFrameBridge.SiteFrame engageFrame = KsaFrameBridge.BuildSiteFrame(site);
         KsaPointMassModel model = Ksa3DofSetup.BuildModel(vehicle, parent, engageFrame, aero, out string refusal, ReturnRollRefLocal(vehicle, parent, engageFrame));
@@ -1161,17 +1170,21 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// One step of the standby that takes the craft before ignition (SixDofOwnsIgnition): re-solved from the measured state with a coast to entry guidance's ignition, and the hand-over asked for once it is due - ThreeDofTakeoverBeforeIgnitionS before entry's ignition or ThreeDofTakeoverBeforeImpactS before its touchdown, whichever is earlier - and the standby is ready. The claim is the next step's (CheckPendingEntryTouchdownHandoff).
+    /// One step of the standby that takes the craft before ignition (SixDofOwnsIgnition): re-solved from the measured state with a coast to entry guidance's ignition, and the hand-over asked for once it is due - ThreeDofTakeoverBeforeIgnitionS before entry's ignition, ThreeDofTakeoverBeforeImpactS before its touchdown, or a second before touchdown's plan turns 5 deg away from the attitude flown (SixDofTurnAwayDue), whichever is earliest - and the standby is ready. The claim is the next step's (CheckPendingEntryTouchdownHandoff).
     /// </summary>
     private static void StepEntryTouchdownOwn(Vehicle vehicle, IParentBody parent, double3 siteCci, Plan3Dof plan, double[] x14, double now)
     {
         double ignition = plan.IgnitionTime;
         _s.SixDofCoastSeedS = Math.Max(ignition - now, 0.0);
         StepSixDofStandby(vehicle, parent, siteCci, x14, now, Math.Max(plan.SigmaBurn, SixDofStandbyMinSeedS));
-        double due = Math.Min(plan.EndTime - _s.ThreeDofTakeoverBeforeImpactS, ignition - _s.ThreeDofTakeoverBeforeIgnitionS);
-        if (now < due || _s.ThreeDofGlideHandoff != null || !SixDofStandbyReady(now))
+        if (_s.ThreeDofGlideHandoff != null || !SixDofStandbyReady(now))
             return;
-        _s.ThreeDofGlideHandoff = FormattableString.Invariant($"HANDOVER IN THE GLIDE: TOUCHDOWN, {ignition - now:F1} s BEFORE ENTRY'S IGNITION, {plan.EndTime - now:F1} s FROM PAD, {x14[2]:F0} m.");
+        // Or before touchdown's plan turns away from the attitude the glide flies (SixDofTurnAwayDue), as bellyflop's hand-over.
+        double turnAway = SixDofTurnAwayDue(x14, now);
+        double due = Math.Min(Math.Min(plan.EndTime - _s.ThreeDofTakeoverBeforeImpactS, ignition - _s.ThreeDofTakeoverBeforeIgnitionS), turnAway);
+        if (now < due)
+            return;
+        _s.ThreeDofGlideHandoff = FormattableString.Invariant($"HANDOVER IN THE GLIDE: TOUCHDOWN, {ignition - now:F1} s BEFORE ENTRY'S IGNITION, {plan.EndTime - now:F1} s FROM PAD, {x14[2]:F0} m") + (now >= turnAway ? ", ITS PLAN TURNING AWAY." : ".");
     }
 
     private static void StepEntryTouchdownHandoff(Vehicle vehicle, IParentBody parent, double3 siteCci,

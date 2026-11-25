@@ -103,10 +103,30 @@ if (args.Contains("--aero-alloc"))
 
 if (args.Contains("--6dof-fins"))
     return SixDofFinCheck.Run(verbose);
+if (args.Contains("--6dof-blend"))
+    return SixDofTableBlendCheck.Run(verbose);
 if (args.Contains("--6dof-thrust-moment"))
     return SixDofThrustMomentCheck.Run(verbose);
 if (args.Contains("--6dof-aero"))
     return SixDofAeroCheck.Run(verbose);
+
+if (args.Contains("--bellyflop"))
+    return BellyflopCheck.Run(verbose);
+
+if (args.Contains("--rcs-refusal"))
+    return RcsRefusalCheck.Run();
+
+if (args.Contains("--phase-plane"))
+    return PhasePlaneCheck.Run();
+
+if (args.Contains("--aero-com-move"))
+    return AeroComMoveCheck.Run();
+
+if (args.Contains("--orbital-entry-gains"))
+    return OrbitalEntryCheck.SweepGains();
+
+if (args.Contains("--orbital-entry"))
+    return OrbitalEntryCheck.Run(verbose);
 
 if (args.Contains("--3dof-mpc"))
     return ThreeDofMpcCheck.Run(verbose);
@@ -131,6 +151,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
 
         CORRECTNESS - these should always pass
           --fd            forward-mode AD Jacobians against the JAX reference
+          --aero-com-move aero moments moved to a new centre of mass (the sweep cache) against moments taken there
           --sub-scs       one subproblem against the reference solution
           --loop          the full SCvx loop against the reference trajectory
           --scs-layout    P/Invoke struct layouts against the native SCS build

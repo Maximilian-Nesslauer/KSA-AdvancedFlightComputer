@@ -636,7 +636,10 @@ public sealed class VehicleAutopilotState
     internal bool RcsGimbalLostAxis;
     public bool DeorbitArrivalAngleEnabled;
     public double DeorbitArrivalDescentDeg = 5;
+    /// <summary>The deorbit ends in the entry burn, and orbital entry guidance takes the craft from there. The LAND page sets it from the body: an orbital entry where there is air, the braking burn where there is none.</summary>
     public bool DeorbitOnly;
+    /// <summary>The braking burn only, from where the craft flies now, with no deorbit burn before it (LAND > ENTRY/BRAKING on a body with no air): the deorbit planner takes only a direct approach and refuses otherwise.</summary>
+    public bool DeorbitBrakingOnly;
     public double DeorbitEntryPeriapsisKm = 30.0;
     internal DeorbitRequest DeorbitRequest;
     internal DeorbitPlanner DeorbitPlanner;
@@ -917,6 +920,8 @@ public sealed class VehicleAutopilotState
     // 6-DOF SCvx state.
     public int SixDofNodes = 50;
     public double SixDofTiltDeg = 120.0;
+    /// <summary>The share of the RCS's torque and the control surfaces' travel touchdown's plans may use (PLAN RCS AND FLAPS; Ksa6DofSetup.TryBuild's surfaceShare).</summary>
+    public double SixDofSurfaceShare = 0.75;
     public double SixDofThrottleFloor = 0.40;
     public bool SixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     public double SixDofSigmaSeed = 20.0;
@@ -1075,6 +1080,11 @@ public sealed class VehicleAutopilotState
 
     /// <summary>The game's air moment limiter measured on this craft, per Pa (BodyAero6Dof.MomentLimiterPerPa), smoothed; 0 until measured. The divisor it gave at the last reading, and when that was.</summary>
     internal double MomentLimiterPerPa, MomentLimiterDivisor = double.NaN, MomentLimiterAt = double.NegativeInfinity;
+    /// <summary>When the AERO CHECK was last logged (SixDof.LogAeroCheck).</summary>
+    internal double AeroCheckAt = double.NegativeInfinity;
+    /// <summary>The air moment's measured error per pascal, model body axes, N m/Pa, and when it was last updated (SixDof.UpdateMomentBias).</summary>
+    internal double3 MomentBiasPerPa;
+    internal double MomentBiasAt = double.NegativeInfinity;
 
     /// <summary>The body rates at the last entry log row, assembly axes, rad/s, for the three-axis balance.</summary>
     internal Brutal.Numerics.double3? RollMonitorPrevW;
@@ -1123,6 +1133,8 @@ public sealed class VehicleAutopilotState
     /// to answer a question whose inputs only change when the part tree does.
     /// </summary>
     public KsaAeroSweep.Result Aero;
+    /// <summary>The craft's belly side for its sweep (KsaAeroSweep.BellyAxes index), or -1 for none yet: kept between modes, so a belly-flopper's table is always swept with its belly-first and whole-sphere tables (BoostbackGauge.ResampleBoostbackAero).</summary>
+    public int AeroBellySide = -1;
 
     /// <summary>The sweep running for <see cref="Aero"/> on its own thread (KsaAeroSweep.Job), or null; and when a failed one may be tried again, sim time.</summary>
     public KsaAeroSweep.Job AeroJob;
@@ -1144,7 +1156,8 @@ public sealed class VehicleAutopilotState
     {
         if (Aero == null) return true;
         if (!ReferenceEquals(Aero.Parent, parent)) return true;
-        if (liveMeshHash != 0 && liveMeshHash != Aero.MeshHash) return true;
+        // The mesh hash decides where both have one: KSAero takes it with every surface at rest, but a part's bounds follow its subparts, so a flap out can change the box when nothing else has.
+        if (liveMeshHash != 0 && Aero.MeshHash != 0) return liveMeshHash != Aero.MeshHash;
         double3 was = Aero.SampledExtents;
         double tol = 1e-3;
         return System.Math.Abs(was.X - liveExtents.X) > tol
@@ -1608,6 +1621,8 @@ public sealed class VehicleAutopilotState
 
     /// <summary>The page's Engage, consumed by the next step (draw-time writes do not reach the sim), and the sim time of the last step.</summary>
     public bool ThreeDofEngagePending;
+    /// <summary>The last engage of entry guidance waits for the aero sweep it started, so the request stays pending (a reloaded craft has no sweep yet).</summary>
+    public bool ThreeDofAeroWaiting;
 
     /// <summary>The console's BOOSTBACK commit, taken by the next guidance step, because the aero sweep it forces must run where no worker steps the vehicle.</summary>
     public bool BoostbackEngagePending;
@@ -1728,6 +1743,10 @@ public sealed class VehicleAutopilotState
     /// Fly entry guidance's glide with AFC's own attitude controller (AttitudeController): a feedforward of the air's moment from the sweep's tables plus filtered PD feedback and a slow integral, shared between the control surfaces and the RCS in one programme that spends the RCS only on what the fins cannot give, with an optional deadband (0, off, by default) inside which only the feedforward and integral fly. Off points the craft through the stock flight computer, as before 2026-11-20, which fired the RCS every way against the air it knows nothing of. The controller's natural frequency, rad/s, and its deadband, degrees.
     /// </summary>
     public bool ThreeDofOwnAttitude = true;
+    /// <summary>RETRO BURN's glide flies orbital entry's attitude control: the authority-aware capture, each axis owned by the flaps or the RCS, and the RCS on the stock flight computer's phase plane (AttitudeController). Off flies the joint flap and RCS programme as before.</summary>
+    public bool ThreeDofNewAttitude = true;
+    /// <summary>The band the RCS holds an axis in under NEW ATTITUDE CONTROL, deg (stock's Balanced 1 deg).</summary>
+    public double ThreeDofRcsDeadbandDeg = 1.0;
     public double AttitudeBandwidthRadS = 1.0;
     public double AttitudeDeadbandDeg = 0.0;
 
@@ -1775,6 +1794,120 @@ public sealed class VehicleAutopilotState
     public bool ThreeDofRefusing;
 
     public string GlideStatus = "";
+
+    // ---- Orbital entry (Modes/OrbitalEntry.cs; its window is Ui/Gauges/EntryTrajWindow.cs) ----
+
+    /// <summary>The craft's orbital entry: phase, plan, tracker and the ENTRY TRAJ window's history.</summary>
+    internal OrbitalEntryState OrbitalEntry = new();
+
+    /// <summary>Dynamic pressure limit of the entry plan, kPa. 0 is off.</summary>
+    public double OrbitalEntryQMaxKPa = 16.0;
+    /// <summary>Aerodynamic load limit of the entry plan, g. 0 is off.</summary>
+    public double OrbitalEntryGMax = 2.5;
+    /// <summary>Stagnation heating limit of the entry plan, kW/m^2 (Sutton-Graves on OrbitalEntryNoseRadiusM). 0 is off.</summary>
+    public double OrbitalEntryHeatMaxKWm2 = 440.0;
+
+    /// <summary>How far short of the site, along the bearing to it, bellyflop aims its fall, m: the ground the flip and landing burn will cover after it.</summary>
+    public double OrbitalEntryBellyflopAimUprangeM = 200.0;
+    /// <summary>How far short of the site the entry aims its hand-over when RETRO BURN follows it, km (RETRO AIM SHORT).</summary>
+    public double OrbitalEntryRetroAimShortKm = 30.0;
+    /// <summary>Nose radius for the heating estimate, m.</summary>
+    public double OrbitalEntryNoseRadiusM = 1.0;
+    /// <summary>Smallest bank the plan uses, deg: side lift kept for the roll reversals.</summary>
+    public double OrbitalEntryBankMinDeg = 15.0;
+    /// <summary>Largest bank the plan uses, deg.</summary>
+    public double OrbitalEntryBankMaxDeg = 100.0;
+    /// <summary>Largest bank the tracker may command, deg: further than the plan's, with nothing else of its own.</summary>
+    public double OrbitalEntryOverbankDeg = 120.0;
+    /// <summary>Roll rate the tracker slews at and the plan leaves room for, deg/s.</summary>
+    public double OrbitalEntryRollRateDegS = 5.0;
+    /// <summary>Hand-over altitude, km, and Mach (airspeed over the sea-level speed of sound, as the aero tables use).</summary>
+    public double OrbitalEntryHandoverAltKm = 38.0;
+    public double OrbitalEntryHandoverMach = 5.0;
+    /// <summary>Fly the terminal descent from the hand-over with bellyflop (docs/guidance/bellyflop-design.md): the entry aims at the ground through its predicted fall.</summary>
+    public bool OrbitalEntryBellyflop = true;
+    /// <summary>Bellyflop hands the craft to touchdown guidance for the flip and the landing burn (BELLYFLOP TO TOUCHDOWN): its standby solves from OrbitalEntryBellyflopTouchdownS before bellyflop's plan reaches the ground, and takes the craft a second before its plan turns away from bellyflop's attitude (SixDofTurnAwayDue).</summary>
+    public bool OrbitalEntryBellyflopTouchdown = true;
+    public double OrbitalEntryBellyflopTouchdownS = 45.0;
+    /// <summary>The Mach bellyflop starts solving from, in the background.</summary>
+    public double OrbitalEntryBellyflopArmMach = 10.0;
+    /// <summary>Bellyflop's largest pitch from belly-first, deg.</summary>
+    public double OrbitalEntryBellyflopAngleMaxDeg = 20.0;
+    /// <summary>Bellyflop's largest pitch nose up from belly-first, deg: the entry's own attitude and a little more, so it can take over from the entry and glide on.</summary>
+    public double OrbitalEntryBellyflopPitchUpDeg = 55.0;
+    /// <summary>Bellyflop's largest bank from belly-first, deg.</summary>
+    public double OrbitalEntryBellyflopBankMaxDeg = 45.0;
+    /// <summary>Seconds between bellyflop's re-solves.</summary>
+    public double OrbitalEntryBellyflopResolveS = 1.0;
+    /// <summary>Drag at which the tracker takes hold, m/s^2. Above it the craft holds its entry attitude lift-up.</summary>
+    public double OrbitalEntryStartDragMs2 = 0.02;
+    /// <summary>Take hold as soon as the craft is below the top of the air.</summary>
+    public bool OrbitalEntryEngageInAir = true;
+    /// <summary>Time constant of the low-pass on the commanded vertical L/D, s.</summary>
+    public double OrbitalEntrySmoothS = 0.0;
+    /// <summary>Fly the pitch-trim angle of attack at each Mach (from the belly-first sweep); off flies OrbitalEntryAoaDeg throughout. Off by default, flying 55 deg for every craft, for now (2026-11-25, the user's call); the flap re-trim (RetrimWithFlaps) is skipped with it.</summary>
+    public bool OrbitalEntryTrimAoa = false;
+    /// <summary>Preferred (and fallback) angle of attack from nose-first, deg, and the band a trim must lie in.</summary>
+    public double OrbitalEntryAoaDeg = 55.0;
+    public double OrbitalEntryAoaMinDeg = 40.0;
+    public double OrbitalEntryAoaMaxDeg = 70.0;
+    /// <summary>Which body axis is the belly: 0 the craft's own (+Z), then -Z, +Z, -Y, +Y, and 5 the best of the four by the sweep.</summary>
+    public double OrbitalEntryBellyAxis = 0.0;
+
+    /// <summary>HAND FLYING (HandFlying): the PILOT panel's choice, AFC flying the pitch, yaw and roll keys through its own attitude controller, and the share of the craft's turning authority the keys ask for (RATE 30 / 50 / 95 %). For this game session.</summary>
+    public bool HandFlyAfc;
+    public double HandFlyShare = 0.5;
+
+    /// <summary>
+    /// The craft's belly side (KsaAeroSweep.BellyAxes index) from BELLY AXIS: orbital entry's once it has chosen one; else 0 is the craft's own belly, +Z (index 1) - -Z had it upside down, and every flight set 2 by hand (2026-11-21); 1 to 4 name a side; 5 lets the sweep choose: -1 with <paramref name="chooseAny"/>, else the side chosen before, if any. Every whole-craft sweep is taken on this side (KsaAeroSweep.TryStart), never on one guessed from the air.
+    /// </summary>
+    public int BellySideWanted(bool chooseAny = false)
+    {
+        if (!chooseAny && OrbitalEntry?.BellyIndex >= 0)
+            return OrbitalEntry.BellyIndex;
+        int choice = (int)System.Math.Round(OrbitalEntryBellyAxis);
+        if (choice is >= 1 and <= 4)
+            return choice - 1;
+        if (choice == 5)
+            return chooseAny ? -1 : AeroBellySide;
+        return 1;
+    }
+    /// <summary>Seconds between re-solves.</summary>
+    public double OrbitalEntryResolveS = 2.0;
+    /// <summary>Natural frequency of the drag-tracking loop, rad/s: higher pulls the drag onto the plan's faster.</summary>
+    public double OrbitalEntryTrackOmega = 0.03;
+    /// <summary>The least drag the tracker's gains are taken at, m/s^2 (EntryConfig.GainDragFloor).</summary>
+    public double OrbitalEntryGainDragFloor = 10.0;
+    /// <summary>The tracker's measurement filter on drag and sink rate, s (EntryConfig.MeasureSmoothS).</summary>
+    public double OrbitalEntryMeasureSmoothS = 4.0;
+    /// <summary>The tracker's bank slew while tracking, deg/s; reversals use OrbitalEntryRollRateDegS.</summary>
+    public double OrbitalEntryTrackRollRateDegS = 5.0;
+    /// <summary>Weight keeping the plan in the middle of the corridor, against the heat load that pushes it to the high-energy edge.</summary>
+    public double OrbitalEntryCorridorWeight = 1.0;
+    /// <summary>The heading error to the site at which the bank reverses, deg, narrowing below 2 km/s.</summary>
+    public double OrbitalEntryReversalBandDeg = 5.0;
+    /// <summary>Take orbital entry guidance at the end of a DEORBIT ONLY burn.</summary>
+    public bool OrbitalEntryAfterDeorbit = true;
+    /// <summary>Time that DEORBIT ONLY burn so the site sits at OrbitalEntryAimFraction of the corridor at the start of the air (OrbitalEntryAim).</summary>
+    public bool OrbitalEntryAimDeorbit = true;
+    /// <summary>LAND NOW's GLIDE row: FLIP LANDING (orbital entry's bellyflop, then touchdown guidance) instead of RETRO BURN (the 3-DOF glide and landing burn, then touchdown guidance).</summary>
+    public bool LandFlip;
+    /// <summary>The GLIDE row after an orbital entry (DEORBIT, ENTRY/BRAKING): FLIP LANDING, else RETRO BURN.</summary>
+    public bool EntryFlip = true;
+    /// <summary>What the orbital entry that flies or is next hands to, set by the LAND page from the way it engages: LAND NOW's FLIP LANDING, or the entry's own GLIDE row. Not kept.</summary>
+    public bool OrbitalEntryFlip = true;
+    /// <summary>Where in the corridor the site is aimed: 0 at its short end (most drag), 1 at its long end (the glide).</summary>
+    public double OrbitalEntryAimFraction = 0.5;
+    /// <summary>The farthest the site may sit off the pass's ground track, km.</summary>
+    public double OrbitalEntryAimMaxCrossKm = 200.0;
+    /// <summary>How far ahead the aimed burn is searched for, h.</summary>
+    public double OrbitalEntryAimHorizonH = 24.0;
+    /// <summary>Fly the entry attitude with AFC's own attitude controller; off steers through the stock flight computer.</summary>
+    public bool OrbitalEntryOwnAttitude = true;
+    /// <summary>Let AFC's own attitude controller fire the RCS during orbital entry; off flies on the surfaces alone.</summary>
+    public bool OrbitalEntryUseRcs = true;
+    /// <summary>The phase-plane RCS's angle band in orbital entry, deg, whole width (the stock flight computer's Balanced is 1): on the RCS's own axes; three times it on the flaps' as their backup.</summary>
+    public double OrbitalEntryRcsDeadbandDeg = 4.0;
 
     #region Status texts and their marks
 

@@ -9,9 +9,11 @@ internal static class PageText
 
     public static string WayCard(LandWay way) => way switch
     {
-        LandWay.FromOrbit => "Orbit to site. STOCK AUTO flies the deorbit burn, then AFC lands with TOUCHDOWN.",
-        LandWay.Boostback => "Spent booster to its site. AFC slews and aims the fall, ENTRY can take the glide.",
-        LandWay.FromHere => "From the current position with ENTRY or TOUCHDOWN.",
+        LandWay.FromOrbit => "Orbit to site. STOCK AUTO flies the deorbit burn, then ORBITAL ENTRY where there is air or the BRAKING BURN where there is none, and TOUCHDOWN lands.",
+        LandWay.Boostback => "Spent booster to its site. AFC slews and aims the fall, RETRO BURN takes the glide and TOUCHDOWN the end of the burn.",
+        LandWay.Entry => "Already on the way down, no deorbit burn: ORBITAL ENTRY where there is air, the BRAKING BURN where there is none, then TOUCHDOWN.",
+        LandWay.Glide => "The fall through the air to the landing burn, from any fall: FLIP LANDING (bellyflop) or RETRO BURN, then TOUCHDOWN.",
+        LandWay.FromHere => "From where the craft is: FLIP LANDING or RETRO BURN through the air, else TOUCHDOWN.",
         _ => "AFC stops the drift and sinks to the ground. NUDGE moves the touchdown point.",
     };
 
@@ -73,6 +75,7 @@ internal static class PageText
         GuidanceModeId.DeorbitLand => "Needs orbit and a set site.",
         GuidanceModeId.Boostback => "Needs a set stage site.",
         GuidanceModeId.EntryHere => "Needs a fall through air and a set site.",
+        GuidanceModeId.OrbitalEntry => "Needs a body with air and a set site.",
         GuidanceModeId.SixDofHere => "Needs a descent and a set site.",
         GuidanceModeId.GfoldHere => "Needs a descent over an airless body and a set site.",
         GuidanceModeId.Hover => "Needs a position near the ground.",
@@ -367,7 +370,8 @@ internal static class PageText
     public static readonly string[] TuneLandingCards =
     {
         "Flight from orbit to the start of the descent.",
-        "Glide and landing burn of ENTRY.",
+        "Entry tracking and bellyflop of ORBITAL ENTRY.",
+        "Glide and landing burn of RETRO BURN.",
         "Powered descent of TOUCHDOWN.",
         "Powered descent of G-FOLD.",
         "Hover to touchdown.",
@@ -746,7 +750,7 @@ internal static class PageText
     internal readonly record struct OutcomeFacts(
         bool AutoStageArms = false, string Target = "", string Solver = "", bool HandToTouchdown = false, double TouchdownLastS = double.NaN,
         double HoverFromM = double.NaN, bool MayFly = true, bool HoverFlies = true, bool Falling = false, bool HoverKnown = true,
-        bool DeorbitOnly = false);
+        bool DeorbitOnly = false, bool BrakingOnly = false);
 
     /// <summary>The end of every launch outcome while guidance will arm AutoStage when the ascent starts.</summary>
     public const string AutoStageArmsNote = "AutoStage arms at lift-off.";
@@ -772,10 +776,14 @@ internal static class PageText
                 return "Turns the booster back to its site.";
             case GuidanceModeId.DeorbitLand:
                 if (f.DeorbitOnly)
-                    return "Stock Auto flies the entry burn. AFC then releases control for the parachute descent.";
+                    return "Stock Auto flies the entry burn, timed for the site. ORBITAL ENTRY then takes the craft down the path above.";
+                if (f.BrakingOnly)
+                    return f.Solver.Length > 0 ? "Brakes from where the craft flies, no deorbit burn, then lands with " + f.Solver + "." : "Brakes from where the craft flies, no deorbit burn, then lands.";
                 return f.Falling
                     ? (f.Solver.Length > 0 ? "Lands with " + f.Solver + ", with a stock burn first if needed." : "Lands, with a stock burn first if needed.")
                     : (f.Solver.Length > 0 ? "Burns out of orbit, then lands with " + f.Solver + "." : "Burns out of orbit, then lands.");
+            case GuidanceModeId.OrbitalEntry:
+                return "Flies the entry to the hand-over, then the fall the path shows: BELLYFLOP or RETRO BURN, and TOUCHDOWN lands; or the parachutes.";
             case GuidanceModeId.EntryHere:
                 return "Glides engine off, then flies the landing burn."
                        + (f.HandToTouchdown && double.IsFinite(f.TouchdownLastS)
@@ -806,7 +814,7 @@ internal static class PageText
         string running = InSentence(from);
         return mode switch
         {
-            GuidanceModeId.GfoldHere or GuidanceModeId.SixDofHere or GuidanceModeId.EntryHere or GuidanceModeId.Hover or GuidanceModeId.Boostback or GuidanceModeId.DeorbitLand
+            GuidanceModeId.GfoldHere or GuidanceModeId.SixDofHere or GuidanceModeId.EntryHere or GuidanceModeId.OrbitalEntry or GuidanceModeId.Hover or GuidanceModeId.Boostback or GuidanceModeId.DeorbitLand
                 => "Replaces " + running + " with " + SituationVerbs.VerbName(mode) + ".",
             GuidanceModeId.AscentUpfg or GuidanceModeId.AscentGravityTurn => "Replaces " + running + " with LAUNCH.",
             _ => "Ends " + running + ".",
@@ -826,7 +834,8 @@ internal static class PageText
         {
             GuidanceModeId.GfoldHere => "G-FOLD",
             GuidanceModeId.SixDofHere => "TOUCHDOWN",
-            GuidanceModeId.EntryHere => "ENTRY",
+            GuidanceModeId.EntryHere => "RETRO BURN",
+            GuidanceModeId.OrbitalEntry => "ORBITAL ENTRY",
             GuidanceModeId.Hover => "HOVER",
             GuidanceModeId.Boostback => "BOOSTBACK",
             GuidanceModeId.DeorbitLand => "LANDING",
@@ -1279,13 +1288,11 @@ internal static class PageText
 
     public const string NoThrustToJudge = "NO LIT ENGINE. NO TWR.";
 
-    public static string HandOversLabel(bool entryTakesGlide, double glideAtS, bool touchdownTakesBurn, double burnLastS, double glideAtKpa = 0.0)
+    public static string HandOversLabel(double glideAtS, double burnLastS, double glideAtKpa = 0.0)
     {
-        string glide = !entryTakesGlide ? "ENTRY OFF"
-            : glideAtKpa > 0.0 ? string.Create(Inv, $"ENTRY AT {glideAtKpa:0.##} kPa")
-            : string.Create(Inv, $"ENTRY AT IMPACT T-{glideAtS:F0} s");
-        string burn = touchdownTakesBurn ? string.Create(Inv, $"TOUCHDOWN LAST {burnLastS:F0} s") : "TOUCHDOWN OFF";
-        return "HANDOVER: " + glide + ", " + burn;
+        string glide = glideAtKpa > 0.0 ? string.Create(Inv, $"RETRO BURN AT {glideAtKpa:0.##} kPa")
+            : string.Create(Inv, $"RETRO BURN AT IMPACT T-{glideAtS:F0} s");
+        return "HANDOVER: " + glide + string.Create(Inv, $", TOUCHDOWN LAST {burnLastS:F0} s");
     }
 
     public static string HoverHandOverLabel(double fromM, bool hoverCanFly, bool known = true)
@@ -1297,10 +1304,25 @@ internal static class PageText
 
     public const string HoverHandOverTip = "Height where G-FOLD hands over to the hover, if the craft can hover there.";
 
+    /// <summary>The HAND-OVERS fold of ORBITAL ENTRY: where the entry ends, and what flies after it.</summary>
+    /// <param name="next">What takes the craft at the hand-over: BELLYFLOP, RETRO BURN, PARACHUTES or HOLD ATTITUDE.</param>
+    public static string OrbitalHandOversLabel(double handoverMach, double handoverKm, string next)
+        => string.Create(Inv, $"HANDOVER: MACH {handoverMach:0.#} OR {handoverKm:0.#} km, ") + next;
+
+    public const string OrbitalHandOversTip = "Where orbital entry ends, and where BELLYFLOP and TOUCHDOWN take the craft after it.";
+
+    public const string OrbitalEntryIdle = "The entry plan and the craft on it show here once ORBITAL ENTRY flies.";
+
+    public const string OrbitalEntryFirstPlan = "Measuring the craft belly first, then the first entry plan.";
+
+    public const string PopOut = "POP OUT";
+
+    public const string PopOutTip = "The same picture in a window of its own, to keep beside the flight.";
+
     public const string NoHandOversLabel = "HANDOVER: NONE";
 
     public static string NoHandOversTip(LandSolver solver) => solver == LandSolver.Entry
-        ? "No air, no ENTRY plan. Nothing to hand over."
+        ? "No air, no RETRO BURN plan. Nothing to hand over."
         : LandSolvers.Label(solver) + " flies to the ground. Nothing to hand over.";
 
     public const string BoostbackTakesCraft = "Takes the craft, also on the pad. No stage can fly home.";

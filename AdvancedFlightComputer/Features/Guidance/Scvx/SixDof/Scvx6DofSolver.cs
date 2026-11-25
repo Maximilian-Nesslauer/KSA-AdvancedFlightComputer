@@ -320,9 +320,11 @@ public sealed class Scvx6DofSolver : IDisposable
     /// <summary>
     /// Change the price on virtual control between iterations: the scale each channel's jump is measured on (Scvx6DofConfig.VirtualControlScale, null for XScale). The subproblem reads it at its next assembly, and the reference's merit is recomputed here under it, so the next ratio test compares like with like - a price changed under a reference whose cost was taken at the old one would read as a gain or a loss the step never made.
     /// </summary>
-    public void SetVirtualControlScale(double[]? scale)
+    public void SetVirtualControlScale(double[]? scale, double[]? nearScale = null, int nearIntervals = 0)
     {
         _cfg.VirtualControlScale = scale;
+        _cfg.VirtualControlNearScale = nearScale;
+        _cfg.VirtualControlNearIntervals = nearScale != null ? Math.Max(nearIntervals, 0) : 0;
         for (int i = 0; i < NX; i++) _vcs[i] = _cfg.VirtualControlScaleOf(i);
         if (_initialised)
             (_jRef, _) = TrueCost(_xbar, _ubar, _sigBar);
@@ -505,7 +507,7 @@ public sealed class Scvx6DofSolver : IDisposable
         //  offline the ratio test then accepted steps that raised the whole merit (444 of 1134 on the roll-free landing) on a predicted reduction that was often negative.
         //  NOT THE TRUE VIOLATIONS. SCS meets those rows only to its tolerance: a terminal slack priced 0.11 sat beside a true miss of 0.7 m priced 293, and with that in the actual merit the ratio test refused most steps and the trust region shrank on nearly every one.
         double convexSlack = _sub.AccelerationSlackCost + _sub.RateSlackCost + _sub.PathSlackCost;
-        double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * SumSquaresScaled(wv, _vcs) + convexSlack;
+        double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * VirtualControlSumSquares(wv) + convexSlack;
         (double jTrue, double defectNorm) = TrueCost(x, u, sigma, coastSigma,
                                                      out int defectChannel, out int defectNode);
         jTrue += convexSlack - SoftLimitCost(x, u);
@@ -591,7 +593,7 @@ public sealed class Scvx6DofSolver : IDisposable
             for (int i = 0; i < NX; i++)
             {
                 double d = x[(k + 1) * NX + i] - x[k * NX + i] - half * (fk[i] + fk1[i]);
-                double priced = d / _vcs[i];
+                double priced = d / (k < _cfg.VirtualControlNearIntervals ? _cfg.VirtualControlScaleOf(i, k) : _vcs[i]);
                 sumSq += priced * priced;
                 double scaled = d / _xs[i];
                 if (Math.Abs(scaled) > worst)
@@ -899,6 +901,19 @@ public sealed class Scvx6DofSolver : IDisposable
                     fin += r * r;
                 }
         return _cfg.WDu * du + _cfg.WW * ww + coastWw + _cfg.RcsWeight * rcs + _cfg.FinWeight * fin;
+    }
+
+    /// <summary>The virtual control's sum of squares, each interval's on its own scale (Scvx6DofConfig.VirtualControlScaleOf(i, k)).</summary>
+    private double VirtualControlSumSquares(double[] wv)
+    {
+        double s = 0;
+        for (int j = 0; j < wv.Length; j++)
+        {
+            int k = j / NX, i = j % NX;
+            double d = wv[j] / (k < _cfg.VirtualControlNearIntervals ? _cfg.VirtualControlScaleOf(i, k) : _vcs[i]);
+            s += d * d;
+        }
+        return s;
     }
 
     private static double SumSquaresScaled(double[] v, double[] scale)

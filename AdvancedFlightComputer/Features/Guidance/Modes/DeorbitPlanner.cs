@@ -123,6 +123,139 @@ internal static class EntryDeorbitPlanner
         return null;
     }
 
+    /// <summary>
+    /// The entry burn at a chosen departure time, the same burn as <see cref="Plan"/> makes (horizontal, down to the entry periapsis) but not snapped to apoapsis: an orbital entry aimed at its site picks the time (OrbitalEntryAim). Null, with the reason, where that time leaves too little to prepare, there is no propellant for it, or the lowered orbit does not meet the air in time.
+    /// </summary>
+    internal static DeorbitPlan? PlanAt(DeorbitRequest request, double departureSeconds, out string refusal, double measuredPreparation = 0.0)
+    {
+        if (!request.Source.IsBound())
+        {
+            refusal = "DEORBIT ONLY NEEDS A BOUND PARKING ORBIT ABOVE THE ATMOSPHERE.";
+            return null;
+        }
+        if (request.Engines.Length == 0 || !(request.ExhaustVelocity > 0.0))
+        {
+            refusal = request.Engines.Length == 0
+                ? "NO SUPPLIED ENGINE FOR THE ENTRY BURN: THE ENGINE MODEL HAS NO THROTTLE CONTROL (ACTIVE, FUELLED LIQUID ENGINES NEEDED)."
+                : "NO EXHAUST VELOCITY FOR THE ENTRY BURN.";
+            return null;
+        }
+        if (!TryLowered(request, departureSeconds, out StateVectors state, out double3 velocity, out double3 dv, out Orbit lowered, out refusal))
+            return null;
+        return Finish(request, departureSeconds, state, velocity, dv, lowered, measuredPreparation, out refusal);
+    }
+
+    /// <summary>
+    /// The entry burn at a chosen departure time to a chosen velocity, as Maxi's Lambert transfer of DEORBIT + LAND gives it (DeorbitPlanner.TryLambert): an orbital entry aims it at the entry point itself (OrbitalEntryAim), which a horizontal burn cannot reach off its plane. The same checks as <see cref="PlanAt"/>: time to prepare, propellant, and an orbit that meets the air in time.
+    /// </summary>
+    internal static DeorbitPlan? PlanAtVelocity(DeorbitRequest request, double departureSeconds, double3 velocity, out string refusal, double measuredPreparation = 0.0)
+    {
+        if (!request.Source.IsBound())
+        {
+            refusal = "DEORBIT ONLY NEEDS A BOUND PARKING ORBIT ABOVE THE ATMOSPHERE.";
+            return null;
+        }
+        if (request.Engines.Length == 0 || !(request.ExhaustVelocity > 0.0))
+        {
+            refusal = request.Engines.Length == 0
+                ? "NO SUPPLIED ENGINE FOR THE ENTRY BURN: THE ENGINE MODEL HAS NO THROTTLE CONTROL (ACTIVE, FUELLED LIQUID ENGINES NEEDED)."
+                : "NO EXHAUST VELOCITY FOR THE ENTRY BURN.";
+            return null;
+        }
+        UniverseTime departure = new(departureSeconds);
+        StateVectors state = request.Source.GetStateVectorsAt(departure);
+        double3 dv = velocity - state.VelocityCci;
+        if (!DeorbitPlanner.Finite(dv) || !(state.PositionCci.Length() > request.Parent.GetAtmosphereRadius()))
+        {
+            refusal = "NO ENTRY BURN TO THE AIMED ENTRY POINT.";
+            return null;
+        }
+        Orbit lowered = Orbit.CreateFromStateCci(request.Parent, departure, state.PositionCci, velocity, request.Source.OrbitLineColor);
+        return Finish(request, departureSeconds, state, velocity, dv, lowered, measuredPreparation, out refusal);
+    }
+
+    private static DeorbitPlan? Finish(DeorbitRequest request, double departureSeconds, StateVectors state, double3 velocity, double3 dv, Orbit lowered,
+        double measuredPreparation, out string refusal)
+    {
+        // As Plan (main #300): the entry burn flies at the minimum-throttle preview point, so cutoff mass and duration both use Engines[0].
+        DeorbitEngine minimum = request.Engines[0];
+        double exhaustVelocity = minimum.MassFlow > 0.0 ? minimum.Thrust / minimum.MassFlow : double.NaN;
+        if (!(exhaustVelocity > 0.0))
+        {
+            refusal = "NO EXHAUST VELOCITY FOR THE ENTRY BURN.";
+            return null;
+        }
+        double cutoff = request.Mass * Math.Exp(-dv.Length() / exhaustVelocity);
+        if (request.Model.Stages.Count == 0 || cutoff < request.Model.Stages[0].MassDry)
+        {
+            refusal = "INSUFFICIENT PROPELLANT FOR THE ENTRY BURN.";
+            return null;
+        }
+        double duration = (request.Mass - cutoff) / minimum.MassFlow;
+        double preparation = Math.Max(request.StockPreparation, measuredPreparation);
+        if (departureSeconds < request.Epoch + preparation + 45.0 + duration * 0.6)
+        {
+            refusal = "THE AIMED ENTRY BURN IS TOO SOON TO PREPARE.";
+            return null;
+        }
+        UniverseTime departure = new(departureSeconds);
+        double entry = request.Parent.GetAtmosphereRadius();
+        double hi = InterfaceTime(lowered, departure, entry);
+        if (!(hi > departureSeconds + duration * 0.5 + request.StockPreparation))
+        {
+            refusal = "ENTRY STARTS TOO CLOSE TO THE STOCK BURN.";
+            return null;
+        }
+        StateVectors arrival = lowered.GetStateVectorsAt(new UniverseTime(hi));
+        refusal = "";
+        return new DeorbitPlan(departureSeconds, hi, state.PositionCci, velocity, dv,
+            arrival.PositionCci, arrival.VelocityCci, 0.0, entry - request.Parent.MeanRadius, cutoff);
+    }
+
+    /// <summary>The velocity right after the horizontal burn of <see cref="PlanAt"/> at <paramref name="departureSeconds"/>, CCI, for comparing another burn with it.</summary>
+    internal static bool TryHorizontalBurn(DeorbitRequest request, double departureSeconds, out double3 dv)
+        => TryLowered(request, departureSeconds, out _, out _, out dv, out _, out _);
+
+    /// <summary>
+    /// Where a horizontal burn down to the entry periapsis at <paramref name="departureSeconds"/> meets the top of the air: the time and the state there, CCI. The cheap part of <see cref="PlanAt"/>, for a search over departure times.
+    /// </summary>
+    internal static bool TryArrival(DeorbitRequest request, double departureSeconds, out double arrivalSeconds, out StateVectors arrival)
+    {
+        arrivalSeconds = double.NaN;
+        arrival = default;
+        if (!TryLowered(request, departureSeconds, out _, out _, out _, out Orbit lowered, out _))
+            return false;
+        double hi = InterfaceTime(lowered, new UniverseTime(departureSeconds), request.Parent.GetAtmosphereRadius());
+        if (!double.IsFinite(hi))
+            return false;
+        arrivalSeconds = hi;
+        arrival = lowered.GetStateVectorsAt(new UniverseTime(hi));
+        return true;
+    }
+
+    private static bool TryLowered(DeorbitRequest request, double departureSeconds, out StateVectors state, out double3 velocity,
+                                   out double3 dv, out Orbit lowered, out string refusal)
+    {
+        double periapsis = request.Parent.MeanRadius + request.Settings.EntryPeriapsis!.Value;
+        double entry = request.Parent.GetAtmosphereRadius();
+        UniverseTime departure = new(departureSeconds);
+        state = request.Source.GetStateVectorsAt(departure);
+        double radius = state.PositionCci.Length();
+        double3 radial = state.PositionCci / radius;
+        double3 transverse = state.VelocityCci - double3.Dot(state.VelocityCci, radial) * radial;
+        double semiMajor = (radius + periapsis) * 0.5;
+        double speed = Math.Sqrt(request.Parent.Mu * (2.0 / radius - 1.0 / semiMajor));
+        velocity = transverse.NormalizeOrZero() * speed;
+        dv = velocity - state.VelocityCci;
+        lowered = null;
+        refusal = "NO RETROGRADE BURN TO THAT ENTRY PERIAPSIS.";
+        if (!(radius > entry) || !(speed < transverse.Length()) || !DeorbitPlanner.Finite(dv))
+            return false;
+        lowered = Orbit.CreateFromStateCci(request.Parent, departure, state.PositionCci, velocity, request.Source.OrbitLineColor);
+        refusal = "";
+        return true;
+    }
+
     internal static double InterfaceTime(Orbit orbit, UniverseTime cutoff, double entry)
     {
         if (!orbit.IsBound() || !(orbit.GetPeriapsisPositionOrb().Length() < entry)

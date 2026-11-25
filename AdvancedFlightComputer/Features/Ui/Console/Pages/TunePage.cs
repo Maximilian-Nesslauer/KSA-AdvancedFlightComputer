@@ -142,6 +142,11 @@ internal static class TunePage
         Switch("SHOW STAGING DIAGNOSTICS", "AfcTuneDiagnostics", UiConfig.KeyShowDiagnostics,
             "Shows the rows of the staging bar with their provenance, and the KSA cross-check.");
 
+        bool logShown = ScreenLog.Shown;
+        if (ConsoleUi.CheckboxRow("LOG LINES ON SCREEN".AsSpan(), "AfcTuneScreenLog".AsSpan(), ref logShown,
+                ("Off: the game's console stops showing new log lines over the flight while it is closed, KSA's and AFC's alike, for clean footage. They still go to the log file and to the console's history. The AFC menu has the same switch.\n" + PageText.TagEveryCraft).AsSpan()))
+            ScreenLog.Set(logShown);
+
         if (ConsoleUi.ButtonRow("WINDOW POSITION", PageText.ResetVerb, "AfcTuneResetPlace", "Docks the console where the stock Transfer Planner opens."))
             AfcConsole.ResetWindowPlace();
     }

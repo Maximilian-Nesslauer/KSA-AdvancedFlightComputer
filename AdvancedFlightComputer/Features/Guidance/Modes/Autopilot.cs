@@ -1004,7 +1004,7 @@ public static partial class GuidanceWindow
     /// (6-DOF) and entry guidance (3-DOF) are solver choices on that page but
     /// separate modes.
     /// </summary>
-    private enum GuidanceMode { Ascent, Landing, Boostback, SixDof, ThreeDof }
+    private enum GuidanceMode { Ascent, Landing, Boostback, SixDof, ThreeDof, OrbitalEntry }
 
     /// <summary>
     /// TAKE THE VEHICLE FOR ONE MODE, releasing every other.
@@ -1081,6 +1081,10 @@ public static partial class GuidanceWindow
             _s.ThreeDofPhase = ThreeDofPhase.Idle;
         }
 
+        // Orbital entry flies no engine, so letting go of it cuts nothing either.
+        if (mode != GuidanceMode.OrbitalEntry && _s.OrbitalEntry.Phase != OrbitalEntryPhase.Idle)
+            ResetOrbitalEntry();
+
         // The engine cut is deliberate and is NOT redundant with the incoming mode's own engine handling. A mode can claim the vehicle in a phase that commands nothing yet - LandingPhase.Coast is the case, coasting to a burn point - and in that phase nothing in ApplyAutopilot writes EngineOn at all. Without the cut, a 6-DOF descent handing over to a deorbit coast would leave the engine lit and throttled the whole way round.
         if (mode != GuidanceMode.SixDof && (_s.Active || _s.EngagePending))
             Disengage6Dof(vehicle);
@@ -1118,6 +1122,8 @@ public static partial class GuidanceWindow
     {
 #if DEBUG
         using var _perf = new PerfTracker.Scope("Guidance.ApplyAutopilot");
+        if (ReferenceEquals(vehicle, Program.ControlledVehicle))
+            PerfTracker.Gap("Guidance.StepGap(focused)");
 #endif
         // Do not create state while guidance is disabled. Release each vehicle in its PrepareWorker prefix so cleanup reaches the next worker snapshot.
         if (!ModActive)
@@ -1186,6 +1192,7 @@ public static partial class GuidanceWindow
         // LaunchArmed counts as flying because a vehicle waiting for its launch window must update the window and fire the commit. A booster adopted at separation also counts as flying until boostback engages.
         bool handingOver = _s.HandoverPendingUntil > SimNow();
         bool flying = sixDof || _s.Running || landingActive || BoostbackLive || ThreeDofLive || _s.ThreeDofEngagePending || _s.BoostbackEngagePending
+                   || OrbitalEntryLive || _s.OrbitalEntry.EngagePending
                    || _s.WasEngaged || _s.LandingCutPending || _s.LaunchArmed || handingOver || _s.MoonChain != MoonChainStage.Idle
                    || _s.LandingEngineCommitPending.HasValue;
 
@@ -1202,7 +1209,7 @@ public static partial class GuidanceWindow
         bool engineTaken = _s.ControlAcquired
             && vehicle.FlightComputer.BurnMode == FlightComputerBurnMode.Auto;
         if (_s.ControlAcquired && ((!sixDof && !_s.Engage)
-            || (!sixDof && !_s.Running && !landingActive && !BoostbackLive && !ThreeDofLive && !_s.LaunchArmed)
+            || (!sixDof && !_s.Running && !landingActive && !BoostbackLive && !ThreeDofLive && !OrbitalEntryLive && !_s.LaunchArmed)
             || attitudeTaken || engineTaken))
         {
             // Release after a takeover without changing the engine command. A takeover moves one actuator and nothing else, so an engine cut guidance already decided on still happens, whether it sits in the queued one-shot cut or in a release that shuts down by itself. The reason outlives a failed cleanup, so the retry can say it.
@@ -1240,13 +1247,15 @@ public static partial class GuidanceWindow
             RefreshStageModel(vehicle);
 
         // After the stage model, because both want a part tree that has finished settling after a separation and this is the first point in the frame where that is true. It engages boostback, so a fault here counts as a failed step like a mode's.
-        StepBoosterHandover(vehicle);
+        using (new PerfTracker.Scope("Guidance.StepBoosterHandover"))
+            StepBoosterHandover(vehicle);
 
         // A readout fault costs readouts, never the flight. After one, the readouts wait a second before they try again, so a fault that repeats does not throw on every step.
         if (GuidanceClock.NowMs >= _s.HousekeepingRetryTick)
         {
             try
             {
+                using var _readouts = new PerfTracker.Scope("Guidance.StepReadouts");
                 StepReadouts(vehicle, orbit, parent);
             }
             catch (Exception ex)
@@ -1258,11 +1267,15 @@ public static partial class GuidanceWindow
         }
 
         // Likewise the launch window: tracked, and FIRED, from here rather than from the console. It has to run for a focused vehicle that is not flying yet, which is precisely the state an armed launch sits in. It starts the ascent, so a fault here counts as a failed step like a mode's. See StepLaunchWindow.
-        StepLaunchWindow(vehicle, orbit, parent, parent.MeanRadius);
-        StepMoonTransfer(vehicle, orbit, parent);
+        using (new PerfTracker.Scope("Guidance.StepLaunchWindow+MoonTransfer"))
+        {
+            StepLaunchWindow(vehicle, orbit, parent, parent.MeanRadius);
+            StepMoonTransfer(vehicle, orbit, parent);
+        }
 
         // The convex ascent's Calculate request is built here for the same reason as the stage model: this is the one point in the frame where the part tree is settled and nothing else is reading it. The solve itself runs on its own thread. It catches its own faults, which cost the plan, never the step.
-        StepAscentPlanner(vehicle, orbit, parent);
+        using (new PerfTracker.Scope("Guidance.StepAscentPlanner"))
+            StepAscentPlanner(vehicle, orbit, parent);
 
         // A requested reset runs ahead of everything below: the whole point of the button is to recover when the mod's own state is wrong, so it must not depend on that state saying the autopilot is still active.
         if (_s.FcResetPending)
@@ -1282,10 +1295,16 @@ public static partial class GuidanceWindow
         {
             _s.ThreeDofEngagePending = false;
             bool engaged = Engage3Dof(vehicle, SimNow());
-            if (_s.LandingGroupWaiting)
+            if (_s.LandingGroupWaiting || _s.ThreeDofAeroWaiting)
                 _s.ThreeDofEngagePending = true;
             else
                 FinishLandingGroupReplan(vehicle, engaged);
+        }
+        // Orbital entry engages here for the same reason: its first step is claimed like any other mode's.
+        if (_s.OrbitalEntry.EngagePending)
+        {
+            _s.OrbitalEntry.EngagePending = false;
+            EngageOrbitalEntry(vehicle, SimNow());
         }
 
         // Check the takeover while stock still owns the burn, because its step returns while it is active.
@@ -1298,9 +1317,10 @@ public static partial class GuidanceWindow
 
         CheckPendingBrakingHandover(vehicle, parent);
         CheckPendingEntryTouchdownHandoff(vehicle, parent);
+        CheckPendingBellyflopTouchdownHandoff(vehicle);
         sixDof = _s.Active || _s.EngagePending;
         // Active, not EngagePending: a setup that Engage6Dof rejects never writes control, and must not leave the craft owned. A coast owns nothing either, see StepLandingCoast.
-        if (_s.Active || (_s.Engage && (_s.Running || LandingCommands(_s.LandingPhase) || BoostbackLive || ThreeDofLive)))
+        if (_s.Active || (_s.Engage && (_s.Running || LandingCommands(_s.LandingPhase) || BoostbackLive || ThreeDofLive || OrbitalEntryLive)))
         {
             // A refused claim must not reach command writes or restore the holder's attitude fields.
             if (!TryTakeCraft(vehicle, acquire: true))
@@ -1317,7 +1337,8 @@ public static partial class GuidanceWindow
             LandingPhase landingBefore = _s.LandingPhase;
             bool boostbackBefore = BoostbackLive;
             bool ascentBefore = _s.Running;
-            Step6Dof(vehicle);
+            using (new PerfTracker.Scope("Guidance.Step6Dof"))
+                Step6Dof(vehicle);
             // Touchdown guidance keeps the RCS hold of the burn it took over, and the switch stays the player's there too.
             YieldRcsToThePlayer(vehicle);
 
@@ -1350,10 +1371,16 @@ public static partial class GuidanceWindow
             return;
 
         // Step this vehicle's guidance and apply its command.
-        StepLanding(vehicle, orbit, parent, parent.Mu, parent.MeanRadius);
-        StepAscent(vehicle, orbit, parent, parent.Mu, parent.MeanRadius);
-        StepBoostback(vehicle, orbit, parent);
-        Step3Dof(vehicle, orbit, parent);
+        using (new PerfTracker.Scope("Guidance.StepLanding"))
+            StepLanding(vehicle, orbit, parent, parent.Mu, parent.MeanRadius);
+        using (new PerfTracker.Scope("Guidance.StepAscent"))
+            StepAscent(vehicle, orbit, parent, parent.Mu, parent.MeanRadius);
+        using (new PerfTracker.Scope("Guidance.StepBoostback"))
+            StepBoostback(vehicle, orbit, parent);
+        using (new PerfTracker.Scope("Guidance.Step3Dof"))
+            Step3Dof(vehicle, orbit, parent);
+        using (new PerfTracker.Scope("Guidance.StepOrbitalEntry"))
+            StepOrbitalEntry(vehicle, orbit, parent);
 
         // Read straight off _s, not off the values the bail above was computed from: the flows just ran, and a touchdown, an abort or a handoff can have changed the phase on this very step.
         //
@@ -1363,7 +1390,9 @@ public static partial class GuidanceWindow
         bool boostbackGuides = BoostbackLive;
         // The 3-DOF steers through the flight computer as the boostback does, from its PID glide to the end of its burn.
         bool threeDofGuides = ThreeDofLive;
-        bool shouldCommand = _s.Engage && (_s.Running || landingGuides || boostbackGuides || threeDofGuides)
+        // Orbital entry steers belly first at its trim angle of attack, banked about the velocity, with no engine.
+        bool orbitalEntryGuides = OrbitalEntryLive && _s.OrbitalEntry.Phase != OrbitalEntryPhase.Sweeping;
+        bool shouldCommand = _s.Engage && (_s.Running || landingGuides || boostbackGuides || threeDofGuides || orbitalEntryGuides)
                           && _s.HasCommand;
 
         // Auto engine control: master switch on at full throttle while flying, off for good once the terminal countdown expires. Written here - the prefix runs just before PrepareWorker snapshots _manualControlInputs - so it reaches the sim exactly like the player's ignite/shutdown key. One-shot engine cut when the landing flow ends (cutoff, abort, failure) - after this the player's inputs are untouched, so the final descent below the gate can be flown manually.
@@ -1452,6 +1481,7 @@ public static partial class GuidanceWindow
             bool boosterReturn = boostbackGuides || threeDofGuides;
             bool holdRoll = boosterReturn && _s.BoosterRollHold;
             double3? rollRef = _s.Running ? AscentRollRef(vehicle, _s.CommandDir)
+                : orbitalEntryGuides ? _s.OrbitalEntry.RollRefCci
                 : holdRoll && _s.CommandDir.Length() > 0.5 ? ReturnRollRefCci(vehicle, parent)
                 : null;
             if (ownAttitude)
@@ -1467,7 +1497,7 @@ public static partial class GuidanceWindow
 
             // Publish the attitude and its turning rate together so they describe the same instant.
             KsaAttitudeRate.Set(vehicle,
-                _s.Running || boostbackGuides || threeDofGuides ? _s.CommandRate : default);
+                _s.Running || boostbackGuides || threeDofGuides || orbitalEntryGuides ? _s.CommandRate : default);
             _s.WasEngaged = true;
         }
         // A queued 6-DOF engage keeps the attitude of the mode that handed over, see the 6-DOF branch above.
@@ -1482,7 +1512,7 @@ public static partial class GuidanceWindow
         // A temporary command gap releases attitude but keeps ownership. Release ownership when the mode ends, before the next frame applies player input. A coast that the commit queued while another mode still owned the craft stays through that release, and claims again at Prep.
         // A 6-DOF engage queued on this step is a handover, not an end: the deorbit burn queues one at its handoff, and the next step's 6-DOF dispatch runs it. Releasing here would drop the request and cut the engine the burn left lit, so the craft falls with nothing flying it.
         bool stillNeedsCraft = _s.Active || _s.EngagePending
-            || (_s.Engage && (_s.Running || landingGuides || boostbackGuides || threeDofGuides));
+            || (_s.Engage && (_s.Running || landingGuides || boostbackGuides || threeDofGuides || OrbitalEntryLive));
         if (_s.ControlAcquired && !_s.LaunchArmed && !stillNeedsCraft)
             ReleaseVehicle(vehicle, keepWaitingCoast: true);
     }
@@ -1707,6 +1737,22 @@ public static partial class GuidanceWindow
         _s.ForcedBurnTarget = null;
     }
 
+    /// <summary>
+    /// AFC MANUAL INTERVENTION (HandFlying) takes the craft: whatever AFC programme flies it stops as a takeover stops it, with its engine left as it is, and says why. Main thread, from the guidance step.
+    /// </summary>
+    internal static void StopForManualIntervention(Vehicle vehicle)
+    {
+        VehicleAutopilotState state = VehicleAutopilotState.For(vehicle);
+        if (!state.ControlAcquired)
+            return;
+        _s = state;
+        _s.TakeoverStop = true;
+        _s.TakeoverReason = "GUIDANCE STOPPED: AFC MANUAL INTERVENTION.";
+        _s.ReleaseWithoutEngineCut = true;
+        GuidanceLog.Info(vehicle, "AFC manual intervention: the pilot takes the craft; the programme stops, the engine is left as it is.");
+        HandBackVehicle(vehicle);
+    }
+
     // Not inlined, because a harness test patches it by name to fail a release.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static bool HandBackVehicle(Vehicle vehicle) => ReleaseVehicle(vehicle, keepWaitingCoast: false);
@@ -1760,7 +1806,8 @@ public static partial class GuidanceWindow
             || s.HandoverPendingUntil != double.NegativeInfinity
             || ReferenceEquals(SixDofLog.Owner, s)
             || s.LandingPhase != LandingPhase.Idle || s.BoostbackPhase != BoostbackPhase.Idle
-            || s.ThreeDofPhase != ThreeDofPhase.Idle;
+            || s.ThreeDofPhase != ThreeDofPhase.Idle
+            || s.OrbitalEntry.Phase != OrbitalEntryPhase.Idle || s.OrbitalEntry.EngagePending;
 
     /// <summary>
     /// Releases this vehicle's guidance state, keeping ownership if any cleanup fails.
@@ -1810,6 +1857,8 @@ public static partial class GuidanceWindow
             Reset3Dof();
             _s.ThreeDofPhase = ThreeDofPhase.Idle;
         }
+        if (_s.OrbitalEntry.Phase != OrbitalEntryPhase.Idle || _s.OrbitalEntry.EngagePending)
+            ResetOrbitalEntry();
         _s.LaunchArmed = false;
         _s.HasCommand = false;
         _s.Active = false;
@@ -2182,6 +2231,8 @@ public static partial class GuidanceWindow
             return false;
         if (_s.Running)
             return _s.AscentOwnAttitude;
+        if (OrbitalEntryLive)
+            return _s.OrbitalEntryOwnAttitude;
         if (!_s.ThreeDofOwnAttitude)
             return false;
         if (threeDofGuides)
@@ -2197,6 +2248,7 @@ public static partial class GuidanceWindow
     /// <param name="heldRoll">The roll is the returning booster's held one (ReturnRollRefCci), which the glide may turn to its least rolling moment (UpdateGlideRoll).</param>
     private static void FlyOwnAttitude(Vehicle vehicle, IParentBody parent, double3? rollRef, bool heldRoll)
     {
+        using var _perf = new PerfTracker.Scope("Guidance.FlyOwnAttitude");
         if (!TryTakeCraft(vehicle, acquire: true))
             return;
         FlightComputer fc = vehicle.FlightComputer;
@@ -2230,13 +2282,42 @@ public static partial class GuidanceWindow
         };
         if (ascent)
             settings = settings with { RateFilterS = _s.AscentRateFilterS, RollCaptureRateDegS = _s.AscentRollRateDegS, RollBandwidthRadS = _s.AscentRollBandwidthRadS };
-        KsaAeroSweep.Result aero = _s.Aero;
+        // ORBITAL ENTRY catches up at 10 deg/s or its tracker's roll rate, pointing and roll alike: a reversal's slew is fed forward as the target's rate, and the glide's 5 deg/s capture left no margin to catch up once it fell behind. The bank turns about the airflow, not the nose: at 60 deg AoA most of it is the body's yaw, so the pointing cap counts as much as the roll's.
+        else if (OrbitalEntryLive)
+        {
+            double entryCapture = Math.Max(10.0, _s.OrbitalEntryRollRateDegS);
+            // Authority-aware: the square-root capture and conditional integral (AttitudeController's AUTHORITY-AWARE CAPTURE). Each axis flown by the flaps or by the RCS on the stock flight computer's phase plane, whichever has the authority (PHASE-PLANE RCS), or by the flaps alone with ENTRY RCS off.
+            settings = settings with
+            {
+                CaptureRateDegS = entryCapture, RollCaptureRateDegS = entryCapture,
+                AuthorityCapture = true,
+                UseRcs = _s.OrbitalEntryUseRcs,
+                PhasePlaneRcs = true,
+                RcsAngleBandDeg = _s.OrbitalEntryRcsDeadbandDeg,
+            };
+        }
+        // RETRO BURN'S GLIDE with NEW ATTITUDE CONTROL: the same authority-aware capture and per-axis flaps or phase-plane RCS as orbital entry, at the glide's own capture rates.
+        else if (_s.ThreeDofNewAttitude && ThreeDofLive && _s.ThreeDofPhase == ThreeDofPhase.Glide)
+        {
+            settings = settings with
+            {
+                AuthorityCapture = true,
+                PhasePlaneRcs = true,
+                RcsAngleBandDeg = _s.ThreeDofRcsDeadbandDeg,
+            };
+        }
+        KsaAeroSweep.Result aero = OrbitalEntryLive ? _s.OrbitalEntry.Aero : _s.Aero;
         if (ascent)
         {
             aero = AscentControllerAero(vehicle, parent);
             UpdateMomentLimiter(vehicle, SimNow());
         }
         AttitudeController.Report report = AttitudeController.Step(vehicle, target, _s.CommandRate, aero, _s.MomentLimiterPerPa, settings);
+        if (OrbitalEntryLive)
+        {
+            _s.OrbitalEntry.Attitude = report;
+            _s.OrbitalEntry.AttitudeOwn = true;
+        }
         if (ascent)
             LogAscentAttitude(vehicle, report, settings);
         _s.OwnAttitudeFlying = true;

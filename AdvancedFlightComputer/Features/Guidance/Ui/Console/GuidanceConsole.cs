@@ -228,12 +228,13 @@ public static partial class GuidanceWindow
             AutoStageArms: LaunchFlownByNote(vehicle).Length > 0,
             Target: _s.TargetId.Length > 0 ? _s.TargetId : _s.PlaneTarget?.Label ?? "",
             Solver: LandSolvers.Label(LandSolvers.Shown(LandSolvers.Chosen(false, _s.UseSixDofLanding), LandingMachineLive)),
-            HandToTouchdown: _s.ThreeDofSixDofHandover, TouchdownLastS: _s.ThreeDofSixDofTimeS,
+            HandToTouchdown: true, TouchdownLastS: _s.ThreeDofSixDofTimeS,
             HoverFromM: _s.GfoldHoverHandoffAltM,
             MayFly: _s.Engage && _s.AutoStage,
             HoverFlies: _landHoverFlies,
             HoverKnown: _landHoverKnown,
-            DeorbitOnly: _s.DeorbitOnly);
+            DeorbitOnly: _s.DeorbitOnly,
+            BrakingOnly: !_s.DeorbitOnly && _s.DeorbitBrakingOnly);
 
     #endregion
 
@@ -395,6 +396,7 @@ public static partial class GuidanceWindow
         AddStatusLine(lines, _s.BoostbackSeverity, _s.BoostbackStatus);
         AddStatusLine(lines, _s.LandingSeverity, _s.LandingStatus);
         AddEntryStatusLines(lines);
+        AddOrbitalEntryStatusLines(lines);
         AddStatusLine(lines, _s.ErrorSeverity, _s.Error);
         AddStatusLine(lines, NoThrustLasts() ? Severity.Warning : _s.StatusSeverity, _s.Status);
         AddStatusLine(lines, Severity.Warning, ProbePowerPlanWarning(vehicle));
@@ -431,6 +433,7 @@ public static partial class GuidanceWindow
     internal static void ConsumeCues(List<StatusLine> cues)
     {
         FollowLiveLanding(cues);
+        FollowLiveWay();
         if (_s.GfoldCuePending)
         {
             cues.Add(new StatusLine(Severity.Cue, "AFC: POWERED DESCENT",
@@ -461,10 +464,23 @@ public static partial class GuidanceWindow
             return;
         if (LandSolvers.SolverFor(live) is LandSolver solver)
             (_s.UseThreeDofLanding, _s.UseSixDofLanding) = LandSolvers.Apply(solver, _s.UseSixDofLanding);
-        if (LandWays.Follow(last.Value, live) is LandWay way)
-            _followedLandWay = way;
         if (LandSolvers.CueFor(last.Value, live) is StatusLine cue)
             cues.Add(cue);
+        last.Value = live;
+    }
+
+    // The LAND way of the path step that flew each craft when the console last read it (LiveLandWay). Per craft, as above.
+    private static readonly ConditionalWeakTable<VehicleAutopilotState, StrongBox<LandWay?>> _lastLiveWay = new();
+
+    /// <summary>On a change of the path step that flies (an engage or a hand-over), LAND turns to that step's way, once: the ways stay free to look through until the next change.</summary>
+    private static void FollowLiveWay()
+    {
+        LandWay? live = LiveLandWay();
+        StrongBox<LandWay?> last = _lastLiveWay.GetValue(_s, _ => new StrongBox<LandWay?>(null));
+        if (live == last.Value)
+            return;
+        if (live is LandWay way)
+            _followedLandWay = way;
         last.Value = live;
     }
 
@@ -534,7 +550,7 @@ public static partial class GuidanceWindow
         // Step3Dof never plans on a body with no air, so this one needs no wait.
         bool noAir = EntryHasNoAir(_s);
         if (noAir)
-            failures.Add(new CraftFailure("NO ENTRY PLAN", EntryGuidance.NoAirText));
+            failures.Add(new CraftFailure("NO RETRO BURN PLAN", EntryGuidance.NoAirText));
         string detail = "";
         string noPlan = noAir ? "" : NoPlanNow(out detail);
         if (problems.NoPlan.Lasts(noPlan, now, realMs))
@@ -548,7 +564,7 @@ public static partial class GuidanceWindow
         if (ThreeDofLive && _s.ThreeDofPlan == null)
         {
             detail = _s.ThreeDofStatus;
-            return "NO ENTRY PLAN";
+            return "NO RETRO BURN PLAN";
         }
         if (_s.Active && (_s.Guidance == null || !_s.Guidance.HasPlan))
         {
@@ -619,7 +635,8 @@ public static partial class GuidanceWindow
         bool entryBurnOnly = mode == GuidanceModeId.DeorbitLand && _s.DeorbitOnly;
         if (parent != null)
         {
-            if (!entryBurnOnly && NoSitePicked(parent))
+            // An entry burn aimed at the site needs the site, as a landing does.
+            if ((!entryBurnOnly || _s.OrbitalEntryAimDeorbit) && NoSitePicked(parent))
                 noSite = PageText.NoSiteAnswer(SituationVerbs.VerbName(mode), _s.SiteLatDeg, _s.SiteLonDeg);
             else if (mode is GuidanceModeId.SixDofHere or GuidanceModeId.GfoldHere)
             {
@@ -664,7 +681,8 @@ public static partial class GuidanceWindow
             SiteRefusal: mode == GuidanceModeId.DeorbitLand && !entryBurnOnly && noSite.Length == 0
                 ? SiteSlopeText.Refusal(SiteSlopeText.Verdict(SiteSlopeNowDeg(vehicle.Orbit?.Parent), _s.SiteTipDeg, _s.SiteStandDeg), _s.SiteSlopeDeg, _s.SiteStandDeg)
                 : "",
-            DeorbitOnly: entryBurnOnly);
+            DeorbitOnly: entryBurnOnly,
+            BrakingOnly: mode == GuidanceModeId.DeorbitLand && !_s.DeorbitOnly && _s.DeorbitBrakingOnly);
     }
 
     // The backup choice counts only while the failure it answered is still shown.
@@ -711,7 +729,8 @@ public static partial class GuidanceWindow
 
         if (!enginesPrepared && SelectedLandingEngines != null)
         {
-            if (mode == GuidanceModeId.DeorbitLand)
+            // The braking burn of an airless deorbit would fly on the landing group from the start. An entry burn (DEORBIT + ENTRY) does not: bellyflop or the retro burn switches the group on before touchdown, after the entry (StepBellyflopTouchdown, PrepareSelectedLandingEngines), so it is not refused.
+            if (mode == GuidanceModeId.DeorbitLand && !_s.DeorbitOnly)
             {
                 _s.WarnLanding("LANDING GROUPS NEED A SEPARATE COAST BEFORE THE APPROACH BURN. USE LAND NOW.");
                 NoteRefusal(vehicle, mode);

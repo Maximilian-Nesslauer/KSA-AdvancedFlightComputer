@@ -360,7 +360,7 @@ public static partial class GuidanceWindow
         {
             impact = ImpactSeconds(vehicle, guidanceBound: true);
             SituationFacts facts = Ui.Console.ConsoleFrame.ReadFacts(vehicle);
-            ChainStep[] chain = LandChain.For(way, LandSolverOf(way), facts.Where, facts.HasAir, _s.ThreeDofFromGlide, _s.ThreeDofSixDofHandover, BelowBrakingStart(vehicle), _landHoverFlies);
+            ChainStep[] chain = LandChain.For(way, LandSolverOf(way), facts.Where, facts.HasAir, _s.LandFlip, LandEngineOnCraft(vehicle), BelowBrakingStart(vehicle), _landHoverFlies);
             shows = FormRules.LegsNoteShows(facts.Where, TerminalHeight(orbit, parent, parent.MeanRadius), impact, LandFlies);
             roomOnly = shows && LandChain.EndsInImpact(chain);
         }

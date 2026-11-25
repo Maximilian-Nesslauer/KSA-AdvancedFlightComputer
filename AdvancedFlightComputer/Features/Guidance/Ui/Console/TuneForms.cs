@@ -11,7 +11,8 @@ using Specs = AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs;
 
 public static partial class GuidanceWindow
 {
-    private static readonly string[] TuneLandingLabels = { "APPROACH", "ENTRY", "TOUCHDOWN", "G-FOLD", "HOVER" };
+    // In TuneLanding order.
+    private static readonly string[] TuneLandingLabels = { "APPROACH", EntryMethods.OrbitalLabel, EntryMethods.GlideBurnLabel, "TOUCHDOWN", "G-FOLD", "HOVER" };
     // In TuneDiagnostics order.
     private static readonly string[] TuneDiagnosticsLabels = { "ASCENT", "BOOSTBACK", "AERO", "ATMOSPHERE", "G-FOLD", "TOUCHDOWN", "FLIGHT PLAN" };
 
@@ -64,6 +65,9 @@ public static partial class GuidanceWindow
                     {
                         case TuneLanding.Approach:
                             DrawDescentContent(innerW);
+                            break;
+                        case TuneLanding.OrbitalEntry:
+                            DrawOrbitalEntryContent(vehicle, innerW);
                             break;
                         case TuneLanding.Entry:
                             Draw3DofLandingContent(vehicle, innerW);
@@ -138,6 +142,7 @@ public static partial class GuidanceWindow
                     DrawBoostbackImpactSection(vehicle, parent, innerW);
                     break;
                 case TuneDiagnostics.Aero:
+                    DrawAeroSweepsSection(vehicle);
                     DrawBoostbackSurrogateSection(vehicle, innerW);
                     DrawBoostbackProfileSection(innerW);
                     break;
@@ -158,6 +163,7 @@ public static partial class GuidanceWindow
         TuneSet.Landing => landing switch
         {
             TuneLanding.Approach => (Specs.TuningApproach, null),
+            TuneLanding.OrbitalEntry => (Specs.TuningOrbitalEntry, null),
             TuneLanding.Entry => (Specs.TuningThreeDof, null),
             TuneLanding.Gfold => (Specs.TuningGfold, null),
             TuneLanding.SixDof => (Specs.TuningSixDof, Specs.TuningSixDofBools),
