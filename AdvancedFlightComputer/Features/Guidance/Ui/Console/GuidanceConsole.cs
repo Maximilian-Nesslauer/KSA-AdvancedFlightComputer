@@ -432,6 +432,7 @@ public static partial class GuidanceWindow
     internal static void ConsumeCues(List<StatusLine> cues)
     {
         FollowLiveLanding(cues);
+        FollowLiveWay();
         if (_s.GfoldCuePending)
         {
             cues.Add(new StatusLine(Severity.Cue, "AFC: POWERED DESCENT",
@@ -462,10 +463,23 @@ public static partial class GuidanceWindow
             return;
         if (LandSolvers.SolverFor(live) is LandSolver solver)
             (_s.UseThreeDofLanding, _s.UseSixDofLanding) = LandSolvers.Apply(solver, _s.UseSixDofLanding);
-        if (LandWays.Follow(last.Value, live) is LandWay way)
-            _followedLandWay = way;
         if (LandSolvers.CueFor(last.Value, live) is StatusLine cue)
             cues.Add(cue);
+        last.Value = live;
+    }
+
+    // The LAND way of the path step that flew each craft when the console last read it (LiveLandWay). Per craft, as above.
+    private static readonly ConditionalWeakTable<VehicleAutopilotState, StrongBox<LandWay?>> _lastLiveWay = new();
+
+    /// <summary>On a change of the path step that flies (an engage or a hand-over), LAND turns to that step's way, once: the ways stay free to look through until the next change.</summary>
+    private static void FollowLiveWay()
+    {
+        LandWay? live = LiveLandWay();
+        StrongBox<LandWay?> last = _lastLiveWay.GetValue(_s, _ => new StrongBox<LandWay?>(null));
+        if (live == last.Value)
+            return;
+        if (live is LandWay way)
+            _followedLandWay = way;
         last.Value = live;
     }
 

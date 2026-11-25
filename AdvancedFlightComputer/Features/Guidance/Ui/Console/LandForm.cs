@@ -286,6 +286,31 @@ public static partial class GuidanceWindow
             : OrbitalEntryLive || _s.OrbitalEntry.EngagePending ? _s.OrbitalEntryFlip
             : GlideFlips(way);
 
+    /// <summary>
+    /// The LAND way of the path step that flies now, the step the way starts from: DEORBIT for the deorbit's burn and coast, ENTRY/BRAKING for orbital entry and the braking burn, GLIDE for bellyflop and the retro burn, LAND NOW for touchdown and G-FOLD, HOVER, BOOSTBACK; null while nothing flies. The console turns LAND to it when it changes (FollowLiveLanding), and its page counts as flying.
+    /// </summary>
+    internal static LandWay? LiveLandWay()
+    {
+        if (_s.Active || _s.EngagePending)
+            return LandWay.FromHere;
+        if (_s.LandingPhase is LandingPhase.TerminalHover or LandingPhase.TerminalCoast or LandingPhase.TerminalBrake)
+            return LandWay.Hover;
+        if (EntryLive(_s))
+            return LandWay.Glide;
+        if (OrbitalEntryLive || _s.OrbitalEntry.EngagePending)
+            return _s.OrbitalEntry.Phase == OrbitalEntryPhase.Bellyflop || _s.OrbitalEntry.BellyflopDirect ? LandWay.Glide : LandWay.Entry;
+        switch (_s.LandingPhase)
+        {
+            case LandingPhase.Prep or LandingPhase.Burn:
+                return LandWay.Entry;
+            case LandingPhase.GfoldDescent:
+                return LandWay.FromHere;
+            case not (LandingPhase.Idle or LandingPhase.Done):
+                return LandWay.FromOrbit;
+        }
+        return _s.BoostbackPhase is BoostbackPhase.Idle or BoostbackPhase.Done ? null : LandWay.Boostback;
+    }
+
     /// <summary>Where in the path the craft is: the step of the mode that flies now, found by its name in <paramref name="chain"/>; -1 while nothing flies or the step is not in this way's path.</summary>
     private static int LiveStepIndex(ChainStep[] chain)
     {

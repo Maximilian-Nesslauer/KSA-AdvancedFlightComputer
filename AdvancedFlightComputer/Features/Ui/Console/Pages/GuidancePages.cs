@@ -98,6 +98,9 @@ internal static class LandPage
         LandWay way = AfcConsole.LandWay;
         if (ctx.Flying)
         {
+            // The ways stay on top while a landing flies, so every step of the path can be looked at; a pick of one that does not fly shows its form on the next frame.
+            DrawWayRow(in ctx);
+            way = AfcConsole.LandWay;
             LandRead live = GuidanceWindow.ReadLandForm(ctx.Subject, way);
             GuidanceWindow.DrawLandPicture(ctx.Subject, ctx.PictureHeight, way);
             GuidanceWindow.DrawLandLive(ctx.Subject, ctx.Width, way);
@@ -105,7 +108,6 @@ internal static class LandPage
             {
                 ctx.PlanHead();
                 GuidanceWindow.DrawLandPlanLine(way);
-                DrawWayRow(in ctx);
                 GuidanceWindow.DrawLandInputRows(ctx.Subject, way, in ctx.Frame.Situation, in live, pickSite: false);
                 GuidanceWindow.DrawLandPage(ctx.Subject, ctx.Width, way, ctx.FoldsOpen, in live, flying: true);
             }

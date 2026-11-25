@@ -87,7 +87,7 @@ internal static partial class AfcConsole
     {
         Open(page);
         CraftActivity a = Frame.Activity;
-        if (page == ConsolePage.Land && FlightView.FlyingWay(in a) is LandWay way)
+        if (page == ConsolePage.Land && (GuidanceWindow.LiveLandWay() ?? FlightView.FlyingWay(in a)) is LandWay way)
             LandWay = way;
     }
 
@@ -418,7 +418,7 @@ internal static partial class AfcConsole
             && MultiPassRegistry.TryGet(subject.Id, out MultiPassExecution? exec) && !OrbitToolCatalog.IsTool(exec.Intent.TypeKey);
         HeadDrawer.Refresh(subject, force: false);
         ConsoleHead.BuildLines(Frame);
-        // LAND follows a hand-over of the landing with its way, as the solver follows it. The page itself never changes.
+        // LAND turns to the way of the path step that flies when that step changes (an engage or a hand-over, GuidanceWindow.FollowLiveWay), once. The page itself never changes.
         if (GuidanceWindow.ConsumeFollowedLandWay() is LandWay followed && followed != LandWay)
         {
             LandWay = followed;
