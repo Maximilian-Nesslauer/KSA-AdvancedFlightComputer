@@ -10,7 +10,7 @@ using KSA;
 namespace AdvancedFlightComputer.HarnessTests;
 
 // UncompressedSave.Load returns without UncompressedSave.ApplyLoaded when the editor refuses the load or the universe file cannot be read, and SaveSystemSwap.RequestLoad defers ApplyLoaded for a save of another star system or skips it for one that is not installed.
-// Run the real Load on a save that cannot be read to verify that a load that did not happen leaves the current save state unchanged, then drive the load patch for an applied load.
+// The binding check covers all of those paths. Run the real Load on a save that cannot be read to verify that a load that did not happen leaves the current save state unchanged, then drive the load patch for an applied load.
 public sealed class RefusedLoadTest : AfcTest
 {
     private const double MarkerAltitudeM = 654_321.0;

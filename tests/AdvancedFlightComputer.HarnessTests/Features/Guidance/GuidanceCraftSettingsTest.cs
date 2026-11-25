@@ -457,17 +457,11 @@ public sealed class GuidanceCraftSettingsTest : AfcTest
             InvokePatch("WritePatch", "Postfix", [written, true]);
             t.Check("a completed write puts the settings in the save folder", File.Exists(FilePath(save)));
 
+            // A load that is refused, unreadable or not applied never runs UncompressedSave.ApplyLoaded, which afc-refused-load covers, so only the applied load is driven here.
             VehicleAutopilotState.Remove(craft);
             UncompressedSave loaded = MakeSave("events", save);
             loaded.UniverseData = new UniverseData();
-            object?[] prefixArgs = [loaded, null];
-            InvokePatch("LoadPatch", "Prefix", prefixArgs);
-            InvokePatch("LoadPatch", "Postfix", [loaded, prefixArgs[1]]);
-            t.Check("a refused load restores nothing", !VehicleAutopilotState.TryGet(craft, out _));
-            prefixArgs = [loaded, null];
-            InvokePatch("LoadPatch", "Prefix", prefixArgs);
-            loaded.UniverseData = new UniverseData();
-            InvokePatch("LoadPatch", "Postfix", [loaded, prefixArgs[1]]);
+            InvokePatch("LoadPatch", "Postfix", [loaded]);
             t.Check("a completed load restores the settings", VehicleAutopilotState.TryGet(craft, out VehicleAutopilotState s)
                 && Math.Abs(s.LegsDeployBufferS - 1.5) < 1e-12);
         }
