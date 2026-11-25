@@ -174,7 +174,7 @@ internal static class GameReflection
     public static readonly MethodInfo? FlightComputer_RaisePendingAlerts =
         AccessTools.Method(typeof(FlightComputer), nameof(FlightComputer.RaisePendingAlerts), new[] { typeof(Vehicle) });
 
-    // UncompressedSave.ApplyLoaded is the step that calls Universe.DeserializeSave, run by SaveSystemSwap.RequestLoad once the save's system is in place, and the save's Id is the save-game discriminator the registries scope their entries by.
+    // UncompressedSave.ApplyLoaded is the step that calls Universe.DeserializeSave, run once the save's system is in place, at once or on a later frame through SaveSystemSwap.OnFrame, and the save's Id is the save-game discriminator the registries scope their entries by.
     [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation)]
     public static readonly MethodInfo? UncompressedSave_ApplyLoaded =
         AccessTools.Method(typeof(UncompressedSave), "ApplyLoaded", Type.EmptyTypes);

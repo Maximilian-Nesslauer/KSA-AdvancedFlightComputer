@@ -111,7 +111,7 @@ internal static class KsaEnginePerf
         return pulse;
     }
 
-    // Rocket.UpdateState can keep a started minimum pulse burning after the engine-off command.
+    // Rocket.ApplyCommand can keep a started minimum pulse burning after the engine-off command.
     internal static double RemainingMinimumPulse(Vehicle vehicle)
     {
         ReadOnlySpan<RocketState> states = RocketStates.Of(vehicle.Parts);
@@ -249,7 +249,7 @@ internal static class KsaEnginePerf
                 RocketState state = rocketStates.States[rocket.StatesIdx];
                 if (!FollowsThrottle(rocket))
                 {
-                    // SolidRocket.UpdateState can keep a motor burning after its controller is disabled.
+                    // SolidRocket.Update can keep a motor burning after its controller is disabled.
                     // IsNonzero also covers ignition and shutdown transitions.
                     // An inactive, unignited motor does not block liquid control.
                     if (state.IsNonzero() || (supplied && state.IsPropellantAvailable))

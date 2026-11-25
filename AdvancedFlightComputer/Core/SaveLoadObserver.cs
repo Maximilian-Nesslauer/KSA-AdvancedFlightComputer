@@ -37,7 +37,7 @@ internal static class SaveLoadObserver
             DefaultCategory.Log.Debug("[AFC] SaveLoadObserver: patches applied.");
     }
 
-    // UncompressedSave.Load only reads the file and hands ApplyLoaded to SaveSystemSwap.RequestLoad, which runs it at once for a save of the running system, a frame later after Program.SwapSystem for a save of another system, and never for a save of a system that is not installed or a load the editor refuses.
+    // UncompressedSave.Load only reads the file and hands ApplyLoaded to SaveSystemSwap.RequestLoad, which runs it at once for a save of the running system, on a later frame through SaveSystemSwap.OnFrame after Program.SwapSystem for a save of another system, in a new process for a save whose system needs a restart, and never for a save of a system that is not installed or a load the editor refuses.
     // ApplyLoaded is the step that calls Universe.DeserializeSave, so its postfix runs exactly once for each save that is really loaded.
     [HarmonyPatch(typeof(UncompressedSave), "ApplyLoaded", new Type[0])]
     private static class LoadPatch
