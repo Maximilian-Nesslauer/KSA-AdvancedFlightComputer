@@ -111,7 +111,7 @@ internal static class KsaEnginePerf
         return pulse;
     }
 
-    // Rocket.UpdateState can keep a started minimum pulse burning after the engine-off command.
+    // Rocket.ApplyCommand can keep a started minimum pulse burning after the engine-off command.
     internal static double RemainingMinimumPulse(Vehicle vehicle)
     {
         ReadOnlySpan<RocketState> states = RocketStates.Of(vehicle.Parts);
@@ -157,8 +157,9 @@ internal static class KsaEnginePerf
     }
 
     // A combustion or thermal core sets its chamber pressure from the throttle, which is what RocketControllerData.ComputeFromRockets models.
+    // A gas generator follows the throttle too, because GasGeneratorRocket.ComputeGasGeneratorConditions derives its flow from the conditions of the chamber at that throttle.
     // A solid motor ignores the throttle, and an AntimatterRamCore delivers what its ram speed and jet power allow rather than what ComputeConditions reports, so neither can follow a guidance command.
-    internal static bool FollowsThrottle(RocketCore core) => core is Combustor or ThermalCore;
+    internal static bool FollowsThrottle(RocketCore core) => core is Combustor or ThermalCore or GasGeneratorCore;
 
     internal static bool FollowsThrottle(Rocket rocket)
     {
@@ -248,7 +249,7 @@ internal static class KsaEnginePerf
                 RocketState state = rocketStates.States[rocket.StatesIdx];
                 if (!FollowsThrottle(rocket))
                 {
-                    // SolidRocket.UpdateState can keep a motor burning after its controller is disabled.
+                    // SolidRocket.Update can keep a motor burning after its controller is disabled.
                     // IsNonzero also covers ignition and shutdown transitions.
                     // An inactive, unignited motor does not block liquid control.
                     if (state.IsNonzero() || (supplied && state.IsPropellantAvailable))

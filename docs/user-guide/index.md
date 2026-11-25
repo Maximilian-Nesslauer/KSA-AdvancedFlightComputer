@@ -2,7 +2,7 @@
 
 Advanced Flight Computer (AFC) adds maneuver planning, burn execution, automatic staging and closed-loop powered guidance to [Kitten Space Agency](https://ahwoo.com/app/100000/kitten-space-agency) through one console window.
 
-Written against the [StarMap loader](https://github.com/StarMapLoader/StarMap). Validated against KSA build `2026.11.16.5901`.
+Written against the [StarMap loader](https://github.com/StarMapLoader/StarMap). Validated against KSA build `2026.11.25.5949`.
 
 ## What is in this guide
 

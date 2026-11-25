@@ -37,23 +37,13 @@ internal static class SaveLoadObserver
             DefaultCategory.Log.Debug("[AFC] SaveLoadObserver: patches applied.");
     }
 
-    [HarmonyPatch(typeof(UncompressedSave), nameof(UncompressedSave.Load), new Type[0])]
+    // UncompressedSave.Load only reads the file and hands ApplyLoaded to SaveSystemSwap.RequestLoad, which runs it at once for a save of the running system, on a later frame through SaveSystemSwap.OnFrame after Program.SwapSystem for a save of another system, in a new process for a save whose system needs a restart, and never for a save of a system that is not installed or a load the editor refuses.
+    // ApplyLoaded is the step that calls Universe.DeserializeSave, so its postfix runs exactly once for each save that is really loaded.
+    [HarmonyPatch(typeof(UncompressedSave), "ApplyLoaded", new Type[0])]
     private static class LoadPatch
     {
-        static void Prefix(UncompressedSave __instance, out UniverseData __state) => __state = __instance.UniverseData;
-
-        static void Postfix(UncompressedSave __instance, UniverseData __state)
+        static void Postfix(UncompressedSave __instance)
         {
-            // UncompressedSave.Load returns normally when GameSaves.RefusedInEditor refuses the load or the universe file cannot be read.
-            // Only a completed load replaces UniverseData.
-            if (ReferenceEquals(__instance.UniverseData, __state))
-            {
-                if (DebugConfig.MultiPass)
-                    DefaultCategory.Log.Debug(
-                        $"[AFC] SaveLoadObserver.LoadPatch: ignored save '{__instance.Id}' because it did not load.");
-                return;
-            }
-
             string saveId = __instance.Id ?? string.Empty;
             CurrentSaveId = saveId;
             CurrentSaveDirectory = __instance.Directory;

@@ -2,7 +2,17 @@
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-11-25
+
+AFC runs on KSA 2026.11.25.5949 and its engine cycles, and touchdown and entry guidance solve their plans with Clarabel.
+
+- AFC works on KSA 2026.11.25.5949. The game models engine cycles: a gas generator engine such as the stock LR91 has two cores, the chamber and the gas generator, and the turbine exhaust adds its own small thrust. Throttle guidance takes a gas generator engine as throttleable again, a rocket counts as fueled only while all its cores are fed, the thrust sums keep the turbine exhaust, and the burn preview cache sees a change of the gas generator design. A save of another star system is loaded a frame later, after the game switches the system, so AFC restores its save-scoped state when that load is applied, and not when a load is refused or deferred.
+
 - Touchdown guidance (6-DOF) and entry guidance (3-DOF) **solve their plans with Clarabel** instead of SCS. The problem is the same: the same matrices, weights, trust regions, tolerances and node counts go to either solver. **CLARABEL SOLVER** (`ScvxClarabel`, on by default, under the 6-DOF solver tuning) switches back to SCS, for comparing the two in one build. It is one switch for every craft, set from the focused one. Clarabel is interior-point and cannot start from the last solution as SCS's ADMM does, so it keeps its solver instead: one per plan, built once and refreshed in place (`update_P/A/q/b`), with iterative refinement off (back on by itself after a numerical failure) and presolve off. Offline (Scvx.Console `--backend scs|clarabel`), every check that passes on SCS passes on Clarabel with the same plans, and `--spread` and the 3-DOF closed loop's 8 % thrust shortfall pass only on Clarabel. Cold solves are 4 to 40 times faster (a 6-DOF booster plan with RCS 4.0 s to 0.1 s, the 3-DOF glide and burn 2.7 s to 0.14 s), and the worst subproblem drops from 0.4-1.4 s to 25-35 ms. Warm re-solves of an easy plan are as fast as SCS's warm start at 25-50 nodes and faster below 20. Flown headless twice each way on 2stage_KSAero_Gimbal10's booster with KSAero: both land inside 1 m at under 0.2 m/s. Entry guidance's first plan comes 0.2 s after engaging (SCS 0.8 s), its solves take 16 ms median and 24 ms p95 (SCS 66 and 250 ms), and it fires 18 kg of RCS in the glide (SCS 24-29 kg). Touchdown guidance's oldest plan is 0.20 s old (SCS 0.6-0.9 s), its slowest solve 40-66 ms (SCS 180-235 ms), and its median at 50 nodes 31 ms (SCS 23 ms). Not flown in a windowed game yet.
+
+## [0.17.0] to [0.19.0]
+
+These releases have one section together.
 
 - Touchdown guidance's **step test prices every soft limit the same way** in what it predicts and what it measures: the acceleration, turn-rate, glideslope, climb-rate and terminal-miss slacks, each at what the plan's solution pays for it (#247). The turn rate used to be in the measured cost only and the rest in neither, so it accepted steps that made the plan worse overall. Offline it now takes more steps and refuses fewer plans (77 refused against 107 in the RCS landings), the roll-free landing solves twice as fast, and the miss distances are unchanged. Not flown yet.
 

@@ -190,7 +190,7 @@ internal static class RcsCapability
                         continue;
                     foreach (RocketCore core in rocket.Cores)
                     {
-                        RcsWrenchTable.ComputeLiveCoreAsmb(rocket, core, com, ambientPressure,
+                        RcsWrenchTable.ComputeLiveCoreAsmb(core, com, ambientPressure,
                             out float3 coreForce, out float3 coreTorque, out float coreMassFlow);
                         forceAsmb += coreForce;
                         torqueAsmb += coreTorque;

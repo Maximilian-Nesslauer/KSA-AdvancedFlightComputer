@@ -127,10 +127,13 @@ public sealed class GuidanceThrustTest : AfcTest
         AddRocket(active.Rockets[0], 204, supplied: true);
         t.Check("an antimatter ram core refuses throttle control",
             KsaEnginePerf.GetThrottleControlStatus(vehicle) == KsaEnginePerf.ThrustStatus.UnsupportedEngine);
+        // A gas generator cycle has two cores, and the gas generator takes its flow from the chamber at the commanded throttle.
+        active.Rockets = [GasGeneratorRocketOf()];
+        AddRocket(active.Rockets[0], 205, supplied: true);
+        t.Check("a gas generator cycle supports throttle control", KsaEnginePerf.SupportsThrottleControl(vehicle));
 
-        ProbeCore suppliedCore = Uninitialized<ProbeCore>();
-        ProbeCore dryCore = Uninitialized<ProbeCore>();
-        suppliedCore.LastThrottle = dryCore.LastThrottle = -1f;
+        ProbeCore suppliedCore = NewProbe();
+        ProbeCore dryCore = NewProbe();
         active.Rockets = [Probe(suppliedCore, 0.4f), Probe(dryCore, 0.2f)];
         AddRocket(active.Rockets[0], 201, supplied: true);
         AddRocket(active.Rockets[1], 202, supplied: false);
@@ -202,7 +205,7 @@ public sealed class GuidanceThrustTest : AfcTest
 
     private static void CoreMinimum(TestContext t)
     {
-        ProbeCore core = Uninitialized<ProbeCore>();
+        ProbeCore core = NewProbe();
         Rocket rocket = Probe(core, 0.4f);
         RocketControllerData.ComputeFromRockets(new Rocket[] { rocket }, 101325f, 0.1f);
         t.CheckAbs("the stock computation applies the per-rocket floor", core.LastThrottle, 0.4, 1e-7);
@@ -216,13 +219,60 @@ public sealed class GuidanceThrustTest : AfcTest
         return rocket;
     }
 
+    // Each core goes into the concrete rocket the game builds around it, with no nozzles.
     private static Rocket RocketOf(RocketCore core)
     {
-        Rocket rocket = core is SolidMotor ? Uninitialized<SolidRocket>() : Uninitialized<Rocket>();
-        rocket.Core = core;
-        rocket.Nozzles = [];
+        Rocket rocket = core switch
+        {
+            SolidMotor solid => SolidRocketOf(solid),
+            Combustor combustor => ChamberRocketOf(combustor),
+            ThermalCore thermal => ChamberRocketOf(thermal),
+            ProbeCore probe => ChamberRocketOf(probe),
+            AntimatterRamCore ram => RamRocketOf(ram),
+            _ => throw new ArgumentException($"no test rocket for {core.GetType().Name}", nameof(core)),
+        };
         core.Rocket = rocket;
         core.Nozzles = [];
+        return rocket;
+    }
+
+    private static SolidRocket SolidRocketOf(SolidMotor core)
+    {
+        SolidRocket rocket = Uninitialized<SolidRocket>();
+        rocket.Core = core;
+        rocket.Nozzles = [];
+        return rocket;
+    }
+
+    private static UnmodeledFeedRocket<TConfig> ChamberRocketOf<TConfig>(ChamberCore<TConfig> core)
+        where TConfig : struct, IChamberConfig
+    {
+        UnmodeledFeedRocket<TConfig> rocket = Uninitialized<UnmodeledFeedRocket<TConfig>>();
+        rocket.Core = core;
+        rocket.Nozzles = [];
+        return rocket;
+    }
+
+    private static AntimatterRamRocket RamRocketOf(AntimatterRamCore core)
+    {
+        AntimatterRamRocket rocket = Uninitialized<AntimatterRamRocket>();
+        rocket.Core = core;
+        rocket.Nozzles = [];
+        return rocket;
+    }
+
+    private static GasGeneratorRocket GasGeneratorRocketOf()
+    {
+        GasGeneratorRocket rocket = Uninitialized<GasGeneratorRocket>();
+        rocket.Core = Uninitialized<Combustor>();
+        rocket.Nozzles = [];
+        rocket.GasGenerator = Uninitialized<GasGeneratorCore>();
+        rocket.TurbineExhaustNozzles = [];
+        foreach (RocketCore core in rocket.Cores)
+        {
+            core.Rocket = rocket;
+            core.Nozzles = [];
+        }
         return rocket;
     }
 
@@ -250,35 +300,33 @@ public sealed class GuidanceThrustTest : AfcTest
             ?? throw new MissingFieldException(typeof(PartTree).FullName, "_engineThrottleMin"))
             .SetValue(tree, value);
 
-    // Records the throttle passed by RocketControllerData.ComputeFromRockets.
-    // Other operations throw because this probe cannot simulate a live engine.
-    private sealed class ProbeCore : RocketCore
+    private static ProbeCore NewProbe()
     {
-        public float LastThrottle;
+        ProbeCore core = Uninitialized<ProbeCore>();
+        core.Config = new ProbeConfig { LastThrottle = new StrongBox<float>(-1f) };
+        return core;
+    }
 
-        private ProbeCore() : base("probe") { }
+    // Records the throttle passed by RocketControllerData.ComputeFromRockets, which reaches the config through ChamberCore.ComputeConditions.
+    // The throttle is kept in a box, because the config is a struct that the game may copy.
+    private struct ProbeConfig : IChamberConfig
+    {
+        public StrongBox<float> LastThrottle;
 
-        public override float MaxChamberPressure => 1;
+        public readonly float ChamberPressureMax => 1;
 
-        public override RocketCoreConditions ComputeConditions(float throttle)
+        public readonly RocketCoreConditions ComputeConditions(float throttle)
         {
-            LastThrottle = throttle;
+            LastThrottle.Value = throttle;
             return RocketCoreConditions.Zero;
         }
+    }
 
-        public override void RecomputeDesignConditions() => throw new NotSupportedException();
+    private sealed class ProbeCore : ChamberCore<ProbeConfig>
+    {
+        public float LastThrottle => Config.LastThrottle.Value;
 
-        public override bool ComputePropellantAvailable(ReadOnlySpan<MoleState> states, bool isBurning)
-            => throw new NotSupportedException();
-
-        public override void ConsumePropellant(Span<MoleState> states, float mass)
-            => throw new NotSupportedException();
-
-        public override bool TryPrepareDrain(CoreDrainState slot, in DrainContext context)
-            => throw new NotSupportedException();
-
-        public override bool TryAccumulateDrain(CoreDrainState slot, in DrainContext context)
-            => throw new NotSupportedException();
+        private ProbeCore() : base("probe") { }
     }
 
     // Constructors are skipped, so finalizers must not access the incomplete state.

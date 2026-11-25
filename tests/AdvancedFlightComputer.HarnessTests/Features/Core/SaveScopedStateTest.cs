@@ -4,7 +4,7 @@ using AdvancedFlightComputer.HarnessTests.Framework;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// Covers the save-scoped reset list SaveLoadObserver's UncompressedSave.Load postfix and Mod.Unload
+// Covers the save-scoped reset list SaveLoadObserver's UncompressedSave.ApplyLoaded postfix and Mod.Unload
 // both run. Two properties matter and neither needs a loaded save:
 //
 //  1. It must not throw. The load postfix wraps everything in one try/catch, so an exception in an

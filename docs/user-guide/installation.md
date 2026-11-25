@@ -22,7 +22,7 @@ AFC reads and writes its files (settings, staging delays, multi-pass plans, RCS 
 | --- | --- | --- |
 | [StarMap](https://github.com/StarMapLoader/StarMap) | Mod loader (`0.5.4` or later required at runtime) | `0.5.4` |
 
-Validated against KSA build `2026.11.16.5901`.
+Validated against KSA build `2026.11.25.5949`.
 
 ## Build dependencies
 

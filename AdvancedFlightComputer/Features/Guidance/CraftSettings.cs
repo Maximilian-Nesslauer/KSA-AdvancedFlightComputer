@@ -10,7 +10,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 /// <summary>
 /// The guidance settings of each craft, kept with the game save. After UncompressedSave.Write the values that differ from
 /// their defaults are written to a file in the folder of that save, so the game copies, overwrites and deletes them with
-/// the save, and after UncompressedSave.Load they are applied to the craft of the same Vehicle.Id. A rename needs nothing,
+/// the save, and after the load applies the save (UncompressedSave.ApplyLoaded) they are applied to the craft of the same Vehicle.Id. A rename needs nothing,
 /// because the state is keyed on the vehicle and the file is written with the id the craft has at the save.
 /// Only settings are kept, never the state of a mode that flies (Active, LaunchArmed, the chain to a moon), so a load
 /// starts nothing. A value another writer owns (SettingAccess.SetBy) is not written, and neither is the LAN, which the

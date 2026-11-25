@@ -577,10 +577,21 @@ public sealed class GuidanceLandingStagingTest : AfcTest
             typeof(SequenceList).GetField("_sequences", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .SetValue(tree.SequenceList, sequences);
 
-            RocketCore core = solid ? Empty<SolidMotor>() : Empty<Combustor>();
-            _rocket = solid ? Empty<SolidRocket>() : Empty<Rocket>();
-            _rocket.Core = core;
-            _rocket.Nozzles = [];
+            RocketCore core;
+            if (solid)
+            {
+                SolidRocket solidRocket = Empty<SolidRocket>();
+                solidRocket.Core = Empty<SolidMotor>();
+                solidRocket.Nozzles = [];
+                (core, _rocket) = (solidRocket.Core, solidRocket);
+            }
+            else
+            {
+                UnmodeledFeedRocket<CombustorConfig> liquidRocket = Empty<UnmodeledFeedRocket<CombustorConfig>>();
+                liquidRocket.Core = Empty<Combustor>();
+                liquidRocket.Nozzles = [];
+                (core, _rocket) = (liquidRocket.Core, liquidRocket);
+            }
             core.Rocket = _rocket;
             core.Nozzles = [];
             _engine.Rockets = [_rocket];
