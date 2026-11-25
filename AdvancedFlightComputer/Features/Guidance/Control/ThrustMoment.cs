@@ -9,7 +9,7 @@ using KSA;
 
 /// <summary>
 /// The moment a set of engines makes about the centre of mass with every gimbal at rest: zero for a cluster balanced about the centre of mass, and for an off-centre choice (one engine of a ring, a pair beside the center) the moment the gimbals must hold for as long as the engines burn.
-///  IN PROPORTION TO THE THRUST. Every nozzle is taken at a throttle of 2 in vacuum, the conditions of GimbalController.Data.MaximumThrust (GimbalController.RecomputeStaticData), so the moment is on the same scale as the gimbals' capability, and the moment over the force is the moment per newton the engines make at any throttle.
+///  IN PROPORTION TO THE THRUST. Every nozzle, the turbine exhaust of a gas generator cycle included, is taken at full throttle in vacuum, the conditions of GimbalController.Data.MaximumThrust (GimbalController.RecomputeStaticData), so the moment is on the same scale as the gimbals' capability, and the moment over the force is the moment per newton the engines make at any throttle.
 ///  AT REST, because the allocator is incremental from there (KsaTvcAllocator.FillColumns differentiates about zero deflection): the torque the craft gets is this moment plus what the allocator was asked for.
 /// </summary>
 internal static class KsaThrustMoment
@@ -27,11 +27,11 @@ internal static class KsaThrustMoment
         double3 moment = double3.Zero, force = double3.Zero;
         foreach (EngineController engine in engines)
             foreach (Rocket rocket in engine.Rockets)
-                foreach (RocketNozzle nozzle in rocket.Nozzles)
+                foreach (RocketNozzle nozzle in rocket.AllNozzles)
                 {
                     if (nozzle.Core == null || nozzle.Parent is not { } part)
                         continue;
-                    RocketCoreConditions combustion = rocket.ComputeCoreConditions(nozzle.Core, 2f);
+                    RocketCoreConditions combustion = nozzle.Core.ComputeConditions(1f);
                     double thrust = nozzle.ComputePerformance(in combustion, 0f).GetTotalThrust();
                     if (!double.IsFinite(thrust) || thrust <= 0.0)
                         continue;

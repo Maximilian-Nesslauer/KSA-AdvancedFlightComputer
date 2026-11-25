@@ -233,7 +233,14 @@ public sealed class SpentStageDropTest : AfcTest
             foreach (Rocket rocket in engine.Rockets)
             {
                 bool burning = rocketStates[rocket.StatesIdx].Throttle > 0f;
-                cores += $" [{rocket.Core.GetType().Name} burning={burning} fed={rocket.ComputePropellantAvailable(moleStates, burning)}]";
+                string kinds = "";
+                bool fed = true;
+                foreach (RocketCore core in rocket.Cores)
+                {
+                    kinds += (kinds.Length > 0 ? "+" : "") + core.GetType().Name;
+                    fed &= core.ComputePropellantAvailable(moleStates, burning);
+                }
+                cores += $" [{kinds} burning={burning} fed={fed}]";
             }
             t.Info($"  engine '{engine.Parent.FullPart.Id}' seq={engine.Sequence} active={engine.IsActive}{cores}");
         }

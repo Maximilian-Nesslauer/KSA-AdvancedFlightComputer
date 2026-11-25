@@ -19,7 +19,7 @@ Read the [User Guide](https://maximilian-nesslauer.github.io/KSA-AdvancedFlightC
 - [Hyperbolic targets](https://maximilian-nesslauer.github.io/KSA-AdvancedFlightComputer/user-guide/maneuvers/#hyperbolic-targets): target interstellar comets (Oumuamua, 2I/Borisov, 3I/ATLAS).
 - [Powered guidance](https://maximilian-nesslauer.github.io/KSA-AdvancedFlightComputer/user-guide/powered-guidance/): ascent, [launch to a moon](https://maximilian-nesslauer.github.io/KSA-AdvancedFlightComputer/user-guide/powered-guidance/#launch-to-a-moon), boostback, atmospheric entry and powered landing, with [landing sites from other mods](https://maximilian-nesslauer.github.io/KSA-AdvancedFlightComputer/user-guide/landing-sites/).
 
-Written against the [StarMap loader](https://github.com/StarMapLoader/StarMap). Validated against KSA build `2026.11.16.5901`.
+Written against the [StarMap loader](https://github.com/StarMapLoader/StarMap). Validated against KSA build `2026.11.25.5949`.
 
 ## Quick installation
 

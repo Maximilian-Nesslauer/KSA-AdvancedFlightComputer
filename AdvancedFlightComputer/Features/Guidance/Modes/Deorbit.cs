@@ -474,7 +474,7 @@ public static partial class GuidanceWindow
         DeorbitPlanner planner = _s.DeorbitPlanner;
         if (planner == null)
         {
-            // Rocket.UpdateState can retain an unexpired minimum pulse after the engine-off command.
+            // Rocket.ApplyCommand can retain an unexpired minimum pulse after the engine-off command.
             if (KsaEnginePerf.RemainingMinimumPulse(vehicle) > 0) return;
             if (!TryCaptureDeorbitRequest(vehicle, orbit, parent))
             { RefuseDeorbit(vehicle, "DEORBIT DONE: NO USABLE BRAKING MODEL."); return; }

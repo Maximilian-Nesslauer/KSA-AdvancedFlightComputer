@@ -54,9 +54,10 @@ internal sealed class LandingEngineLayout
             int count = 0;
             bool onGimbal = false;
             foreach (Rocket rocket in engine.Rockets)
-                foreach (RocketNozzle nozzle in rocket.Nozzles)
+                foreach (RocketNozzle nozzle in rocket.AllNozzles)
                 {
-                    if (nozzle.Parent is not { } part)
+                    // The place is an unweighted mean of the nozzles, so the small turbine exhaust of a gas generator cycle would pull the dot away from the chamber that makes nearly all of the thrust.
+                    if (nozzle is TurbineExhaustNozzle || nozzle.Parent is not { } part)
                         continue;
                     float3 at = nozzle.LocationAsmb.Transform(float4x4.Pack(part.MatrixAsmb2VehicleAsmb));
                     float3 thrust = (-nozzle.ExhaustDirectionAsmb).Transform(floatQuat.Pack(part.Asmb2VehicleAsmb));

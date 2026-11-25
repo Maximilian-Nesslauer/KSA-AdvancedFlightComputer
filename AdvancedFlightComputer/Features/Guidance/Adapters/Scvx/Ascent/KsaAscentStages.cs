@@ -64,7 +64,7 @@ internal static class KsaAscentStages
                             if (core is not SolidMotor motor)
                                 continue;
                             solid = true;
-                            if (!motor.Stack.IsValid || motor.Rocket?.Nozzles == null)
+                            if (!motor.Stack.IsValid || motor.Rocket == null)
                                 continue;
                             if (!motorIndex.TryGetValue(motor, out int index))
                             {
@@ -169,7 +169,7 @@ internal static class KsaAscentStages
     internal static AscentSolidMotor SimulateBurn(PartTree tree, SolidMotor motor, double[] grid)
     {
         if (tree?.Moles == null || tree.RocketNozzles == null || tree.RocketCores == null
-            || !motor.Stack.IsValid || motor.Rocket?.Nozzles == null || motor.Stack.Segments.Length == 0)
+            || !motor.Stack.IsValid || motor.Rocket == null || motor.Stack.Segments.Length == 0)
             return null;
 
         SolidGrainSegment[] segments = motor.Stack.Segments;
@@ -269,14 +269,14 @@ internal static class KsaAscentStages
         pressure = conditions.Core.Pressure;
         if (!(pressure > 0f))
             return false;
-        var nozzles = tree.RocketNozzles.GetModulesAndStates(motor.Rocket.Nozzles.AsSpan());
+        var nozzles = tree.RocketNozzles.GetModulesAndStates(motor.Nozzles.AsSpan());
         foreach (var nozzle in nozzles)
             massFlow += nozzle.Module.ComputePerformance(in conditions, 0f).GetRocketPerformance().MassFlowRate;
         if (row != null)
             for (int g = 0; g < grid.Length; g++)
             {
                 float3 sum = float3.Zero;
-                foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(motor.Rocket.Nozzles.AsSpan()))
+                foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(motor.Nozzles.AsSpan()))
                     sum += nozzle.Module.ComputePerformance(in conditions, (float)grid[g]).GetRocketPerformance().TotalThrust
                            * nozzle.State.ThrustDirectionVehicleAsmb;
                 row[g] = sum.Length();

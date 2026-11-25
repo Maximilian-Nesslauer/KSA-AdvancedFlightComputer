@@ -34,6 +34,10 @@ public sealed class GuidanceLandingGimbalTest : AfcTest
     // axis no authority in one direction, which stock reports as none at all.
     private const float TargetAuthorityRatio = 0.06f;
 
+    // How the narrowed range widens when the engines' moment leaves an axis no authority (NarrowTheGimbals). Each step is small against the band between no authority and a tenth of the RCS authority, so one lands in it.
+    private const float NarrowingWidenFactor = 1.15f;
+    private const int NarrowingSteps = 40;
+
     private static Vehicle? _held;
 
     protected override void Execute(TestContext t)
@@ -140,11 +144,27 @@ public sealed class GuidanceLandingGimbalTest : AfcTest
             return false;
         }
 
-        ScaleTheGimbals(vehicle, Math.Min(TargetAuthorityRatio * rcs / tvc, 1f));
-        driver.Step(0.05, 3);
-
-        bool rcsSteers = RcsSteersPitchAndYaw(fc) && fc.TvcTorqueAuthority.Y > 0f;
-        t.Check("with the gimbal narrowed and no guidance, stock gives pitch and yaw to the RCS", rcsSteers, Axes(fc));
+        // The ratio alone is not enough where the engines' own moment needs a trim larger than the narrowed range: a gas generator's turbine exhaust beside the engine axis is such a moment. Stock then reports no authority in that direction, so the range is widened step by step until pitch and yaw keep some.
+        GimbalController[] gimbals = vehicle.Parts.Modules.Get<GimbalController>().ToArray();
+        float[] restY = gimbals.Select(gc => gc.Gimbal.AxisY.MaxAngle).ToArray();
+        float[] restZ = gimbals.Select(gc => gc.Gimbal.AxisZ.MaxAngle).ToArray();
+        float scale = Math.Min(TargetAuthorityRatio * rcs / tvc, 1f);
+        bool rcsSteers = false;
+        for (int step = 0; ; step++)
+        {
+            for (int i = 0; i < gimbals.Length; i++)
+            {
+                gimbals[i].Gimbal.AxisY = new GimbalAxis { MaxAngle = restY[i] * scale };
+                gimbals[i].Gimbal.AxisZ = new GimbalAxis { MaxAngle = restZ[i] * scale };
+            }
+            driver.Step(0.05, 3);
+            rcsSteers = RcsSteersPitchAndYaw(fc) && fc.TvcTorqueAuthority.Y > 0f;
+            if (rcsSteers || step + 1 >= NarrowingSteps || scale >= 1f)
+                break;
+            scale = Math.Min(scale * NarrowingWidenFactor, 1f);
+        }
+        t.Check("with the gimbal narrowed and no guidance, stock gives pitch and yaw to the RCS", rcsSteers,
+            $"{Axes(fc)}, range {scale:P2} of the full one");
         return rcsSteers;
     }
 
