@@ -21,7 +21,7 @@ The manual for players is the [User Guide](https://maximilian-nesslauer.github.i
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
-Validated against KSA build version 2026.11.16.5901.
+Validated against KSA build version 2026.11.25.5949.
 
 ## Installation
 
