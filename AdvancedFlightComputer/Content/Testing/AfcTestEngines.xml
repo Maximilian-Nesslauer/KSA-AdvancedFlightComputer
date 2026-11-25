@@ -4,7 +4,7 @@
     LOCAL TESTING ONLY. Debug builds deploy this file and add it to the deployed mod.toml (AdvancedFlightComputer.csproj,
     DeployTestParts); release packages never carry it (the payload is Content\*.xml, not this folder).
 
-    A copy of the stock "LR91 Vac + Verniers" (CorePropulsionA_Prefab_EngineA5, KSA 5901) with the main chamber's gimbal widened
+    A copy of the stock "LR91 Vac + Verniers" (CorePropulsionA_Prefab_EngineA5, KSA 5949) with the main chamber's gimbal widened
     from 2 to 10 deg each axis and its slew from 4 to 10 deg/s, closer to a landing booster's engines (Raptor class), for testing
     landing engine groups whose thrust centre sits off the axis. Everything else is the stock part: the first Part is its asset
     definition from CorePropulsionAAssets.xml, the second its game data patch from CorePropulsionAGameData.xml, both renamed.
@@ -152,8 +152,7 @@
     <RocketEngineControllers Modify="Extend">
       <RocketEngineController Key="LR91-AJ-3">
         <Rockets>
-          <Rocket SubPart="CorePropulsionA_Subpart_EngineALargeVacAssembly3" KeyRef="Engine" />
-          <Rocket KeyRef="GasGenerator" />
+          <Rocket KeyRef="Engine" />
         </Rockets>
       </RocketEngineController>
     </RocketEngineControllers>
@@ -172,30 +171,31 @@
       </Connector>
     </Connectors>
     <Rockets Modify="Extend">
-      <Rocket Key="GasGenerator">
-        <Core KeyRef="GasGeneratorChamber" />
+      <GasGeneratorRocket Key="Engine">
+        <Core SubPart="CorePropulsionA_Subpart_EngineALargeVacAssembly3" KeyRef="ThrustChamber" />
         <Nozzles>
+          <Nozzle SubPart="CorePropulsionA_Subpart_EngineALargeVacAssembly3" KeyRef="Nozzle" />
+        </Nozzles>
+        <GasGenerator KeyRef="GasGenerator" />
+        <TurbineExhaustNozzles>
           <Nozzle SubPart="CorePropulsionA_Subpart_EngineAVernierNozzle4" KeyRef="VernierNozzle" />
           <Nozzle SubPart="CorePropulsionA_Subpart_EngineAVernierNozzle5" KeyRef="VernierNozzle" />
           <Nozzle SubPart="CorePropulsionA_Subpart_EngineAVernierNozzle6" KeyRef="VernierNozzle" />
           <Nozzle SubPart="CorePropulsionA_Subpart_EngineAVernierNozzle7" KeyRef="VernierNozzle" />
-        </Nozzles>
+        </TurbineExhaustNozzles>
+        <TurbomachineryEfficiency Value="0.42" />
+        <TurbineInletTemperature K="1000" />
         <MinimumThrottle Value="0.1" />
-      </Rocket>
+      </GasGeneratorRocket>
     </Rockets>
     <RocketCores Modify="Extend">
-      <Combustor Key="GasGeneratorChamber">
+      <GasGenerator Key="GasGenerator">
         <FeedsFroms>
           <FeedsFrom>
             <Connector KeyRef="_connector5" />
           </FeedsFrom>
         </FeedsFroms>
-        <Reaction Ref="Hydrolox">
-            <MixtureRatio>5.5</MixtureRatio>
-        </Reaction>
-        <MaxPressure Bar="49" />
-        <ThermalEfficiency Value="0.95" />
-      </Combustor>
+      </GasGenerator>
     </RocketCores>
     <Gimbals Modify="Extend">
       <Gimbal Key="CorePropulsionA_Subpart_EngineAVernierNozzle4" Modify="Patch">
