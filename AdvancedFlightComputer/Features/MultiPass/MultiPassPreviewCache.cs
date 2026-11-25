@@ -166,6 +166,14 @@ internal static class MultiPassPreviewCache
                 hc.Add(thermal.Config.CoreTemperature);
                 hc.Add(thermal.Config.ThermalEfficiency);
             }
+            else if (core is GasGeneratorCore gasGenerator && gasGenerator.Rocket is GasGeneratorRocket cycle)
+            {
+                hc.Add(gasGenerator.DesignPressure);
+                hc.Add(cycle.Config.TurbomachineryEfficiency);
+                hc.Add(cycle.Config.TurbineInletTemperature);
+                hc.Add(cycle.Config.FeedPressureDrop);
+                hc.Add(cycle.Config.TankPressureMax);
+            }
             AddReactants(plumbed.DesiredMix, ref hc);
             AddConsumptionOrder(plumbed.ResourceManager, ref hc);
             return;
@@ -237,6 +245,8 @@ internal static class MultiPassPreviewCache
 
             if (nozzle is DeLavalNozzle liquid)
                 AddNozzleConfig(liquid.Config, ref hc);
+            else if (nozzle is TurbineExhaustNozzle exhaust)
+                AddNozzleConfig(exhaust.Config, ref hc);
             else if (nozzle is SolidMotorNozzle solid)
             {
                 AddNozzleConfig(solid.Config, ref hc);
