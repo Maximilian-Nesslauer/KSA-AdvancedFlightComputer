@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq.Expressions;
 using System.Reflection;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Ui.Logic;
@@ -8,69 +9,98 @@ namespace AdvancedFlightComputer.Features.Guidance;
 
 /// <summary>
 /// Reads and writes the guidance fields a <see cref="SettingSpec"/> names, so a page can count and
-/// reset its changed values without a hand-written list of fields. A key that does not resolve logs
-/// once and counts as unchanged, so a renamed field costs the count, not the page. A value that
-/// guidance or the launch site writes by itself is not the player's change, so it is not counted,
-/// not reset and not marked, see <see cref="SetBy"/>.
+/// reset its changed values without a hand-written list of fields. Compiled typed delegates avoid
+/// per-frame reflection and value-type boxing.
 /// </summary>
 internal static class SettingAccess
 {
-    private static readonly Dictionary<string, FieldInfo?> _fields = new(StringComparer.Ordinal);
+    private enum FieldKind : byte { Missing, Double, Int, Bool }
 
-    private static FieldInfo? Field(string key)
+    // Reference type rather than a value-type struct so dictionary lookups copy an 8-byte reference instead of 40 bytes of delegates.
+    private sealed class Accessor
     {
-        if (_fields.TryGetValue(key, out FieldInfo? cached))
+        public FieldKind Kind;
+        public Func<VehicleAutopilotState, double>? GetDouble;
+        public Action<VehicleAutopilotState, double>? SetDouble;
+        public Func<VehicleAutopilotState, bool>? GetBool;
+        public Action<VehicleAutopilotState, bool>? SetBool;
+    }
+
+    private static readonly Dictionary<string, Accessor> _accessors = new(StringComparer.Ordinal);
+
+    private static Accessor Resolve(string key)
+    {
+        if (_accessors.TryGetValue(key, out Accessor? cached))
             return cached;
+
         FieldInfo? field = typeof(VehicleAutopilotState).GetField(key, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (field != null && field.FieldType != typeof(double) && field.FieldType != typeof(int) && field.FieldType != typeof(bool))
-            field = null;
-        if (field == null)
+        var acc = new Accessor();
+        if (field != null)
+        {
+            ParameterExpression stateParam = Expression.Parameter(typeof(VehicleAutopilotState), "s");
+            MemberExpression member = Expression.Field(stateParam, field);
+            if (field.FieldType == typeof(double))
+            {
+                ParameterExpression valParam = Expression.Parameter(typeof(double), "v");
+                acc.Kind = FieldKind.Double;
+                acc.GetDouble = Expression.Lambda<Func<VehicleAutopilotState, double>>(member, stateParam).Compile();
+                acc.SetDouble = Expression.Lambda<Action<VehicleAutopilotState, double>>(Expression.Assign(member, valParam), stateParam, valParam).Compile();
+            }
+            else if (field.FieldType == typeof(int))
+            {
+                ParameterExpression valParam = Expression.Parameter(typeof(double), "v");
+                MethodInfo round = typeof(Math).GetMethod(nameof(Math.Round), new[] { typeof(double) })!;
+                Expression rounded = Expression.Convert(Expression.Call(round, valParam), typeof(int));
+                acc.Kind = FieldKind.Int;
+                acc.GetDouble = Expression.Lambda<Func<VehicleAutopilotState, double>>(Expression.Convert(member, typeof(double)), stateParam).Compile();
+                acc.SetDouble = Expression.Lambda<Action<VehicleAutopilotState, double>>(Expression.Assign(member, rounded), stateParam, valParam).Compile();
+            }
+            else if (field.FieldType == typeof(bool))
+            {
+                ParameterExpression valParam = Expression.Parameter(typeof(bool), "v");
+                acc.Kind = FieldKind.Bool;
+                acc.GetBool = Expression.Lambda<Func<VehicleAutopilotState, bool>>(member, stateParam).Compile();
+                acc.SetBool = Expression.Lambda<Action<VehicleAutopilotState, bool>>(Expression.Assign(member, valParam), stateParam, valParam).Compile();
+            }
+        }
+        if (acc.Kind == FieldKind.Missing)
             LogHelper.WarnOnce("setting-access:" + key, $"[AFC] Setting '{key}' has no double, int or bool field on VehicleAutopilotState.");
-        _fields[key] = field;
-        return field;
+        _accessors[key] = acc;
+        return acc;
     }
 
     public static bool TryGetDouble(VehicleAutopilotState state, string key, out double value)
     {
-        value = double.NaN;
-        FieldInfo? field = Field(key);
-        if (field == null)
-            return false;
-        object? raw = field.GetValue(state);
-        switch (raw)
+        Accessor acc = Resolve(key);
+        if (acc.GetDouble == null)
         {
-            case double d: value = d; return true;
-            case int i: value = i; return true;
-            default: return false;
+            value = double.NaN;
+            return false;
         }
+        value = acc.GetDouble(state);
+        return true;
     }
 
     public static void SetDouble(VehicleAutopilotState state, string key, double value)
     {
-        FieldInfo? field = Field(key);
-        if (field == null)
-            return;
-        if (field.FieldType == typeof(int))
-            field.SetValue(state, (int)Math.Round(value));
-        else if (field.FieldType == typeof(double))
-            field.SetValue(state, value);
+        Resolve(key).SetDouble?.Invoke(state, value);
     }
 
     public static bool TryGetBool(VehicleAutopilotState state, string key, out bool value)
     {
-        value = false;
-        FieldInfo? field = Field(key);
-        if (field == null || field.FieldType != typeof(bool))
+        Accessor acc = Resolve(key);
+        if (acc.GetBool == null)
+        {
+            value = false;
             return false;
-        value = (bool)field.GetValue(state)!;
+        }
+        value = acc.GetBool(state);
         return true;
     }
 
     public static void SetBool(VehicleAutopilotState state, string key, bool value)
     {
-        FieldInfo? field = Field(key);
-        if (field != null && field.FieldType == typeof(bool))
-            field.SetValue(state, value);
+        Resolve(key).SetBool?.Invoke(state, value);
     }
 
     /// <summary>

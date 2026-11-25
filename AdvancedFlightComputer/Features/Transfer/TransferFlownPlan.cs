@@ -15,8 +15,8 @@ namespace AdvancedFlightComputer.Features.Transfer;
 /// </summary>
 internal static class TransferFlownPlan
 {
-    // The phase buffer size stock uses for the same comparison.
-    private static readonly FiniteBurnPhase[] _phases = new FiniteBurnPhase[16];
+    // Start with the 16-phase buffer stock uses and grow if a vehicle has more phases so SequenceEqual stays valid.
+    private static FiniteBurnPhase[] _phases = new FiniteBurnPhase[16];
     private static int _phaseCount;
     private static Vehicle? _source;
     private static UniverseTime _start, _transit;
@@ -53,9 +53,16 @@ internal static class TransferFlownPlan
     public static void Reset()
     {
         _source = null;
+        _plan?.ReleaseCachedPoints();
         _plan = null;
         _built = false;
         _phaseCount = 0;
+    }
+
+    public static void OnVehicleDisposed(Vehicle vehicle)
+    {
+        if (ReferenceEquals(_source, vehicle))
+            Reset();
     }
 
     private static void Refresh(Vehicle source, OrbitalTransfers.PorkChopEntry entry)
@@ -78,18 +85,22 @@ internal static class TransferFlownPlan
         _start = data.Start;
         _transit = data.Transit;
         _instantDvVlf = data.TransferDvVlf;
-        _phaseCount = Math.Min(phases.Length, _phases.Length);
-        phases.Slice(0, _phaseCount).CopyTo(_phases);
+        if (phases.Length > _phases.Length)
+            _phases = new FiniteBurnPhase[phases.Length];
+        _phaseCount = phases.Length;
+        phases.CopyTo(_phases);
         _dvVlf = _instantDvVlf;
+        _plan?.ReleaseCachedPoints();
         _plan = null;
 
         PatchedConic? patch = source.FlightPlan.TryFindPatch(_start);
         if (patch == null)
             return;
+        FlightPlan? plan = null;
         try
         {
             _dvVlf = FiniteBurns.Refine(patch.Orbit, _start, _instantDvVlf, phases, FiniteBurnGoal.Transfer(data.Arrival)).DvVlf;
-            FlightPlan plan = FlightPlan.CreateUninitialized(source.Hash);
+            plan = FlightPlan.CreateUninitialized(source.Hash);
             if (FiniteBurns.TryAddFiniteBurn(plan, patch, _start, _dvVlf, phases, out bool impacted) == null)
                 return;
             if (!impacted)
@@ -100,9 +111,11 @@ internal static class TransferFlownPlan
                 piece.Orbit.UpdateCachedPoints(UpdateTaskUtils.GenerateSpacedPoints(piece));
             }
             _plan = plan;
+            plan = null;
         }
         catch (Exception ex)
         {
+            plan?.ReleaseCachedPoints();
             // The impulsive transfer stays a valid burn, so a failed refinement costs the finite correction, not the CREATE.
             _dvVlf = _instantDvVlf;
             _plan = null;

@@ -119,17 +119,22 @@ public static partial class GuidanceWindow
                             series.StagingNodes, "", _planSwatch, old, axisStep: PitchAxisStepDeg);
                         break;
                     case 2 when series != null:
-                        var q = new double[series.QFraction.Length];
-                        var qa = new double[series.QAlphaFraction.Length];
+                        int qLen = series.QFraction.Length;
+                        int qaLen = series.QAlphaFraction.Length;
+                        if (_qScratch.Length != qLen)
+                            _qScratch = new double[qLen];
+                        if (_qaScratch.Length != qaLen)
+                            _qaScratch = new double[qaLen];
                         double peak = 0.0;
-                        for (int i = 0; i < q.Length; i++)
+                        for (int i = 0; i < qLen; i++)
                         {
-                            q[i] = 100.0 * series.QFraction[i];
-                            qa[i] = 100.0 * series.QAlphaFraction[i];
+                            _qScratch[i] = 100.0 * series.QFraction[i];
+                            if (i < qaLen)
+                                _qaScratch[i] = 100.0 * series.QAlphaFraction[i];
                             if (double.IsFinite(series.QFraction[i]))
                                 peak = Math.Max(peak, series.QFraction[i]);
                         }
-                        PicBox qLegend = DrawSeriesView(in f, series.Time, q, qa, 100.0, PageText.QLimits(plan.QMaxKpa, plan.QAlphaMax), 0.0, 100.0, AxisTicks.Percent,
+                        PicBox qLegend = DrawSeriesView(in f, series.Time, _qScratch, _qaScratch, 100.0, PageText.QLimits(plan.QMaxKpa, plan.QAlphaMax), 0.0, 100.0, AxisTicks.Percent,
                             series.StagingNodes, PageText.PeakQ(peak * plan.QMaxKpa), _qSwatches, old, boldAtLimit: true, refShort: PageText.QLimitShort(plan.QMaxKpa));
                         if (qLegend.W > 0f)
                         {
@@ -206,6 +211,37 @@ public static partial class GuidanceWindow
 
     private static ImColor8 StageInk(int stage, bool old) => old ? ((Rgb)ColorRules.Stage(stage)).A(OldPlanAlpha) : Palette.Stage(stage);
 
+    private static double[] _qScratch = Array.Empty<double>();
+    private static double[] _qaScratch = Array.Empty<double>();
+    private static double[] _traceDownCache = Array.Empty<double>();
+    private static double[] _traceAltCache = Array.Empty<double>();
+    private static VehicleAutopilotState _traceCacheState;
+    private static double3[] _traceCacheRing;
+    private static IParentBody _traceCacheParent;
+    private static int _traceCacheStart = -1;
+    private static int _traceCacheProcessed;
+    private static int _traceCacheFlownCount;
+    private static double _traceCacheMaxDown;
+    private static double _traceCacheTopAlt;
+    private static double _traceCacheClimbEnd = double.NaN;
+    private static double3 _traceCacheFirst;
+    private static readonly List<(float X, string Label)> _plannedSiteMarkers = new();
+    private static readonly List<(float X, string Label)> _pendingSiteMarkers = new();
+
+    private static void ResetPictureCaches()
+    {
+        _traceCacheState = null;
+        _traceCacheRing = null;
+        _traceCacheParent = null;
+        _traceCacheStart = -1;
+        _traceCacheProcessed = 0;
+        _traceCacheFlownCount = 0;
+        _traceCacheMaxDown = 0.0;
+        _traceCacheTopAlt = 0.0;
+        _traceCacheClimbEnd = double.NaN;
+        _traceCacheFirst = default;
+    }
+
     private static void DrawProfileView(in PictureFrame f, IParentBody parent, AscentPlan plan, bool old)
     {
         AscentPlanSeries series = plan?.Series;
@@ -223,23 +259,54 @@ public static partial class GuidanceWindow
             double3 first = double3.Normalize(_s.Trace[start]);
             double[] times = TraceTimes();
             double spin = parent.GetAngularVelocity();
-            flownDown = new double[_s.TraceCount];
-            flownAlt = new double[_s.TraceCount];
             double climbEnd = ClimbEndTime();
-            for (int i = 0; i < _s.TraceCount; i++)
+            bool cacheValid = ReferenceEquals(_traceCacheState, _s)
+                && ReferenceEquals(_traceCacheRing, _s.Trace)
+                && ReferenceEquals(_traceCacheParent, parent)
+                && _traceCacheStart == start
+                && _s.TraceCount >= _traceCacheProcessed
+                && _traceCacheClimbEnd == climbEnd
+                && _traceCacheFirst == first;
+            if (!cacheValid)
+            {
+                if (_traceDownCache.Length < cap)
+                {
+                    _traceDownCache = new double[cap];
+                    _traceAltCache = new double[cap];
+                }
+                _traceCacheState = _s;
+                _traceCacheRing = _s.Trace;
+                _traceCacheParent = parent;
+                _traceCacheStart = start;
+                _traceCacheProcessed = 0;
+                _traceCacheFlownCount = 0;
+                _traceCacheMaxDown = 0.0;
+                _traceCacheTopAlt = 0.0;
+                _traceCacheClimbEnd = climbEnd;
+                _traceCacheFirst = first;
+            }
+            for (int i = _traceCacheProcessed; i < _s.TraceCount; i++)
             {
                 int slot = (start + i) % cap;
                 if (times != null && times[slot] > climbEnd)
                     break;
-                flownCount++;
                 double3 p = _s.Trace[slot];
                 double turn = times != null ? -spin * (times[slot] - times[start]) : 0.0;
                 var ground = new double3(p.X * Math.Cos(turn) - p.Y * Math.Sin(turn), p.X * Math.Sin(turn) + p.Y * Math.Cos(turn), p.Z);
-                flownDown[i] = AngleBetween(first, ground) * radius / 1000.0;
-                flownAlt[i] = (p.Length() - radius) / 1000.0;
-                maxDown = Math.Max(maxDown, flownDown[i]);
-                flownTop = Math.Max(flownTop, flownAlt[i]);
+                double downKm = AngleBetween(first, ground) * radius / 1000.0;
+                double altKm = (p.Length() - radius) / 1000.0;
+                _traceDownCache[i] = downKm;
+                _traceAltCache[i] = altKm;
+                _traceCacheMaxDown = Math.Max(_traceCacheMaxDown, downKm);
+                _traceCacheTopAlt = Math.Max(_traceCacheTopAlt, altKm);
+                _traceCacheFlownCount = i + 1;
+                _traceCacheProcessed = i + 1;
             }
+            flownDown = _traceDownCache;
+            flownAlt = _traceAltCache;
+            flownCount = _traceCacheFlownCount;
+            maxDown = Math.Max(maxDown, _traceCacheMaxDown);
+            flownTop = Math.Max(flownTop, _traceCacheTopAlt);
         }
         if (series != null)
         {
@@ -636,8 +703,10 @@ public static partial class GuidanceWindow
     private static void DrawProfileSites(ImDrawListPtr draw, Labels labels, CanvasView view, in PicBox plot,
                                          float scale, AscentPlan plan, bool old)
     {
-        var planned = new List<(float X, string Label)>();
-        var pending = new List<(float X, string Label)>();
+        List<(float X, string Label)> planned = _plannedSiteMarkers;
+        List<(float X, string Label)> pending = _pendingSiteMarkers;
+        planned.Clear();
+        pending.Clear();
         foreach (BoosterTrackView track in plan.BoosterTracks)
             if (track.SiteDownrangeKm >= view.X0 && track.SiteDownrangeKm <= view.X1 && track.SiteLabel.Length > 0)
                 planned.Add((view.Sx(track.SiteDownrangeKm), track.SiteLabel));

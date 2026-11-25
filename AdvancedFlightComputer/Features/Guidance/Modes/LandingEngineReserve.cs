@@ -107,7 +107,7 @@ public static partial class GuidanceWindow
             foreach (Tank tank in part.SubtreeModules.Get<Tank>())
             {
                 double kg = tank.ComputeSubstanceMass(moles);
-                if (tank.RoleAffinity == ConsumerRole.Engine)
+                if ((tank.RoleAffinity & ConsumerRole.Engine) != 0)
                     propellant += kg;
                 else
                     dry += kg;

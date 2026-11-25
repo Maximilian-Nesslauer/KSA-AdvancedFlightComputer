@@ -64,6 +64,8 @@ internal static class BurnPointing
 
     private static double SettleSeconds(float authority, float frequency, float pointingError)
     {
+        if (!float.IsFinite(authority) || !float.IsFinite(frequency) || !float.IsFinite(pointingError))
+            return 0.0;
         if (_settle.Authority != authority || _settle.Frequency != frequency || _settle.Error != pointingError)
             _settle = (authority, frequency, pointingError,
                 FlightComputer.ComputeTvcTrackSettleDuration(GimbalControlPeriod, authority, frequency, pointingError, GimbalSettleTolerance));

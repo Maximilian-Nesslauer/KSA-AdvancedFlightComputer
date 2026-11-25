@@ -293,11 +293,12 @@ internal static class AttitudeController
             remaining = ask;
         }
         // One programme for fins and RCS (the RCS as the fins' backup): the fins are commanded, the RCS fired for what they will give short. Fins off (Settings.UseSurfaces) are held at rest and the RCS takes it all.
-        // RCS off (Settings.UseRcs): the surfaces alone, no backup in their programme and no thrusters fired.
+        // RCS off (Settings.UseRcs): the surfaces alone, no backup in their programme and no thrusters fired. The one measure of the thrusters is handed to the RCS's command below too, so it is not measured twice in a step.
         RcsTorqueAllocator rcsColumns = null;
+        ThrusterController[] rcsModules = null;
         if (rcsNow && !phasePlane)
             using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.RcsColumns"))
-                rcsColumns = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out _);
+                rcsColumns = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out rcsModules);
         KsaAeroTorqueControl.Report surfaces = default;
         if (settings.UseSurfaces)
             surfaces = KsaAeroTorqueControl.Command(vehicle, aero, remaining, mx, my, mz, RcsPriority, momentLimiterPerPa,
@@ -320,7 +321,9 @@ internal static class AttitudeController
         }
         KsaRcsTorqueControl.Report rcs = default;
         if (rcsNow && (!phasePlane || rcsFiring != 0))
-            rcs = KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, rcsPriority, jetMapFallback: phasePlane);
+            rcs = rcsColumns != null
+                ? KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, rcsPriority, rcsColumns, rcsModules)
+                : KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, rcsPriority, jetMapFallback: phasePlane);
         else
             KsaRcsTorqueControl.Release(vehicle);
         // THE RCS'S STEADY WORK TO THE SURFACES: on each axis it owns, what it gives is integrated into the surfaces' trim there, so a moment the tables miss ends up on the flaps and the RCS keeps only what changes. A Starship's RCS held a steady 80-117 kN m of pitch on pulses through its whole entry, 2 t of propellant by Mach 19 (2026-11-24). Held to the surfaces' reach either way, so it does not wind up past what they can give; the step's holdS is the time the RCS's torque was held.

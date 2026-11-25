@@ -742,6 +742,15 @@ public static partial class GuidanceWindow
     private static readonly HashSet<Part> _litStaying = new HashSet<Part>();
     private static readonly HashSet<RocketCore> _leavingCores = new HashSet<RocketCore>();
 
+    private static void ClearSeparationScratch()
+    {
+        _separationDrops.Clear();
+        _pendingIgnition.Clear();
+        _litLeaving.Clear();
+        _litStaying.Clear();
+        _leavingCores.Clear();
+    }
+
     /// <summary>The tanks in what the next separation drops (<see cref="_separationDrops"/>, as NextSeparationTakesBurningEngines left it) that feed the engines dropped with them: the side boosters' own propellant, which their reserve is counted in. A pod's tank that only RCS draws on is not one.</summary>
     private static void CollectReserveTanks(Vehicle vehicle, List<Tank> into)
     {
@@ -871,19 +880,27 @@ public static partial class GuidanceWindow
             _s.ReserveNote = "NO SEPARATION IN STAGE MODEL FOR A RESERVE";
             return;
         }
-        if (!NextSeparationTakesBurningEngines(vehicle, out double flowShare, out string why))
+        double flowShare;
+        try
         {
-            _s.ReserveNote = why;
-            return;
-        }
-        if (flowShare < 1.0)
-        {
-            CollectReserveTanks(vehicle, _s.ReserveTanks);
-            if (_s.ReserveTanks.Count == 0)
+            if (!NextSeparationTakesBurningEngines(vehicle, out flowShare, out string why))
             {
-                _s.ReserveNote = "NO TANKS FEED THE SIDE BOOSTERS' ENGINES";
+                _s.ReserveNote = why;
                 return;
             }
+            if (flowShare < 1.0)
+            {
+                CollectReserveTanks(vehicle, _s.ReserveTanks);
+                if (_s.ReserveTanks.Count == 0)
+                {
+                    _s.ReserveNote = "NO TANKS FEED THE SIDE BOOSTERS' ENGINES";
+                    return;
+                }
+            }
+        }
+        finally
+        {
+            ClearSeparationScratch();
         }
         _s.ReserveFlowShare = flowShare;
 
@@ -1515,6 +1532,8 @@ public static partial class GuidanceWindow
             ResampleBoostbackAero(vehicle, parent, force: true);
         if (!BoostbackLive && ViewDemand.Wants(vehicle, ViewDemand.Kind.Impact))
             UpdateImpactPrediction(vehicle, orbit, parent, force: false);
+        if (!BoostbackLive && ViewDemand.Wants(vehicle, ViewDemand.Kind.Steer))
+            UpdateSteering(vehicle, orbit, parent);
         if (ViewDemand.Wants(vehicle, ViewDemand.Kind.Passes))
             RefreshPasses(orbit, parent, parent.Mu, parent.MeanRadius);
 
@@ -2417,7 +2436,7 @@ public static partial class GuidanceWindow
             return null;
         ReadOnlySpan<Astronomical> all = system.All.AsSpan();
         for (int i = 0; i < all.Length; i++)
-            if (all[i] is Vehicle v && !ReferenceEquals(v, exclude) && v.Id == id)
+            if (all[i] is Vehicle v && !v.IsDisposed && !ReferenceEquals(v, exclude) && v.Id == id)
                 return v;
         return null;
     }

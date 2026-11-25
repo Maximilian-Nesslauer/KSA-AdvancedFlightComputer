@@ -47,6 +47,7 @@ public sealed class TransferSessionTest : AfcTest
 
         t.Info($"case: the current epoch {Universe.GetElapsedSeconds():F3} s");
         PlanOnce(t, home, destination, save, firstCase: true);
+        CheckConcurrencyAndValidationRegressions(t, home, destination, save);
 
         // The sim clock only runs forward, so the fixed epoch is reachable only when no earlier test passed it.
         double wait = FixedEpochSeconds - Universe.GetElapsedSeconds();
@@ -121,6 +122,7 @@ public sealed class TransferSessionTest : AfcTest
             DateTime refineStart = DateTime.UtcNow;
             while (TransferSession.Refining && DateTime.UtcNow - refineStart < RefineTimeout)
                 Thread.Sleep(50);
+            TransferSession.Tick();
             t.Check("the intercept refinement ends", !TransferSession.Refining);
             CheckDepartureImpactScore(t, info);
 
@@ -233,9 +235,181 @@ public sealed class TransferSessionTest : AfcTest
         DateTime start = DateTime.UtcNow;
         while (TransferSession.Refining && DateTime.UtcNow - start < RefineTimeout)
             Thread.Sleep(50);
+        TransferSession.Tick();
         OrbitalTransfers.TransferData? data = info.PorkChopData?[flagged.X, flagged.Y]?.TransferData;
         t.Check("the cheapest cell scored as a departure impact impacts in its propagated trajectory",
             data is { Impacts: true }, $"index {flagged.X}, {flagged.Y}, {lowest:F1} m/s");
+    }
+
+    private static void CheckConcurrencyAndValidationRegressions(
+        TestContext t, IParentBody home, IOrbiter destination, VehicleSave save)
+    {
+        CheckBestDvRelTransposeInvariance(t);
+        CheckCorrectionValidation(t);
+        CheckRefineExceptionAndCancellation(t, home, destination, save);
+        CheckNonCelestialOriginGuard(t, home, destination, save);
+    }
+
+    private static void CheckBestDvRelTransposeInvariance(TestContext t)
+    {
+        // Cell (0, 1) has very low arrival speed and huge departure dV, which used to trap coupled running minima.
+        // Cell (1, 0) has strictly lower total (dv + rel) and must win regardless of grid orientation.
+        var grid = new PorkchopScores.Cell[2, 2];
+        var t0 = new UniverseTime(1000.0);
+        var dt = new UniverseTime(500.0);
+        grid[0, 0] = new PorkchopScores.Cell(t0, dt, 4000.0, 2000.0, false);
+        grid[0, 1] = new PorkchopScores.Cell(t0, dt, 9000.0, 50.0, false);
+        grid[1, 0] = new PorkchopScores.Cell(t0, dt, 1500.0, 300.0, false);
+        grid[1, 1] = new PorkchopScores.Cell(t0, dt, 1200.0, 2500.0, false);
+
+        var transposed = new PorkchopScores.Cell[2, 2];
+        for (int r = 0; r < 2; r++)
+            for (int c = 0; c < 2; c++)
+                transposed[c, r] = grid[r, c];
+
+        var (_, bestRel) = TransferSession.SelectBestCells(grid, null);
+        var (_, bestRelT) = TransferSession.SelectBestCells(transposed, null);
+        t.Check("BestDvRel minimizes total departure dV plus arrival speed",
+            bestRel.X == 1 && bestRel.Y == 0, $"got ({bestRel.X}, {bestRel.Y})");
+        t.Check("BestDvRel is invariant under grid transpose",
+            bestRelT.X == bestRel.Y && bestRelT.Y == bestRel.X, $"got ({bestRelT.X}, {bestRelT.Y})");
+    }
+
+    private static void CheckCorrectionValidation(TestContext t)
+    {
+        UniverseTime now = Universe.GetElapsedTime();
+        var nanData = new OrbitalTransfers.TransferData
+        {
+            CorrectionStart = now + 600.0,
+            CorrectionDvVlf = new double3(double.NaN, 0.0, 0.0),
+        };
+        var pastData = new OrbitalTransfers.TransferData
+        {
+            CorrectionStart = now - 10.0,
+            CorrectionDvVlf = new double3(10.0, 0.0, 0.0),
+        };
+        var validData = new OrbitalTransfers.TransferData
+        {
+            CorrectionStart = now + 600.0,
+            CorrectionDvVlf = new double3(10.0, 0.0, 0.0),
+        };
+
+        t.Check("IsValidCorrection rejects NaN delta-V", !TransferSession.IsValidCorrection(nanData, now));
+        t.Check("IsValidCorrection rejects past correction time", !TransferSession.IsValidCorrection(pastData, now));
+        t.Check("IsValidCorrection accepts finite future correction", TransferSession.IsValidCorrection(validData, now));
+
+        TransferSession.CancelAll();
+        try
+        {
+            TransferSession.StartCorrectionForTest(nanData, (_, _) => throw new InvalidOperationException("synthetic correction failure"));
+            DateTime waitStart = DateTime.UtcNow;
+            while (TransferSession.CorrectionCalculating && DateTime.UtcNow - waitStart < TimeSpan.FromSeconds(5))
+                Thread.Sleep(20);
+            TransferSession.Tick();
+            t.Check("correction task recovers cleanly from worker exceptions",
+                !TransferSession.CorrectionCalculating && TransferSession.CorrectionFailed);
+        }
+        finally
+        {
+            TransferSession.CancelAll();
+        }
+    }
+
+    private static void CheckRefineExceptionAndCancellation(
+        TestContext t, IParentBody home, IOrbiter destination, VehicleSave save)
+    {
+        string id = "TransferSessionRefine_" + Guid.NewGuid().ToString("N");
+        Vehicle? vehicle = null;
+        TransferSession.CancelAll();
+        try
+        {
+            vehicle = VehicleFixtures.SpawnDesign(t.System, home, save.VehicleSaveData.RootPartInstance!, id,
+                OrbitFixtures.CircularAt(home, 400_000, Universe.GetElapsedTime()));
+            TransferSession.SetSource(vehicle);
+            TransferSession.SetDestination(destination);
+
+            var dummy = new OrbitalTransfers.PorkChopEntry(
+                new OrbitalTransfers.TransferData(), FlightPlan.CreateUninitialized(vehicle.Hash));
+            TransferSession.StartRefineForTest(dummy, (_, _) => throw new InvalidOperationException("synthetic refine failure"));
+            DateTime waitStart = DateTime.UtcNow;
+            while (TransferSession.Refining && DateTime.UtcNow - waitStart < TimeSpan.FromSeconds(5))
+                Thread.Sleep(20);
+            t.Check("refine clears Refining even when the worker throws", !TransferSession.Refining);
+            TransferSession.Tick();
+            t.Check("session remains usable after a refine exception", !TransferSession.Refining && TransferSession.SelectedEntry == null);
+
+            using var started = new ManualResetEventSlim(false);
+            using var cancelledSeen = new ManualResetEventSlim(false);
+            TransferSession.StartRefineForTest(dummy, (stop, _) =>
+            {
+                started.Set();
+                DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+                while (!stop.IsCancellationRequested && DateTime.UtcNow < deadline)
+                    Thread.Sleep(10);
+                if (stop.IsCancellationRequested)
+                    cancelledSeen.Set();
+                return true;
+            });
+            started.Wait(TimeSpan.FromSeconds(5));
+            TransferSession.CancelAll();
+            t.Check("CancelAll signals cancellation to an in-flight refine worker",
+                cancelledSeen.Wait(TimeSpan.FromSeconds(5)) && !TransferSession.Refining && TransferSession.SelectedEntry == null);
+        }
+        finally
+        {
+            TransferSession.CancelAll();
+            if (vehicle != null)
+                VehicleSpawner.Despawn(vehicle);
+        }
+    }
+
+    private static void CheckNonCelestialOriginGuard(
+        TestContext t, IParentBody home, IOrbiter destination, VehicleSave save)
+    {
+        string id = "TransferSessionOrigin_" + Guid.NewGuid().ToString("N");
+        Vehicle? vehicle = null;
+        try
+        {
+            // Look for an OrbitingStar with a child planet in the loaded system; otherwise exercise same-SOI home->destination.
+            OrbitingStar? orbitingStar = null;
+            IOrbiter? starChild = null;
+            foreach (Astronomical body in t.System.All.AsSpan())
+            {
+                if (body is OrbitingStar star && star.Children.Count > 0)
+                {
+                    orbitingStar = star;
+                    starChild = star.Children[0];
+                    break;
+                }
+            }
+
+            IParentBody spawnParent = orbitingStar ?? home;
+            IOrbiter target = starChild ?? destination;
+            double altitude = orbitingStar != null ? Math.Max(1_000_000.0, orbitingStar.MeanRadius * 2.0) : 400_000.0;
+            vehicle = VehicleFixtures.SpawnDesign(t.System, spawnParent, save.VehicleSaveData.RootPartInstance!, id,
+                OrbitFixtures.CircularAt(spawnParent, altitude, Universe.GetElapsedTime()));
+
+            IOrbiter sourceOrbiter = (spawnParent as IOrbiter) ?? vehicle;
+            var info = new OrbitalTransfers.TransferInfo(sourceOrbiter, target, vehicle, usePorkChopData: false);
+            Exception? error = null;
+            try
+            {
+                TransferSession.PrepareCalculationOrigin(info, Universe.GetElapsedTime());
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+            t.Check("PrepareCalculationOrigin completes without throwing on same-SOI or OrbitingStar origins",
+                error == null, error?.ToString() ?? "ok");
+            if (OrbitalTransfers.SameSoiTransfer(new OrbitalTransfers.TransferInfo(sourceOrbiter, target, vehicle, usePorkChopData: false)))
+                t.Check("PrepareCalculationOrigin switches same-SOI Source to Vehicle", ReferenceEquals(info.Source, vehicle));
+        }
+        finally
+        {
+            if (vehicle != null)
+                VehicleSpawner.Despawn(vehicle);
+        }
     }
 
     private static void CheckCancelReportsNothing(TestContext t)

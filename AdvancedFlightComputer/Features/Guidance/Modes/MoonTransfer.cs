@@ -37,6 +37,7 @@ public static partial class GuidanceWindow
 {
     // The ascent release cuts the engine and hands the craft back within a few steps, and the game rebuilds the flight plan after a burn. Planning waits this long after either.
     private const double MoonSettleS = 10.0;
+    private const int MoonSettleSteps = 10;
 
     // The ignition of the injection is never sooner than this after the plan, so stock Auto has the time to turn the craft. The ignition comes half a burn ahead of the node.
     private const double MoonBurnLeadS = 600.0;
@@ -302,10 +303,13 @@ public static partial class GuidanceWindow
     /// <summary>The completion of a stock burn, from the FlightComputer.RaisePendingAlerts postfix and before AutoRemove takes the burn out of the plan.</summary>
     internal static void OnStockBurnCompleted(Vehicle vehicle, Burn burn)
     {
-        if (VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState state)
-            && state.MoonChain is MoonChainStage.Injection or MoonChainStage.Correction or MoonChainStage.Capture
+        if (!VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState state))
+            return;
+        if (state.MoonChain is MoonChainStage.Injection or MoonChainStage.Correction or MoonChainStage.Capture
             && state.MoonChainNode != null && ReferenceEquals(state.MoonChainNode, burn))
             state.MoonChainCompleted = true;
+        if (state.DeorbitAutoArmed && state.DeorbitNode != null && ReferenceEquals(state.DeorbitNode, burn))
+            state.DeorbitBurnCompleted = true;
     }
 
     // The armed burn, until stock reports it complete. FlightComputer.UpdateBurnTarget ends an Auto burn when the delta v to go no longer points along the target and writes Manual, and the kept BurnTarget still shows that after the node is gone, as the stock deorbit phase reads it (StockDeorbitComplete).
@@ -382,13 +386,16 @@ public static partial class GuidanceWindow
         }
         _s.MoonChain = MoonChainStage.Course;
         _s.MoonChainAfter = SimNow() + CourseCorrector.SettleS;
+        _s.MoonChainSettleSteps = CourseCorrector.SettleSteps;
         _s.Status = $"TO {moonBody.Id.ToUpperInvariant()}: BURN DONE, CHECKING THE COURSE.";
     }
 
     // After a burn: compare the periapsis on the craft's own flight plan with the request, and plan a correction when it is off.
     private static void StepMoonCourse(Vehicle vehicle, Orbit orbit, Celestial moon, IParentBody moonBody)
     {
-        if (SimNow() < _s.MoonChainAfter)
+        if (_s.MoonChainSettleSteps > 0)
+            _s.MoonChainSettleSteps--;
+        if (SimNow() < _s.MoonChainAfter || _s.MoonChainSettleSteps > 0)
             return;
         string moonName = moonBody.Id.ToUpperInvariant();
         if (CourseCorrector.BurnPlanned(vehicle))
@@ -456,6 +463,7 @@ public static partial class GuidanceWindow
         }
         _s.MoonChain = MoonChainStage.Coast;
         _s.MoonChainAfter = double.NaN;
+        _s.MoonChainSettleSteps = 0;
         _s.MoonChainWarpAsked = false;
         _s.MoonChainPowerWarp = ProbeWarpRetry.None;
         _s.Status = $"TO {moonName}: {course}. THE CAPTURE BURN IS PLANNED IN ITS SPHERE.";
@@ -484,17 +492,25 @@ public static partial class GuidanceWindow
                 return;
             }
             _s.MoonChainAfter = double.NaN;
+            _s.MoonChainSettleSteps = 0;
             _s.MoonChainCoastEnd = entry.Seconds();
             StepMoonWarp(vehicle, entry.Seconds() + MoonSphereMarginS);
             return;
         }
 
-        // Inside the sphere. The settle time starts at the first step here.
+        // Inside the sphere. The settle time and step countdown start at the first step here.
         if (_s.MoonChainPowerWarp != ProbeWarpRetry.None)
             _s.MoonChainPowerWarp = ProbeWarpRetry.Spent;
-        if (double.IsNaN(_s.MoonChainAfter) || _s.MoonChainAfter > now + MoonSettleS)
+        if (double.IsNaN(_s.MoonChainAfter))
+        {
             _s.MoonChainAfter = now + MoonSettleS;
-        if (now < _s.MoonChainAfter)
+            _s.MoonChainSettleSteps = MoonSettleSteps;
+        }
+        else if (_s.MoonChainAfter > now + MoonSettleS)
+            _s.MoonChainAfter = now + MoonSettleS;
+        if (_s.MoonChainSettleSteps > 0)
+            _s.MoonChainSettleSteps--;
+        if (now < _s.MoonChainAfter || _s.MoonChainSettleSteps > 0)
             return;
         double available = vehicle.Parts?.PerformanceSequences?.TotalDeltaV ?? 0.0;
         string refusal = MoonInjectionPlanner.TryPlanCapture(vehicle, moonBody, available, new UniverseTime(now + MoonBurnLeadS),
@@ -602,6 +618,7 @@ public static partial class GuidanceWindow
         _s.MoonChain = MoonChainStage.Idle;
         _s.MoonChainStopRequested = false;
         _s.MoonChainAfter = double.NaN;
+        _s.MoonChainSettleSteps = 0;
         _s.MoonTransferId = "";
         _s.MoonTransferCapture = false;
         _s.PlaneTarget = null;

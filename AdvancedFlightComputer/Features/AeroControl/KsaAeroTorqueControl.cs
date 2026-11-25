@@ -296,9 +296,13 @@ internal static class KsaAeroTorqueControl
     {
         if (vehicle == null)
             return;
-        // Sent home, the surfaces start the next smoothing from what they give where they are, not from a stale lagged torque.
         if (Slots.TryGetValue(vehicle, out Slot slot))
+        {
+            slot.Last = default;
+            slot.Surfaces.Clear();
+            // Sent home, the surfaces start the next smoothing from what they give where they are, not from a stale lagged torque.
             slot.LaggedKnown = false;
+        }
         if (!ControlSurfaces.Any)
             return;
         var surfaces = new List<ControlSurface>();

@@ -91,6 +91,7 @@ internal static partial class RcsExecutor
         int best = cap.BestAxis();
         if (best >= 0)
         {
+            FlightComputer fc = vehicle.FlightComputer;
             RcsAxisGroup g = cap.Get(best);
             est.AlignAxis = best;
             est.AlignFeasible = true;
@@ -100,22 +101,65 @@ internal static partial class RcsExecutor
                 + mass * dv * GroupAttitudeFightPerImpulse(
                     in cap, double3.Unpack(RcsCapabilitySnapshot.AxisDirection(best)));
 
-            double3 axisCci = double3.Unpack(RcsCapabilitySnapshot.AxisDirection(best))
-                .Transform(ctrl2Cci);
-            double3 uCci = double3.Unpack(togo).NormalizeOrZero();
-            double theta = MathEx.SafeAcos(double3.Dot(axisCci, uCci));
-            if (theta > AlignMinThetaRad)
-                EstimateSlew(vehicle.FlightComputer, in cap, theta, ref est);
+            float3 authority = EffectiveTorqueAuthority(fc, in cap);
+            // Stock UpdateAttitudeTrackError leaves roll uncontrolled when RollMode is decoupled, so non-X axes cannot hold alignment without coupled roll and roll authority.
+            if (best >= 2 && (fc.RollMode.IsDecoupled() || authority.X <= MinSlewAlphaRadS2))
+            {
+                est.AlignFeasible = false;
+            }
+            else
+            {
+                double3 axisCci = double3.Unpack(RcsCapabilitySnapshot.AxisDirection(best))
+                    .Transform(ctrl2Cci);
+                double3 uCci = double3.Unpack(togo).NormalizeOrZero();
+                double theta = MathEx.SafeAcos(double3.Dot(axisCci, uCci));
+                if (theta > AlignMinThetaRad)
+                    EstimateSlew(fc, in cap, best, authority, theta, ref est);
+            }
         }
         return est;
     }
 
-    /// <summary>Estimate an acceleration and braking turn with the flight computer rate limit. Low angular acceleration makes Align infeasible.</summary>
-    private static void EstimateSlew(
-        FlightComputer fc, in RcsCapabilitySnapshot cap, double theta, ref RcsEstimates est)
+    /// <summary>FlightComputer.UpdateRcsParams zeroes RcsTorqueAuthority while RCSMode is Disabled. Derive angular acceleration from live rotation torque and inverse inertia so previews, activation, and warp lead still work with RCS off.</summary>
+    internal static float3 EffectiveTorqueAuthority(FlightComputer fc, in RcsCapabilitySnapshot cap)
     {
-        double alpha = Math.Min(fc.RcsTorqueAuthority.Y, fc.RcsTorqueAuthority.Z);
-        if (alpha <= MinSlewAlphaRadS2)
+        if (fc.RCSMode == FlightComputerRCSMode.Enabled)
+            return fc.RcsTorqueAuthority;
+        float3 ax = float3.UnitX.Transform(fc.Ctrl2AsmbF);
+        float3 ay = float3.UnitY.Transform(fc.Ctrl2AsmbF);
+        float3 az = float3.UnitZ.Transform(fc.Ctrl2AsmbF);
+        float invIx = float3.Dot(ax, ax.Transform(in fc.TotalMassPropsInvBody.Inertia));
+        float invIy = float3.Dot(ay, ay.Transform(in fc.TotalMassPropsInvBody.Inertia));
+        float invIz = float3.Dot(az, az.Transform(in fc.TotalMassPropsInvBody.Inertia));
+        return new float3(
+            0.5f * cap.RotationTorqueNm.X * invIx,
+            0.5f * cap.RotationTorqueNm.Y * invIy,
+            0.5f * cap.RotationTorqueNm.Z * invIz);
+    }
+
+    /// <summary>Estimate an acceleration and braking turn with the flight computer rate limit on the two axes orthogonal to the chosen thrust axis. Low angular acceleration makes Align infeasible.</summary>
+    private static void EstimateSlew(
+        FlightComputer fc, in RcsCapabilitySnapshot cap, int axisIdx, float3 authority, double theta, ref RcsEstimates est)
+    {
+        double alpha;
+        double rotFlow;
+        if (axisIdx < 2)
+        {
+            alpha = Math.Min(authority.Y, authority.Z);
+            rotFlow = cap.RotationMassFlowKgS.Y + cap.RotationMassFlowKgS.Z;
+        }
+        else if (axisIdx < 4)
+        {
+            alpha = Math.Min(authority.X, authority.Z);
+            rotFlow = cap.RotationMassFlowKgS.X + cap.RotationMassFlowKgS.Z;
+        }
+        else
+        {
+            alpha = Math.Min(authority.X, authority.Y);
+            rotFlow = cap.RotationMassFlowKgS.X + cap.RotationMassFlowKgS.Y;
+        }
+
+        if (!double.IsFinite(alpha) || alpha <= MinSlewAlphaRadS2)
         {
             est.AlignFeasible = false;
             return;
@@ -124,8 +168,7 @@ internal static partial class RcsExecutor
         double thrustOn = 2.0 * omega / alpha;
         double coast = Math.Max(0.0, theta - omega * omega / alpha) / Math.Max(omega, 1e-9);
         est.AlignSlewDurationSec = thrustOn + coast;
-        double slewMassFlow = SlewMassFlowFactor
-            * (cap.RotationMassFlowKgS.Y + cap.RotationMassFlowKgS.Z);
+        double slewMassFlow = SlewMassFlowFactor * rotFlow;
         est.AlignSlewPropellantKg = thrustOn * slewMassFlow;
     }
 

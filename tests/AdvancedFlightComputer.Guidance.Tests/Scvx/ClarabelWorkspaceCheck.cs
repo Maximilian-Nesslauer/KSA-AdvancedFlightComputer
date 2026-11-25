@@ -20,6 +20,7 @@ internal static class ClarabelWorkspaceCheck
             CheckFreshRebuildDoesNotDoubleRebuildOnMaxIterations();
             CheckEffectiveIterationCapStaysBoundToLastSolve();
             CheckDeterministicDispose();
+            CheckSolveMsSamplesRingBuffer();
             Console.WriteLine("PASS clarabel-workspace");
             return 0;
         }
@@ -173,6 +174,29 @@ internal static class ClarabelWorkspaceCheck
         var sub3 = new Scvx3DofSubproblemScs(new Scvx3DofConfig { Nodes = 5, GlideIntervals = 2 });
         sub3.Dispose();
         sub3.Dispose();
+    }
+
+    private static void CheckSolveMsSamplesRingBuffer()
+    {
+        const int solves = 1200;
+        var (A, P, b, c) = BuildTinyQp(1.0, 1.0);
+
+        ScsWorkspace.ResetTimers();
+        var scs = new ScsWorkspace();
+        for (int i = 0; i < solves; i++)
+            scs.Solve(A, b, c, P, zeroDim: 0, posDim: 2, socDims: [], warmStart: false, maxIterations: 200);
+        Require(ScsWorkspace.TotalCalls == solves, $"SCS TotalCalls expected {solves}, got {ScsWorkspace.TotalCalls}");
+        Require(ScsWorkspace.SolveMsSamples.Count == 1024, $"SCS SolveMsSamples expected 1024, got {ScsWorkspace.SolveMsSamples.Count}");
+        Require(ScsWorkspace.SolveMsPercentile(0.5) >= 0.0, "SCS median percentile must be non-negative");
+
+        ClarabelWorkspace.Persistent = true;
+        ClarabelWorkspace.ResetTimers();
+        using var clarabel = new ClarabelWorkspace();
+        for (int i = 0; i < solves; i++)
+            clarabel.Solve(A, b, c, P, zeroDim: 0, posDim: 2, socDims: [], warmStart: false, maxIterations: 100);
+        Require(ClarabelWorkspace.TotalCalls == solves, $"Clarabel TotalCalls expected {solves}, got {ClarabelWorkspace.TotalCalls}");
+        Require(ClarabelWorkspace.SolveMsSamples.Count == 1024, $"Clarabel SolveMsSamples expected 1024, got {ClarabelWorkspace.SolveMsSamples.Count}");
+        Require(ClarabelWorkspace.SolveMsPercentile(0.5) >= 0.0, "Clarabel median percentile must be non-negative");
     }
 
     private static void Require(bool condition, string message)

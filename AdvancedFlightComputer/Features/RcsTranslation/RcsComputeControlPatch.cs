@@ -42,9 +42,9 @@ internal static class RcsComputeControlPatch
             * fc.TotalMassPropsBody.Mass;
 
         // Stock UpdateBurnTarget writes engine timing every tick. Replace it with remaining RCS duration. Stale LP geometry uses the group model.
-        bool lpUsable = cmd.LpSecondsPerImpulse != null
-            && cmd.LpSecondsPerImpulse.Length == fc.VehicleConfig.Thrusters.Count
-            && (!cmd.RequireAttitude || !RcsExecutor.OutsideAlignGate(fc));
+        bool lpMatches = LpMatchesConfig(cmd, fc);
+        bool lpUsable = lpMatches
+            && (!cmd.RequireAttitude || !RcsExecutor.OutsideAlignGate(fc, cmd.RequireRoll));
         bt.BurnDuration = RemainingDurationSec(cmd, impulse, lpUsable);
         bt.IgnitionTime = cmd.IgnitionTime;
 
@@ -62,17 +62,16 @@ internal static class RcsComputeControlPatch
         if (float3.Dot(togo, bt.DeltaVTargetCci) <= 0f)
             return;
 
-        if (cmd.RequireAttitude && RcsExecutor.OutsideAlignGate(fc))
+        if (cmd.RequireAttitude && RcsExecutor.OutsideAlignGate(fc, cmd.RequireRoll))
         {
             receipt.Wake(RcsExecutor.MaxPulseSec);
             return;
         }
 
-        // Stock updates the thrust timestamp before this postfix, so record any translation pulses committed here. A changed thruster count invalidates the LP pattern and falls back to groups.
-        float[]? lp = cmd.LpSecondsPerImpulse;
-        if (lp != null && lp.Length == fc.VehicleConfig.Thrusters.Count)
+        // Stock updates the thrust timestamp before this postfix, so record any translation pulses committed here. A replaced VehicleConfig invalidates the LP pattern and falls back to groups.
+        if (lpMatches)
         {
-            if (FireLpPattern(fc, ref outputs, ref receipt, cmd, lp, impulse))
+            if (FireLpPattern(fc, ref outputs, ref receipt, cmd, cmd.LpSecondsPerImpulse!, impulse))
                 fc.LastThrustTime = nav.Time;
             return;
         }
@@ -80,6 +79,11 @@ internal static class RcsComputeControlPatch
         if (FireGroups(fc, ref outputs, ref receipt, cmd, impulse))
             fc.LastThrustTime = nav.Time;
     }
+
+    internal static bool LpMatchesConfig(RcsWorkerCommand cmd, FlightComputer fc)
+        => cmd.LpSecondsPerImpulse != null
+           && ReferenceEquals(cmd.VehicleConfig, fc.VehicleConfig)
+           && cmd.LpSecondsPerImpulse.Length == fc.VehicleConfig.Thrusters.Count;
 
     private static bool FireGroups(
         FlightComputer fc, ref FlightComputerOutput outputs, ref VehicleCommandSink.Receipt receipt,

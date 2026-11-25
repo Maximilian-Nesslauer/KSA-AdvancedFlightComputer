@@ -39,6 +39,8 @@ internal sealed class MultiPassExecution
 
     public int AwaitingMaterializationTicks { get; set; }
 
+    public int ReconcileAfterLoadTicks { get; set; }
+
     public int ConsecutiveScheduleFailures { get; set; }
 
     // Restore Auto only after FlightComputer.LoadBurn has reset the new pass to Manual.
@@ -58,6 +60,7 @@ internal sealed class MultiPassExecution
         CurrentBurnDvMagnitudeMs = burn.DeltaVVlf.Length();
         AwaitingMaterialization = true;
         AwaitingMaterializationTicks = 0;
+        ReconcileAfterLoadTicks = 0;
         PassArmed = false;
         StallHintShown = false;
     }
@@ -69,6 +72,7 @@ internal sealed class MultiPassExecution
         CurrentBurnDvMagnitudeMs = null;
         AwaitingMaterialization = false;
         AwaitingMaterializationTicks = 0;
+        ReconcileAfterLoadTicks = 0;
         PassArmed = false;
         StallHintShown = false;
     }
@@ -76,6 +80,7 @@ internal sealed class MultiPassExecution
     public void ReattachAfterLoad(Burn burn)
     {
         CurrentBurn = burn;
+        ReconcileAfterLoadTicks = 0;
     }
 
     public Burn? TryResolveCurrentBurn(BurnPlan plan)

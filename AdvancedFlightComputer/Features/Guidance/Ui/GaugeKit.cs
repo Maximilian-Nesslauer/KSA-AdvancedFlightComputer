@@ -77,7 +77,8 @@ public static partial class GuidanceWindow
             changed = true;
             ended = true;
         }
-        SpecTooltip(label, hovered, spec.Key, LockedHelp(lockReason, spec.Help), BodyDefaults.GhostText(setting, _s.DefaultsBody), SettingMath.IsChanged(spec, value));
+        if (hovered && !ImGui.IsItemActive())
+            SpecTooltip(label, spec.Key, LockedHelp(lockReason, spec.Help), BodyDefaults.GhostText(setting, _s.DefaultsBody), SettingMath.IsChanged(spec, value));
         ConsoleUi.EndRow();
         _lastRowKey = spec.Key;
         _lastRowEditEnded = ended;
@@ -185,7 +186,8 @@ public static partial class GuidanceWindow
         }
 
         bool hovered = ConsoleWidgets.RowHovered && ImGui.IsMouseHoveringRect(new float2(from, y), new float2(x, y + h));
-        SpecTooltip(spec.Label, hovered, spec.Key, LockedHelp(lockReason, spec.Help), BodyDefaults.GhostText(setting, _s.DefaultsBody), SettingMath.IsChanged(spec, value));
+        if (hovered && !ImGui.IsItemActive())
+            SpecTooltip(spec.Label, spec.Key, LockedHelp(lockReason, spec.Help), BodyDefaults.GhostText(setting, _s.DefaultsBody), SettingMath.IsChanged(spec, value));
         ConsoleUi.NoteRow(spec.Key, new float2(from, y), new float2(x - from, h));
         x += CellGap;
         _lastRowKey = spec.Key;
@@ -219,7 +221,8 @@ public static partial class GuidanceWindow
         double whole = value;
         ClampOnEnd(in spec, ref whole, ref changed, round: true);
         value = (int)whole;
-        SpecTooltip(label, hovered, spec.Key, LockedHelp(lockReason, spec.Help), BodyDefaults.GhostText(setting, _s.DefaultsBody), SettingMath.IsChanged(spec, value));
+        if (hovered && !ImGui.IsItemActive())
+            SpecTooltip(label, spec.Key, LockedHelp(lockReason, spec.Help), BodyDefaults.GhostText(setting, _s.DefaultsBody), SettingMath.IsChanged(spec, value));
         ConsoleUi.EndRow();
         return changed;
     }
@@ -242,7 +245,8 @@ public static partial class GuidanceWindow
             value = spec.Default;
             changed = true;
         }
-        SpecTooltip(spec.Label, hovered, spec.Key, LockedHelp(lockReason, spec.Help), BodyDefaults.GhostText(setting, _s.DefaultsBody), SettingMath.IsChanged(spec, value));
+        if (hovered && !ImGui.IsItemActive())
+            SpecTooltip(spec.Label, spec.Key, LockedHelp(lockReason, spec.Help), BodyDefaults.GhostText(setting, _s.DefaultsBody), SettingMath.IsChanged(spec, value));
         ConsoleUi.EndRow();
         return changed;
     }
@@ -323,12 +327,8 @@ public static partial class GuidanceWindow
     // A locked row is drawn disabled, so its card says first why it takes no edit.
     private static string LockedHelp(string lockReason, string help) => lockReason.Length > 0 ? lockReason + "\n\n" + help : help;
 
-    private static void SpecTooltip(string title, bool hovered, string key, string help, string ghost, bool changed)
-    {
-        if (!hovered || ImGui.IsItemActive())
-            return;
-        ConsoleUi.Card(title, PageText.SettingTooltip(help, changed, ghost, SettingAccess.SetBy(_s, key)));
-    }
+    private static void SpecTooltip(string title, string key, string help, string ghost, bool changed)
+        => ConsoleUi.Card(title, PageText.SettingTooltip(help, changed, ghost, SettingAccess.SetBy(_s, key)));
 
     private static void VehicleHeightRows()
     {
@@ -340,8 +340,8 @@ public static partial class GuidanceWindow
             return;
         }
         GaugeRowText(height.Tier, height.Label, Fmt.Meters(_s.VehicleHeightM));
-        if (TierScope.Show(height.Tier))
-            SpecTooltip(height.Label, ImGui.IsItemHovered(), height.Key, height.Help, BodyDefaults.GhostText(height, _s.DefaultsBody), false);
+        if (TierScope.Show(height.Tier) && ImGui.IsItemHovered() && !ImGui.IsItemActive())
+            SpecTooltip(height.Label, height.Key, height.Help, BodyDefaults.GhostText(height, _s.DefaultsBody), false);
         if (_s.VehicleHeightStatus.Length == 0 || _s.VehicleHeightStowed)
             return;
         bool warn = _s.VehicleHeightStatus.StartsWith("NO COLLIDERS", StringComparison.Ordinal);

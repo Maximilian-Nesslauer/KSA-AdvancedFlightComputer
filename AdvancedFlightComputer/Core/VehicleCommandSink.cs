@@ -61,7 +61,7 @@ internal static class VehicleCommandSink
         // RCS torque for whichever mode asked for it (KsaRcsTorqueControl); it writes nothing for a craft that has no command.
         try
         {
-            KsaRcsTorqueControl.OnComputeControl(in nav, ref outputs, ref receipt);
+            KsaRcsTorqueControl.OnComputeControl(fc, in nav, ref outputs, ref receipt);
         }
         catch (Exception ex)
         {

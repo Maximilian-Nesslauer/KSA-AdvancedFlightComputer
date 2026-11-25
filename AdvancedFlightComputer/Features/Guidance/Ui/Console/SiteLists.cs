@@ -58,7 +58,6 @@ public static partial class GuidanceWindow
         IParentBody parent = vehicle.Orbit?.Parent;
         if (parent == null || LandingSiteRegistry.On(parent).Count == 0)
             return;
-        List<SiteChoice> choices = StageSiteChoices(_s, parent, LaunchOriginCcf(vehicle), stage.RootId);
         LandingSite on = stage.HasTarget ? LandingSiteRegistry.Holding(parent, stage.TargetLatDeg, stage.TargetLonDeg) : null;
         string preview = on != null ? on.Name : stage.HasTarget ? PageText.SiteListPickedPoint : PageText.SiteListChoose;
         BeginKitRow(PageText.ReturnTo);
@@ -68,6 +67,7 @@ public static partial class GuidanceWindow
             ConsoleUi.Card(PageText.ReturnTo, PageText.ReturnToTip);
         if (open)
         {
+            List<SiteChoice> choices = StageSiteChoices(_s, parent, LaunchOriginCcf(vehicle), stage.RootId);
             LandingSite picked = DrawSiteChoices(choices, on, $"AfcStageSite{stage.RootId}");
             if (picked != null)
                 SetStageTarget(_s, stage.RootId, picked.LatDeg, picked.LonDeg, parent);
@@ -81,9 +81,6 @@ public static partial class GuidanceWindow
     {
         if (LandingSiteRegistry.On(parent).Count == 0)
             return;
-        bool falling = way == LandWay.FromHere && !vehicle.Situation.HasAnyContact();
-        double impact = falling ? ImpactSeconds(vehicle, guidanceBound: true) : double.NaN;
-        List<SiteChoice> choices = LandSiteChoices(parent, CraftCcf(vehicle), impact, vehicle.GetSurfaceSpeed());
         LandingSite on = NoSitePicked(parent) ? null : LandingSiteRegistry.Holding(parent, _s.SiteLatDeg, _s.SiteLonDeg);
         BeginKitRow(PageText.LandAt);
         bool rowHovered = ConsoleWidgets.RowHovered;
@@ -94,6 +91,9 @@ public static partial class GuidanceWindow
                 ConsoleUi.Card(PageText.LandAt, DeorbitTargetLocked ? PageText.SiteLockedByDeorbit : PageText.LandAtTip);
             if (open)
             {
+                bool falling = way == LandWay.FromHere && !vehicle.Situation.HasAnyContact();
+                double impact = falling ? ImpactSeconds(vehicle, guidanceBound: true) : double.NaN;
+                List<SiteChoice> choices = LandSiteChoices(parent, CraftCcf(vehicle), impact, vehicle.GetSurfaceSpeed());
                 LandingSite picked = DrawSiteChoices(choices, on, "AfcLandSite");
                 if (picked != null)
                     RetargetVehicleSite(picked.LatDeg, picked.LonDeg);
