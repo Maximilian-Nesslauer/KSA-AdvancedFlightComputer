@@ -157,8 +157,9 @@ internal static class KsaEnginePerf
     }
 
     // A combustion or thermal core sets its chamber pressure from the throttle, which is what RocketControllerData.ComputeFromRockets models.
+    // A gas generator follows the throttle too, because GasGeneratorRocket.ComputeGasGeneratorConditions derives its flow from the conditions of the chamber at that throttle.
     // A solid motor ignores the throttle, and an AntimatterRamCore delivers what its ram speed and jet power allow rather than what ComputeConditions reports, so neither can follow a guidance command.
-    internal static bool FollowsThrottle(RocketCore core) => core is Combustor or ThermalCore;
+    internal static bool FollowsThrottle(RocketCore core) => core is Combustor or ThermalCore or GasGeneratorCore;
 
     internal static bool FollowsThrottle(Rocket rocket)
     {
