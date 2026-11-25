@@ -1737,6 +1737,22 @@ public static partial class GuidanceWindow
         _s.ForcedBurnTarget = null;
     }
 
+    /// <summary>
+    /// AFC MANUAL INTERVENTION (HandFlying) takes the craft: whatever AFC programme flies it stops as a takeover stops it, with its engine left as it is, and says why. Main thread, from the guidance step.
+    /// </summary>
+    internal static void StopForManualIntervention(Vehicle vehicle)
+    {
+        VehicleAutopilotState state = VehicleAutopilotState.For(vehicle);
+        if (!state.ControlAcquired)
+            return;
+        _s = state;
+        _s.TakeoverStop = true;
+        _s.TakeoverReason = "GUIDANCE STOPPED: AFC MANUAL INTERVENTION.";
+        _s.ReleaseWithoutEngineCut = true;
+        GuidanceLog.Info(vehicle, "AFC manual intervention: the pilot takes the craft; the programme stops, the engine is left as it is.");
+        HandBackVehicle(vehicle);
+    }
+
     // Not inlined, because a harness test patches it by name to fail a release.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static bool HandBackVehicle(Vehicle vehicle) => ReleaseVehicle(vehicle, keepWaitingCoast: false);

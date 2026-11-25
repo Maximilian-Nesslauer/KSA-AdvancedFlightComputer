@@ -1,0 +1,88 @@
+<Assets>
+  <!--
+    AFC MANUAL INTERVENTION (HandFlying.cs): who flies the pitch, yaw and roll keys - STOCK, the stock flight
+    computer as always, or AFC MANUAL INTERVENTION, AFC's own attitude controller as rate command and attitude
+    hold, overriding the stock flight computer and any AFC programme - and how hard AFC turns for them:
+    RATE 30 / 50 / 80 % of what the craft can turn with now.
+
+    A thin strip, every button in one row, as wide as the stock Autopilot Settings panel and just above it
+    (its OffsetUv is the stock panel's, raised by that panel's height and a small gap). Button heights and text
+    are the stock panel's, rescaled to this strip's height. Its own enum, AfcPilot, is put in the gauge
+    buttons' list before the game reads the gauges (Mod.OnBeforeMain); the buttons call Vehicle.ToggleEnum,
+    which HandFlying answers.
+  -->
+  <GaugeCanvas Id="AfcHandFlying">
+    <VisibleInContexts>
+      <VisibleInContext>Vehicle</VisibleInContext>
+    </VisibleInContexts>
+    <DisplayName Value="AFC Manual Intervention" />
+    <SizeUv X="0.719467" Y="0.042" Locked="true" />
+    <AnchorUv X="1" Y="1" />
+    <PivotUv X="1" Y="1" />
+    <OffsetUv X="-0.017778" Y="-0.246" />
+    <Components>
+      <Component Name="Back">
+        <AnchorUv X="0" Y="0" />
+        <PivotUv X="0" Y="0" />
+        <OffsetUv X="0" Y="0" />
+        <SizeUv X="1.0" Y="1.0" />
+        <Vertex Ref="GaugeInstancedVert" />
+        <Fragment Ref="GaugeColor" />
+        <Rects>
+          <Box X="0" Y="0" Z="1" W="1">
+            <Color R="0.07" G="0.07" B="0.07" />
+            <Rounding Value="0.3" />
+          </Box>
+        </Rects>
+      </Component>
+      <Component Name="Labels">
+        <AnchorUv X="0" Y="0" />
+        <PivotUv X="0" Y="0" />
+        <OffsetUv X="0" Y="0" />
+        <SizeUv X="1.0" Y="1.0" />
+        <Vertex Ref="GaugeInstancedVert" />
+        <Fragment Ref="GaugeLabel" />
+        <Rects>
+          <Label X="0.015" Y="0.12" Width="0.08" Height="0.76" Label="PILOT" TextScale="0.34" />
+          <Label X="0.545" Y="0.12" Width="0.08" Height="0.76" Label="RATE" TextScale="0.34" />
+        </Rects>
+      </Component>
+      <Component Name="Buttons">
+        <Vertex Ref="GaugeInstancedVert" />
+        <Fragment Ref="GaugeButtonFace" />
+        <AnchorUv X="0" Y="0" />
+        <PivotUv X="0" Y="0" />
+        <OffsetUv X="0" Y="0" />
+        <SizeUv X="1.0" Y="1.0" />
+        <Rects>
+          <Button X="0.095" Y="0.12" Width="0.118" Height="0.76" Label="STOCK" TextScale="0.34">
+            <TextColor Name="Black" />
+            <FlightComputer Action="AfcPilot" Value="Stock" Toggle="true" />
+            <Tooltip Value="The stock flight computer flies the pitch, yaw and roll keys, as always." />
+          </Button>
+          <Button X="0.218" Y="0.12" Width="0.317" Height="0.76" Label="AFC MANUAL INTERVENTION" TextScale="0.34">
+            <TextColor Name="Black" />
+            <ActiveColor Name="Green" />
+            <FlightComputer Action="AfcPilot" Value="Afc" Toggle="true" />
+            <Tooltip Value="AFC's attitude controller flies the pitch, yaw and roll keys: hold a key to turn at the RATE, let go to hold the attitude. Overrides everything: the stock flight computer goes to MANUAL and any AFC programme stops (the engine is left as it is). Flaps, RCS and gimbals as the craft has them. STOCK gives the keys back." />
+          </Button>
+          <Button X="0.625" Y="0.12" Width="0.105" Height="0.76" Label="30%" TextScale="0.34">
+            <TextColor Name="Black" />
+            <FlightComputer Action="AfcPilot" Value="Rate30" Toggle="true" />
+            <Tooltip Value="AFC turns at 30% of what the craft can turn with now: the rate it reaches in 3 s at that effort. Gentle." />
+          </Button>
+          <Button X="0.735" Y="0.12" Width="0.105" Height="0.76" Label="50%" TextScale="0.34">
+            <TextColor Name="Black" />
+            <FlightComputer Action="AfcPilot" Value="Rate50" Toggle="true" />
+            <Tooltip Value="AFC turns at 50% of what the craft can turn with now: the rate it reaches in 3 s at that effort." />
+          </Button>
+          <Button X="0.845" Y="0.12" Width="0.105" Height="0.76" Label="80%" TextScale="0.34">
+            <TextColor Name="Black" />
+            <FlightComputer Action="AfcPilot" Value="Rate80" Toggle="true" />
+            <Tooltip Value="AFC turns at 80% of what the craft can turn with now: the rate it reaches in 3 s at that effort. Brisk, with a margin to hold the other axes." />
+          </Button>
+        </Rects>
+      </Component>
+    </Components>
+  </GaugeCanvas>
+</Assets>

@@ -27,7 +27,12 @@ public sealed class Mod
     // StarMap hooks [StarMapImmediateLoad] to Mod.PrepareSystems, which KSA 2026.11.10.5801 removed, so the enum goes in before Program.Main.
     // GaugeButtonFlightComputer's static constructor only builds the enum list, so touching it this early is safe.
     [StarMapBeforeMain]
-    public void OnBeforeMain() => AutoStageFeature.InjectGaugeEnumAtLoad();
+    public void OnBeforeMain()
+    {
+        AutoStageFeature.InjectGaugeEnumAtLoad();
+        // The PILOT buttons (hand flying) bind their enum the same way.
+        AdvancedFlightComputer.Features.Guidance.HandFlying.InjectGaugeEnum();
+    }
 
     [StarMapAllModsLoaded]
     public void OnFullyLoaded()

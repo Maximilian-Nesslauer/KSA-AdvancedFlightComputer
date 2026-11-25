@@ -61,7 +61,8 @@ internal static class AttitudeController
         double ErrorDeg, double RateErrorDegS, bool InDeadband,
         double3 DemandNm, double3 AirNm, double3 SurfacesNm, double3 RcsAskedNm, double3 RcsNm, double RcsFlowKgS, bool AirKnown,
         double3 IntegralNm = default, double[] FinCommandDeg = null, double[] FinNowDeg = null, double3 GimbalsNm = default,
-        double3 SpareAccelRadS2 = default, double AirAxisAccelRadS2 = double.NaN, bool Saturated = false, int RcsAxes = 0, int RcsFiring = 0);
+        double3 SpareAccelRadS2 = default, double AirAxisAccelRadS2 = double.NaN, bool Saturated = false, int RcsAxes = 0, int RcsFiring = 0,
+        double3 SpareTotalRadS2 = default);
 
     private sealed class Slot
     {
@@ -197,6 +198,8 @@ internal static class AttitudeController
         double3 capturePoint = Capped(kd > 0.0 ? kp / kd * thetaPoint : default, captureMax);
         double3 captureRoll = Capped(kdRoll > 0.0 ? kpRoll / kdRoll * thetaRoll : default, rollCaptureMax);
         double3 spare = default;
+        // The surfaces and the RCS together, before the phase plane takes each axis's owner alone below: what hand flying's rates are shares of (HandFlying).
+        double3 spareTotal = default;
         double airAxisAccel = double.NaN;
         if (settings.AuthorityCapture || phasePlane)
         {
@@ -204,6 +207,7 @@ internal static class AttitudeController
             using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.SpareAccel"))
                 spare = SpareAccel(vehicle, slot, now, aero, momentLimiterPerPa, settings.UseSurfaces, settings.UseRcs, mx, my, mz, ixx, iyy, izz,
                                    airKnown ? -Model(air, mx, my, mz) : default);
+            spareTotal = spare;
         }
         int rcsAxes = 0;
         if (phasePlane)
@@ -348,7 +352,7 @@ internal static class AttitudeController
         slot.Last = new Report(errorDeg, rateErrorDegS, !slot.Feedback,
             Model(demand, mx, my, mz), Model(air, mx, my, mz), surfaces.GivenNm, Model(rcsAsked, mx, my, mz),
             rcs.GivenNm, rcs.FlowKgS, airKnown, Model(integral, mx, my, mz), surfaces.CommandDeg, surfaces.NowDeg,
-            Model(gimbalsBody, mx, my, mz), spare, airAxisAccel, slot.Saturated, rcsAxes, rcsFiring);
+            Model(gimbalsBody, mx, my, mz), spare, airAxisAccel, slot.Saturated, rcsAxes, rcsFiring, spareTotal);
         return slot.Last;
     }
 

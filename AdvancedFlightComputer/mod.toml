@@ -1,5 +1,5 @@
 name = "AdvancedFlightComputer"
-assets = [ "Content/HyperbolicBodies.xml", "Content/AutoStageButton.xml" ]
+assets = [ "Content/HyperbolicBodies.xml", "Content/AutoStageButton.xml", "Content/HandFlyingPanel.xml" ]
 
 [StarMap]
 EntryAssembly = "AdvancedFlightComputer"
