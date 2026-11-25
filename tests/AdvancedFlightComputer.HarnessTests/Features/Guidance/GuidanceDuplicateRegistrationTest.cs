@@ -206,7 +206,7 @@ public sealed class GuidanceDuplicateRegistrationTest : AfcTest
                 continue;
             foreach (Rocket rocket in engine.Rockets)
             {
-                if (rocket.Core is SolidMotor != solid)
+                if (rocket is SolidRocket != solid)
                     return false;
                 any = true;
             }

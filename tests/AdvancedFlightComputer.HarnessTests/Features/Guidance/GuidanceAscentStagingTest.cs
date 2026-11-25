@@ -322,11 +322,11 @@ public sealed class GuidanceAscentStagingTest : AfcTest
                 continue;
             foreach (Rocket rocket in engine.Rockets)
             {
-                if (rocket.Core is not SolidMotor solid || solid.Rocket == null || !solid.Stack.IsValid)
+                if (rocket is not SolidRocket { Core: { } solid } || !solid.Stack.IsValid)
                     continue;
 
                 double liveFlow = 0.0;
-                foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(solid.Rocket.Nozzles.AsSpan()))
+                foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(solid.Nozzles.AsSpan()))
                     liveFlow += nozzle.State.Performance.MassFlowRate;
                 if (!(liveFlow > 0.0))
                     continue;
@@ -380,7 +380,7 @@ public sealed class GuidanceAscentStagingTest : AfcTest
             if (!engine.IsActive || !jettison.Contains(engine.Parent.FullPart))
                 continue;
             foreach (Rocket rocket in engine.Rockets)
-                if (rocket.Core is SolidMotor solid && solid.Rocket?.Nozzles != null && solid.Stack.IsValid)
+                if (rocket is SolidRocket { Core: { } solid } && solid.Stack.IsValid)
                     return solid;
         }
         return null;
@@ -469,7 +469,7 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         double statePressure = coreState.Conditions.Core.Pressure;
 
         double nozzleFlow = 0.0;
-        foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(solid.Rocket.Nozzles.AsSpan()))
+        foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(solid.Nozzles.AsSpan()))
             nozzleFlow += nozzle.State.Performance.MassFlowRate;
 
         ReadOnlySpan<MoleState> moles = tree.Moles.States;
@@ -477,7 +477,7 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         RocketCoreConditions solved = solid.SolveConditionsForArea(area, (float)statePressure);
         double solvedPressure = solved.Core.Pressure;
         double solvedFlow = 0.0;
-        foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(solid.Rocket.Nozzles.AsSpan()))
+        foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(solid.Nozzles.AsSpan()))
             solvedFlow += nozzle.Module.ComputePerformance(in solved, 0f).MassFlowRate;
 
         double density = solid.Propellant?.StorageDensity ?? 0.0;

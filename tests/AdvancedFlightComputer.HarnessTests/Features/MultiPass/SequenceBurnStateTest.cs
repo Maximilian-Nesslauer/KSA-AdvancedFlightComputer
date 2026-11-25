@@ -207,11 +207,14 @@ public sealed class SequenceBurnStateTest : AfcTest
             {
                 foreach (Rocket rocket in engines[e].Rockets)
                 {
-                    // Only liquid combustors have a FlowRule.
-                    if (rocket.Core is not Combustor combustor || combustor.ResourceManager == null)
-                        continue;
-                    combustor.ResourceManager.FlowRule = rule;
-                    changed++;
+                    // Only tank-fed cores have a FlowRule.
+                    foreach (RocketCore core in rocket.Cores)
+                    {
+                        if (core is not PlumbedCore { ResourceManager: not null } plumbed)
+                            continue;
+                        plumbed.ResourceManager.FlowRule = rule;
+                        changed++;
+                    }
                 }
             }
         }
@@ -338,7 +341,7 @@ public sealed class SequenceBurnStateTest : AfcTest
             {
                 foreach (Rocket rocket in engines[e].Rockets)
                 {
-                    if (rocket.Core is not Combustor { ResourceManager: not null } combustor)
+                    if (rocket.Cores[0] is not Combustor { ResourceManager: not null } combustor)
                         continue;
                     FlowOrder<Tank> levels = combustor.ResourceManager.ConsumptionOrder;
                     for (int level = 0; level < levels.LevelCount; level++)
@@ -456,7 +459,7 @@ public sealed class SequenceBurnStateTest : AfcTest
             }
         }
         if (motor == null || motor.Rocket?.Controller is not EngineController { IsActive: true }
-            || motor.Stack.Segments.Length == 0 || motor.Rocket.Nozzles.Length == 0)
+            || motor.Stack.Segments.Length == 0 || motor.Nozzles.Length == 0)
         {
             t.Skip("sub-quantum drain cache: no active solid motor state.");
             return;
@@ -469,7 +472,7 @@ public sealed class SequenceBurnStateTest : AfcTest
             return;
         }
         var grainState = vehicle.Parts.Moles.GetModuleAndAllMutableStatesForInitialization(grain);
-        RocketNozzle nozzle = motor.Rocket.Nozzles[0];
+        RocketNozzle nozzle = motor.Nozzles[0];
         var nozzleState = vehicle.Parts.RocketNozzles.GetModuleAndAllMutableStatesForInitialization(nozzle);
         float originalMass = grainState.State.Mass;
         RocketPerformance originalPerformance = nozzleState.State.Performance;
