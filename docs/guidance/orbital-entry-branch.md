@@ -12,7 +12,9 @@ First landing (2026-11-24, windowed): a Starship engaged from a bellyflop save w
 
 Not yet flown: the whole chain from orbit to touchdown in one flight, a landing on all three engines, and the harness checks after the touchdown pricing changes (7e401d6 onwards).
 
-Branch state: 57 commits on top of `origin/main`, one of them the merge of main (2a72baa). `origin/main` has #295 to #298 since that merge, not yet merged in.
+Branch state: up to date with `origin/main` through #306 (merges 2a72baa, 230b092 and 7697c62), so it builds for KSA 2026.11.25.5949 and no longer for 5901. Harness on 5949 (2026-11-25, harness 1.2.2): the Moon retarget passes; the flopper and the booster landing fail as before; the suite has 109 pass and 21 fail, five of them new on 5949 in code the branch did not touch (flyby course, ascent arg. Pe, booster aero, moon chain, RCS attitude yield), not yet checked against a main baseline.
+
+The LAND page rework (#303) and the entry's retro burn, parachutes and Lambert-aimed burn (2026-11-25) are built and offline-checked but not flown.
 
 ## The flight chain
 
@@ -111,7 +113,7 @@ Where a cell lists several paths, the later ones are relative to the first one's
 ### UI and settings
 
 - ENTRY TRAJ window after the Shuttle's displays: paged range plot on fixed axes, guidance box, Mach axis, plots kept inside their frames (924012b, 94a839f, 233a946, 98cb019, e3f4fc3, 6a7f0cc).
-- LAND > ENTRY with a METHOD row, ORBITAL ENTRY and GLIDE + BURN (the 3-DOF, renamed in the UI; setting keys unchanged). Orbital entry is a registered console mode; its settings are tiered across the page, HAND-OVERS, GNC, TUNE > LANDING > ORBITAL ENTRY, AFTER DEORBIT and DEORBIT's GNC; the ENTRY TRAJ window became a display-only pop-out (653fce9).
+- LAND as the path of modes (#303, 800d6b0 to 9bae2c2): tabs DEORBIT, BOOSTBACK, ENTRY/BRAKING, GLIDE, LAND NOW, HOVER, each starting the path at its step; the path built from each mode's declared steps and next mode (`GuidanceModeDescriptor.Steps`, `.Next`), each step a button for its settings, the flying step marked and followed; the GLIDE table (FLIP LANDING or RETRO BURN); the hand-over switches, the solver table and the AFTER DEORBIT and METHOD rows gone. GLIDE + BURN is RETRO BURN in the console. Before it: LAND > ENTRY with a METHOD row, ORBITAL ENTRY and GLIDE + BURN (the 3-DOF, renamed in the UI; setting keys unchanged). Orbital entry is a registered console mode; its settings are tiered across the page, HAND-OVERS, GNC, TUNE > LANDING > ORBITAL ENTRY, AFTER DEORBIT and DEORBIT's GNC; the ENTRY TRAJ window became a display-only pop-out (653fce9).
 - Editor BELLY-FLOP BALANCE window: centre of pressure against centre of mass belly first, per angle of attack (c2c7b7a, ce8dc00).
 - New settings include BELLYFLOP, BELLYFLOP FROM MACH, HAND-OVER MACH, BELLYFLOP PITCH UP/DOWN, BELLYFLOP BANK, BELLYFLOP AIM SHORT, BELLYFLOP TO TOUCHDOWN, TOUCHDOWN FROM, MAX HEATING, NOSE RADIUS, ENTRY RCS, RCS DEAD BAND, AIM AT SITE, CORRIDOR MARGIN and DRAG TRACKING.
 
@@ -140,7 +142,11 @@ Where a cell lists several paths, the later ones are relative to the first one's
 5. **Entry with too much energy.** Two offline bellyflop closed loops that start with more energy than they can lose before the site still pass it (08c3c62).
 6. **Heating limit.** The flopper cannot hold the default 440 kW/m²; the limit is soft and loses to the range, so the craft may fly hotter than the limit to reach the site. LEAST HEATING says so.
 7. **Engines to land on.** The chain now lands on the LAND landing group (1c1f49e). Open: switching the number of engines in flight (flip on several, land on one, as the real Starship does), so a craft whose full set cannot hover can still light high. The hand-over checks only the active engines' thrust against weight.
-8. **Merge with main.** `origin/main` #295 (the #282 fixes) changes `KsaRcsTorqueControl.cs`, `KsaAeroTorqueControl.cs` and `AttitudeController.cs`, and #298 changes `RcsLpSolver.cs`. The branch rewrote large parts of these files, so expect conflicts there and in `Modes/SixDof.cs`.
+8. **Merge with main (done, 230b092 and 7697c62).** The three conflicts in the RCS and aero torque controls and the attitude controller keep both sides; main's minimum-throttle exhaust velocity is applied to the aimed entry burn too.
+9. **Retro burn after an entry.** Asked once at the entry's hand-over (Mach 5 at 38 km, about 6-7 kPa) and started cold; the entry aims RETRO AIM SHORT (30 km), a guess. A standby like the boostback's, with its prediction of the ground covered in place of the guess, is the next step. Not flown.
+10. **Parachutes.** Armed at the hand-over for a craft with no engine to land on; KSA opens them at their own deploy altitude. Not flown.
+11. **The Lambert-aimed deorbit burn.** Taken when within 25 % (10 m/s) of the horizontal burn and 0.5 deg of its flight path angle. Not flown.
+12. **User guide.** `docs/user-guide/console.md`, `powered-guidance.md` and `docs/guidance/boostback.md` still describe the old LAND page (ENTRY BURN ONLY, ENTRY ON GLIDE, the solver table).
 
 ## Relation to open issues
 
