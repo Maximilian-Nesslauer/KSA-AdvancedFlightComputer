@@ -448,6 +448,7 @@ public sealed class MoonChainTest : AfcTest
         state.MoonChainPeKm = state.MoonTransferPeKm;
         state.MoonChainCapture = capture;
         state.MoonChainAfter = Universe.GetElapsedSeconds() - 1.0;
+        state.MoonChainSettleSteps = 0;
         state.MoonChainCorrections = 0;
         state.MoonChainStopRequested = false;
         state.MoonChainNode = null;
@@ -619,9 +620,10 @@ public sealed class MoonChainTest : AfcTest
             GuidanceWindow.ApplyAutopilot(vehicle);
             t.Info($"{label} status: {state.Status}");
             t.Check($"{label}: the chain counts the burn as completed and checks the course",
-                state.MoonChain == MoonChainStage.Course && state.MoonChainCorrections == 1 && !state.Status.Contains("STOPPED")
+                state.MoonChain == MoonChainStage.Course && state.MoonChainCorrections == 1
+                && state.MoonChainSettleSteps == CourseCorrector.SettleSteps && !state.Status.Contains("STOPPED")
                 && state.MoonTransferId == moon.Id && fc.BurnPlan.BurnCount == 0,
-                $"stage {state.MoonChain}, status '{state.Status}', burns {fc.BurnPlan.BurnCount}");
+                $"stage {state.MoonChain}, settleSteps {state.MoonChainSettleSteps}, status '{state.Status}', burns {fc.BurnPlan.BurnCount}");
         }
         finally
         {

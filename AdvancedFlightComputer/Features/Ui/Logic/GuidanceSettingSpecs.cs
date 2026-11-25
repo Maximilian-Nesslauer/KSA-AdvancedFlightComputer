@@ -240,6 +240,8 @@ internal static class GuidanceSettingSpecs
         "Uses fewer points as the burn gets shorter.");
     public static readonly BoolSpec SixDofThreaded = new("SixDofThreaded", "SOLVE ON WORKER THREAD", T, true,
         "Solves on a worker thread. A solve does not stop the simulation.");
+    public static readonly BoolSpec ScvxClarabel = new("ScvxClarabel", "CLARABEL SOLVER", T, true,
+        "Solves the 6-DOF and 3-DOF plans with Clarabel. Off solves them with SCS. One switch for every craft, the focused craft's; the same problem either way.");
     public static readonly BoolSpec SixDofSpreadCold = new("SixDofSpreadCold", "SPREAD FIRST PLAN", T, true,
         "Spreads the iterations of a first plan over several frames.");
     public static readonly BoolSpec SixDofBiasEnabled = new("SixDofBiasEnabled", "ESTIMATE UNMODELED ACCEL", T, true,
@@ -363,7 +365,7 @@ internal static class GuidanceSettingSpecs
     public static readonly BoolSpec[] TuningSixDofBools =
     {
         SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates, SixDofThreaded,
-        SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack,
+        SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ScvxClarabel,
     };
     public static readonly SettingSpec[] TuningSixDofLimits =
         { SixDofTiltDeg, SixDofThrottleFloor, SixDofGlideSlopeDeg, SixDofVzMaxMs, LandingPlanFloorMargin };
@@ -375,7 +377,7 @@ internal static class GuidanceSettingSpecs
         SixDofNodes, SixDofNodeDtTarget, SixDofSigmaSeed, SixDofSigmaSamples, SixDofColdIntervalS, SixDofRateDampShare,
         SixDofControlSmooth, SixDofProximal,
     };
-    public static readonly BoolSpec[] TuningSixDofSolverBools = { SixDofNodeGates, SixDofGfoldSeed, SixDofFixedTime, SixDofThreaded, SixDofSpreadCold };
+    public static readonly BoolSpec[] TuningSixDofSolverBools = { SixDofNodeGates, SixDofGfoldSeed, SixDofFixedTime, SixDofThreaded, SixDofSpreadCold, ScvxClarabel };
 
     public static readonly SettingSpec[] TuningHover = { TermQuadK, TermKpV, TermKiV, TermKdV, TermKpL, TermKiL, TermKdL };
 
@@ -414,7 +416,7 @@ internal static class GuidanceSettingSpecs
         GLimitEnabled, AutoLaunch, MatchTargetArgPe, ArgPeFixed, OptimiseInsertion, InsertBeforeApoapsis,
         FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, AscentOwnAttitude, AscentAeroControl, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
         VehicleHeightAuto, LegsAutoDeploy, ParkIdleEngines, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
-        SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ThreeDofFromGlide, ThreeDofSixDofHandover,
+        SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ThreeDofFromGlide, ThreeDofSixDofHandover, ScvxClarabel,
     };
 
     #endregion

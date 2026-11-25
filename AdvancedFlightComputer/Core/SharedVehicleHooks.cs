@@ -2,9 +2,13 @@ using AdvancedFlightComputer.Features.AutoRemove;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.Guidance;
+using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.RcsTorque;
 using AdvancedFlightComputer.Features.RcsTranslation;
+using AdvancedFlightComputer.Features.Transfer;
 using AdvancedFlightComputer.Features.Ui.Console;
+using AdvancedFlightComputer.Features.Ui.Console.Pages;
 using HarmonyLib;
 using KSA;
 
@@ -107,6 +111,7 @@ internal static class SharedVehicleHooks
         // A failed feature can still have loaded entries that the save observer will persist.
         VehicleDisposePatch.Remove(vehicle);
         RcsVehicleDisposePatch.Remove(vehicle);
+        KsaRcsTorqueControl.Release(vehicle);
         StagingConfig.RemoveVehicle(vehicle.Id);
 
         // Vehicle.Dispose has finished, so guidance releases only process resources.
@@ -116,6 +121,11 @@ internal static class SharedVehicleHooks
         // Vehicle.Dispose leaves the part graph intact. Clear caches that can keep it reachable.
         PlannedBurnPhases.OnVehicleDisposed(vehicle);
         FlybyCourse.OnVehicleDisposed(vehicle);
+        TransferSession.OnVehicleDisposed(vehicle);
+        TransferFlownPlan.OnVehicleDisposed(vehicle);
+        OrbitToolsPanel.OnVehicleDisposed(vehicle);
+        RcsPage.OnVehicleDisposed(vehicle);
+        ConsoleHead.OnVehicleDisposed(vehicle);
         MultiPassPreviewCache.OnVehicleDisposed(vehicle);
         HohmannMultiPassUI.OnVehicleDisposed(vehicle.Id);
         HohmannMultiPassPlanner.OnVehicleDisposed(vehicle.Id);
@@ -160,6 +170,9 @@ internal static class SharedVehicleHooks
         // A failed feature can still have loaded entries that the save observer will persist.
         RcsExecRegistry.RenameVehicle(oldId, vehicle.Id);
         MultiPassRegistry.RenameVehicle(oldId, vehicle.Id);
+        StagingConfig.RenameVehicle(oldId, vehicle.Id);
+        HohmannMultiPassUI.OnVehicleDisposed(oldId);
+        HohmannMultiPassPlanner.OnVehicleDisposed(oldId);
     }
 
     // Vehicle.Dispose() delegates to Dispose(bool), and EVA boarding calls the bool overload directly.

@@ -3,9 +3,14 @@ using System.Reflection;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.AutoRemove;
 using AdvancedFlightComputer.Features.AutoStage;
+using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.Features.RcsTranslation;
+using AdvancedFlightComputer.Features.Transfer;
+using AdvancedFlightComputer.Features.Ui.Console;
+using AdvancedFlightComputer.Features.Ui.Console.Pages;
+using AdvancedFlightComputer.Features.Ui.Logic;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
@@ -175,6 +180,18 @@ public sealed class SharedVehicleHooksTest : AfcTest
         t.Check("sequence-state cache holds the vehicle before disposal", cachedState.GetValue(null) != null);
         StagingHelpers.HasNextEngineSequence(vehicle);
         t.Check("staging state exists for the vehicle before disposal", StagingDetector.HasState(vehicle));
+        TransferSession.SetSource(vehicle);
+        OrbitToolsPanel.Select(ManeuverTools.KeyCircularizeApoapsis, vehicle);
+        UniverseTime now = Universe.GetElapsedTime();
+        PatchedConic disposePatch = new PatchedConic(now, UniverseTime.EndOfTime, PatchTransition.Burn,
+            PatchTransition.Final, Orbit.CreateFrom(vehicle.Orbit), vehicle.ParentPatchIdHash);
+        Burn disposeBurn = Burn.Create(OrbitPointCce.Zero, (now + 120.0).Seconds(), new double3(1.0, 0.0, 0.0), disposePatch, vehicle);
+        FieldInfo rcsFocusField = StaticField(typeof(RcsPage), "_focus");
+        FieldInfo burnEndField = StaticField(typeof(ConsoleHead), "_burnEndBurn");
+        FieldInfo stopRequestsField = StaticField(typeof(GuidanceWindow), "_stopRequests");
+        rcsFocusField.SetValue(null, disposeBurn);
+        burnEndField.SetValue(null, disposeBurn);
+        GuidanceWindow.RequestStop(vehicle, StopTarget.Ascent);
         MultiPassRegistry.Add(new MultiPassExecution
         {
             SaveId = SaveLoadObserver.CurrentSaveId,
@@ -188,11 +205,20 @@ public sealed class SharedVehicleHooksTest : AfcTest
             && RcsExecRegistry.TryGet(vehicle.Id, out _));
 
         SharedVehicleHooks.Reset();
+        SharedVehicleHooks.GuidanceEnabled = true;
         vehicle.Dispose(false);
+        disposeBurn.Dispose();
+        SharedVehicleHooks.GuidanceEnabled = false;
         t.Check("disposal removes entries even when both drivers are disabled", !MultiPassRegistry.Has(vehicle.Id)
             && !RcsExecRegistry.TryGet(vehicle.Id, out _));
         t.Check("disposal drops the sequence-state cache of that vehicle", cachedState.GetValue(null) == null);
         t.Check("disposal drops the staging state of that vehicle", !StagingDetector.HasState(vehicle));
+        t.Check("disposal drops TransferSession source", TransferSession.Source == null);
+        t.Check("disposal drops OrbitToolsPanel source", OrbitToolsPanel.Source == null);
+        t.Check("disposal drops RcsPage focus burn", rcsFocusField.GetValue(null) == null);
+        t.Check("disposal drops ConsoleHead burn-end reference", burnEndField.GetValue(null) == null);
+        var stopRequests = (System.Collections.IList)stopRequestsField.GetValue(null)!;
+        t.Check("disposal drops queued GuidanceWindow stop requests", stopRequests.Count == 0);
         SharedVehicleHooks.AutoStageEnabled = true;
         SharedVehicleHooks.MultiPassEnabled = true;
         SharedVehicleHooks.RcsEnabled = true;

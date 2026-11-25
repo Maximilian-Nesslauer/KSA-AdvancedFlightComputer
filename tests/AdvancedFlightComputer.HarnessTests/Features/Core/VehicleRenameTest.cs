@@ -46,6 +46,7 @@ public sealed class VehicleRenameTest : AfcTest
             CheckRenameMovesState(t, vehicle, renamedId);
             CheckClaimIsReleasableAgain(t, vehicle);
             CheckRefusedRenameMovesNothing(t, vehicle, secondId, renamedId);
+            CheckMissingBurnReconcileCancels(t, other);
         }
         finally
         {
@@ -134,6 +135,21 @@ public sealed class VehicleRenameTest : AfcTest
             vehicle.Id == currentId
             && RcsExecRegistry.TryGet(currentId, out _) && MultiPassRegistry.Has(currentId)
             && !RcsExecRegistry.TryGet(takenId, out _) && !MultiPassRegistry.Has(takenId));
+    }
+
+    // A persisted pass whose burn is missing from BurnPlan must cancel after bounded reconciliation retries instead of stalling forever.
+    private static void CheckMissingBurnReconcileCancels(TestContext t, Vehicle vehicle)
+    {
+        MultiPassExecution stale = ArmPass(vehicle);
+        stale.CurrentBurnTimeSec = Universe.GetElapsedSeconds() + 9999.0;
+        stale.CurrentBurnDvMagnitudeMs = 42.0;
+        MultiPassRegistry.Add(stale);
+        for (int i = 0; i < 4; i++)
+            PassCompletionPatch.TickVehicle(vehicle);
+        bool stillPresentBeforeLimit = MultiPassRegistry.Has(vehicle.Id);
+        PassCompletionPatch.TickVehicle(vehicle);
+        t.Check("stale persisted multi-pass cancels after reconciliation retry limit",
+            stillPresentBeforeLimit && !MultiPassRegistry.Has(vehicle.Id));
     }
 
     private static RcsExecution Arm(Vehicle vehicle)

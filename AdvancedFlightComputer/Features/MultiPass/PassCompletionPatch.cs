@@ -14,6 +14,7 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 internal static class PassCompletionPatch
 {
     private const int MaxAwaitingMaterializationTicks = 4;
+    private const int MaxReconcileAfterLoadTicks = 5;
     private const int MaxConsecutiveScheduleFailures = 5;
 
     // Runs after FlightComputer.RaisePendingAlerts with the workers joined, so the plan can be changed directly.
@@ -141,13 +142,22 @@ internal static class PassCompletionPatch
             return ReconcileResult.Proceed;
         }
 
+        exec.ReconcileAfterLoadTicks++;
         if (MultiPassDebug.Enabled)
         {
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass.Reconcile: vehicle='{vehicleId}' could not match " +
                 $"persisted burn (t={exec.CurrentBurnTimeSec:F1}s, " +
-                $"dv={exec.CurrentBurnDvMagnitudeMs:F2}m/s); BurnPlan dump follows.");
+                $"dv={exec.CurrentBurnDvMagnitudeMs:F2}m/s, attempt {exec.ReconcileAfterLoadTicks}/{MaxReconcileAfterLoadTicks}); BurnPlan dump follows.");
             MultiPassDebug.LogBurnPlan($"Reconcile no-match vehicle='{vehicleId}'", fc.BurnPlan);
+        }
+        if (exec.ReconcileAfterLoadTicks >= MaxReconcileAfterLoadTicks)
+        {
+            DefaultCategory.Log.Warning(
+                $"[AFC] MultiPass: vehicle={vehicleId} persisted burn (t={exec.CurrentBurnTimeSec:F1}s, " +
+                $"dv={exec.CurrentBurnDvMagnitudeMs:F2}m/s) was not found in BurnPlan after " +
+                $"{exec.ReconcileAfterLoadTicks} ticks; cancelling stale execution.");
+            CancelExecution(vehicleId, reason: null);
         }
         return ReconcileResult.SkipTick;
     }

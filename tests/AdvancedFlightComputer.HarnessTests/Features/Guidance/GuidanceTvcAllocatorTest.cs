@@ -38,6 +38,7 @@ public sealed class GuidanceTvcAllocatorTest : AfcTest
         TheRollModelTakesACraftWithoutRollTorque(t);
         ASaturatedGimbalLeavesTheRestToTheOthers(t);
         TheCoupledRollGoesWithTheLateralTorque(t);
+        DiagonalSaturationStaysInsideCircularCone(t);
     }
 
     // One main gimbal 1 m off the axis, and a gimbal with a hundredth of its thrust beside it that stands for the verniers. A sideways deflection of the main one turns the craft about Y and rolls it by 1/PivotArm of that. Asked for Y torque at zero roll, the small gimbal has to take the roll out and its stops end the allocation early; asked with that roll named as coupled, the main gimbal gives its full travel.
@@ -68,9 +69,60 @@ public sealed class GuidanceTvcAllocatorTest : AfcTest
         int mainAxis = Math.Abs(mainTorque[0].Y) > Math.Abs(mainTorque[1].Y) ? 0 : 1;
         t.Check("with its roll named as coupled, the main gimbal goes to its stop", Math.Abs(coupledCommands[mainAxis]) >= 1.0 - 1e-6 && coupledGot >= (1.0 - 2e-3) * full,
             $"main command {coupledCommands[mainAxis]:F4}, {coupledGot:E3} of the main gimbal's {full:E3} N m");
-        t.CheckRel("and the roll is the one that comes with it", coupled.AchievedTorque.X, rollPerY * coupledGot, 2e-3, 1.0);
-        t.Check("every command stays inside its stop", coupledCommands.All(c => Math.Abs(c) <= 1.0 + 1e-9),
+        // Under KSA.Gimbal.ConstrainStateToCircle (||(u_y, u_z)||_2 <= 1), once the main gimbal sits at its
+        // stop (1, 0), the vernier stays inside its circular cone and the achieved roll matches the main gimbal's
+        // physical coupled roll (rollPerY * full).
+        t.CheckRel("and the roll is the one that comes with it", coupled.AchievedTorque.X, rollPerY * full, 2e-3, 1.0);
+        bool insideCone = true;
+        for (int i = 0; i < coupledCommands.Length; i += 2)
+            if (coupledCommands[i] * coupledCommands[i] + coupledCommands[i + 1] * coupledCommands[i + 1] > 1.0 + 1e-6)
+                insideCone = false;
+        t.Check("every command stays inside its circular gimbal cone", insideCone,
             string.Join(", ", coupledCommands.Select(c => c.ToString("F4"))));
+    }
+
+    // Across saturated diagonal pitch, yaw, and roll demands on an off-centre 3-engine cluster, every gimbal
+    // command must obey u_y^2 + u_z^2 <= 1 so KSA.Gimbal.ConstrainStateToCircle never clips delivered torque.
+    private static void DiagonalSaturationStaysInsideCircularCone(TestContext t)
+    {
+        var com = new float3(0f, 0f, 0f);
+        const float r = 1.6f;
+        GimbalController[] gimbals =
+        [
+            Synthetic(floatQuat.Identity, new float3(-PivotArm, r, 0f), new float3(-NozzleOffset, 0f, 0f)),
+            Synthetic(floatQuat.Identity, new float3(-PivotArm, -0.5f * r, 0.8660254f * r), new float3(-NozzleOffset, 0f, 0f)),
+            Synthetic(floatQuat.Identity, new float3(-PivotArm, -0.5f * r, -0.8660254f * r), new float3(-NozzleOffset, 0f, 0f)),
+        ];
+        double[] thrusts = [Thrust, Thrust, Thrust];
+        var commands = new double[6];
+        double maxNorm = 0.0;
+        double worstTorqueErr = 0.0;
+
+        for (int k = 0; k < 12; k++)
+        {
+            double ang = 2.0 * Math.PI * k / 12.0;
+            foreach (double rollSign in new[] { -1.0, 0.0, 1.0 })
+            {
+                var demand = new double3(rollSign * 2.0e5, 3.0e6 * Math.Cos(ang), 3.0e6 * Math.Sin(ang));
+                TvcAllocationResult res = KsaTvcAllocator.Solve(gimbals, thrusts, com, demand, commands);
+                double3 stockTotal = default;
+                for (int i = 0; i < gimbals.Length; i++)
+                {
+                    double u0 = commands[2 * i], u1 = commands[2 * i + 1];
+                    maxNorm = Math.Max(maxNorm, Math.Sqrt(u0 * u0 + u1 * u1));
+                    float2 angles = new((float)(u0 * MaxAngle), (float)(u1 * MaxAngle));
+                    float3 trq = TvcAllocation.ComputeTorqueAsmb(gimbals[i], (float)thrusts[i], angles, com);
+                    stockTotal += new double3(trq.X, trq.Y, trq.Z);
+                }
+                double relErr = (stockTotal - res.AchievedTorque).Length() / Math.Max(res.AchievedTorque.Length(), 1.0);
+                worstTorqueErr = Math.Max(worstTorqueErr, relErr);
+            }
+        }
+
+        t.Check("36 diagonal saturated demands stay inside the circular gimbal cone",
+            maxNorm <= 1.0 + 1e-6, $"max ||(u_y, u_z)||_2 = {maxNorm:F6}");
+        t.Check("reported torque matches unclipped stock torque across diagonal saturation",
+            worstTorqueErr < 5e-3, $"worst relative error {worstTorqueErr:E2}");
     }
 
     // Two gimbals on the centre line, one with twice the other's range: the min-norm solution gives the wide one the larger command, so it reaches its stop first. Scaled to that, the narrow one gives only half of what it has; redistributed, it carries on to its own stop and the craft gets both gimbals' full torque, in the demanded direction, inside every stop.

@@ -474,7 +474,11 @@ public static partial class GuidanceWindow
 
         // The new activation switches the dry controllers off and is confirmed like the first one, then the engage request rebuilds entry guidance (FinishLandingGroupReplan).
         double wait = double.IsFinite(_s.GlideTgo) ? Math.Clamp(0.1 * _s.GlideTgo, 0.1, LandingEngineActivationLimitS) : LandingEngineActivationLimitS;
-        _s.EngineActivation = new LandingEngineActivation(activation.Group, remaining, now + wait) { Fallback = activation.Fallback };
+        _s.EngineActivation = new LandingEngineActivation(activation.Group, remaining, now + wait)
+        {
+            Fallback = activation.Fallback,
+            SuppliedRockets = surviving,
+        };
         _s.LandingGroupReplanPending = true;
         _s.ThreeDofEngagePending = true;
         _s.WarnEntry("LANDING GROUP LOST SUPPLY. REPLANNING WITH THE REMAINING ENGINES.");

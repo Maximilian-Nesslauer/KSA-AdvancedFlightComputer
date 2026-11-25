@@ -182,6 +182,14 @@ internal static partial class ClarabelNative
         public double IterativeRefinementStopRatio;
 
         [MarshalAs(UnmanagedType.U1)] public bool PresolveEnable;
+        /// <summary>
+        /// Clarabel.rs's DefaultSettingsFFI carries this bool straight after presolve_enable (offset 273, inside
+        /// the struct's tail padding, so the size stays 280), though the vendored C header never declared it.
+        /// It must be false for update_P/A/q/b: a solver that dropped structural zeros refuses data updates, and
+        /// the C wrapper unwraps that refusal, which panics inside the DLL. Declared so it is set, not left to
+        /// whatever the marshaller's padding byte holds.
+        /// </summary>
+        [MarshalAs(UnmanagedType.U1)] public bool InputSparseDropzeros;
     }
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
@@ -202,6 +210,22 @@ internal static partial class ClarabelNative
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern ClarabelDefaultSolution clarabel_DefaultSolver_f64_solution(IntPtr solver);
+
+    // In-place data updates (DefaultSolver.h, "P data updating" onward). Each takes the full nonzero
+    // array in the solver's own CSC order, so the sparsity pattern must be the one the solver was built
+    // with. Allowed only with presolve and zero-dropping off; see ClarabelWorkspace.
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void clarabel_DefaultSolver_f64_update_P(IntPtr solver, IntPtr pNzVal, nuint nnzP);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void clarabel_DefaultSolver_f64_update_A(IntPtr solver, IntPtr aNzVal, nuint nnzA);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void clarabel_DefaultSolver_f64_update_q(IntPtr solver, IntPtr values, nuint n);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void clarabel_DefaultSolver_f64_update_b(IntPtr solver, IntPtr values, nuint n);
 
     /// <summary>
     /// What .NET actually computed for these layouts, to be checked by hand against

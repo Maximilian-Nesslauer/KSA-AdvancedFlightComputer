@@ -326,7 +326,7 @@ public sealed class RcsRegistryTest : AfcTest
         CheckRejectedActive(t, "undefined mode", "mode = \"99\"");
         CheckRejectedActive(t, "unresolved strategy", "resolved_strategy = \"Auto\"");
         CheckRejectedActive(t, "engine mode", "mode = \"Engine\"");
-        CheckRejectedActive(t, "allocator mismatch", "resolved_allocator = \"Lp\"");
+        CheckAcceptedActive(t, "allocator edited while active", "resolved_allocator = \"Lp\"");
         CheckRejectedActive(t, "Align axis outside range", "resolved_axis = 99");
         CheckRejectedActive(t, "Hold axis mismatch",
             "resolved_strategy = \"Hold\"", "resolved_axis = 0");

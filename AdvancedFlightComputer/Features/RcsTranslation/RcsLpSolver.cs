@@ -9,14 +9,21 @@ internal static class RcsLpSolver
     // Columns are column-major. Return null when the solve cannot certify a finite feasible result.
     public static double[]? Solve(int rows, int n, double[] columns, double[] cost, double[] b)
     {
+        if (columns == null || cost == null || b == null)
+            return null;
+        return SolveSpan(rows, n, columns.AsSpan(), cost.AsSpan(), b.AsSpan());
+    }
+
+    internal static double[]? SolveSpan(int rows, int n, ReadOnlySpan<double> columns, ReadOnlySpan<double> cost, ReadOnlySpan<double> b)
+    {
         if (!HasValidInputs(rows, n, columns, cost, b))
             return null;
         return SolveValid(rows, n, columns, cost, b);
     }
 
-    private static bool HasValidInputs(int rows, int n, double[] columns, double[] cost, double[] b)
+    private static bool HasValidInputs(int rows, int n, ReadOnlySpan<double> columns, ReadOnlySpan<double> cost, ReadOnlySpan<double> b)
     {
-        if (rows < 0 || n < 0 || columns == null || cost == null || b == null
+        if (rows < 0 || n < 0
             || (long)rows * n != columns.Length || cost.Length != n || b.Length != rows)
             return false;
         foreach (double value in columns)
@@ -28,7 +35,7 @@ internal static class RcsLpSolver
         return true;
     }
 
-    private static double[]? SolveValid(int rows, int n, double[] columns, double[] cost, double[] b)
+    private static double[]? SolveValid(int rows, int n, ReadOnlySpan<double> columns, ReadOnlySpan<double> cost, ReadOnlySpan<double> b)
     {
         if (!ScaleRows(rows, n, columns, b, out double[] rowScale, out bool[] rowActive, out int activeRows))
             return null;
@@ -48,7 +55,7 @@ internal static class RcsLpSolver
 
         // Artificial columns cannot enter the basis during the cost phase.
         double[] phase2Cost = new double[n + m];
-        Array.Copy(cost, phase2Cost, n);
+        cost.CopyTo(phase2Cost);
         for (int i = 0; i < m; i++)
             phase2Cost[n + i] = double.PositiveInfinity;
         if (!RunSimplex(t, basis, m, width, phase2Cost, out _))
@@ -61,7 +68,7 @@ internal static class RcsLpSolver
         return SatisfiesConstraints(rows, n, columns, b, x) ? x : null;
     }
 
-    private static bool ScaleRows(int rows, int n, double[] columns, double[] b,
+    private static bool ScaleRows(int rows, int n, ReadOnlySpan<double> columns, ReadOnlySpan<double> b,
         out double[] rowScale, out bool[] rowActive, out int activeRows)
     {
         // Normalize force and torque rows separately because their magnitudes can differ greatly.
@@ -102,7 +109,7 @@ internal static class RcsLpSolver
         return true;
     }
 
-    private static void BuildTableau(int rows, int n, double[] columns, double[] b,
+    private static void BuildTableau(int rows, int n, ReadOnlySpan<double> columns, ReadOnlySpan<double> b,
         double[] rowScale, bool[] rowActive, int m,
         out double[] t, out int[] basis, out int width)
     {
@@ -161,7 +168,7 @@ internal static class RcsLpSolver
         return true;
     }
 
-    private static bool SatisfiesConstraints(int rows, int n, double[] columns, double[] b, double[] x)
+    private static bool SatisfiesConstraints(int rows, int n, ReadOnlySpan<double> columns, ReadOnlySpan<double> b, double[] x)
     {
         foreach (double value in x)
             if (!double.IsFinite(value)) return false;

@@ -89,10 +89,14 @@ internal static class AttitudeController
         doubleQuat body2Cci = KsaFrameBridge.BodyToCci(vehicle);
         doubleQuat cci2Body = doubleQuat.Inverse(body2Cci);
 
-        // The rotation onto the target, in body axes: from the target's axes seen in the body, half the sum of e_i x t_i (exact for small errors, saturating for large ones).
-        double3 theta = default;
-        foreach (double3 e in new[] { new double3(1, 0, 0), new double3(0, 1, 0), new double3(0, 0, 1) })
-            theta += 0.5 * double3.Cross(e, e.Transform(targetBody2Cci).Transform(cci2Body));
+        // Exact SO(3) axis-angle error in body axes from the relative rotation matrix columns t_i = R_err e_i.
+        // Avoids sin(phi) fold-back past 90 deg and remains non-zero at 180 deg.
+        double3 t0 = new double3(1, 0, 0).Transform(targetBody2Cci).Transform(cci2Body);
+        double3 t1 = new double3(0, 1, 0).Transform(targetBody2Cci).Transform(cci2Body);
+        double3 t2 = new double3(0, 0, 1).Transform(targetBody2Cci).Transform(cci2Body);
+        So3AxisAngle.FromBasisColumns(t0.X, t0.Y, t0.Z, t1.X, t1.Y, t1.Z, t2.X, t2.Y, t2.Z,
+            out double ex, out double ey, out double ez);
+        var theta = new double3(ex, ey, ez);
         // Roll free (Settings.RollFree): no roll angle is held, only the roll rate damped.
         if (settings.RollFree)
             theta -= double3.Dot(theta, mz) * mz;
@@ -104,7 +108,7 @@ internal static class AttitudeController
             slot.RateErrorFiltered += dt / (settings.RateFilterS + dt) * (rawRateError - slot.RateErrorFiltered);
         slot.RateKnown = true;
         double3 rateError = slot.RateErrorFiltered;
-        double errorDeg = Math.Asin(Math.Min(theta.Length(), 1.0)) * 180.0 / Math.PI;
+        double errorDeg = theta.Length() * 180.0 / Math.PI;
 
         // Pointing and roll apart (model z, mz, is the roll axis): a craft that starts 90 deg off in roll must not have its pointing starved by it. On the harness booster (2026-11-20) one cap on the whole error vector let a 5 deg pointing error close at 0.3 deg/s while the roll took 18 s.
         double3 thetaPoint = theta - double3.Dot(theta, mz) * mz;
@@ -172,7 +176,7 @@ internal static class AttitudeController
         }
 
         // One programme for fins and RCS (the RCS as the fins' backup): the fins are commanded, the RCS fired for what they will give short. Fins off (Settings.UseSurfaces) are held at rest and the RCS takes it all.
-        RcsTorqueAllocator rcsColumns = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out _);
+        RcsTorqueAllocator rcsColumns = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out ThrusterController[] rcsModules);
         KsaAeroTorqueControl.Report surfaces = default;
         if (settings.UseSurfaces)
             surfaces = KsaAeroTorqueControl.Command(vehicle, aero, remaining, mx, my, mz, RcsPriority, momentLimiterPerPa,
@@ -181,7 +185,7 @@ internal static class AttitudeController
             KsaAeroTorqueControl.Release(vehicle);
         double3 surfacesBody = surfaces.GivenNm.X * mx + surfaces.GivenNm.Y * my + surfaces.GivenNm.Z * mz;
         double3 rcsAsked = remaining - surfacesBody;
-        KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, RcsPriority);
+        KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, RcsPriority, rcsColumns, rcsModules);
 
         slot.Last = new Report(errorDeg, rateErrorDegS, !slot.Feedback,
             Model(demand, mx, my, mz), Model(air, mx, my, mz), surfaces.GivenNm, Model(rcsAsked, mx, my, mz),

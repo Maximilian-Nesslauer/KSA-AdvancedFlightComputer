@@ -47,7 +47,7 @@ public static class KsaGimbalControl
     /// <summary>
     /// One gimbal's command and state on a control pass, in FRACTIONS OF ITS RANGE (Gimbal.GetCommand's units): the command just written, the angle and rate the game's state had before this pass (per second for the rate), its range in degrees and its slew cap in ranges per second, the thrust through it, and how many gimbals the allocation drove. An angle that trails its command by the slew cap is the gimbal's rate limit; one on its command with the torque still short is the allocation.
     /// </summary>
-    public sealed record GimbalTrace(double CmdY, double CmdZ, double AngleY, double AngleZ, double RateY, double RateZ,
+    public readonly record struct GimbalTrace(double CmdY, double CmdZ, double AngleY, double AngleZ, double RateY, double RateZ,
                                      double MaxAngleDeg, double SlewPerS, double ThrustN, int Count);
 
     public sealed class Slot
@@ -66,8 +66,8 @@ public static class KsaGimbalControl
         /// <summary>Diagnostics from the last Lsq allocation, for the UI readout.</summary>
         public TvcAllocationResult LastAllocation;
 
-        /// <summary>The highest-thrust gimbal on the last Lsq pass: what it was told against where it is. Replaced whole by the worker, read by the sim thread for the log.</summary>
-        public volatile GimbalTrace Trace;
+        /// <summary>The highest-thrust gimbal on the last Lsq pass: what it was told against where it is. Written by the worker and read by the sim thread after worker join.</summary>
+        public GimbalTrace? Trace;
 
         /// <summary>The vehicle the demand is for. The worker reads Vehicle.IsControllable through it, which Vehicle.UpdateControl writes on the main thread while no worker runs.</summary>
         internal volatile Vehicle Owner;
@@ -251,6 +251,11 @@ public static class KsaGimbalControl
         return thrust;
     }
 
+    // Main-thread scratch for PredictLsq, reused across steps to avoid per-step list and array allocations.
+    private static GimbalController[] _predictGimbals = [];
+    private static double[] _predictThrusts = [];
+    private static double[] _predictCommands = [];
+
     /// <summary>
     /// What an Lsq command of <paramref name="torqueNm"/> (KSA body axes, N m) will give, as the worker's allocation will solve it (KsaTvcAllocator.Solve) on the lit gimbals with the thrust of the last step: the torque it delivers once the gimbals reach their commands, and the solve's diagnostics. Zero with no lit gimbal: unlike the worker, no nameplate thrust stands in, because a prediction for a caller sharing the torque with other actuators must not promise torque an unlit engine cannot give. Main thread, between the workers' steps.
     /// </summary>
@@ -261,20 +266,32 @@ public static class KsaGimbalControl
             || !ModuleStateful<GimbalController, GimbalControllerState, EmptyStruct, EmptyStruct>
                 .TryGetFrom(vehicle.Parts.States, out var gimbals))
             return default;
-        var lit = new System.Collections.Generic.List<GimbalController>();
-        var thrusts = new System.Collections.Generic.List<double>();
+        int count = 0;
         foreach (var gimbal in gimbals.ModulesAndStates)
         {
             Gimbal g = gimbal.Module.Gimbal;
             if (g == null || !(Math.Max(g.AxisY.MaxAngle, g.AxisZ.MaxAngle) > 0f) || !(gimbal.State.TotalThrust > 0.0))
                 continue;
-            lit.Add(gimbal.Module);
-            thrusts.Add(gimbal.State.TotalThrust);
+            if (count == _predictGimbals.Length)
+            {
+                int next = Math.Max(4, _predictGimbals.Length * 2);
+                Array.Resize(ref _predictGimbals, next);
+                Array.Resize(ref _predictThrusts, next);
+                Array.Resize(ref _predictCommands, 2 * next);
+            }
+            _predictGimbals[count] = gimbal.Module;
+            _predictThrusts[count] = gimbal.State.TotalThrust;
+            count++;
         }
-        if (lit.Count == 0)
+        if (count == 0)
             return default;
-        var commands = new double[2 * lit.Count];
-        result = KsaTvcAllocator.Solve(lit.ToArray(), thrusts.ToArray(), vehicle.CenterOfMassAsmbF, torqueNm, commands);
+        result = KsaTvcAllocator.Solve(
+            _predictGimbals.AsSpan(0, count),
+            _predictThrusts.AsSpan(0, count),
+            vehicle.CenterOfMassAsmbF,
+            torqueNm,
+            _predictCommands);
+        Array.Clear(_predictGimbals, 0, count);
         return result.AchievedTorque;
     }
 

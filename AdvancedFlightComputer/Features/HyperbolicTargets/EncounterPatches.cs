@@ -80,11 +80,10 @@ internal static class Patch_TryFindIntercept
 
     /// <summary>Coarse pass at one day, then one minute around the coarse minimum
     /// so a fast flyby is not aliased between coarse samples.</summary>
-    private static double FindPatchedConicClosestApproach(
+    internal static double FindPatchedConicClosestApproach(
         FlightPlan flightPlan, IOrbiter target, double transitSeconds)
     {
         double minDist = double.MaxValue;
-        double minTime = double.NaN;
         Orbit targetOrbit = target.Orbit;
 
         const double CoarseStep = 86400.0;
@@ -99,17 +98,20 @@ internal static class Patch_TryFindIntercept
             // Offsets from the patch start rather than absolute sim seconds, because a UniverseTime holds 128 bit nanoseconds and an absolute double would spend its mantissa on the epoch instead of on the window.
             UniverseTime patchStart = patch.StartTime;
             double end = Math.Min(transitSeconds * 2.0, (patch.EndTime - patchStart).Seconds());
+            double patchMinDist = double.MaxValue;
+            double patchMinTime = double.NaN;
 
             for (double t = 0.0; t <= end; t += CoarseStep)
             {
                 double dist = DistanceAt(patch, targetOrbit, patchStart + t);
-                if (dist < minDist) { minDist = dist; minTime = t; }
+                if (dist < patchMinDist) { patchMinDist = dist; patchMinTime = t; }
+                if (dist < minDist) minDist = dist;
             }
 
-            if (double.IsNaN(minTime)) continue;
+            if (double.IsNaN(patchMinTime)) continue;
 
-            double refineStart = Math.Max(0.0, minTime - RefineHalfWindow);
-            double refineEnd = Math.Min(end, minTime + RefineHalfWindow);
+            double refineStart = Math.Max(0.0, patchMinTime - RefineHalfWindow);
+            double refineEnd = Math.Min(end, patchMinTime + RefineHalfWindow);
             for (double t = refineStart; t <= refineEnd; t += RefineStep)
             {
                 double dist = DistanceAt(patch, targetOrbit, patchStart + t);

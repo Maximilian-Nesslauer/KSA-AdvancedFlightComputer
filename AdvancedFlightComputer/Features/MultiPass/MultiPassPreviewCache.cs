@@ -44,8 +44,6 @@ internal static class MultiPassPreviewCache
     private static int ComputePerformanceInputSignature(Vehicle source)
     {
         if (source.Parts == null) return 0;
-        // Ensure what SequencePerformanceList.Recompute ensures, so the key never reads a stale solid motor stack or sequence list.
-        source.Parts.EnsureDerived(DerivedData.SolidMotorStacks | DerivedData.Sequences);
         var hc = new HashCode();
         hc.Add(source.Parts);
         hc.Add(source.Parts.SequenceList.ActiveSequence);
@@ -71,6 +69,12 @@ internal static class MultiPassPreviewCache
 
     private static void AddPartInputs(PartTree tree, ref HashCode hc)
     {
+        // Hash tree inert masses once in O(P) instead of calling Part.ComputeSubtreeInertMass per part.
+        Span<InertMass> inertMasses = tree.Modules.Get<InertMass>();
+        hc.Add(inertMasses.Length);
+        for (int i = 0; i < inertMasses.Length; i++)
+            hc.Add(inertMasses[i].MassPropertiesAsmb.Props.Mass);
+
         ReadOnlySpan<Part> parts = tree.Parts;
         hc.Add(parts.Length);
         for (int i = 0; i < parts.Length; i++)
@@ -78,7 +82,6 @@ internal static class MultiPassPreviewCache
             Part part = parts[i];
             hc.Add(part.InstanceId);
             hc.Add(part.SequenceOrder);
-            hc.Add(part.ComputeSubtreeInertMass());
 
             ReadOnlySpan<Part> subParts = part.SubParts;
             for (int s = 0; s < subParts.Length; s++)
@@ -278,6 +281,7 @@ internal static class MultiPassPreviewCache
         long DvBucket,
         long SmaBucket,
         long MassBucket,
+        long TargetAltitudeBucket,
         bool UseDescendingNode,
         long TargetIncMilliRad,
         OrbitManeuvers.InclinationReference Reference,
@@ -298,6 +302,7 @@ internal static class MultiPassPreviewCache
                 (long)totalDv,
                 (long)(source.Orbit.SemiMajorAxis / SmaQuantumM),
                 (long)(source.TotalMass / MassQuantumKg),
+                double.IsFinite(OrbitToolForm.TargetAltitude) ? (long)Math.Round(OrbitToolForm.TargetAltitude) : 0L,
                 OrbitToolForm.UseDescendingNode,
                 (long)(OrbitToolForm.TargetInclinationRad * 1000.0),
                 OrbitToolForm.InclinationRef,
@@ -358,6 +363,7 @@ internal static class MultiPassPreviewCache
         PassPreviewResult result = PlanForType(
             source, maneuver, typeKey, allocations, Universe.GetElapsedTime());
 
+        ReleasePreviewPoints(_cachedPreview);
         _cachedPreview = result;
         _cachedAllocations = allocations;
         _cachedAllocationsSum = Splitter.SumDvCapacityMs(allocations);
@@ -408,8 +414,17 @@ internal static class MultiPassPreviewCache
             $"no planner for typeKey '{typeKey}'");
     }
 
+    private static void ReleasePreviewPoints(PassPreviewResult? preview)
+    {
+        if (preview is not { Passes: { } passes })
+            return;
+        for (int i = 0; i < passes.Length; i++)
+            passes[i].FlightPlan.ReleaseCachedPoints();
+    }
+
     public static void ClearPreview()
     {
+        ReleasePreviewPoints(_cachedPreview);
         _cachedPreview = null;
         _cachedAllocations = null;
         _cachedAllocationsSum = 0.0;

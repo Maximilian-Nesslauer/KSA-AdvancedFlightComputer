@@ -25,15 +25,46 @@ public static partial class GuidanceWindow
     {
         PartTree? tree = vehicle.Parts;
         double now = SimNow();
-        _stageEngineCarries.RemoveAll(record => now > record.ExpiresAt || record.From.IsDisposed && double.IsPositiveInfinity(record.ExpiresAt));
         foreach (StageEngineCarry record in _stageEngineCarries)
         {
-            // A stage that has left starts its window here, the first refresh after the split.
-            if (ReferenceEquals(record.From, vehicle) && !ReferenceEquals(record.StageRoot.Tree, tree) && double.IsPositiveInfinity(record.ExpiresAt))
+            if (!double.IsPositiveInfinity(record.ExpiresAt))
+                continue;
+            if (record.From.IsDisposed)
+            {
+                // Keep the carry alive while the separated stage belongs to another live craft so it can claim its choice.
+                Vehicle? owner = record.StageRoot.Tree?.OwningVehicle;
+                record.ExpiresAt = owner is { IsDisposed: false } && !ReferenceEquals(owner, record.From)
+                    ? now + StageEngineCarryWindowS
+                    : double.NegativeInfinity;
+            }
+            else if (ReferenceEquals(record.From, vehicle) && !ReferenceEquals(record.StageRoot.Tree, tree))
+            {
+                // A stage that has left starts its window here, the first refresh after the split.
                 record.ExpiresAt = now + StageEngineCarryWindowS;
+            }
         }
+        _stageEngineCarries.RemoveAll(record => now > record.ExpiresAt);
         if (tree == null)
             return;
+
+        // Drop attached carry records for stages on this vehicle that are no longer returnable.
+        for (int i = _stageEngineCarries.Count - 1; i >= 0; i--)
+        {
+            StageEngineCarry record = _stageEngineCarries[i];
+            if (!ReferenceEquals(record.From, vehicle) || !ReferenceEquals(record.StageRoot.Tree, tree))
+                continue;
+            bool stillReturnable = false;
+            for (int s = 0; s < _s.ReturnableStages.Count; s++)
+            {
+                if (_s.ReturnableStages[s].RootId == record.StageRoot.InstanceId)
+                {
+                    stillReturnable = true;
+                    break;
+                }
+            }
+            if (!stillReturnable)
+                _stageEngineCarries.RemoveAt(i);
+        }
 
         foreach (ReturnableStage stage in _s.ReturnableStages)
         {

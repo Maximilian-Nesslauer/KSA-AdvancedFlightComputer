@@ -18,7 +18,7 @@ A provider gives four functions, all called on the main thread except where note
 
 | Function | What it does |
 | --- | --- |
-| `collect` | the fins on a vehicle, each as (part, name, min °, max °, rate °/s) |
+| `collect` | the fins on a vehicle, each as (part, name, min deg, max deg, rate deg/s) |
 | `deflection` | the deflection a fin has reached, degrees |
 | `command` | ask a fin for a deflection; the provider moves it at its own rate |
 | `poser` | for the aero sweep: a binder that finds the fin in a private copy of the aero mesh and returns an action that turns it to a deflection there. The binder and the action run on the sweep's thread. |
@@ -38,30 +38,44 @@ On one test craft the body took 2 s and four fins 5.2 s.
 
 For each fin, alone, the sweep:
 
-1. turns it to each deflection of its grid (`KsaAeroSweep.SurfaceDeflections`): rest, every 15° outward from rest (`SurfaceStepDeg`), and both ends of its range. A ±45° fin is swept at −45, −30, −15, 0, 15, 30 and 45°;
-2. flies the body table's grid again at each deflection: the same Mach rows (0 to 5 in the default grid, then 6, 7 and 8) and the same $\alpha$ and $\beta$ breakpoints (every degree to ±5°, then ±8, ±12, ±16 and ±20°);
+1. turns it to each deflection of its grid (`KsaAeroSweep.SurfaceDeflections`): rest, every 15 deg outward from rest (`SurfaceStepDeg`), and both ends of its range. A +/-45 deg fin is swept at -45, -30, -15, 0, 15, 30 and 45 deg;
+2. flies the body table's grid again at each deflection: the same Mach rows (0 to 5 in the default grid, then 6, 7 and 8) and the same $\alpha$ and $\beta$ breakpoints (every degree to +/-5 deg, then +/-8, +/-12, +/-16 and +/-20 deg);
 3. records, per node, the **change** the fin makes to the body's force coefficients (per $qS$) and moment coefficients (per $qSL$, about the centre of mass the sweep saw);
 4. turns it back to rest, whatever happens, so the next fin is swept against the craft as built.
 
 Each deflection's table is a cubic B-spline over (Mach, $\alpha$, $\beta$), like the body table (`BodyAeroTable`).
 A fin is swept with the body angles because it is panels of the craft's mesh like any other, shielded by the body and the other fins as the flow turns: what it does depends on $\alpha$ and $\beta$, not only on its own angle.
+During the sweep, `KsaAeroSweep.SamplingFlow.Prepare(u)` tracks `_lastFlowDir` and issues the cache-busting `_flow.Update(+u)` only when $\mathbf d_{\text{last}}\cdot(-\mathbf u) \ge \cos(1^\circ)$ before calling `_flow.Update(-u)`, preventing stale shielding caches without redundant backwards solves.
+The sweep also captures speed-invariant **rotational aerodynamic damping** $(C_{lp}, C_{mq}, C_{nr})$ via four `ForceProbe.WrenchWithRates` probes at $\mathbf u_{\text{retro}} = (-1, 0, 0)$, $v_{\text{damp}} = 100$ m/s and $\omega_{\text{damp}} = 0.10$ rad/s:
+
+$$
+C_{lp,mq,nr} = \max\!\left(0,\ -\frac{M_i(\omega_i) - M_i(0)}{\tfrac12\rho_{\text{SL}}\,v_{\text{damp}}\,\omega_{\text{damp}}}\right),
+$$
+
+together with the geometry stiffness and damping bounds $(K_{\text{sub}}, C_{\text{sub}})$ measured once at $v = 150$ m/s, $\alpha = 5^\circ$ retrograde.
 The fins are swept one at a time and added in flight; the interference between two deflected fins is left out.
 
 ## From tables to torque curves
 
-Each step, `KsaAeroTorqueControl.Measure` reads every fin's tables at the condition flown now and builds one curve per fin.
+Each step, `KsaAeroTorqueControl.Measure` reads every fin's tables at the local Mach number, $\alpha$ and $\beta$ flown now and builds one curve per fin.
 At each swept deflection $\delta_k$:
 
 $$
-\mathbf t_i(\delta_k) = \frac{q S L\,\Delta\mathbf C_{M,i}(\delta_k) + (\mathbf r_\text{sweep} - \mathbf r_\text{now}) \times q S\,\Delta\mathbf C_{F,i}(\delta_k)}{1 + k\,q},
+\mathbf t_i(\delta_k) = \frac{q S L\,\Delta\mathbf C_{M,i}(\delta_k) + (\mathbf r_\text{sweep} - \mathbf r_\text{now}) \times q S\,\Delta\mathbf C_{F,i}(\delta_k)}{D(q, v, \Delta t)},
 \qquad
-\mathbf f_i(\delta_k) = q S\,\Delta\mathbf C_{F,i}(\delta_k)
+\mathbf f_i(\delta_k) = q S\,\Delta\mathbf C_{F,i}(\delta_k),
 $$
 
-with every coefficient read at the Mach number, $\alpha$ and $\beta$ flown.
-The terms are those of the air-moment feed-forward on the [overview](index.md#air-moment-feed-forward): the moment moved to the present centre of mass, and divided by the game's moment limiter $1 + kq$.
+where $D(q, v, \Delta t)$ is KSA's exact closed-form mass-varying 2-term moment limiter (`KsaAeroSweep.TryComputeMomentLimiterClosedForm`):
+
+$$
+D(q, v, \Delta t) = 1 + \lVert I_{\text{asmb}}^{-1}\rVert_\infty\,\Delta t\,q\!\left(\tfrac12\Delta t\,K_{\text{sub}} + \frac{C_{\text{sub}}}{v}\right),
+\qquad
+\lVert I_{\text{asmb}}^{-1}\rVert_\infty = \max_i \sum_j \lvert(I_{\text{asmb}}^{-1})_{ij}\rvert.
+$$
+
 Between swept deflections the curve is straight; past its ends it is held.
-Every curve is zero at rest.
+Every curve is zero at rest. Controllable AoA ceilings are derived directly from measured aerodynamic restoring moment against available actuator authority.
 
 ### Authority limits
 
@@ -69,8 +83,8 @@ The fins report **no authority**, rather than a guess, when
 
 - the dynamic pressure is under 50 Pa (`MinQPa`),
 - the airspeed is under 1 m/s,
-- the craft flies nose first, or
-- $|\alpha|$ or $|\beta|$ is over 20° (`KsaAeroSweep.BodyAngleMaxDeg`), the edge of the tables.
+- the craft flies nose first without nose-first surface tables (`SurfaceTable.NoseForce`/`NoseMoment`), or
+- $|\alpha|$ or $|\beta|$ is over 20 deg (`KsaAeroSweep.BodyAngleMaxDeg` engine-first, `KsaAeroSweep.NoseAngleMaxDeg` nose-first), the edge of the tables.
 
 Then every fin is sent home and the whole demand goes to the RCS.
 
@@ -142,17 +156,17 @@ Where a curve steepens outward, the straight piece is a chord that promises a li
 
 The first pass is the programme above.
 Where the curves bend the wrong way, its answer can count on torque they do not give; from a deflection on a bend it can even fill a steep piece one way and a shallow one back, moving nowhere for torque it does not get.
-On one craft's ±45° fins, whose drag grows faster outward, it gave 48 of 51 kN m of pitch with 12 kN m of roll and 14 of yaw nobody asked for.
+On one craft's +/-45 deg fins, whose drag grows faster outward, it gave 48 of 51 kN m of pitch with 12 kN m of roll and 14 of yaw nobody asked for.
 
 So `AeroTorqueAllocator.Allocate` refines its own answer.
 Each further pass gives each fin **one straight slope**, the secant of its curve across a window of $\pm W$ around the best answer so far, the same slope both ways so there is nothing to play off:
 
 1. Solve the programme on those secants.
 2. Read the torque the new deflections really give off the curves, and the true cost in the programme's own prices.
-3. If the cost fell, keep the answer and double the window, up to 15°. If not, halve it.
-4. Stop when the window is under 0.05°, after 24 passes, or once the torque the pass planned is within $1 + 0.005\,|\boldsymbol\tau|$ N m of what the curves give.
+3. If the cost fell, keep the answer and double the window, up to 15 deg. If not, halve it.
+4. Stop when the window is under 0.05 deg, after 24 passes, or once the torque the pass planned is within $1 + 0.005\,|\boldsymbol\tau|$ N m of what the curves give.
 
-The window starts at 10°.
+The window starts at 10 deg.
 A window that could only shrink settled 8 % short on scaled-up fins, where one large coordinated move of several fins was needed, so it can grow back.
 If the first start does not settle, a second one runs from where the fins are now, and the better answer is kept.
 
@@ -177,77 +191,6 @@ The prices then line up as: a fin about $10^{-3}$ per newton metre, a thruster 0
 The programme's duties are not flown.
 The controller reads what the fins will give and fires the RCS through [RCS mixing](rcs.md) for the rest.
 
-### Slow demand to the fins, fast to the RCS
-
-Where RCS backs the fins, the attitude controller can lag the fins behind the programme's answer (`AttitudeController.Settings.SurfaceSmoothS`, passed to `KsaAeroTorqueControl.Command` as `smoothS`).
-Orbital entry uses it, with $T = 0.5/\omega_n = 0.5$ s at the controller's $\omega_n = 1$ rad/s; the other modes leave it at 0.
-Without it, the RCS's flutter about a held attitude swung the flaps 10° every half second for next to no torque (2026-11-21).
-
-Each step, in order:
-
-1. The programme above gives each fin its best deflection $\delta^*_i$, inside its rate reach.
-2. Each fin moves only part of the way there from its last command $\delta_{\text{prev},i}$ (its measured deflection on the first step), and stays inside its reach (below).
-3. The torque the fins give is read off their curves at those deflections, $\boldsymbol\tau_{\text{fins}} = \sum_i \boldsymbol\tau_i(\delta_{\text{cmd},i})$ (`AeroTorqueAllocator.Evaluate`).
-4. The RCS is fired for the rest, $\boldsymbol\tau_{\text{rcs}} = \boldsymbol\tau - \boldsymbol\tau_{\text{gimbals}} - \boldsymbol\tau_{\text{fins}}$.
-
-Step 2 in full:
-
-$$
-\begin{aligned}
-k &= \frac{\Delta t}{T + \Delta t} \
-\delta_{\text{cmd},i} &= \delta_{\text{prev},i} + k\,\big(\delta^*_i - \delta_{\text{prev},i}\big) \
-\delta_{\text{cmd},i} &\leftarrow \operatorname{clamp}\big(\delta_{\text{cmd},i},\ \delta_{\text{now},i} - r_i\,\Delta t,\ \delta_{\text{now},i} + r_i\,\Delta t\big)
-\end{aligned}
-$$
-
-At 60 frames a second, $\Delta t \approx 0.017$ s and $k \approx 0.032$: each step a fin closes about 3 % of the gap to its target.
-
-**It is a first-order lag.** Step 2 is the backward-Euler step of $T\,\dot\delta = \delta^* - \delta$:
-
-$$
-\frac{\delta_k - \delta_{k-1}}{\Delta t} = \frac{\delta^*_k - \delta_k}{T}
-\quad\Longrightarrow\quad
-\delta_k = \delta_{k-1} + \frac{\Delta t}{T + \Delta t}\,\big(\delta^*_k - \delta_{k-1}\big)
-$$
-
-**It prices the fins' rate, not their deflection.** Step 2 is also the deflection that minimises, fin by fin,
-
-$$
-J(\delta) = (\delta - \delta^*)^2 + \frac{T}{\Delta t}\,(\delta - \delta_{\text{prev}})^2
-= (\delta - \delta^*)^2 + T\,\Delta t\,\dot\delta^{\,2},
-\qquad \dot\delta = \frac{\delta - \delta_{\text{prev}}}{\Delta t}
-$$
-
-since $J'(\delta) = 0$ gives exactly the update above.
-That is dynamic control allocation (Härkegård) with diagonal weights: a quadratic price on the fin's rate, of weight $T\,\Delta t$ against the distance from the programme's answer, and none on the deflection itself, so the fins still end where the programme wants them.
-The programme's own price of a degree moved, $c_\Delta$, stays: it is linear and small, and stops the fins swapping work; the lag is the strong price on top.
-
-**It splits the demand by frequency.** For demand varying at $\omega$, the fins pass a low-pass share and the RCS the complementary high-pass share:
-
-$$
-H_{\text{fins}}(j\omega) = \frac{1}{1 + j\omega T}, \qquad
-H_{\text{rcs}}(j\omega) = \frac{j\omega T}{1 + j\omega T}, \qquad
-H_{\text{fins}} + H_{\text{rcs}} = 1
-$$
-
-| Demand varying at | $\lvert H_{\text{fins}}\rvert$ | $\lvert H_{\text{rcs}}\rvert$ |
-| --- | --- | --- |
-| 0.5 rad/s, a slow trim change | 0.97 | 0.24 |
-| 1 rad/s, the attitude loop's bandwidth | 0.89 | 0.45 |
-| 2 rad/s | 0.71 | 0.71 |
-| 6 rad/s, about 1 Hz flicker | 0.32 | 0.95 |
-| 12 rad/s, about 2 Hz | 0.16 | 0.99 |
-
-The magnitudes do not add to 1; the complex shares do.
-Steady demand ends on the fins, and the fast flicker almost all on the RCS.
-
-Where it is approximate:
-
-- The lag is on deflection, so the split is exact only where a fin's torque is straight in its deflection; step 3 reads the true torque, so the RCS is always told the truth.
-- $\delta^*$ already counts on the RCS, which shares the programme as backup columns; the lag only delays the fins' part of that answer.
-- With no RCS on the craft there is nothing to take the fast part, so there is no lag: the fins follow the programme directly.
-- A fast, large demand that the RCS cannot cover goes partly unmet while the fins travel. The attitude controller's authority-aware capture (orbital entry) keeps its demands to what the craft can stop from, which keeps this rare.
-
 ## What the fins can reach
 
 `AeroTorqueAllocator.Characterise(axis, sign)` is the common characterise step, run from rest over each fin's whole range on the straightened segments.
@@ -265,7 +208,7 @@ The fins go home when a plan has none.
 ## What you see in flight
 
 - **The fins move smoothly and settle.** They would chatter if they chased a jittering demand or swapped work between them every step; the filtered rate error on the [overview](index.md#rate-error-and-its-filter), the price of a degree moved, and asking each fin only for what it reaches stop that.
-- **The RCS fires when the fins cannot reach.** That happens in thin air, while the fins are still travelling to a new deflection, when they are at their stops, and when the craft is more than 20° off engine first.
+- **The RCS fires when the fins cannot reach.** That happens in thin air, while the fins are still travelling to a new deflection, when they are at their stops, and when the craft is more than 20 deg off engine first.
 - **Idle fins drift home** at their own rate when the demand does not need them.
 - **Fins take roll too**, by deflecting against each other, so the RCS rolls the craft only when the fins have no roll left.
 

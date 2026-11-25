@@ -106,6 +106,8 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
             CheckLongMinimumPreview(t, fixture, state);
             CheckContact(t, fixture, state);
             CheckCompletionAfterRemoval(t, fixture, state);
+            CheckCompletionByAlertWithPositiveResidual(t, fixture, state);
+            CheckSuperSynchronousSitePassesAndUnboundChase(t, fixture, state, other.Vehicle, ambient);
             state.FcResetPending = true;
             GuidanceWindow.ApplyAutopilot(craft);
             t.Check("reset releases the AFC braking claim", !state.ControlAcquired && state.DeorbitPlan == null
@@ -523,6 +525,73 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
             state.LandingPhase == GuidanceWindow.LandingPhase.TransferPlanning && state.ControlAcquired
             && state.DeorbitNode == null && state.DeorbitPlan != null && !Inputs(craft).EngineOn
             && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance, state.LandingStatus);
+    }
+
+    private static void CheckCompletionByAlertWithPositiveResidual(TestContext t, DeorbitFixture fixture, VehicleAutopilotState state)
+    {
+        state.FcResetPending = true;
+        GuidanceWindow.ApplyAutopilot(fixture.Vehicle);
+        Seed(fixture, state);
+        if (!Arm(t, fixture, state)) return;
+        Vehicle craft = fixture.Vehicle;
+        Burn node = state.DeorbitNode!;
+        BurnTarget target = craft.FlightComputer.Burn!;
+        // Keep DeltaVToGoCci aligned with DeltaVTargetCci (as a post-cutoff RCS pulse can leave on a short burn).
+        target.DeltaVAccumCci = target.DeltaVTargetCci * 0.99f;
+        GuidanceWindow.OnStockBurnCompleted(craft, node);
+        craft.FlightComputer.BurnMode = FlightComputerBurnMode.Manual;
+        craft.FlightComputer.RemoveBurn(node);
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("stock completion alert completes deorbit even when residual stays positive",
+            state.LandingPhase == GuidanceWindow.LandingPhase.TransferPlanning && state.ControlAcquired
+            && state.DeorbitNode == null && state.DeorbitPlan != null
+            && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance, state.LandingStatus);
+    }
+
+    private static void CheckSuperSynchronousSitePassesAndUnboundChase(
+        TestContext t, DeorbitFixture fixture, VehicleAutopilotState state, Vehicle targetCraft, System.Reflection.FieldInfo ambient)
+    {
+        IParentBody parent = fixture.Request.Parent;
+        double omega = Math.Abs(parent.GetAngularVelocity());
+        if (omega > 1e-9)
+        {
+            // Orbit well above synchronous radius so orbital mean motion is smaller than body rotation rate.
+            double rSync = Math.Cbrt(parent.Mu / (omega * omega));
+            double rSuper = Math.Max(rSync * 1.6, parent.MeanRadius * 2.0);
+            double vCirc = Math.Sqrt(parent.Mu / rSuper);
+            Orbit superOrbit = Orbit.CreateFromStateCci(parent, Universe.GetElapsedTime(),
+                new double3(rSuper, 0.0, 0.0), new double3(0.0, vCirc, 0.0), default);
+            ambient.SetValue(null, state);
+            AccessTools.Method(typeof(GuidanceWindow), "RefreshPasses")
+                .Invoke(null, new object[] { superOrbit, parent, parent.Mu, parent.MeanRadius });
+            t.Check("super-synchronous orbit finds upcoming site passes",
+                state.Passes.Count > 0 && state.Passes[0].tSec > 0.0,
+                $"passes={state.Passes.Count}");
+        }
+
+        string savedTargetId = state.TargetId;
+        Vehicle? escapeTarget = null;
+        try
+        {
+            double r = parent.MeanRadius + 500_000.0;
+            double vEsc = Math.Sqrt(2.0 * parent.Mu / r) * 1.25;
+            Orbit hyperbolic = Orbit.CreateFromStateCci(parent, Universe.GetElapsedTime(),
+                new double3(r, 0.0, 0.0), new double3(0.0, vEsc, 0.0), default);
+            escapeTarget = VehicleSpawner.SpawnCopy(targetCraft, parent, "ChaseUnbound_" + Guid.NewGuid().ToString("N"), hyperbolic);
+            state.TargetId = escapeTarget.Id;
+            ambient.SetValue(null, state);
+            object[] args = { fixture.Vehicle, fixture.Vehicle.Orbit, parent, parent.MeanRadius, null! };
+            var status = (GuidanceWindow.ChaseStatus)AccessTools.Method(typeof(GuidanceWindow), "TryChaseOrbit")
+                .Invoke(null, args)!;
+            t.Check("ChaseOrbit rejects unbound target orbits instead of emitting NaN",
+                status == GuidanceWindow.ChaseStatus.NotFound, $"status={status}");
+        }
+        finally
+        {
+            if (escapeTarget != null)
+                VehicleSpawner.Despawn(escapeTarget);
+            state.TargetId = savedTargetId;
+        }
     }
 
     // Planning sets 1x itself and gives the speed back when it ends; see GuidanceWindow.StepRealSpeedHold.

@@ -61,6 +61,9 @@ internal static partial class Program
         LandingLegRules();
         SiteSlopeRules();
         IdleEngineParkingRules();
+        AscentEscapeGuardRules();
+        AscentTerminalCutoffRules();
+        So3AxisAngleRules();
         BurnTurnChecks();
         PrintfTexts();
         LandingSiteParseRules();
@@ -216,14 +219,19 @@ internal static partial class Program
     private static void SentenceAndVerbRules()
     {
         static float Width(string text) => text.Length * 10f;
+        SentenceWrap.SpanMeasure spanWidth = static text => text.Length * 10f;
         Check("a sentence that fits has no break", SentenceWrap.Break("short", 100f, Width) == "short");
+        Check("span measure matches string measure on single-line text", SentenceWrap.Break("short", 100f, spanWidth) == "short");
         string site = SentenceWrap.Break("No site. A press flies to 0.674, 23.473.", 260f, Width);
         Check("a decimal never breaks", !site.Contains("0.\n") && !site.Contains("23.\n") && site.Replace('\n', ' ') == "No site. A press flies to 0.674, 23.473.", site);
+        Check("span measure matches string measure on decimal wrap", SentenceWrap.Break("No site. A press flies to 0.674, 23.473.", 260f, spanWidth) == site);
         Check("the last row of a broken text", SentenceWrap.LastRow("one\ntwo three") == "two three" && SentenceWrap.LastRow("one") == "one");
         Check("a word has company on the last row", SentenceWrap.Break("aaaa bbbb cccc dddd", 150f, Width) == "aaaa bbbb\ncccc dddd", SentenceWrap.Break("aaaa bbbb cccc dddd", 150f, Width));
+        Check("span measure keeps last-row company", SentenceWrap.Break("aaaa bbbb cccc dddd", 150f, spanWidth) == "aaaa bbbb\ncccc dddd");
         Check("a row of two words above keeps them", SentenceWrap.Break("aaaaaa bbbbbb cccccc", 130f, Width) == "aaaaaa bbbbbb\ncccccc", SentenceWrap.Break("aaaaaa bbbbbb cccccc", 130f, Width));
         Check("a word that is alone above stays there", SentenceWrap.Break("aaaaaaaaaaaaaaaa bbbb", 100f, Width) == "aaaaaaaaaaaaaaaa\nbbbb");
         Check("a line end of the text holds", SentenceWrap.Break("aa bb\ncc dd", 100f, Width) == "aa bb\ncc dd");
+        Check("span measure preserves explicit line breaks", SentenceWrap.Break("aa bb\n\ncc dd", 100f, spanWidth) == "aa bb\n\ncc dd");
 
         Check("the mark stands beside a short last row", !FormRules.MarkOwnRow(100f, 165f, 584f, 10f, false));
         Check("a last row with no room moves the mark", FormRules.MarkOwnRow(500f, 165f, 584f, 10f, false));

@@ -280,7 +280,7 @@ public sealed class UpfgGuidance
         // 5 - Guidance vectors
         ComputeGuidanceVectors(vgo, rd, r, v, tgo, _prev.Tgo, rgrav, iy, S, L, J, Q, H, P, rbias,
             out double3 lambda, out double3 rgo, out double3 iF, out double3 vthrust,
-            out double3 rthrust, out double3 vbias, out double3 lambdadot);
+            out double3 rthrust, out double3 vbias, out double3 lambdadot, out bool singular);
         rbias = rgo - rthrust;
         Rgo = rgo;   // latched for the RGO readout of the console head; not used by the solver
 
@@ -358,8 +358,11 @@ public sealed class UpfgGuidance
             return;
         }
 
-        // Convergence: tgo settled between iterations
-        EvaluateConvergence(prevTgoForConvergence, tgo, dt);
+        // Convergence: tgo settled between iterations. Do not latch convergence on a singular step.
+        if (singular)
+            Converged = false;
+        else
+            EvaluateConvergence(prevTgoForConvergence, tgo, dt);
 
         _prev = new State
         {
@@ -511,8 +514,9 @@ public sealed class UpfgGuidance
         double3 vgo, double3 rd, double3 r, double3 v, double tgo, double prevTgo, double3 rgrav,
         double3 iy, double S, double L, double J, double Q, double H, double P, double3 rbias,
         out double3 lambda, out double3 rgo, out double3 iF, out double3 vthrust,
-        out double3 rthrust, out double3 vbias, out double3 lambdadotOut)
+        out double3 rthrust, out double3 vbias, out double3 lambdadotOut, out bool singular)
     {
+        singular = false;
         lambda = double3.Normalize(vgo);
         if (prevTgo > 0)
             rgrav = Math.Pow(tgo / prevTgo, 2) * rgrav;
@@ -520,20 +524,36 @@ public sealed class UpfgGuidance
         rgo = rd - (r + v * tgo + rgrav);
         double3 iz = double3.Normalize(double3.Cross(rd, iy));
         double3 rgoxy = rgo - double3.Dot(iz, rgo) * iz;
-        double rgoz = (S - double3.Dot(lambda, rgoxy)) / double3.Dot(lambda, iz);
+        // Guard the downrange projection denominator dot(lambda, iz) because on steep or high-TWR ascents
+        // lambda can become nearly radial (perpendicular to iz), blowing up rgoz and driving vgo to escape.
+        double lambdaIz = double3.Dot(lambda, iz);
+        double rgoz;
+        if (Math.Abs(lambdaIz) >= 0.15)
+        {
+            rgoz = (S - double3.Dot(lambda, rgoxy)) / lambdaIz;
+        }
+        else
+        {
+            rgoz = Math.Clamp(double3.Dot(iz, rgo), -Math.Abs(S), Math.Abs(S));
+            singular = true;
+        }
         rgo = rgoxy + rgoz * iz + rbias;
 
-        double lambdade = Q - S * J / L;
-        double3 lambdadot = (rgo - S * lambda) * (1.0 / lambdade);
+        double jOverL = Math.Abs(L) > 1e-9 ? J / L : 0.0;
+        double lambdade = Q - S * jOverL;
+        double3 lambdadot = Math.Abs(lambdade) > 1e-6 ? (rgo - S * lambda) * (1.0 / lambdade) : default;
         lambdadotOut = lambdadot;
-        iF = lambda - lambdadot * (J / L);
+        iF = lambda - lambdadot * jOverL;
         iF = double3.Normalize(iF);
 
         double phi = Math.Acos(Math.Clamp(double3.Dot(iF, lambda) / (iF.Length() * lambda.Length()), -1.0, 1.0));
-        double phidot = -phi * L / J;
+        double phidot = Math.Abs(J) > 1e-9 ? -phi * L / J : 0.0;
         vthrust = (L - 0.5 * L * phi * phi - J * phi * phidot - 0.5 * H * phidot * phidot) * lambda;
         double rthrustMag = S - 0.5 * S * phi * phi - Q * phi * phidot - 0.5 * P * phidot * phidot;
-        rthrust = rthrustMag * lambda - (S * phi + Q * phidot) * (lambdadot * (1.0 / lambdadot.Length()));
+        double ldLen = lambdadot.Length();
+        rthrust = ldLen > 1e-12
+            ? rthrustMag * lambda - (S * phi + Q * phidot) * (lambdadot * (1.0 / ldLen))
+            : rthrustMag * lambda;
         vbias = vgo - vthrust;
     }
 

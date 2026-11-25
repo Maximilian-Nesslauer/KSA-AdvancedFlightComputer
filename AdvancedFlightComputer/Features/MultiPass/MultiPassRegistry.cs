@@ -402,6 +402,12 @@ internal static class MultiPassRegistry
             || !RequireInt(block, "pass_index", line, out int idx))
             return false;
 
+        if (total < 1 || idx < 0 || idx > total)
+        {
+            DropBlock(line, $"invalid pass counts (pass_index={idx}, pass_count_total={total})");
+            return false;
+        }
+
         if (!IntentDeserializers.TryGetValue(kind, out var deserializer))
         {
             DropBlock(line, $"unknown intent kind '{kind}'");

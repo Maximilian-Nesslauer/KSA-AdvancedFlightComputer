@@ -631,6 +631,19 @@ public static partial class GuidanceWindow
             }
         }
 
+        // Cut engines immediately if a bound-orbit ascent crosses into escape or runaway over-energy.
+        if (!_s.CutoffDone && (_s.Phase == AscentPhase.ClosedLoop || _s.Phase == AscentPhase.Terminal))
+        {
+            if (AscentEscapeGuard.ShouldCutForEscape(bodyRadius, _s.PeKm, _s.ApKm, mu, r.Length(), v.LengthSquared(),
+                out double targetE, out double curE))
+            {
+                GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                    $"Orbital escape guard triggered: E={curE:G4} J/kg vs target E={targetE:G4} J/kg (phase {PhaseName(_s.Phase)}). Cutting engine."));
+                ReleaseAscent("CUTOFF: ESCAPE SAFETY GUARD.", vehicle, warn: true);
+                return;
+            }
+        }
+
         UpdatePhase(vehicle, r, v, parent, bodyRadius, stepDt);
     }
 

@@ -28,7 +28,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 /// expansion (a term w*z^2 contributes P_ii = 2w; a combined cross term w*zi*zj
 /// contributes P_ij = w, i&lt;j).
 /// </summary>
-public sealed class Scvx6DofSubproblemScs
+public sealed class Scvx6DofSubproblemScs : IDisposable
 {
     private const int NX = Dynamics6Dof.NX;
     /// <summary>The control count, the base controls and the craft's fins (Scvx6DofConfig.NU).</summary>
@@ -53,7 +53,10 @@ public sealed class Scvx6DofSubproblemScs
     private readonly double[] _b, _c;
     private readonly double[] _colScale;
 
-    private readonly ScsWorkspace _ws = new();
+    // The conic backend (ScvxConic.Backend): SCS or Clarabel, one workspace each, the same problem data for both.
+    private readonly ScvxConicWorkspaces _wss = new();
+    /// <summary>The workspace of the last solve, whose solution and statistics the properties below read.</summary>
+    private IScvxConicWorkspace _ws => _wss.Last;
     private double _sigCBar;
     private double[]? _aJ, _bJ, _f0J;
     private bool _frozen;
@@ -68,7 +71,12 @@ public sealed class Scvx6DofSubproblemScs
     public double PrimalObjective => _ws.PrimalObjective;
     public string StatusText => _ws.StatusText;
     public bool HitIterationLimit => _ws.HitIterationLimit;
-    public bool HasWarmStart => _ws.HasWarmStart;
+    public bool HasWarmStart => _wss.Current.HasWarmStart;
+
+    /// <summary>The iteration cap the last solve backend turns a requested budget into (IScvxConicWorkspace.EffectiveIterationCap).</summary>
+    public int EffectiveIterationCap(int requested) => _ws.EffectiveIterationCap(requested);
+
+    public void Dispose() => _wss.Dispose();
 
     public int IX(int node, int i) => _oX + node * NX + i;
     public int IU(int node, int j) => _oU + node * NU + j;
@@ -269,7 +277,7 @@ public sealed class Scvx6DofSubproblemScs
                          double epsRel = ScsWorkspace.DefaultEps)
     {
         ThrowIfNotFinite();
-        return _ws.Solve(_A, _b, _c, _P, _nEq, _lDim, _socDims, warmStart, verbose,
+        return _wss.ForSolve().Solve(_A, _b, _c, _P, _nEq, _lDim, _socDims, warmStart, verbose,
                          maxIterations, epsAbs, epsRel);
     }
 
@@ -309,7 +317,7 @@ public sealed class Scvx6DofSubproblemScs
             throw new InvalidOperationException($"objective vector c has non-finite value at column {bad} ({_c[bad]})");
     }
 
-    public void ResetWarmStart() => _ws.ResetWarmStart();
+    public void ResetWarmStart() => _wss.ResetWarmStart();
 
     // ---------------------------------------------------------------- solution
 

@@ -66,9 +66,7 @@ internal static class PlaneChangeBurnPlanner
 
                 double3 vehicleNormal = orbit.GetOrbitNormalCci();
                 double3 referenceNormal = OrbitManeuvers.GetReferenceNormalCci(orbit, reference);
-                double3 nodeDir = double3.Cross(referenceNormal, vehicleNormal).NormalizeOrZero();
-                if (nodeDir.LengthSquared() < 1e-12)
-                    nodeDir = new double3(1, 0, 0);
+                double3 nodeDir = OrbitManeuvers.ResolveReferenceNodeDirection(referenceNormal, vehicleNormal);
 
                 TrueAnomaly anTa = orbit.GetTrueAnomaly(nodeDir);
                 TrueAnomaly nodeTa = useDescendingNode

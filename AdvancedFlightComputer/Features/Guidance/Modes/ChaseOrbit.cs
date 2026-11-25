@@ -68,10 +68,13 @@ public static partial class GuidanceWindow
         else
         {
             Vehicle target = FindVehicleById(_s.TargetId, vehicle);
-            if (target == null)
+            if (target == null || target.IsDisposed)
                 return ChaseStatus.NotFound;
 
             Orbit targetOrbit = target.Orbit;
+            if (targetOrbit == null || !targetOrbit.IsBound()
+                || !double.IsFinite(targetOrbit.Periapsis) || !double.IsFinite(targetOrbit.Apoapsis))
+                return ChaseStatus.NotFound;
             if (!ReferenceEquals(targetOrbit.Parent, orbit.Parent))
                 return ChaseStatus.DifferentBody;
 

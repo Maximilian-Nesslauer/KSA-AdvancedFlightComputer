@@ -49,6 +49,7 @@ public sealed class SetInclinationTest : AfcTest
         CheckHalfFraction(t, orbit, now);
         CheckEquatorial(t, orbit, home, now);
         CheckCoplanarStart(t, home, now);
+        CheckTiltedCoplanarStart(t, home, now);
         ManeuverAssertions.CheckNone(t, "already at target",
             OrbitManeuvers.ComputeSetInclination(
                 orbit,
@@ -144,5 +145,34 @@ public sealed class SetInclinationTest : AfcTest
         t.Check("coplanar start", ok,
             $"inc={OrbitFixtures.Deg(after.Inclination):F3}deg " +
             $"(target {OrbitFixtures.Deg(CoplanarTargetRad):F3}deg) nodeLineOnX={nodeOk}");
+    }
+
+    private static void CheckTiltedCoplanarStart(TestContext t, IParentBody home, UniverseTime now)
+    {
+        double3 tiltedNormal = new double3(0.6, 0.5, 0.6244997998398398).NormalizeOrZero();
+        double3 axis = OrbitManeuvers.ResolveReferenceNodeDirection(tiltedNormal, tiltedNormal);
+        t.Check("tilted coplanar node direction is unit and orthogonal",
+            Math.Abs(axis.Length() - 1.0) < 1e-9 && Math.Abs(double3.Dot(axis, tiltedNormal)) < 1e-9,
+            $"|axis|={axis.Length():F6} dot={double3.Dot(axis, tiltedNormal):E3}");
+
+        double3 eqNormal = OrbitManeuvers.GetReferenceNormalCci(
+            OrbitFixtures.EllipticalAt(home, PeriapsisAltitudeM, ApoapsisAltitudeM, now),
+            OrbitManeuvers.InclinationReference.Equatorial);
+        double3 rHat = OrbitManeuvers.ResolveReferenceNodeDirection(eqNormal, eqNormal);
+        double3 vHat = double3.Cross(eqNormal, rHat).NormalizeOrZero();
+        double r = home.MeanRadius + PeriapsisAltitudeM;
+        double v = Math.Sqrt(home.Mu / r);
+        Orbit coplanarEq = Orbit.CreateFromStateCci(
+            home, now, r * rHat, v * vHat, Brutal.Numerics.byte4.Zero);
+        OrbitManeuvers.ManeuverResult? result = OrbitManeuvers.ComputeSetInclination(
+            coplanarEq, CoplanarTargetRad, false, now, OrbitManeuvers.InclinationReference.Equatorial);
+        if (!ManeuverAssertions.RequireResult(t, "tilted equatorial coplanar start", result))
+            return;
+
+        Orbit after = ManeuverAssertions.Apply(coplanarEq, result!.Value);
+        double incAfter = OrbitManeuvers.GetInclinationAgainst(after, OrbitManeuvers.InclinationReference.Equatorial);
+        t.Check("tilted equatorial coplanar start reaches target inclination",
+            Math.Abs(incAfter - CoplanarTargetRad) < ManeuverAssertions.IncTolRad,
+            $"inc={OrbitFixtures.Deg(incAfter):F3}deg (target {OrbitFixtures.Deg(CoplanarTargetRad):F3}deg)");
     }
 }

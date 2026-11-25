@@ -461,6 +461,8 @@ public sealed class VehicleAutopilotState
     public bool MoonChainCapture;
     /// <summary>Sim time from which the current stage may plan its next burn, s.</summary>
     public double MoonChainAfter = double.NaN;
+    /// <summary>Remaining frame steps to wait after a burn or SOI change so vehicle workers publish the updated flight plan.</summary>
+    public int MoonChainSettleSteps;
     /// <summary>The node the chain made for the current burn, with the burn target stock loaded for it and the time and delta v the node had then. A node that differs from these was changed by the player.</summary>
     public Burn MoonChainNode;
     public BurnTarget MoonChainTarget;
@@ -654,6 +656,7 @@ public sealed class VehicleAutopilotState
     internal double DeorbitNodeTime = double.NaN;
     internal bool DeorbitNodeClaimed;
     internal bool DeorbitAutoArmed;
+    internal bool DeorbitBurnCompleted;
     internal bool DeorbitWarpRequested;
     internal double DeorbitWarpTime = double.NaN;
     internal ProbeWarpRetry DeorbitPowerWarp;
@@ -981,6 +984,9 @@ public sealed class VehicleAutopilotState
     /// left every other craft's worker running while claiming threading was off.
     /// </summary>
     public bool SixDofThreaded = true;
+
+    /// <summary>The 6-DOF and 3-DOF SCvx plans solve with Clarabel; off, with SCS. Process-wide in effect: the focused craft writes Conic.ScvxConic.Backend each frame.</summary>
+    public bool ScvxClarabel = true;
 
     // Per engagement: the first cold solve's seed, raised to the braking burn's time to go on a handoff, and the last plan published, whose expiry is the craft losing its plan.
     public double SixDofEntrySigmaSeed = 20.0;

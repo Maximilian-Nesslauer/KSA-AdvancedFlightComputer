@@ -1,7 +1,7 @@
 # Native solver build
 
 Guidance builds Clarabel and SCS from the sources in `third_party/`.
-Clarabel serves the G-FOLD planner, and SCS serves the six degree of freedom solver.
+Clarabel serves G-FOLD and all three SCvx planners (convex ascent, 3-DOF entry and 6-DOF touchdown) via persistent native workspaces; SCS remains built and available behind the `IScvxConicWorkspace` switch.
 
 | Runtime | Clarabel | SCS |
 | --- | --- | --- |
@@ -28,8 +28,8 @@ Windows also needs the Visual Studio C++ build tools and Windows SDK for Rust's 
 Linux needs a GNU linker.
 macOS needs the Xcode Command Line Tools.
 
-The check builds both native libraries and eight game-free managed projects, then checks native layouts and exports against the C# bindings in the Conic assembly.
-It runs each Scvx check (`--fd`, `--aero`, `--impact`, `--sub-scs`, `--loop`, `--ascent`, `--ascent-glimit`, `--cold-shift`, `--hermite`), the Gfold checks (the default `81 120` run, `--clarabel-smoke`, `--realtime`, `--terminal-braking`, `--accel-limit`) and `Worker.Tests`, stopping on failure.
+The check builds both native libraries and nine game-free managed projects, then checks native layouts and exports against the C# bindings in the Conic assembly.
+It runs each Scvx check (`--fd`, `--aero`, `--impact`, `--sub-scs`, `--loop`, `--ascent`, `--ascent-glimit`, `--ascent-qceiling`, `--cold-shift`, `--hermite`, `--slope`, `--3dof`, `--3dof-model`, `--3dof-ksa`), the Gfold checks (the default `81 120` run, `--clarabel-smoke`, `--realtime`, `--terminal-braking`, `--accel-limit`), `Worker.Tests`, and `UiLogic.Tests`, stopping on failure.
 The default `Gfold 81 120` run checks its plan against the boundary conditions and the dynamics. It only prints its fuel comparison and does not check it.
 
 To build a single library with tools already on PATH, run:
@@ -43,6 +43,20 @@ Both scripts default to the host runtime and accept `-OutDir` for a different ou
 Zig can cross-compile SCS.
 Clarabel cross builds need the selected Rust target and a suitable linker.
 ABI checks must run on the target platform.
+
+## Clarabel persistent-workspace C-ABI contract
+
+Persistent `ClarabelWorkspace` reuse across SCvx iterations relies on four native update exports in `clarabel_c`:
+
+- `clarabel_DefaultSolver_f64_update_P`
+- `clarabel_DefaultSolver_f64_update_A`
+- `clarabel_DefaultSolver_f64_update_q`
+- `clarabel_DefaultSolver_f64_update_b`
+
+Two runtime settings are mandatory whenever numeric updates are active:
+
+- `PresolveEnable = false` and `InputSparseDropzeros = false`: Clarabel's native `update_A` requires exact CSC sparsity invariance against the initial symbolic factorisation; enabling presolve alters the internal sparsity pattern and causes `update_A` to fail.
+- `EquilibrateEnable = true` (`EquilibrateMaxIter = 3` for real-time 6-DOF warm updates; default `10` for multi-stage ascent with workspace reset on $\ge 2.0\times$ stage-duration shifts) and `IterativeRefinementEnable = false` by default, with automatic one-shot `IR = true` rebuild on numerical faults and terminal `IR = true` / $\epsilon = 10^{-8}$ polish on ascent.
 
 ## Public CI
 

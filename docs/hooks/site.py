@@ -61,9 +61,31 @@ def on_config(config, **kwargs):
     return config
 
 
+FENCED_BLOCK = re.compile(r"(^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?\n {0,3}\2[ \t]*$)", re.MULTILINE | re.DOTALL)
+
+
+def _transform_outside_fences(markdown: str, fn) -> str:
+    """Apply fn only to markdown outside fenced code blocks."""
+    out = []
+    pos = 0
+    for match in FENCED_BLOCK.finditer(markdown):
+        out.append(fn(markdown[pos:match.start()]))
+        out.append(match.group(0))
+        pos = match.end()
+    out.append(fn(markdown[pos:]))
+    return "".join(out)
+
+
 def on_page_markdown(markdown, page, config, files, **kwargs):
     src = page.file.src_uri
-    markdown = GITHUB_MATH.sub(lambda m: f"${m.group(1)}$", markdown)
-    markdown = VIZ.sub(lambda m: _viz(m, page, files), markdown)
-    markdown = MD_LINK.sub(lambda m: m.group(1) + _rewrite_outside_link(m.group(2), src) + m.group(3), markdown)
-    return markdown
+
+    def transform(chunk: str) -> str:
+        chunk = GITHUB_MATH.sub(lambda m: f"${m.group(1)}$", chunk)
+        chunk = VIZ.sub(lambda m: _viz(m, page, files), chunk)
+        chunk = MD_LINK.sub(
+            lambda m: m.group(1) + _rewrite_outside_link(m.group(2), src) + m.group(3),
+            chunk,
+        )
+        return chunk
+
+    return _transform_outside_fences(markdown, transform)

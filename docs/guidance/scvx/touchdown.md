@@ -73,30 +73,37 @@ The torque is linear in the controls. The third row is the roll a sideways defle
 
 **RCS.** $\boldsymbol\tau_{\text{rcs}}$ is the RCS torque. $K$ is a $3\times3$ matrix of the side force each newton metre brings, N per N m, in body axes. On a booster the thrusters sit far above the centre of mass, so each newton metre comes with a sideways push of about one over that distance. $K$ is the average of what the two directions bring, which is exact for a symmetric layout. The RCS propellant (tens of kilograms against hundreds for the engine) is left out of the mass.
 
-**Aerodynamics.** The air force and moment come from tables the aero sweep measures in the game's body axes:
+**Aerodynamics.** The air force and moment come from tables the aero sweep measures in the game's body axes, with rotational damping and the exact closed-form 2-term moment limiter evaluated in `Dual` arithmetic inside `BodyAero6Dof.Wrench`:
 
 $$
 \mathbf F_{\text{aero}} = R(\mathbf q)\,w\,\bar q S\,\Big(\mathbf C_F(M,\alpha,\beta) + \sum_i \Delta\mathbf C_{F,i}(\delta_i)\Big) + (1-w)\,\mathbf F_{\text{pm}}(h, \mathbf v, \mathbf b),
 $$
 
 $$
-\mathbf M_{\text{aero}} = \frac{w\,\bar q S\,\Big(\ell\,\mathbf C_M(M,\alpha,\beta) + \ell\sum_i \Delta\mathbf C_{M,i}(\delta_i)\Big) + \Delta\mathbf c\times\mathbf F_{\text{body}}}{1 + k_{\text{lim}}\,\bar q}.
+\boldsymbol\tau_{\text{damp}} = -\tfrac12\rho(h)\,v\,w\,\operatorname{diag}(C_{lp}, C_{mq}, C_{nr})\,\boldsymbol\omega_{\text{table}},
+\qquad
+D(\bar q, v) = 1 + \bar q\!\left(k_{\text{stiff}} + \frac{k_{\text{damp}}}{v}\right),
+$$
+
+$$
+\mathbf M_{\text{aero}} = \frac{w\,\bar q S\,\Big(\ell\,\mathbf C_M(M,\alpha,\beta) + \ell\sum_i \Delta\mathbf C_{M,i}(\delta_i)\Big) + \Delta\mathbf c\times\mathbf F_{\text{body}} + \boldsymbol\tau_{\text{damp}}}{D(\bar q, v)}.
 $$
 
 - $\bar q = \tfrac12\rho(h)\lVert\mathbf v\rVert^2$ is the dynamic pressure, with $h$ the altitude of the site plus $r_z$.
-- $S$ and $\ell$ are the reference area and length. $M$ is the Mach number.
+- $S$ and $\ell$ are the reference area and length. Local Mach number $M = \lVert\mathbf v\rVert / a(h)$ uses altitude-varying `Atmosphere.Mach(speed, altitude)`.
 - $\alpha$ and $\beta$ are the angles of the air velocity off engine-first, read in the body axes from the plan's own $\mathbf q$. So the model knows its roll.
-- $\Delta\mathbf C_{F,i}$ and $\Delta\mathbf C_{M,i}$ are what fin $i$ adds at its deflection, interpolated between the swept deflections.
+- $\Delta\mathbf C_{F,i}$ and $\Delta\mathbf C_{M,i}$ are what fin $i$ adds at its deflection, with smooth transitions across breakpoints in `BodyAero6Dof.FinCoefficients`.
 - $\Delta\mathbf c$ moves the moment from the centre of mass the sweep saw to the one the craft has now. $\mathbf F_{\text{body}}$ is the table force in body axes.
-- $k_{\text{lim}}$ copies the game's moment limiter, which divides the air's moment by $1 + k_{\text{lim}}\bar q$. It is measured in flight.
-- $w = w_{\text{tilt}}\,w_{\text{speed}}$ fades the tables out where they mean nothing. Both factors are smoothsteps: $w_{\text{speed}}$ from 0 at 5 m/s to 1 at 15 m/s, and $w_{\text{tilt}}$ from 1 at 20° off engine-first to 0 at 28°, where the tables end.
+- $\boldsymbol\omega_{\text{table}} = \mathbf M_{\text{m}\to\text{t}}\boldsymbol\omega$ rotates body rates into table axes for rotational aerodynamic damping $(C_{lp}, C_{mq}, C_{nr})$.
+- $k_{\text{stiff}} = \tfrac12\lVert I_{\text{asmb}}^{-1}\rVert_\infty \Delta t^2 K_{\text{sub}}$ and $k_{\text{damp}} = \lVert I_{\text{asmb}}^{-1}\rVert_\infty \Delta t\,C_{\text{sub}}$ are computed live every step with zero filter lag via `KsaAeroSweep.TryComputeMomentLimiterClosedForm` and passed via `WithMomentLimiterExact`.
+- $w = w_{\text{tilt}}\,w_{\text{speed}}$ fades the tables out where they mean nothing. Both factors are smoothsteps: $w_{\text{speed}}$ from 0 at 5 m/s to 1 at 15 m/s, and $w_{\text{tilt}}$ from 1 at 20 deg off engine-first to 0 at 28 deg, where the tables end.
 - $\mathbf F_{\text{pm}}$ is the point-mass drag and lift on the thrust axis $\mathbf b$ from the 3-DOF tables. It carries the share $(1-w)$ the body tables fade out of. It has no moment.
 
 The fade keeps the force and its slopes continuous, so the solver never meets a jump.
 
 **Rotational dynamics.** $J = \mathrm{diag}(I_x, I_y, I_z)$ is the inertia about the model body axes. It is the live tensor projected onto those axes, re-read before every solve as the propellant drains. The off-diagonal terms are dropped, which is exact for an axisymmetric craft.
 
-**Mass.** The mass flow is a line in the axial thrust, $\dot m_0 + \alpha T$, fitted through the engines' flow at the minimum and at full throttle at the site's pressure. Under back pressure the thrust is not proportional to the flow, so the line does not pass through zero. In vacuum $\dot m_0 = 0$ and $\alpha = 1/(I_{sp} g_0)$.
+**Engine back-pressure parity and mass flow.** `Dynamics6Dof.Params` carries the shared differentiable 2D cubic B-spline `EngineThrustTable` (`Engine`) and reference pressure `EngineRefPressurePa`. Inside `Dynamics6Dof.F`, the site-reference axial thrust control $T$ maps via the exact Inverse-Function-Theorem `Dual` inverse $u_{\text{th}} = \texttt{Engine.ThrottleFor}(T, P_{\text{ref}})$ to altitude-exact thrust $T_{\text{eff}} = \texttt{Engine.Thrust}(u_{\text{th}}, P(h))$ (applied to both axial thrust and off-centre `ThrustMoment`) and mass flow $\dot m = -\texttt{Engine.MassFlow}(u_{\text{th}})$. `Ksa6DofGuidance.Command` applies the identical conversion at live ambient pressure, eliminating thrust jumps at 3-DOF to 6-DOF hand-over. When no table is attached, mass flow falls back to the linear fit $\dot m_0 + \alpha T$ (or $T / (I_{sp} g_0)$ in vacuum).
 
 **The coast.** Before ignition the engine is off: $t_x$, $t_y$ and $T$ have no effect and no propellant flows. The RCS, the fins and the air still act.
 
@@ -261,7 +268,7 @@ $$
 
 An exact second-order cone of constant radius at every node, with no reference in it. It is exact to the same degree as the unit-norm tangent plane. The tangent of $R_{33}$ that it replaced has a zero gradient for an upright craft, so the linearised row could not see the limit.
 
-$\theta_{\max}$ is 120° (`SixDofTiltDeg`). It is widened to at least the tilt at hand-over plus 5°, up to 175°. The cone includes node 0, which is pinned to the measured state, so a limit below the present tilt would be infeasible.
+$\theta_{\max}$ is 120 deg (`SixDofTiltDeg`). It is widened to at least the tilt at hand-over plus 5 deg, up to 175 deg. The cone includes node 0, which is pinned to the measured state, so a limit below the present tilt would be infeasible.
 
 ### Ground floor
 
@@ -280,7 +287,7 @@ $$
 \qquad s^{\text{gs}}_k \ge 0,\qquad k \ge 1 .
 $$
 
-A second-order cone from node 1, soft with an L1 slack. $\gamma$ is 10° (`SixDofGlideSlopeDeg`). $e_k$ is an entry allowance for a craft handed over outside the cone. With $e_0$ the metres it starts outside and $s = k/(N-1)$,
+A second-order cone from node 1, soft with an L1 slack. $\gamma$ is 10 deg (`SixDofGlideSlopeDeg`). $e_k$ is an entry allowance for a craft handed over outside the cone. With $e_0$ the metres it starts outside and $s = k/(N-1)$,
 
 $$
 e_k = e_0\big((1-s)^2 + s\,(1-s)^4\big),
@@ -310,7 +317,7 @@ $$
 \lVert\boldsymbol\omega_k\rVert \le \omega_{\max} + s^{\omega}_k,\qquad s^{\omega}_k \ge 0,\qquad k \ge 1 .
 $$
 
-A second-order cone from node 1 on the whole body rate, roll included, soft with an L1 slack. $\omega_{\max}$ is 15°/s (`SixDofRateMaxDegS`). With RCS the craft can turn hard, and nothing else in the objective stops the cheapest plan from doing so.
+A second-order cone from node 1 on the whole body rate, roll included, soft with an L1 slack. $\omega_{\max}$ is 15 deg/s (`SixDofRateMaxDegS`). With RCS the craft can turn hard, and nothing else in the objective stops the cheapest plan from doing so.
 
 ### Durations
 
@@ -345,17 +352,16 @@ $$
 \begin{aligned}
 J_{\text{sub}} ={}& -\frac{m_{N-1}}{m_0}
 + W_{\Delta u}\sum_{k}\sum_j \Big(\frac{u_{k+1,j}-u_{k,j}}{u_{s,j}}\Big)^2
-+ W_\omega\sum_k \lVert\boldsymbol\omega_k\rVert^2
-+ W_c\sum_{k=1}^{K-1} \lVert\boldsymbol\omega_k\rVert^2 \\
-&+ W_{\text{rcs}}\sum_k\sum_a \Big(\frac{\tau_{\text{rcs},a,k}}{u_{s,a}}\Big)^2
-+ W_{\text{fin}}\sum_k\sum_i \Big(\frac{\delta_{i,k}}{u_{s,i}}\Big)^2
-+ W_{\text{prox}}\sum_k \big\lVert(\mathbf x_k - \bar{\mathbf x}_k)\oslash\mathbf x_s\big\rVert^2
-+ \rho_{vc}\sum_k \big\lVert\boldsymbol\nu_k\oslash\boldsymbol\nu_s\big\rVert^2 \\
-&+ W_{\text{gs}}\sum_k \frac{s^{\text{gs}}_k}{L}
-+ W_{vz}\sum_k \frac{s^{vz}_k}{V}
-+ W_r\,\frac{\mathbf 1^\top(\mathbf s^{r+}+\mathbf s^{r-})}{250\ \text{m}}
-+ W_v\,\frac{\mathbf 1^\top(\mathbf s^{v+}+\mathbf s^{v-})}{100\ \text{m/s}}
-+ W_a\sum_k \frac{s^a_k}{T_{\max}}
++ W_\omega\sum_k \lVert\boldsymbol\omega_k\rVert^2 \\
+&+ W_c\sum_{k=1}^{K-1} \lVert\boldsymbol\omega_k\rVert^2
++ W_{\text{rcs}}\sum_k\sum_a \Big(\frac{\tau_{\text{rcs},a,k}}{u_{s,a}}\Big)^2
++ W_{\text{fin}}\sum_k\sum_i \Big(\frac{\delta_{i,k}}{u_{s,i}}\Big)^2 \\
+&+ \rho_{vc}\sum_k \big\lVert\boldsymbol\nu_k\oslash\boldsymbol\nu_s\big\rVert^2
++ W_{\text{gs}}\sum_k \frac{s^{\text{gs}}_k}{L}
++ W_{vz}\sum_k \frac{s^{vz}_k}{V} \\
+&+ W_r\,\frac{\mathbf 1^\top(\mathbf s^{r+}+\mathbf s^{r-})}{250\ \text{m}}
++ W_v\,\frac{\mathbf 1^\top(\mathbf s^{v+}+\mathbf s^{v-})}{100\ \text{m/s}} \\
+&+ W_a\sum_k \frac{s^a_k}{T_{\max}}
 + W_{\omega\max}\sum_k \frac{s^\omega_k}{1\ \text{rad/s}} .
 \end{aligned}
 $$
@@ -369,7 +375,7 @@ $\mathbf x_s$ and $u_{s,j}$ are the [scales](#scaling-and-the-cone-program), $L$
 | Coast turning $W_c$ | `CoastRateWeight` | 0 | the fuel of 1 m/s for turning at 0.05 rad/s through the coast: $\alpha / \big((K-1)\cdot 0.05^2\big)$ |
 | RCS torque $W_{\text{rcs}}$ | `RcsWeight` | 0 | 0.1 (`SixDofRcsWeight`) |
 | Fin deflection $W_{\text{fin}}$ | `FinWeight` | $10^{-3}$ | $10^{-3}$ |
-| Proximal $W_{\text{prox}}$ | `ProximalWeight` | 0 | 0.05 (`SixDofProximal`) |
+| Proximal $W_{\text{prox}}$ | `ProximalWeight` | 0 | 0 (disabled under Clarabel to avoid merit distortion) |
 | Virtual control $\rho_{vc}$ | `RhoVc` | $10^5$ | $10^5$ |
 | Glide-slope slack $W_{\text{gs}}$ | `GlideSlopeWeight` | $10^4$ | $10^4$ |
 | Climb-rate slack $W_{vz}$ | `VzWeight` | $10^4$ | $10^4$ |
@@ -382,8 +388,8 @@ The `Scvx6DofConfig` defaults mirror the Python reference (`6dof.py`), so the of
 
 Three choices in the weights matter:
 
-- **Rate, not magnitude.** The smoothing prices the change of each control between nodes, not its size. $W_{\Delta u}$ is the only term that keeps the control profile continuous. Without it the minimum-fuel answer jumps its thrust direction by about 19° between nodes.
-- **Small regularisers.** $W_{\Delta u}$ and $W_\omega$ both get cheaper as the burn gets longer. At the Python values they were 121 % of the fuel term and pinned $\sigma$ at its upper bound. In flight they are a small share of fuel, and the proximal term restores the conditioning they gave.
+- **Rate, not magnitude.** The smoothing prices the change of each control between nodes, not its size. $W_{\Delta u}$ is the only term that keeps the control profile continuous. Without it the minimum-fuel answer jumps its thrust direction by about 19 deg between nodes.
+- **Small regularisers.** $W_{\Delta u}$ and $W_\omega$ both get cheaper as the burn gets longer. At the Python values they were 121 % of the fuel term and pinned $\sigma$ at its upper bound. In flight they are kept a small share of fuel; Clarabel's direct $LDL^\top$ solver stays well-conditioned without needing a proximal distortion term.
 - **The RCS price** makes the split between gimbals and RCS unique, and leans on the gimbals, which cost no propellant. Without it the split was nearly free, and SCS needed several times the iterations.
 
 ## What this solver does differently
@@ -396,15 +402,19 @@ $A$ and $B$ come from forward-mode automatic differentiation of $\mathbf f$: one
 
 The grid is uniform in each phase. Collocation is trapezoidal with no sub-steps: the dynamics are evaluated at the two ends of each interval only. The defect used for the merit and the gates is the same trapezoid on the true dynamics. A coast takes 40 % of the intervals (`CoastIntervalsFor`). See [Discretisation](index.md#discretisation).
 
-### Virtual control
+### Virtual control (`vc-rv`)
 
-$\boldsymbol\nu_k$ enters every state row of every interval. It is priced as a **squared two-norm**, $\rho_{vc}\sum_k\lVert\boldsymbol\nu_k\oslash\boldsymbol\nu_s\rVert^2$ with $\rho_{vc} = 10^5$, not the one-norm of [Virtual control](index.md#virtual-control). The squared price is not exact: a small virtual control repeated on every interval is cheap. So the price is staged:
+$\boldsymbol\nu_k$ enters every state row of every interval. It is priced as a **squared two-norm**, $\rho_{vc}\sum_k\lVert\boldsymbol\nu_k\oslash\boldsymbol\nu_s\rVert^2$ with $\rho_{vc} = 10^5$, using warm-ramped position and velocity scaling (`vc-rv`):
 
-- $\boldsymbol\nu_s$ is the state scale, except velocity, whose target scale is 5 m/s (`VirtualControlVelocityScaleMs`).
-- A cold start, a restart or a moved target prices velocity on the speed scale, loose. Each accepted re-solve tightens it by one of four geometric stages toward 5 m/s; a run of refusals loosens it again.
-- The price is also loose while more than 25 s are left and reaches the stage's value below 10 s, ramping between.
+- $\boldsymbol\nu_s$ uses `VirtualControlPositionScaleM = 5.0` m on position (`[0..2]`), `VirtualControlVelocityScaleMs = 5.0` m/s on velocity (`[3..5]`), and `XScale` on `[6..13]`.
+- `Ksa6DofGuidance.PricingStage` keeps Stage 0 (cold solves and $t_{\text{go}} > 25$ s) loose on `XScale` so straight-line cold seeds are not trapped in high-fuel local minima, then tightens geometrically over 4 accepted warm solves toward the `vc-rv` scales as $t_{\text{go}}$ drops below 10 s.
+- Because Clarabel's direct $LDL^\top$ KKT solver is insensitive to diagonal $P$ scaling, tight position weights drive terminal horizontal miss to sub-centimetre levels without conditioning loss or extra L1 slack variables.
 
-Priced loosely on the hand-over speed, a booster carried 0.18 m/s of braking that no force made on every interval. At the tight price that is about 0.03 m/s.
+### Outer-loop invariants
+
+- `NormaliseQuaternions(_xbar)` executes *before* `_jRef = TrueCost(...)` is stored, preventing systematic bias in $\rho$.
+- Gimbal slew-rate and fin-rate constraints include the time-dilation derivative $\partial(\mathrm{d}u/\mathrm{d}t)/\partial\sigma$.
+- `ColdReferenceShift` smoothly blends observed $(q, \boldsymbol\omega)$ shifts across nodes $0 \dots k_{\text{blend}}$ rather than introducing a step discontinuity across interval 0.
 
 ### Trust region
 
@@ -430,12 +440,12 @@ The proximal term $W_{\text{prox}}\lVert(\mathbf x-\bar{\mathbf x})\oslash\mathb
 The merit uses the true defect $\mathbf d_k$ of the trapezoid:
 
 $$
-\Phi = \frac{m_0 - m_{N-1}}{m_0} + J_{\text{smooth}} + \rho_{vc}\sum_k\lVert\mathbf d_k\oslash\boldsymbol\nu_s\rVert^2 + W_a\sum_k\frac{\max(0, T_k - a_{\max}m_k)}{T_{\max}} + W_{\omega\max}\sum_{k\ge1}\frac{\max(0,\lVert\boldsymbol\omega_k\rVert-\omega_{\max})}{1\ \text{rad/s}},
+\Phi = \frac{m_0 - m_{N-1}}{m_0} + J_{\text{smooth}} + \rho_{vc}\sum_k\lVert\mathbf d_k\oslash\boldsymbol\nu_s\rVert^2 + J_{\text{slacks}},
 $$
 
-with $J_{\text{smooth}}$ the rate, RCS and fin terms above. The prediction uses the same terms with $\boldsymbol\nu_k$ in place of $\mathbf d_k$ and the subproblem's acceleration slacks in place of the acceleration violations. It leaves out the turn-rate term. The ratio $\rho$ is actual over predicted improvement, as in [Accepting a step](index.md#accepting-a-step). When the predicted improvement is below $10^{-9}$, $\rho$ is $\pm1$ by the sign of the actual one.
+where $J_{\text{smooth}}$ holds the rate, RCS and fin smoothing terms above, and $J_{\text{slacks}}$ prices all five soft limits (acceleration, turn-rate, glide-slope, climb-rate and terminal position/velocity miss). On the initial reference (`TrueCost`), $J_{\text{slacks}}$ evaluates those five violations directly on the trajectory (`SoftLimitCost`). Inside `Iterate()`, both $\Phi_{\text{lin}}$ and $\Phi$ use the subproblem's exact convex slack costs (`AccelerationSlackCost + RateSlackCost + PathSlackCost`), while $\Phi$ replaces $\boldsymbol\nu_k$ with the true defect $\mathbf d_k$, so only dynamics linearisation error moves $\rho$. The ratio $\rho$ is actual over predicted improvement, as in [Accepting a step](index.md#accepting-a-step). When the predicted improvement is below $10^{-9}$, $\rho$ is $\pm1$ by the sign of the actual one.
 
-The glide-slope, climb-rate and terminal slacks and the proximal term are not in the merit.
+Only the proximal term is excluded from the merit.
 
 ### Convergence
 
@@ -460,38 +470,35 @@ $$
 | lateral thrust | $T_{\max}(\tan\delta_{\max} + \lVert\mathbf c\rVert)$ |
 | axial thrust | $T_{\max}$ |
 | roll torque | $\tau_{r,\max}$ |
-| RCS torque, axis $a$ | the axis's whole torque: RCS plus gimbals at full thrust |
+| RCS torque, axis $a$ | the axis's physical RCS torque authority (`RcsTorqueScale`) |
 | fin | its range, degrees |
 | durations | the burn-time seed $\sigma_0$ |
 
-The RCS controls share one scale with the gimbal torque on their axis. Scaled on the RCS's own authority, the trust region bound on them and SCS needed 5 to 20 times the iterations.
+Rows are then equilibrated by their largest entry (with every row of a second-order cone sharing one scale, leaving rows below $10^{-4}$ unscaled), and Clarabel applies Ruiz equilibration (`EquilibrateMaxIter = 3`) on top. See [Scaling](index.md#scaling).
 
-Rows are then equilibrated by their largest entry. The rows of one second-order cone share one scale, and a row whose largest entry is below $10^{-4}$ is left unscaled. See [Scaling](index.md#scaling).
+The subproblem is solved through a persistent native **`ClarabelWorkspace`** (backed by `IScvxConicWorkspace`, with `ScsWorkspace` available behind a switch). Equalities, non-negative orthant and second-order cones (gimbal, glide slope, tilt, turn rate) stack into one frozen-sparsity `CcsAssembler`, and quadratic terms go into $P$ directly without epigraph cones. See [The cone program](index.md#the-cone-program).
 
-The subproblem goes to SCS in its native form: one matrix of equalities, then the non-negative orthant, then the second-order cones (gimbal, glide slope, tilt, turn rate). The quadratic terms go into SCS's $P$ directly, so there are no epigraph cones. The sparsity pattern is frozen at the first assembly and refilled after. See [The cone program](index.md#the-cone-program).
-
-| SCS setting | Value |
+| Clarabel setting | Value |
 | --- | --- |
-| tolerance, warm re-solve | $10^{-4}$ (`RealTimeEps`); $10^{-3}$ with RCS above 10 nodes (`RealTimeEpsWithRcs`) |
-| tolerance, cold or spread solve | $3\times10^{-4}$ (`ColdSubproblemEps`) |
-| tolerance, offline validation | $10^{-7}$ (`ScsWorkspace.DefaultEps`) |
-| warm start | the previous solve's $x$, $y$, $s$; never from a failed or truncated solve |
-| Anderson acceleration | SCS's default memory of 10 |
-| iteration cap | 200 ms divided by the measured cost per ADMM iteration, clamped to 400 to 100,000; 1000 ms for the braking-burn standby (`LongBudgetMs`) |
-| SCvx time per cycle | 25 ms (`CycleBudgetMs`); 120 ms after a refusal (`RecoveryCycleBudgetMs`); at least one iteration always runs |
+| tolerance (`ClarabelEpsCap`) | $10^{-4}$ |
+| `PresolveEnable` / `InputSparseDropzeros` | `false` / `false` (mandatory for numeric `update_A` sparsity invariance) |
+| `EquilibrateMaxIter` | `3` (fast Ruiz equilibration on real-time warm updates) |
+| `IterativeRefinementEnable` | `false` (automatic one-shot `IR = true` rebuild on numerical faults) |
+| SCvx warm cycle budget | 25 ms (`CycleBudgetMs`); 120 ms after a refusal (`RecoveryCycleBudgetMs`); at least one iteration always runs |
+| Cold solve budget (`Ksa6DofGuidance.Finish`) | Explicit `budgetMs` when $> 0$; otherwise `max(LongBudgetMs, 5000.0)` ms for cold calls so synchronous cold solves (`Plan`, `PlanFromSeed`, `PlanSearch`) are never truncated to `CycleBudgetMs` |
 
-A subproblem cut off at its cap is treated as failed and shrinks the trust region. Its iterate is not kept as a warm start.
+A subproblem that fails or hits its cap counts as rejected and shrinks the trust region.
 
 ### Re-solving in flight
 
 The loop follows [Re-solving in flight](index.md#re-solving-in-flight).
 
 - **Cadence.** A re-solve is sent to the worker every 0.1 s, with up to 5 SCvx iterations inside the cycle budget. The cadence timer moves on only when a plan is published.
-- **Warm seed.** The last plan is resampled at the times the new grid wants, on a horizon that shrinks onto the same end time. Position and velocity come from the cubic through each interval's end states, the rest is interpolated linearly. The whole reference is then moved to the measured state: position by the offset plus the velocity offset times time, velocity and mass by their offsets. Node 0 takes the measured attitude and rates. Every node is put on the quaternion branch of node 0.
-- **Wide retry.** A refused re-solve is tried again at once from the same seed, with the trust region at 0.1, three times the iterations and the 120 ms budget. After two refused cycles in a row the retry is skipped, and the cheaper failure leaves the ladder and the restart rules to act.
-- **Cold solve.** Spread over frames, one SCvx iteration every 0.25 s of wall time, re-anchored at the craft before each. It is handed over only at the warm gate. After 12 iterations above that gate it asks for more nodes. After 6 refused iterations in a row it starts again from the craft's state. The seed is a straight line, the braking cubic `ColdSeed6Dof.Build` for the braking burn, or entry guidance's own glide and burn (`ColdSeed6Dof.BuildAlongPath`) for a plan with a coast.
-- **Standby.** Under another mode's burn, `Ksa6DofGuidance.Track` re-solves back to back with 2 iterations, keeping its own latest trajectory whether or not it passed the gate.
-- **Model refresh.** The inertia, the moment limiter and the bias are read into the model once, at the start of each solve.
+- **Warm seed.** The last plan is resampled at the times the new grid wants, on a horizon that shrinks onto the same end time. Position and velocity come from the cubic through each interval's end states, the rest is interpolated linearly. The whole reference is then moved to the measured state via `ColdReferenceShift` (blending $(q, \boldsymbol\omega)$ smoothly across nodes $0 \dots k_{\text{blend}}$). Every node is put on the quaternion branch of node 0.
+- **Async cold initialisation (`Ksa6DofJob.InitCold`).** `StartSixDofStandby` reads only immutable vehicle/body properties on the main thread, clones mutable target arrays, and dispatches `TryDispatchInitCold` to `Ksa6DofSolveWorker` so constructing `Ksa6DofGuidance` and running `BeginCold` never hitches the main simulation thread. `StepSixDofStandbyCore` collects the produced instance, logs the `"seed"` snapshot, and skips `StepCold`/`Track` until it arrives.
+- **Cold solve.** On the worker thread (default, `SixDofThreaded` on), cold iterations run back-to-back (`ColdIterationIntervalS = 0`) and re-anchor at the craft before each; when `SixDofThreaded` is off, they are paced at one iteration every 0.25 s (`SixDofColdIntervalS`). It hands over at the warm gate. After 6 refused iterations in a row it restarts from the craft's state. The seed is a straight line, the braking cubic `ColdSeed6Dof.Build`, or entry guidance's glide and burn (`ColdSeed6Dof.BuildAlongPath`) for a plan with a coast.
+- **Standby.** Under another mode's burn, `Ksa6DofGuidance.Track` re-solves back to back with 2 iterations, keeping its latest trajectory whether or not it passed the gate.
+- **Model refresh.** Inertia, the closed-form 2-term moment limiter, engine thrust table and bias are refreshed at the start of each solve.
 
 ### Offset-free bias
 
@@ -501,19 +508,11 @@ $$
 \hat{\mathbf a} \leftarrow \hat{\mathbf a} + \frac{\Delta t}{2\ \text{s}}\Big(\mathbf a_{\text{meas}} - \big(\tfrac{T_{\text{del}}}{m}\mathbf b + \mathbf g + \mathbf F_{\text{aero}}/m\big) - \hat{\mathbf a}\Big),
 $$
 
-a low-pass filter with a time constant of about 2 s, clamped to 5 m/s² per axis, and adds it to the plan's gravity. $T_{\text{del}}$ is the thrust the last throttle delivers, read off the engines' own curve. The model's aero force is taken off first, so the bias holds only what the model misses. It is on by default (`SixDofBiasEnabled`).
-
-### Proximal term
-
-$W_{\text{prox}} = 0.05$ centres a quadratic on the reference. It adds the diagonal mass in $P$ that the smoothing terms gave before they were turned down, without their pull toward long burns, and it vanishes at convergence. At 0.05 it is about 3.8 times faster for the same answer. Larger values start to act as a second trust region and move the answer.
+a low-pass filter with a time constant of about 2 s, clamped to 5 m/s^2 per axis, and adds it to the plan's gravity. $T_{\text{del}}$ is the thrust the last throttle delivers, read off `EngineThrustTable` at live ambient pressure. The model's aero force is subtracted first, so the bias holds only what the model misses. It is on by default (`SixDofBiasEnabled`).
 
 ### Soft path constraints from node 1
 
 The glide slope, climb rate and turn rate start at node 1, since node 0 is the craft and cannot be changed. All soft limits carry L1 slacks, priced on their normalised violation so the weights are dimensionless. The acceleration limit applies at node 0 too, because the thrust there is still free. See [Soft constraints and slacks](index.md#soft-constraints-and-slacks).
-
-### Wall-clock budget
-
-An iteration cap does not bound time, since one ADMM iteration costs much more at 50 nodes than at 10. The cap is derived each cycle from a measured cost per iteration, an exponential average over solves. The SCvx loop stops starting iterations once the cycle budget is spent.
 
 ### Defect gate
 
@@ -523,24 +522,34 @@ The solver's convergence test divides each defect by its state scale. The flight
 | --- | --- |
 | position | 1 m (`MaxDefectM`) |
 | velocity | 0.5 m/s |
-| attitude | 1°, as $\sin(0.5°)$ per quaternion component |
+| attitude | 1 deg, as $\sin(0.5^\circ)$ per quaternion component |
 | body rate | 0.01 rad/s |
 | mass | $10^{-3}$ of the mass |
 
 The intervals within the first second (`CommitHorizonS`) are judged at full strength. Beyond it the allowance rises linearly to 25 times at the last interval (`HorizonFarSlack`). An interval far out will be judged at full strength before it is flown. A cold plan's tolerances are 15 times looser (`ColdMaxDefectM`, 15 m). The plan is also refused if node 0 is more than 1 m from the craft. A refused plan leaves the craft flying the previous one.
 
-### Node ladder
+### Two-grid schedule
 
-The count follows the node spacing, not the altitude. The ladder wants $\lceil\sigma/0.6\ \text{s}\rceil + 1$ nodes (`SixDofNodeDtTarget`) and takes the coarsest rung that gives at least that. It only steps down, and not before ignition. A new count rebuilds the solver and loses the ADMM warm start, but the trajectory is resampled onto the new grid. After 5 refusals in a row it steps back up one rung and will not go that coarse again until the speed has dropped by a third. After 15 refusals, or a drift from the plan of more than 20 m or 5 % of the height, the plan is started again cold.
+Instead of a multi-rung node ladder down to coarse 5-node grids, touchdown uses a **two-grid schedule**:
 
-### After the plan
+- **Coast + burn (`N = 25`):** Used whenever the plan includes an unpowered coast before ignition (`ColdNodesFor`, `StartSixDofStandby`).
+- **Burn-only (`N = 15`):** Clean single transition once the craft enters the powered burn, preserving terminal flare resolution while keeping every warm Clarabel solve well inside a single frame.
 
-There is no planned hand-off to a hover controller: the plan itself ends at first contact. Outside the plan, the mode applies fallback rules:
+At the transition, the reference trajectory is resampled onto the new grid so the solver starts warm. After repeated refusals or a drift from the plan of more than 20 m or 5 % of height, the plan restarts cold.
 
-- **Climb cut.** After the descent, a climb faster than 0.1 m/s with no contact cuts the engine, at any height.
-- **Plan end without contact.** Within 1 m of the plan's end height with no contact, once the plan has run out, the craft is below the end height or it has almost stopped, a craft that can hover (thrust-to-weight at minimum throttle no more than 0.9) sinks to contact on its engine. One that cannot drops with the engine off when the drop ends below 3 m/s, and otherwise flies the no-plan law. One relight is allowed.
-- **No-plan law.** With no live plan, the thrust that stops the descent with the feet on the pad, $m(v^2/2h + g)$, or the engine off below its minimum thrust.
-- **Terminal hover.** A plan lost below 500 m on a craft that can hover hands the craft to terminal hover.
+### After the plan and safety guards
+
+There is no planned hand-off to a hover controller: the plan itself ends at first contact. Outside the plan, the mode enforces strict safety guards:
+
+- **Hover-aware climb cut.** Cuts the engine only when:
+
+    $$
+    \text{cut} \iff \big(\text{minTwr} > \texttt{SixDofHoverMaxMinTwr} \land v_z \ge 0\big) \;\lor\; \big(\text{noLivePlan} \land v_z > \texttt{SixDofClimbCutMs}\big),
+    $$
+
+    with `SixDofHoverMaxMinTwr` in $[0.90, 0.95]$ and `noLivePlan` true when the last published plan is absent or expired. Hoverable landers flying an active plan therefore absorb brief upward gusts via throttle modulation instead of cutting and relighting.
+- **Plan end without contact.** Within 1 m of the plan's end height with no contact, a craft that can hover sinks to contact on its engine. One that cannot drops with the engine off when the drop ends below 3 m/s, and otherwise flies the no-plan law. One relight is allowed.
+- **Unpowered-impact emergency backstop.** Whenever 3-DOF or 6-DOF drops its active plan and altitude reaches $h \le h_{\text{stop,margin}}$, an emergency `TerminalBraking` / G-FOLD suicide-burn backstop engages so propellant-bearing craft never impact unpowered. Below `SixDofLostPlanGateM` (50-120 m), a hoverable craft hands over to terminal hover while higher-altitude plan loss is caught by G-FOLD / `TerminalBraking`.
 
 ## Code map
 

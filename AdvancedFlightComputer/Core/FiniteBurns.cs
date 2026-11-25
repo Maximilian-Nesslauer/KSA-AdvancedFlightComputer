@@ -51,11 +51,22 @@ internal static class FiniteBurns
     public static bool HasThrust(ReadOnlySpan<FiniteBurnPhase> phases)
         => !phases.IsEmpty && phases[0].Thrust > 0.0;
 
-    // A cached preview depends on the phases, so a cache key adds this value. It changes when the thrust of the first phase or the phase count changes, and the mass does not enter it because the caches key the mass themselves.
+    // A cached preview depends on all phases (thrust, mass flow, duration, and stage boundaries). Mass enters through each caller's own cache key.
     public static int PhaseSignature(Vehicle vehicle)
     {
         ReadOnlySpan<FiniteBurnPhase> phases = FullThrottlePhases(vehicle);
-        return HasThrust(phases) ? HashCode.Combine(phases.Length, (long)Math.Round(phases[0].Thrust)) : 0;
+        if (!HasThrust(phases))
+            return 0;
+        var hc = new HashCode();
+        hc.Add(phases.Length);
+        for (int i = 0; i < phases.Length; i++)
+        {
+            hc.Add((long)Math.Round(phases[i].Thrust));
+            hc.Add((long)Math.Round(phases[i].MassFlowRate * 100.0));
+            hc.Add(double.IsFinite(phases[i].MaxSeconds) ? (long)Math.Round(phases[i].MaxSeconds * 10.0) : -1L);
+            hc.Add(phases[i].StartsStage);
+        }
+        return hc.ToHashCode();
     }
 
     public static (UniverseTime BurnTime, double3 DvVlf) Refine(

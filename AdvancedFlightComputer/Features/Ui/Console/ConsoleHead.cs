@@ -143,6 +143,12 @@ internal static class ConsoleHead
         _burnEndTransfer = false;
     }
 
+    public static void OnVehicleDisposed(Vehicle vehicle)
+    {
+        if ((_burnEndBurn != null && ReferenceEquals(_burnEndBurn.Vehicle, vehicle)) || _burnEndCraft == vehicle.Id)
+            ClearBurnEnd();
+    }
+
     private static void RaiseBurnCue(ConsoleFrame f, Vehicle subject)
     {
         if (_burnEndCraft != subject.Id)
@@ -797,7 +803,6 @@ internal static class ConsoleHead
             float heldW = tgoW > 0f ? Math.Max(tgoW, ConsoleUi.ValueWidth(mode.TgoLabel + " 00m 00s")) : 0f;
             float room = width - (heldW > 0f ? heldW + ImGui.GetStyle().ItemSpacing.X : 0f);
             ConsoleStyle.PushValueFont();
-            string numbers = HeadNumbers.Fit(mode.Numbers, MeasureCurrentFont, room);
             List<HeadCell> cells = HeadNumbers.Cells(mode.Numbers, MeasureCurrentFont, room);
             PlanWord word = mode.Word;
             bool wordHere = word.Shows && SlotShown(f);
@@ -810,6 +815,9 @@ internal static class ConsoleHead
             RowText(new float2(at.X + width - tgoW, at.Y), tgoW, tgo, ConsoleStyle.TextPrimaryU32);
             if (ConsoleUi.Hovering(at, at + new float2(room, ConsoleStyle.FrameHeightPx)))
             {
+                ConsoleStyle.PushValueFont();
+                string numbers = HeadNumbers.Fit(mode.Numbers, MeasureCurrentFont, room);
+                ConsoleStyle.PopFont();
                 string card = HeadNumbers.Card(mode.Numbers, numbers, mode.NumbersCard);
                 if (wordHere && wordX < 0f)
                     card = card.Length > 0 ? word.Text + "\n\n" + card : word.Text;
@@ -1004,7 +1012,6 @@ internal static class ConsoleHead
 
         string place = inStrip ? "" : SituationText.FlyingPlace(in f.Situation, f.Mode.NumbersHoldOrbit, f.Mode.HeightShown, f.Mode.ImpactShown);
         string text = pick >= 0 ? LineText(f, in line) : place;
-        string card = pick >= 0 ? Fmt.Sentence(line.Text) + (place.Length > 0 ? "\n" + place : "") : place;
         float lineStart = textX;
         if (text.Length > 0)
         {
@@ -1016,7 +1023,10 @@ internal static class ConsoleHead
             ConsoleStyle.PopFont();
             ConsoleUi.NoteRow("AfcHeadMessage", new float2(textX, at.Y), new float2(Math.Max(1f, lineStart - textX), h));
             if ((shown != text || pick >= 0) && ConsoleUi.Hovering(new float2(textX, at.Y), new float2(lineStart, at.Y + h)))
+            {
+                string card = pick >= 0 ? Fmt.Sentence(line.Text) + (place.Length > 0 ? "\n" + place : "") : place;
                 ConsoleUi.Tooltip(card.AsSpan());
+            }
         }
         if (rightEnd > lineStart)
             dl.AddLine(new float2(lineStart, midY), new float2(rightEnd, midY), ConsoleStyle.ApplyAlpha(ConsoleStyle.HairlineU32), ConsoleStyle.WindowBorderThicknessPx);

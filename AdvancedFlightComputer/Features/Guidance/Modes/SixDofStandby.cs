@@ -158,9 +158,22 @@ public static partial class GuidanceWindow
         _s.Converging = false;
         // Reference first, as Disengage6Dof does: a dispose that throws must still leave no live worker behind.
         Ksa6DofSolveWorker worker = _s.Worker;
+        Ksa6DofGuidance guidance = _s.Guidance;
         _s.Worker = null;
         _s.Guidance = null;
-        try { worker?.Dispose(); } catch { /* stopping must always succeed */ }
+        bool guidanceOwned = worker == null;
+        try
+        {
+            if (worker != null)
+            {
+                guidanceOwned = worker.TryStopWhenIdle();
+                if (!guidanceOwned)
+                    worker.Dispose();
+            }
+        }
+        catch { /* stopping must always succeed */ }
+        if (guidanceOwned)
+            try { guidance?.Dispose(); } catch { /* stopping must always succeed */ }
         if (ReferenceEquals(SixDofLog.Owner, _s))
             ReportLogStop(SixDofLog.Stop(_s));
     }

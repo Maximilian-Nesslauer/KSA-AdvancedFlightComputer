@@ -18,6 +18,7 @@ public static partial class GuidanceWindow
     // The dispose postfix runs after the vehicle is removed, so only process resources need cleanup.
     internal static void ReleaseDisposedVehicle(Vehicle vehicle)
     {
+        _stopRequests.RemoveAll(r => ReferenceEquals(r.Vehicle, vehicle));
         RealSpeedHold.Forget(vehicle);
         DropVehicle(vehicle, release: false);
     }

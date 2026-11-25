@@ -156,6 +156,20 @@ public sealed class MultiPassRegistryTest : AfcTest
         t.Check("missing MultiPass fields fail parse",
             !MultiPassRegistry.ParseLines(
                 ["[[execution]]", "save_id = \"broken\""], "missing-fields", parsed));
+        parsed.Clear();
+        t.Check("non-positive pass_count_total fails parse",
+            !MultiPassRegistry.ParseLines(
+                [
+                    "[[execution]]",
+                    "save_id = \"s\"",
+                    "vehicle_id = \"v\"",
+                    "kind = \"SetApoapsis\"",
+                    "mode = \"EqualBurnTime\"",
+                    "pass_count_total = 0",
+                    "pass_index = 0",
+                    "parent_id = \"Earth\"",
+                    "target_radius_m = 7200000",
+                ], "zero-total", parsed) && parsed.Count == 0);
     }
 
     private static void CheckFailedLoadPreservesState(TestContext t)

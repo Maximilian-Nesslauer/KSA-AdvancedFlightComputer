@@ -35,8 +35,31 @@ internal static partial class OrbitToolsPanel
 
     private static Burn? _ourBurn;
     private static OrbitalTransfers.PorkChopEntry? _lastEntry;
+    private static Vehicle? _lastEntrySource;
+    private static Orbit? _lastEntryBasisOrbit;
+    private static PatchedConic? _lastEntryBasisPatch;
+    private static bool _lastEntryIsChained;
+    private static OrbitManeuvers.ManeuverResult _lastEntryManeuver;
+    private static int _lastEntryPhaseSig;
     private static Vehicle? _lastSource;
     private static bool _showOrbitPreview;
+
+    private static void ReplaceLastEntry(OrbitalTransfers.PorkChopEntry? next)
+    {
+        if (ReferenceEquals(_lastEntry, next))
+            return;
+        _lastEntry?.FlightPlan.ReleaseCachedPoints();
+        _lastEntry = next;
+    }
+
+    private static void ClearLastEntry()
+    {
+        ReplaceLastEntry(null);
+        _lastEntrySource = null;
+        _lastEntryBasisOrbit = null;
+        _lastEntryBasisPatch = null;
+        _lastEntryIsChained = false;
+    }
 
     private static OrbitManeuvers.ManeuverResult? _refined;
     private static Orbit? _refinedOrbit;
@@ -152,7 +175,7 @@ internal static partial class OrbitToolsPanel
         _madeLastFrame = plan.Made;
         if (plan.Made)
         {
-            _lastEntry = null;
+            ClearLastEntry();
             ClearRefinement();
             return plan;
         }
@@ -161,13 +184,29 @@ internal static partial class OrbitToolsPanel
         OrbitManeuvers.ManeuverResult? impulsive = ComputeManeuver(key, source, basis);
         if (impulsive == null)
         {
-            _lastEntry = null;
+            ClearLastEntry();
             ClearRefinement();
             return plan;
         }
         // The single burn is created, previewed and reported as the engines fly it. The multi-pass planners split the impulsive maneuver and refine each pass themselves.
         OrbitManeuvers.ManeuverResult maneuver = RefineForFiniteBurn(key, source, basis, impulsive.Value);
-        _lastEntry = BuildTransferEntry(source, maneuver, basis);
+        int phaseSig = FiniteBurns.PhaseSignature(source);
+        if (_lastEntry == null
+            || !ReferenceEquals(_lastEntrySource, source)
+            || !ReferenceEquals(_lastEntryBasisOrbit, basis.Orbit)
+            || !ReferenceEquals(_lastEntryBasisPatch, basis.Patch)
+            || _lastEntryIsChained != basis.IsChained
+            || _lastEntryManeuver != maneuver
+            || _lastEntryPhaseSig != phaseSig)
+        {
+            ReplaceLastEntry(BuildTransferEntry(source, maneuver, basis));
+            _lastEntrySource = source;
+            _lastEntryBasisOrbit = basis.Orbit;
+            _lastEntryBasisPatch = basis.Patch;
+            _lastEntryIsChained = basis.IsChained;
+            _lastEntryManeuver = maneuver;
+            _lastEntryPhaseSig = phaseSig;
+        }
         return new Plan(maneuver, basis, _lastEntry, state, impulsive);
     }
 
@@ -203,7 +242,7 @@ internal static partial class OrbitToolsPanel
     /// <summary>The markers of the orbit preview, drawn after the console window has ended so they do not nest inside it.</summary>
     internal static void DrawAfterWindow(IGameViewport viewport)
     {
-        if (_showOrbitPreview && _lastSource != null)
+        if (_showOrbitPreview && PreviewVisible && _lastSource != null)
         {
             if (MultiPassUI.HasMultiPassPreview)
                 MultiPassUI.RenderMarkers(viewport, _lastSource);
@@ -220,7 +259,7 @@ internal static partial class OrbitToolsPanel
         if (PreviewVisible || PlanKept)
             return;
         OrbitToolForm.RecheckSeed();
-        _lastEntry = null;
+        ClearLastEntry();
         _lastSource = null;
         ClearRefinement();
     }
@@ -323,9 +362,20 @@ internal static partial class OrbitToolsPanel
     private static void DropPlanState()
     {
         _ourBurn = null;
-        _lastEntry = null;
+        ClearLastEntry();
         _lastSource = null;
         ClearRefinement();
+    }
+
+    internal static void OnVehicleDisposed(Vehicle vehicle)
+    {
+        if (ReferenceEquals(Source, vehicle)
+            || ReferenceEquals(_lastSource, vehicle)
+            || ReferenceEquals(_lastEntrySource, vehicle)
+            || (_ourBurn != null && ReferenceEquals(_ourBurn.Vehicle, vehicle)))
+            DropPlanState();
+        if (ReferenceEquals(Source, vehicle))
+            Source = null;
     }
 
     internal static void Reset()

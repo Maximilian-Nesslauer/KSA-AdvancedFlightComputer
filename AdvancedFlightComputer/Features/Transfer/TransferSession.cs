@@ -34,7 +34,7 @@ internal static class TransferSession
     public static OrbitalTransfers.PorkChopEntry? SelectedEntry { get; private set; }
     internal static bool PresetUnavailable { get; private set; }
     public static bool Refining => _bestAttempts.HasValue || InterceptPending;
-    private static bool InterceptPending => _refine != null && !_refine.IsResultsReady;
+    private static bool InterceptPending => _refine != null && !_refine.IsDone;
     public static PorkchopRaster? RasterDv { get; private set; }
     public static PorkchopRaster? RasterRel { get; private set; }
 
@@ -63,8 +63,8 @@ internal static class TransferSession
     private static readonly HashSet<int2> _rejected = new();
     private static CancellationTokenSource? _cts;
     private static DateTime _startedAt;
-    private static RefineBurnTask? _refine;
-    private static CorrectionBurnTask? _correction;
+    private static TransferRefineTask? _refine;
+    private static TransferCorrectionTask? _correction;
     private static Burn? _correctionBurn;
     private static UniverseTime? _correctionTime;
     private static bool _correctionFailed;
@@ -131,10 +131,7 @@ internal static class TransferSession
         info.MinTransferTimeOfFlight = new UniverseTime(Math.Max(1.0, MinTofSec));
         info.MaxTransferTimeOfFlight = new UniverseTime(Math.Max(MinTofSec + 1.0, MaxTofSec));
         UniverseTime now = Universe.GetElapsedTime();
-        if (info.Source is not Vehicle)
-            info.OptimalPhaseAngleTime = OrbitalTransfers.AlignmentTime(info, now);
-        if (OrbitalTransfers.SameSoiTransfer(info))
-            info.Source = info.Vehicle;
+        PrepareCalculationOrigin(info, now);
 
         double synodic = PatchedConic.CalculateSynodicPeriod(info.Source.Orbit, info.Target!.Orbit);
         UniverseTime range = info.MaxTransferTimeOfFlight - info.MinTransferTimeOfFlight;
@@ -183,7 +180,10 @@ internal static class TransferSession
         if (_bestAttempts is int attempts)
             ValidateNextBest(attempts);
 
-        if (_correction != null && _correction.IsResultsReady)
+        if (_refine != null && _refine.IsDone)
+            FinishRefine();
+
+        if (_correction != null && _correction.IsDone)
             FinishCorrection();
 
         if (TransferBurn != null)
@@ -241,16 +241,36 @@ internal static class TransferSession
         SelectBest(SelectBestRel);
     }
 
+    internal static void PrepareCalculationOrigin(OrbitalTransfers.TransferInfo info, UniverseTime now)
+    {
+        if (OrbitalTransfers.SameSoiTransfer(info))
+            info.Source = info.Vehicle;
+        // OrbitalTransfers.AlignmentTime casts info.Source to Celestial and dereferences it on the same-SOI branch, so skip non-Celestial sources such as OrbitingStar and Vehicle.
+        if (info.Source is Celestial)
+            info.OptimalPhaseAngleTime = OrbitalTransfers.AlignmentTime(info, now);
+    }
+
     private static void UpdateBestScores(OrbitalTransfers.TransferInfo info, PorkchopScores.Cell[,] data)
     {
-        double bestDv = double.MaxValue, bestRelDv = double.MaxValue, bestRel = double.MaxValue;
+        (int2 best, int2 bestR) = SelectBestCells(data, _rejected);
+        info.BestDvTransferIndex = best;
+        info.BestDvRelSpeedTransferIndex = bestR;
+        BestDv = best;
+        BestDvRel = bestR;
+    }
+
+    internal static (int2 BestDv, int2 BestDvRel) SelectBestCells(PorkchopScores.Cell[,] data, HashSet<int2>? rejected)
+    {
+        double bestDv = double.MaxValue, bestTotal = double.MaxValue;
         int2 best = new(-1, -1), bestR = new(-1, -1);
-        for (int m = 0; m < Size; m++)
+        int rows = data.GetLength(0);
+        int cols = data.GetLength(1);
+        for (int m = 0; m < rows; m++)
         {
-            for (int n = 0; n < Size; n++)
+            for (int n = 0; n < cols; n++)
             {
                 var cell = data[m, n];
-                if (!cell.Valid || cell.DepartureImpact || _rejected.Contains(new int2(m, n)))
+                if (!cell.Valid || cell.DepartureImpact || (rejected != null && rejected.Contains(new int2(m, n))))
                     continue;
                 double dv = cell.DepartureDv;
                 if (dv < bestDv)
@@ -258,19 +278,15 @@ internal static class TransferSession
                     best = new int2(m, n);
                     bestDv = dv;
                 }
-                double rel = cell.ArrivalSpeed;
-                if (dv < bestRelDv && rel < bestRel)
+                double total = dv + cell.ArrivalSpeed;
+                if (double.IsFinite(total) && total < bestTotal)
                 {
                     bestR = new int2(m, n);
-                    bestRelDv = dv;
-                    bestRel = rel;
+                    bestTotal = total;
                 }
             }
         }
-        info.BestDvTransferIndex = best;
-        info.BestDvRelSpeedTransferIndex = bestR;
-        BestDv = best;
-        BestDvRel = bestR;
+        return (best, bestR);
     }
 
     internal static PorkchopScores.Cell? ScoreAt(int row, int column)
@@ -330,8 +346,8 @@ internal static class TransferSession
             if (!IsValidated(Selected))
             {
                 Selected = new int2(-1, -1);
-                SelectedEntry = null;
-                _refine = null;
+                SetSelectedEntry(null);
+                CancelRefine();
             }
         }
         _bestAttempts = null;
@@ -370,19 +386,67 @@ internal static class TransferSession
         if (automatic && (cell.TransferData.Impacts || cell.TransferData.BadEncounter || cell.TransferData.DepartureInfeasible))
             return false;
         Selected = index;
-        var entry = new OrbitalTransfers.PorkChopEntry(cell);
-        SelectedEntry = entry;
-        _refine = null;
+        CancelRefine();
+        var selectedCopy = new OrbitalTransfers.PorkChopEntry(cell);
+        SetSelectedEntry(selectedCopy);
 
         bool encounter = false;
-        foreach (PatchedConic patch in entry.FlightPlan.Patches)
+        foreach (PatchedConic patch in selectedCopy.FlightPlan.Patches)
         {
             if (patch.EndTransition == PatchTransition.Encounter && patch.EncounterBody?.Id == Destination?.Id)
                 encounter = true;
         }
-        if (!encounter && !entry.TransferData.Impacts && !entry.TransferData.BadEncounter && !entry.TransferData.DepartureInfeasible)
-            _refine = new RefineBurnTask(info, ref entry);
+        if (!encounter && !selectedCopy.TransferData.Impacts && !selectedCopy.TransferData.BadEncounter && !selectedCopy.TransferData.DepartureInfeasible)
+            StartRefine(info, target, cell);
         return true;
+    }
+
+    private static void StartRefine(OrbitalTransfers.TransferInfo info, IOrbiter target, OrbitalTransfers.PorkChopEntry cell)
+    {
+        UniverseTime startTime = cell.TransferData.Start;
+        PatchedConic? foundPatch = info.Vehicle.FlightPlan.TryFindPatch(startTime);
+        if (foundPatch == null)
+            info.Vehicle.FlightComputer.BurnPlan.FindPatchAt(startTime, out foundPatch);
+        if (foundPatch == null)
+            return;
+        // Snapshot the departure patch and entry on the main thread so the worker never reads live Vehicle state or mutates SelectedEntry.
+        var departureSnapshot = new PatchedConic(foundPatch);
+        OrbitPointCce departurePoint = info.Vehicle.Orbit.GetPointAt(startTime);
+        var workEntry = new OrbitalTransfers.PorkChopEntry(cell);
+        _refine = new TransferRefineTask(workEntry, departureSnapshot, departurePoint, info.Vehicle.Hash, target);
+    }
+
+    internal static void StartRefineForTest(
+        OrbitalTransfers.PorkChopEntry workEntry, Func<CancellationToken, OrbitalTransfers.PorkChopEntry, bool> runner)
+    {
+        CancelRefine();
+        _refine = new TransferRefineTask(workEntry, runner);
+    }
+
+    private static void FinishRefine()
+    {
+        TransferRefineTask task = _refine!;
+        _refine = null;
+        bool publish = !task.IsCancellationRequested && task.Succeeded;
+        task.Dispose();
+        if (publish)
+            SetSelectedEntry(task.Result);
+    }
+
+    private static void SetSelectedEntry(OrbitalTransfers.PorkChopEntry? next)
+    {
+        if (ReferenceEquals(SelectedEntry, next))
+            return;
+        SelectedEntry?.FlightPlan.ReleaseCachedPoints();
+        SelectedEntry = next;
+    }
+
+    private static void CancelRefine()
+    {
+        if (_refine == null)
+            return;
+        _refine.Cancel();
+        _refine = null;
     }
 
     private static OrbitalTransfers.PorkChopEntry BuildSelection(OrbitalTransfers.TransferInfo info, IOrbiter target,
@@ -483,33 +547,63 @@ internal static class TransferSession
         }
     }
 
-    public static bool CorrectionCalculating => _correction != null && !_correction.IsResultsReady;
+    public static bool CorrectionCalculating => _correction != null && !_correction.IsDone;
 
     public static bool CorrectionFailed => _correctionFailed;
 
     public static void StartCorrection()
     {
-        if (!CorrectionOffered || CorrectionCalculating || Info == null || SelectedEntry == null || TransferBurn == null)
+        if (!CorrectionOffered || CorrectionCalculating || Info?.Target == null || SelectedEntry == null || TransferBurn == null)
             return;
         Info.RequiredPeAltitude = CorrectionPeAltitude;
         _correctionFailed = false;
-        _correction = new CorrectionBurnTask(Info, SelectedEntry.TransferData, TransferBurn.FlightPlan);
+        CancelCorrection();
+        // Snapshot the transfer data and flight plan on the main thread so the worker never races live UI or burn state.
+        var dataSnapshot = new OrbitalTransfers.TransferData(SelectedEntry.TransferData);
+        var planSnapshot = new FlightPlan(TransferBurn.FlightPlan);
+        _correction = new TransferCorrectionTask(Info.Target, CorrectionPeAltitude, dataSnapshot, planSnapshot);
     }
+
+    internal static void StartCorrectionForTest(
+        OrbitalTransfers.TransferData dataSnapshot, Func<CancellationToken, OrbitalTransfers.TransferData, bool> runner)
+    {
+        _correctionFailed = false;
+        CancelCorrection();
+        _correction = new TransferCorrectionTask(dataSnapshot, runner);
+    }
+
+    internal static bool IsValidCorrection(OrbitalTransfers.TransferData data, UniverseTime now)
+        => double.IsFinite(data.CorrectionDvVlf.X)
+           && double.IsFinite(data.CorrectionDvVlf.Y)
+           && double.IsFinite(data.CorrectionDvVlf.Z)
+           && data.CorrectionStart > now;
 
     private static void FinishCorrection()
     {
-        CorrectionBurnTask task = _correction!;
+        TransferCorrectionTask task = _correction!;
         _correction = null;
-        if (!task.Success || TransferBurn == null || Source == null)
+        bool cancelled = task.IsCancellationRequested;
+        bool succeeded = task.Succeeded;
+        OrbitalTransfers.TransferData data = task.TransferData;
+        task.Dispose();
+        if (cancelled)
+            return;
+        if (!succeeded || TransferBurn == null || Source == null)
         {
-            _correctionFailed = !task.Success;
+            _correctionFailed = !succeeded;
             return;
         }
-        // The task's own TransferData holds the result, because the selection can move while the task runs.
-        OrbitalTransfers.TransferData data = task.TransferData;
+        if (!IsValidCorrection(data, Universe.GetElapsedTime()))
+        {
+            _correctionFailed = true;
+            return;
+        }
         PatchedConic? patch = TransferBurn.FlightPlan.TryFindPatch(data.CorrectionStart);
         if (patch == null)
+        {
+            _correctionFailed = true;
             return;
+        }
         Burn burn = Burn.Create(data.CorrectionPoint, data.CorrectionStart.Seconds(), data.CorrectionDvVlf, patch, Source);
         burn.IsGizmoActive = false;
         InputEvents.BurnUpdateBuffer.Add(new InputEvents.BurnUpdateData
@@ -520,6 +614,14 @@ internal static class TransferSession
         });
         _correctionBurn = burn;
         _correctionTime = data.CorrectionStart;
+    }
+
+    private static void CancelCorrection()
+    {
+        if (_correction == null)
+            return;
+        _correction.Cancel();
+        _correction = null;
     }
 
     #endregion
@@ -535,13 +637,28 @@ internal static class TransferSession
         BestDv = new int2(-1, -1);
         BestDvRel = new int2(-1, -1);
         Selected = new int2(-1, -1);
-        SelectedEntry = null;
+        SetSelectedEntry(null);
         PresetUnavailable = false;
-        _refine = null;
+        CancelRefine();
         RasterDv = null;
         RasterRel = null;
-        _correction = null;
+        CancelCorrection();
         _correctionFailed = false;
+    }
+
+    public static void OnVehicleDisposed(Vehicle vehicle)
+    {
+        if (ReferenceEquals(Source, vehicle))
+            SetSource(null);
+        else if (ReferenceEquals(Destination, vehicle))
+            SetDestination(null);
+        if (TransferBurn != null && ReferenceEquals(TransferBurn.Vehicle, vehicle))
+            TransferBurn = null;
+        if (_correctionBurn != null && ReferenceEquals(_correctionBurn.Vehicle, vehicle))
+        {
+            _correctionBurn = null;
+            _correctionTime = null;
+        }
     }
 
     /// <summary>Cancels the workers and drops every result, for a save load and the unload.</summary>

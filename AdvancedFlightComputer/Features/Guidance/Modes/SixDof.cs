@@ -491,7 +491,10 @@ public static partial class GuidanceWindow
         _s.PendingNodeRebuild = null;
         // A restart that reused the guidance (converging again) has dropped the plan the rebuild was seeded from.
         if (pending == null || _s.Converging || !ReferenceEquals(result.Source, pending.Source) || !ReferenceEquals(_s.Guidance, pending.Source))
+        {
+            result.Produced?.Dispose();
             return;
+        }
         string why = result.Faulted ? result.Error : pending.Why[0] ?? result.Error;
         bool ok = AdoptRebuild(result.Ok && !result.Faulted ? result.Produced : null, why,
                                pending.Nodes, pending.NodesWas, pending.SigmaWas, pending.AltM, now);
@@ -606,8 +609,11 @@ public static partial class GuidanceWindow
         SixDofLog.Event(_s, now, $"NODE STEP at alt {altM:F0} m: {nodesWas} -> {nodes} nodes " +
                              $"(sigma {sigmaWas:F1} s -> dt {sigmaWas / Math.Max(nodes - 1, 1):F2} s, " +
                              $"defect {next.DefectText})");
+        Ksa6DofGuidance previous = _s.Guidance;
         _s.Guidance = next;
         _s.LastReplan = now;
+        if (!ReferenceEquals(previous, next) && (_s.Worker == null || _s.Worker.IsIdle))
+            previous?.Dispose();
         return true;
     }
 
@@ -618,8 +624,11 @@ public static partial class GuidanceWindow
         if (req == null)
             return false;
 
+        Ksa6DofGuidance previous = _s.Guidance;
         _s.Guidance = NewGuidance(req);
         _s.LastReplan = now;
+        if (_s.Worker == null || _s.Worker.IsIdle)
+            previous?.Dispose();
         SixDofLog.Event(_s, now, $"COLD NODE STEP at alt {x[2]:F0} m: {nodes} nodes without a prior plan");
         return true;
     }
@@ -708,7 +717,7 @@ public static partial class GuidanceWindow
 
         double r22 = 1.0 - 2.0 * (x[7] * x[7] + x[8] * x[8]);
         TvcAllocationResult a = KsaGimbalControl.Diagnostics(vehicle)?.LastAllocation ?? default;
-        KsaGimbalControl.GimbalTrace gimbal = KsaGimbalControl.Diagnostics(vehicle)?.Trace;
+        KsaGimbalControl.GimbalTrace? gimbal = KsaGimbalControl.Diagnostics(vehicle)?.Trace;
         KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Last(vehicle);
 
         AttitudeFeedback6Dof.Result fb = _s.Guidance.AttitudeCorrection;
@@ -960,9 +969,22 @@ public static partial class GuidanceWindow
         // If stopping ever throws, the mod must still end up disengaged: leaving a live _s.Worker behind means the next engage builds a second one and the first keeps solving into an orphan.
         // Disengage is also reached from the ImGui draw, so nothing here may block or throw - see Ksa6DofSolveWorker.Dispose.
         Ksa6DofSolveWorker worker = _s.Worker;
+        Ksa6DofGuidance guidance = _s.Guidance;
         _s.Worker = null;
         _s.Guidance = null;
-        try { worker?.Dispose(); } catch { /* disengaging must always succeed */ }
+        bool guidanceOwned = worker == null;
+        try
+        {
+            if (worker != null)
+            {
+                guidanceOwned = worker.TryStopWhenIdle();
+                if (!guidanceOwned)
+                    worker.Dispose();
+            }
+        }
+        catch { /* disengaging must always succeed */ }
+        if (guidanceOwned)
+            try { guidance?.Dispose(); } catch { /* disengaging must always succeed */ }
         KsaGimbalControl.Disengage(vehicle);
         KsaRcsTorqueControl.Release(vehicle);
         ReleaseTouchdownFins(vehicle);

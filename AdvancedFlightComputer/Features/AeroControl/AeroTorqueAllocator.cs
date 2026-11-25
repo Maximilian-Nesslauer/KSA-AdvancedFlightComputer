@@ -31,6 +31,25 @@ internal sealed class AeroTorqueAllocator
     private readonly double[][] _torque;
     private readonly double[][] _force;
 
+    // Per-instance scratch reused across Allocate and SolvePass iterations.
+    private readonly double[] _current;
+    private readonly double[] _lo;
+    private readonly double[] _hi;
+    private readonly double[] _best;
+    private readonly double[] _trial;
+    private readonly double[] _anchor;
+    private double[] _bestDuty = [];
+    private double[] _trialDuty = [];
+    private double[] _anchorDuty = [];
+    private double[] _lpA = [];
+    private double[] _lpCost = [];
+    private double[] _lpB = [];
+    private readonly List<Segment> _segments = new();
+    private readonly List<double> _points = new();
+    private readonly List<double> _up = new();
+    private readonly List<double> _down = new();
+    private readonly List<(double From, double To)> _pieces = new();
+
     public int Count { get; }
 
     public AeroTorqueAllocator(int count)
@@ -39,6 +58,12 @@ internal sealed class AeroTorqueAllocator
         _deflection = new double[count][];
         _torque = new double[count][];
         _force = new double[count][];
+        _current = new double[count];
+        _lo = new double[count];
+        _hi = new double[count];
+        _best = new double[count];
+        _trial = new double[count];
+        _anchor = new double[count];
         for (int i = 0; i < count; i++)
         {
             _deflection[i] = [0.0];
@@ -76,9 +101,9 @@ internal sealed class AeroTorqueAllocator
     // One segment: surface, the deflection it starts at, its signed width (degrees, negative outward on the negative side), and its slope of torque per degree of its own travel.
     private readonly record struct Segment(int Surface, double From, double Width, double SlopeX, double SlopeY, double SlopeZ);
 
-    private List<Segment> Segments()
+    private double DegreePriceFromCurves()
     {
-        var segments = new List<Segment>();
+        double best = 0.0;
         for (int i = 0; i < Count; i++)
         {
             double[] d = _deflection[i];
@@ -87,24 +112,24 @@ internal sealed class AeroTorqueAllocator
             if (zero < 0)
                 continue;
             for (int k = zero; k + 1 < d.Length; k++)
-                AddSegment(segments, i, d, t, k, k + 1);
+                best = Math.Max(best, SegmentSlopeNorm(d, t, k, k + 1));
             for (int k = zero; k - 1 >= 0; k--)
-                AddSegment(segments, i, d, t, k, k - 1);
+                best = Math.Max(best, SegmentSlopeNorm(d, t, k, k - 1));
         }
-        return segments;
+        return DegreePriceShare * (best > 0.0 ? best : 1.0);
     }
 
-    private static void AddSegment(List<Segment> into, int surface, double[] d, double[] t, int from, int to)
+    private static double SegmentSlopeNorm(double[] d, double[] t, int from, int to)
     {
         double width = Math.Abs(d[to] - d[from]);
         if (!(width > 0.0))
-            return;
+            return 0.0;
         double sx = (t[3 * to] - t[3 * from]) / width;
         double sy = (t[3 * to + 1] - t[3 * from + 1]) / width;
         double sz = (t[3 * to + 2] - t[3 * from + 2]) / width;
         if (!double.IsFinite(sx) || !double.IsFinite(sy) || !double.IsFinite(sz))
-            return;
-        into.Add(new Segment(surface, d[from], d[to] - d[from], sx, sy, sz));
+            return 0.0;
+        return Math.Sqrt(sx * sx + sy * sy + sz * sz);
     }
 
     private static double DegreePrice(List<Segment> segments)
@@ -144,9 +169,9 @@ internal sealed class AeroTorqueAllocator
             backupDuty[..m].Clear();
 
         // The present deflections, and how far each surface reaches from them by the next call.
-        var current = new double[Count];
-        var lo = new double[Count];
-        var hi = new double[Count];
+        double[] current = _current;
+        double[] lo = _lo;
+        double[] hi = _hi;
         for (int i = 0; i < Count; i++)
         {
             double[] d = _deflection[i];
@@ -155,18 +180,33 @@ internal sealed class AeroTorqueAllocator
             lo[i] = Math.Max(d[0], current[i] - step);
             hi[i] = Math.Min(d[^1], current[i] + step);
         }
-        double degree = DegreePrice(Segments());
+        double degree = DegreePriceFromCurves();
         double change = degree * ChangePriceShare / DegreePriceShare;
 
         // REFINED FROM ITS OWN ANSWER. The first pass is a linear programme over each curve's pieces from the present deflection, straightened where they steepen (AddDirection), exact wherever the curves bend the usual way. Where they do not, its answer can count on torque the curves do not give, and from a deflection on a bend it can even fill the steep piece one way and the shallow one back, moving nowhere for torque it does not get (2026-11-20: 2stage_KSAero's fins at a 45 deg range, the drag of a deflected fin growing faster outward, 48 of 51 kN m of pitch with 12 of roll and 14 of yaw nobody asked for). So it is refined: passes with one straight slope per surface across a window round the best answer yet - the same slope either way, nothing to play off - kept when the true cost, off the curves, falls, and with the window halved when it does not.
         //  THE WINDOW GROWS BACK. A pass that lowers the cost doubles the window (to RefineWindowMaxDeg), one that does not halves it: on the scaled-up fins of 2026-11-20 a window that could only shrink settled 8 % short of half the pitch reach, small moves no longer helping where one large coordinated move of several fins would.
         //  TWO STARTS: from the first pass's answer, and, if that does not settle, from where the surfaces are now; the better answer is kept.
-        var best = new double[Count];
-        var bestDuty = new double[m];
-        var trial = new double[Count];
-        var trialDuty = new double[m];
-        var anchor = new double[Count];
-        var anchorDuty = new double[m];
+        if (_bestDuty.Length < m)
+        {
+            _bestDuty = new double[m];
+            _trialDuty = new double[m];
+            _anchorDuty = new double[m];
+        }
+        double[] best = _best;
+        double[] bestDuty = _bestDuty;
+        double[] trial = _trial;
+        double[] trialDuty = _trialDuty;
+        double[] anchor = _anchor;
+        double[] anchorDuty = _anchorDuty;
+        Array.Clear(best, 0, Count);
+        Array.Clear(trial, 0, Count);
+        Array.Clear(anchor, 0, Count);
+        if (m > 0)
+        {
+            Array.Clear(bestDuty, 0, m);
+            Array.Clear(trialDuty, 0, m);
+            Array.Clear(anchorDuty, 0, m);
+        }
         double bestCost = double.PositiveInfinity, bestMiss = double.PositiveInfinity;
         double size = Math.Sqrt(demandX * demandX + demandY * demandY + demandZ * demandZ);
         double settled = 1.0 + 5e-3 * size;
@@ -216,15 +256,29 @@ internal sealed class AeroTorqueAllocator
         }
         if (!any)
             return default;
-        best.CopyTo(deflectionDeg);
+        best.AsSpan(0, Count).CopyTo(deflectionDeg);
         if (backupDuty.Length >= m)
-            bestDuty.CopyTo(backupDuty);
+            bestDuty.AsSpan(0, m).CopyTo(backupDuty);
         return Evaluate(deflectionDeg, demandX, demandY, demandZ, solved: true);
     }
 
     /// <summary>The refinement in Allocate: at most this many passes a start; the first window either way of the answer so far, the largest it grows to, and the smallest, degrees.</summary>
     private const int MaxPasses = 24;
     private const double RefineWindowDeg = 10.0, RefineWindowMaxDeg = 15.0, RefineWindowMinDeg = 0.05;
+
+    private void EnsureLpBuffers(int rows, int cols)
+    {
+        int cells = rows * cols;
+        if (_lpA.Length < cells)
+            _lpA = new double[cells];
+        if (_lpCost.Length < cols)
+            _lpCost = new double[cols];
+        if (_lpB.Length < rows)
+            _lpB = new double[rows];
+        Array.Clear(_lpA, 0, cells);
+        Array.Clear(_lpCost, 0, cols);
+        Array.Clear(_lpB, 0, rows);
+    }
 
     /// <summary>
     /// One pass of Allocate: the linear programme over the pieces from <paramref name="start"/>, within [lo, hi], each degree priced against <paramref name="current"/> (change) and against rest (degree). The deflections into <paramref name="deflection"/>, the backup's duties into <paramref name="duty"/>, and the surfaces' torque the programme counted on.
@@ -243,14 +297,17 @@ internal sealed class AeroTorqueAllocator
             baseX += tx; baseY += ty; baseZ += tz;
         }
         plannedX = baseX; plannedY = baseY; plannedZ = baseZ;
-        List<Segment> segments = windowDeg > 0.0 ? SecantsWithin(start, lo, hi, windowDeg) : SegmentsWithin(start, lo, hi);
+        List<Segment> segments = windowDeg > 0.0
+            ? SecantsWithin(start, current, lo, hi, windowDeg)
+            : SegmentsWithin(start, lo, hi);
         int n = segments.Count;
 
         // Columns: n segments, n slacks, m backups, m slacks, six shortfalls. Rows: three torque, n widths, m bounds.
         int rows = 3 + n + m, cols = 2 * n + 2 * m + 6;
-        var a = new double[rows * cols];
-        var cost = new double[cols];
-        var b = new double[rows];
+        EnsureLpBuffers(rows, cols);
+        double[] a = _lpA;
+        double[] cost = _lpCost;
+        double[] b = _lpB;
         b[0] = demandX - baseX; b[1] = demandY - baseY; b[2] = demandZ - baseZ;
         for (int j = 0; j < n; j++)
         {
@@ -285,7 +342,7 @@ internal sealed class AeroTorqueAllocator
             cost[sf + 2 * r + 1] = w;
         }
 
-        double[]? x = RcsLpSolver.Solve(rows, cols, a, cost, b);
+        double[]? x = RcsLpSolver.SolveSpan(rows, cols, a.AsSpan(0, rows * cols), cost.AsSpan(0, cols), b.AsSpan(0, rows));
         if (x == null)
             return false;
         Array.Copy(start, deflection, Count);
@@ -334,8 +391,11 @@ internal sealed class AeroTorqueAllocator
     /// </summary>
     private List<Segment> SegmentsWithin(double[] start, double[] los, double[] his)
     {
-        var segments = new List<Segment>();
-        var points = new List<double>();
+        List<Segment> segments = _segments;
+        segments.Clear();
+        List<double> points = _points;
+        List<double> up = _up;
+        List<double> down = _down;
         for (int i = 0; i < Count; i++)
         {
             double[] d = _deflection[i];
@@ -350,10 +410,10 @@ internal sealed class AeroTorqueAllocator
                 points.Add(0.0);
             points.Sort();
             int ci = points.IndexOf(c);
-            var up = new List<double>();
+            up.Clear();
             for (int k = ci; k < points.Count; k++)
                 up.Add(points[k]);
-            var down = new List<double>();
+            down.Clear();
             for (int k = ci; k >= 0; k--)
                 down.Add(points[k]);
             AddDirection(segments, i, up);
@@ -363,11 +423,12 @@ internal sealed class AeroTorqueAllocator
     }
 
     /// <summary>
-    /// The refinement's pieces: for each surface one straight slope, the curve's chord across a window either way of <paramref name="start"/> within [lo, hi], used for a move up or down alike.
+    /// The refinement's pieces: for each surface one straight slope, the curve's chord across a window either way of <paramref name="start"/> within [lo, hi], split at 0 deg and <paramref name="current"/> so outward and away cost signs stay exact.
     /// </summary>
-    private List<Segment> SecantsWithin(double[] start, double[] los, double[] his, double windowDeg)
+    private List<Segment> SecantsWithin(double[] start, double[] current, double[] los, double[] his, double windowDeg)
     {
-        var segments = new List<Segment>();
+        List<Segment> segments = _segments;
+        segments.Clear();
         for (int i = 0; i < Count; i++)
         {
             double c = Math.Clamp(start[i], los[i], his[i]);
@@ -380,12 +441,48 @@ internal sealed class AeroTorqueAllocator
             double sx = (bx - ax) / w, sy = (by - ay) / w, sz = (bz - az) / w;
             if (!double.IsFinite(sx) || !double.IsFinite(sy) || !double.IsFinite(sz))
                 continue;
-            if (b - c > 1e-9)
-                segments.Add(new Segment(i, c, b - c, sx, sy, sz));
-            if (c - a > 1e-9)
-                segments.Add(new Segment(i, c, a - c, -sx, -sy, -sz));
+            AddSplitSecant(segments, i, c, b, current[i], sx, sy, sz);
+            AddSplitSecant(segments, i, c, a, current[i], -sx, -sy, -sz);
         }
         return segments;
+    }
+
+    private static void AddSplitSecant(List<Segment> into, int surface, double from, double to, double cur,
+                                       double sx, double sy, double sz)
+    {
+        double diff = to - from;
+        if (!(Math.Abs(diff) > 1e-9))
+            return;
+        double dir = Math.Sign(diff);
+        // Up to two interior breakpoints (0.0 and cur) ordered along the travel direction.
+        double p1 = double.NaN, p2 = double.NaN;
+        if ((0.0 - from) * dir > 1e-9 && (to - 0.0) * dir > 1e-9)
+            p1 = 0.0;
+        if ((cur - from) * dir > 1e-9 && (to - cur) * dir > 1e-9 && !(Math.Abs(cur) <= 1e-9 && !double.IsNaN(p1)))
+        {
+            if (double.IsNaN(p1))
+                p1 = cur;
+            else if ((cur - p1) * dir < 0.0)
+            {
+                p2 = p1;
+                p1 = cur;
+            }
+            else
+                p2 = cur;
+        }
+        double cursor = from;
+        if (!double.IsNaN(p1))
+        {
+            into.Add(new Segment(surface, cursor, p1 - cursor, sx, sy, sz));
+            cursor = p1;
+        }
+        if (!double.IsNaN(p2))
+        {
+            into.Add(new Segment(surface, cursor, p2 - cursor, sx, sy, sz));
+            cursor = p2;
+        }
+        if (Math.Abs(to - cursor) > 1e-9)
+            into.Add(new Segment(surface, cursor, to - cursor, sx, sy, sz));
     }
 
     /// <summary>
@@ -393,7 +490,8 @@ internal sealed class AeroTorqueAllocator
     /// </summary>
     private void AddDirection(List<Segment> into, int surface, List<double> path)
     {
-        var pieces = new List<(double From, double To)>();
+        List<(double From, double To)> pieces = _pieces;
+        pieces.Clear();
         for (int k = 0; k + 1 < path.Count; k++)
         {
             if (!(Math.Abs(path[k + 1] - path[k]) > 1e-9))

@@ -150,6 +150,7 @@ internal sealed class RcsExecution
 
     /// <summary>Store seconds of firing per N s of impulse along LpDirCtrl. Indices match the wrench table and VehicleConfig.Thrusters. Null means no valid solution is available.</summary>
     public float[]? LpSecondsPerImpulse;
+    public FlightComputer.VehicleConfigInfo? LpVehicleConfig;
     public float3 LpDirCtrl;
     public float LpImpulseCapNs;
     public double LpSolvedAtSec = double.NegativeInfinity;
@@ -236,6 +237,7 @@ internal sealed class RcsExecution
         Wrench = null;
         WrenchBuiltAtSec = double.NegativeInfinity;
         LpSecondsPerImpulse = null;
+        LpVehicleConfig = null;
         LpDirCtrl = default;
         LpImpulseCapNs = 0f;
         LpSolvedAtSec = double.NegativeInfinity;

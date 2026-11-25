@@ -557,9 +557,11 @@ internal static partial class RcsExecutor
         }
     }
 
-    // BurnBody +X is the burn direction. Other control axes use a Custom target with a checked Euler round trip.
+    // BurnBody +X is the burn direction. Other control axes use a Custom target with a checked Euler round trip and require coupled roll so roll does not spin the thrust axis off the burn vector.
     private static bool CommandAlignAttitude(FlightComputer fc, int axisIdx)
     {
+        if (axisIdx >= 2 && fc.RollMode.IsDecoupled())
+            return false;
         fc.AttitudeMode = FlightComputerAttitudeMode.Auto;
         if (axisIdx == 0)
         {
@@ -781,8 +783,8 @@ internal static partial class RcsExecutor
         // Match the worker firing gate. Before Align is commanded, angle error belongs to the user target.
         bool slewing = exec.ResolvedStrategy == RcsAttitudeStrategy.Align
             && exec.AlignCommanded
-            && OutsideAlignGate(fc);
-        bool firingEligible = ControlCommandDue(exec, bt, nowSec)
+            && OutsideAlignGate(fc, exec.ResolvedAxis >= 2);
+        bool firingEligible = ControlCommandDue(fc, exec, bt, nowSec)
             && !slewing && nowSec >= bt.IgnitionTime.Seconds();
 
         // Do not solve patterns while the frame rotates and the attitude gate prevents firing.
@@ -905,7 +907,7 @@ internal static partial class RcsExecutor
         float3 impulseCtrl, float togoMs, double nowSec)
     {
         if (DebugConfig.RcsTranslation && !exec.FiringLogged
-            && ControlCommandDue(exec, bt, nowSec)
+            && ControlCommandDue(fc, exec, bt, nowSec)
             && nowSec >= bt.IgnitionTime.Seconds())
         {
             exec.FiringLogged = true;
@@ -975,11 +977,19 @@ internal static partial class RcsExecutor
     }
 
     // FlightComputer.ComputeRcsTrackAxis coasts inside this corridor. A tighter gate can wait on drift.
-    internal static bool OutsideAlignGate(FlightComputer fc)
+    // Non-X Align axes also gate on roll because roll rotates +/-Y and +/-Z off the burn vector.
+    internal static bool OutsideAlignGate(FlightComputer fc, bool checkRoll = false)
     {
         float gateY = Math.Max(fc.AngleDeadband, 0.5f * fc.AngleDeadband + fc.AngleTurnaround.Y);
         float gateZ = Math.Max(fc.AngleDeadband, 0.5f * fc.AngleDeadband + fc.AngleTurnaround.Z);
-        return Math.Abs(fc.ErrorAngles.Y) > gateY || Math.Abs(fc.ErrorAngles.Z) > gateZ;
+        if (Math.Abs(fc.ErrorAngles.Y) > gateY || Math.Abs(fc.ErrorAngles.Z) > gateZ)
+            return true;
+        if (!checkRoll)
+            return false;
+        if (fc.RollMode.IsDecoupled())
+            return true;
+        float gateX = Math.Max(fc.AngleDeadband, 0.5f * fc.AngleDeadband + fc.AngleTurnaround.X);
+        return Math.Abs(fc.ErrorAngles.X) > gateX;
     }
 
     // Must match RcsComputeControlPatch.ShapeAxis component by component, including unusable groups.
@@ -1108,16 +1118,59 @@ internal static partial class RcsExecutor
         return AlignLeadFactor * slewSec + AlignLeadMarginSec;
     }
 
-    // Stock UpdateBurnTarget still supplies engine timing at activation. Anchor on the impulsive instant instead.
-    private static bool ControlCommandDue(RcsExecution exec, BurnTarget bt, double nowSec)
+    internal static double EstimatedDurationSeconds(in RcsEstimates estimates, RcsAttitudeStrategy strategy)
+    {
+        if (!estimates.Valid)
+            return 0.0;
+        double duration = strategy == RcsAttitudeStrategy.Align
+            ? estimates.AlignDurationSec
+            : estimates.HoldDurationSec;
+        return double.IsFinite(duration) && duration > 0.0 ? duration : 0.0;
+    }
+
+    internal static double ControlLeadSeconds(
+        FlightComputer fc, BurnTarget bt, in RcsEstimates estimates, RcsAttitudeStrategy strategy,
+        float[]? lpSecondsPerImpulse = null, float lpImpulseCapNs = 0f)
+    {
+        double duration = EstimatedDurationSeconds(in estimates, strategy);
+        if (lpSecondsPerImpulse != null && lpImpulseCapNs > 0f)
+        {
+            double lpDur = bt.DeltaVTargetCci.Length() * fc.TotalMassPropsBody.Mass * MaxPulseSec / lpImpulseCapNs;
+            if (double.IsFinite(lpDur) && lpDur > 0.0)
+                duration = lpDur;
+        }
+        return 0.5 * duration + AlignLeadSeconds(in estimates);
+    }
+
+    internal static double WarpLeadSeconds(
+        Vehicle vehicle, FlightComputer fc, BurnTarget bt, Burn burn, in RcsEstimates estimates)
+    {
+        RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? exec);
+        if (exec is { IsActive: true } && ReferenceEquals(exec.ActiveBurn, burn))
+            return ControlLeadSeconds(fc, bt, in estimates, exec.ResolvedStrategy,
+                exec.LpSecondsPerImpulse, exec.LpImpulseCapNs);
+
+        RcsBurnOptions? options = exec?.FindOptions(burn.Time.Seconds(), burn.DeltaVVlf.Length());
+        (RcsAttitudeStrategy strategy, _) = ResolveStrategy(
+            options?.Attitude ?? RcsAttitudeStrategy.Auto, in estimates);
+        if (strategy == RcsAttitudeStrategy.Hold && !estimates.HoldFeasible
+            && estimates.AlignFeasible && estimates.AlignAxis >= 0)
+            strategy = RcsAttitudeStrategy.Align;
+        return ControlLeadSeconds(fc, bt, in estimates, strategy);
+    }
+
+    // Stock UpdateBurnTarget still supplies engine timing at activation. Anchor on the centered ignition instant (ImpulsiveInstant - 0.5*duration) minus the align lead.
+    internal static bool ControlCommandDue(FlightComputer fc, RcsExecution exec, BurnTarget bt, double nowSec)
         => exec.ControlTaken
-           || nowSec >= bt.ImpulsiveInstant.Seconds() - AlignLeadSeconds(in exec.Estimates);
+           || nowSec >= bt.ImpulsiveInstant.Seconds()
+               - ControlLeadSeconds(fc, bt, in exec.Estimates, exec.ResolvedStrategy,
+                   exec.LpSecondsPerImpulse, exec.LpImpulseCapNs);
 
     private static bool EnsureBurnControl(
         Vehicle vehicle, FlightComputer fc, RcsExecution exec, double nowSec)
     {
         BurnTarget? bt = fc.Burn;
-        if (bt == null || !ControlCommandDue(exec, bt, nowSec))
+        if (bt == null || !ControlCommandDue(fc, exec, bt, nowSec))
             return true;
         bool takingControl = !exec.ControlTaken;
         exec.ControlTaken = true;
@@ -1159,6 +1212,18 @@ internal static partial class RcsExecutor
         // A yielded attitude belongs to whoever took it, for the rest of this execution.
         if (exec.AttitudeYielded || exec.ResolvedStrategy != RcsAttitudeStrategy.Align)
             return true;
+
+        // A non-X axis cannot stay aligned once roll becomes decoupled, so release the Custom target and fall back to Hold.
+        if (exec.ResolvedAxis >= 2 && fc.RollMode.IsDecoupled())
+        {
+            if (exec.AlignCommanded)
+                fc.SetNullRot(VehicleReferenceFrame.BurnBody);
+            exec.ResolvedStrategy = RcsAttitudeStrategy.Hold;
+            exec.ResolvedAxis = -1;
+            exec.AlignCommanded = false;
+            exec.CommandedAttitude = null;
+            return exec.Estimates.HoldFeasible;
+        }
 
         // Saves retain the Align flag but not this snapshot, so loading requires a new command record.
         if (!exec.AlignCommanded || exec.CommandedAttitude == null)
@@ -1256,12 +1321,14 @@ internal static partial class RcsExecutor
             Owner = vehicle,
             IgnitionTime = bt.ImpulsiveInstant - ignitionLead,
             RequireAttitude = align,
+            RequireRoll = align && exec.ResolvedAxis >= 2,
             MaxPulseSec = MaxPulseSec,
             AxisForcePos = new float3(cap.Ax0.ForceN, cap.Ax2.ForceN, cap.Ax4.ForceN),
             AxisForceNeg = new float3(cap.Ax1.ForceN, cap.Ax3.ForceN, cap.Ax5.ForceN),
             AxisMinCorrectingImpulsePos = new float3(cap.Ax0.MinCorrectingImpulseNs, cap.Ax2.MinCorrectingImpulseNs, cap.Ax4.MinCorrectingImpulseNs),
             AxisMinCorrectingImpulseNeg = new float3(cap.Ax1.MinCorrectingImpulseNs, cap.Ax3.MinCorrectingImpulseNs, cap.Ax5.MinCorrectingImpulseNs),
             LpSecondsPerImpulse = exec.LpSecondsPerImpulse,
+            VehicleConfig = exec.LpVehicleConfig,
             LpDirCtrl = exec.LpDirCtrl,
             LpImpulseCapNs = exec.LpImpulseCapNs,
         };

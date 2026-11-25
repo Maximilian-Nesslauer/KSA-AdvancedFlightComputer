@@ -467,7 +467,7 @@ public static partial class GuidanceWindow
         // --- the steering arrows -------------------------------------------
         if (_showSteerArrow)
         {
-            UpdateSteering(vehicle, orbit, parent);
+            ViewDemand.Mark(vehicle, ViewDemand.Kind.Steer);
             if (st.HasSteer)
             {
                 double3 rv = orbit.StateVectors.PositionCci;

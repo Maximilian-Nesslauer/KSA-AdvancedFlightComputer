@@ -2,14 +2,13 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
-/// <summary>Estimate reachable liquid RCS propellant from ResourceManagerBase.ConsumptionOrder. Assume one reactant mix and ignore depletion order, so this is an upper bound used for a warning.</summary>
+/// <summary>Estimate reachable liquid RCS propellant from ResourceManagerBase.ConsumptionOrder. Partition reachable tanks by reactant mix and ignore depletion order, so this is an upper bound used for a warning.</summary>
 internal static class RcsPropellant
 {
     public static double AvailableKg(Vehicle vehicle)
     {
         ReadOnlySpan<MoleState> moleStates = vehicle.Parts.Moles.States;
-        HashSet<Tank> tanks = new();
-        ReactantMix? mix = null;
+        List<(ReactantMix Mix, HashSet<Tank> Tanks)> mixGroups = new();
 
         foreach (ThrusterController thruster in vehicle.Parts.Modules.Get<ThrusterController>())
         {
@@ -19,30 +18,52 @@ internal static class RcsPropellant
             foreach (RocketCore core in rocket.Cores)
             {
                 // This estimate covers tank-fed cores. Solid cores have no tank graph.
-                if (core is not PlumbedCore plumbed)
+                if (core is not PlumbedCore plumbed || plumbed.DesiredMix == null)
                     continue;
-                mix ??= plumbed.DesiredMix;
+                HashSet<Tank> tanks = GetOrAddMixTanks(mixGroups, plumbed.DesiredMix);
                 CollectReachableTanks(plumbed.ResourceManager, tanks);
             }
         }
-        if (mix == null || tanks.Count == 0)
+        if (mixGroups.Count == 0)
             return 0.0;
 
-        double usable = double.PositiveInfinity;
-        foreach (Reactant reactant in mix.Reactants)
+        double totalUsable = 0.0;
+        for (int g = 0; g < mixGroups.Count; g++)
         {
-            double reactantMass = 0.0;
-            foreach (Tank tank in tanks)
+            (ReactantMix mix, HashSet<Tank> tanks) = mixGroups[g];
+            if (tanks.Count == 0)
+                continue;
+            double usable = double.PositiveInfinity;
+            foreach (Reactant reactant in mix.Reactants)
             {
-                if (!tank.PropellantUseEnabled)
-                    continue;
-                if (tank.TryGetMoleAndState(reactant.SubstancePhase, moleStates, out var mole))
-                    reactantMass += mole.State.Mass;
+                double reactantMass = 0.0;
+                foreach (Tank tank in tanks)
+                {
+                    if (!tank.PropellantUseEnabled)
+                        continue;
+                    if (tank.TryGetMoleAndState(reactant.SubstancePhase, moleStates, out var mole))
+                        reactantMass += mole.State.Mass;
+                }
+                if (reactant.MassFraction > 0f)
+                    usable = Math.Min(usable, reactantMass / reactant.MassFraction);
             }
-            if (reactant.MassFraction > 0f)
-                usable = Math.Min(usable, reactantMass / reactant.MassFraction);
+            if (double.IsFinite(usable) && usable > 0.0)
+                totalUsable += usable;
         }
-        return double.IsFinite(usable) ? usable : 0.0;
+        return totalUsable;
+    }
+
+    private static HashSet<Tank> GetOrAddMixTanks(
+        List<(ReactantMix Mix, HashSet<Tank> Tanks)> groups, ReactantMix mix)
+    {
+        for (int i = 0; i < groups.Count; i++)
+        {
+            if (ReferenceEquals(groups[i].Mix, mix) || groups[i].Mix.SharesReactantSet(mix))
+                return groups[i].Tanks;
+        }
+        HashSet<Tank> tanks = new();
+        groups.Add((mix, tanks));
+        return tanks;
     }
 
     private static void CollectReachableTanks(ResourceManager? rm, HashSet<Tank> tanks)

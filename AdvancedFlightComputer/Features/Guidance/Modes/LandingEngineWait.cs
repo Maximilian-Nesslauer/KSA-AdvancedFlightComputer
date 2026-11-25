@@ -45,12 +45,15 @@ public static partial class GuidanceWindow
         ClearLandingEngineCommand();
         Sequence next = null;
         if (vehicle.Parts?.SequenceList != null)
+        {
+            AutoStage.FairingJettison.Row[] fairings = DeferredFairingRows(vehicle);
             foreach (Sequence sequence in vehicle.Parts.SequenceList.Sequences)
-                if (!sequence.Activated)
+                if (!sequence.Activated && !sequence.Parts.IsEmpty && !AutoStage.FairingJettison.IsDeferred(fairings, sequence))
                 {
                     next = sequence;
                     break;
                 }
+        }
 
         // Engine activation is buffered, so allow time for the last sequence to take effect.
         bool settlingLastSequence = next == null && now >= _s.LastSequenceTime
