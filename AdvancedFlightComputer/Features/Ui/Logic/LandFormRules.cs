@@ -47,7 +47,7 @@ internal static class LandChain
             return [];
         var facts = new PathFacts(way, hasAir, canLand, chutes, flip, hoverFlies, where, belowBrakingStart,
             GfoldFlies: solver == LandSolver.Gfold, BrakingOnly: way == LandWay.Entry && !hasAir);
-        return Follow(ConsolePages.ModeIdFor(ConsolePage.Land, way, solver, AscentChoice.CatsUpfg, hasAir, flip && hasAir && way == LandWay.FromHere), in facts);
+        return Follow(ConsolePages.ModeIdFor(ConsolePage.Land, way, solver, AscentChoice.CatsUpfg, hasAir, flip && hasAir && way is LandWay.FromHere or LandWay.Glide), in facts);
     }
 
     /// <summary>The steps from <paramref name="first"/> on, each mode once.</summary>

@@ -155,6 +155,7 @@ internal static class SituationVerbs
             LandWay.FromOrbit => GuidanceModeId.DeorbitLand,
             LandWay.Boostback => GuidanceModeId.Boostback,
             LandWay.FromHere => GuidanceModeId.SixDofHere,
+            LandWay.Glide => GuidanceModeId.EntryHere,
             LandWay.Entry => hasAir ? GuidanceModeId.OrbitalEntry : GuidanceModeId.DeorbitLand,
             _ => GuidanceModeId.Hover,
         };

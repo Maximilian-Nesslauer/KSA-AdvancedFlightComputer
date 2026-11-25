@@ -359,7 +359,7 @@ internal static class OrbitalEntryGuidance
     /// </summary>
     private static ChainStep[] Steps(PathFacts f)
     {
-        if (f.Way == LandWay.FromHere)
+        if (f.Way is LandWay.FromHere or LandWay.Glide)
             return [new ChainStep(LandChain.Bellyflop)];
         if (!f.CanLand)
             return f.Chutes
@@ -370,7 +370,7 @@ internal static class OrbitalEntryGuidance
 
     /// <summary>After bellyflop touchdown guidance takes the craft for the flip and the burn; after a plain entry RETRO BURN; a craft with no engine to land on ends the path here.</summary>
     private static GuidanceModeId? Next(PathFacts f)
-        => !f.CanLand ? null : f.Flip || f.Way == LandWay.FromHere ? GuidanceModeId.SixDofHere : GuidanceModeId.EntryHere;
+        => !f.CanLand ? null : f.Flip || f.Way is LandWay.FromHere or LandWay.Glide ? GuidanceModeId.SixDofHere : GuidanceModeId.EntryHere;
 
     public static (string Outcome, string Detail) StopText(OrbitalEntryStage stage) => stage switch
     {

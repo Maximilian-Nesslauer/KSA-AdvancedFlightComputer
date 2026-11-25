@@ -51,23 +51,23 @@ public static partial class GuidanceWindow
 
     private static LandSolver LandSolverOf(LandWay way)
         => way == LandWay.FromOrbit || (way == LandWay.Entry && !PageHasAir) ? LandSolvers.Shown(LandSolvers.Chosen(false, _s.UseSixDofLanding), LandingMachineLive)
-            : way == LandWay.Entry ? LandSolver.Entry
+            : way is LandWay.Entry or LandWay.Glide ? LandSolver.Entry
             : LandSolverRoute;
 
     /// <summary>Whether the body under the craft has air, as the console read it this frame: it decides orbital entry or the braking burn.</summary>
     private static bool PageHasAir => Ui.Console.AfcConsole.Frame.Situation.HasAir;
 
-    /// <summary>LAND NOW's GLIDE row chose FLIP LANDING.</summary>
-    internal static bool LandFlipChosen => _s.LandFlip;
+    /// <summary>The way's GLIDE row chose FLIP LANDING, for the commit and the flying page.</summary>
+    internal static bool GlideFlipChosen(LandWay way) => GlideFlips(way);
 
-    /// <summary>LAND NOW where a glide flies first and FLIP LANDING is chosen: orbital entry flies it, from bellyflop past its hand-over.</summary>
-    private static bool FlipWay(LandWay way) => way == LandWay.FromHere && LandSolverRoute == LandSolver.Entry && _s.LandFlip;
+    /// <summary>FLIP LANDING flies: on GLIDE, or on LAND NOW where a glide flies first. Orbital entry flies it, from bellyflop past its hand-over.</summary>
+    private static bool FlipWay(LandWay way) => (way == LandWay.FromHere && LandSolverRoute == LandSolver.Entry && _s.LandFlip) || (way == LandWay.Glide && _s.EntryFlip);
 
     /// <summary>The way's path starts with orbital entry: ENTRY/BRAKING where there is air, or LAND NOW's FLIP LANDING.</summary>
     private static bool OrbitalEntryWay(LandWay way) => (way == LandWay.Entry && PageHasAir) || FlipWay(way);
 
     /// <summary>LAND NOW's RETRO BURN: the 3-DOF's glide and landing burn.</summary>
-    private static bool RetroWay(LandWay way) => way == LandWay.FromHere && LandSolverRoute == LandSolver.Entry && !_s.LandFlip;
+    private static bool RetroWay(LandWay way) => (way == LandWay.FromHere && LandSolverRoute == LandSolver.Entry && !_s.LandFlip) || (way == LandWay.Glide && !_s.EntryFlip);
 
     /// <summary>The picture of orbital entry, for a way whose path starts with it.</summary>
     internal static bool OrbitalEntryPictureFor(Vehicle vehicle, LandWay way) => OrbitalEntryWay(way);
@@ -112,7 +112,8 @@ public static partial class GuidanceWindow
         // The deorbit's next step is the body's: orbital entry where there is air, the braking burn where there is none, and ENTRY/BRAKING flies it with no deorbit burn first. An entry ends in bellyflop and touchdown when the craft has an engine to land on.
         if (!LandFlies)
         {
-            _s.UseThreeDofLanding = EntryFliesFirst(vehicle);
+            // GLIDE with RETRO BURN is the player's pick of the 3-DOF, from any fall.
+            _s.UseThreeDofLanding = (way == LandWay.Glide && !_s.EntryFlip) || EntryFliesFirst(vehicle);
             bool air = HasPhysicalAtmosphere(vehicle.Orbit.Parent);
             if (way is LandWay.FromOrbit or LandWay.Entry && !DeorbitTargetLocked)
             {
@@ -123,11 +124,11 @@ public static partial class GuidanceWindow
             {
                 _s.OrbitalEntryBellyflop = LandEngineOnCraft(vehicle);
                 // LAND NOW engages orbital entry only for its FLIP LANDING; DEORBIT and ENTRY/BRAKING by their own GLIDE row.
-                _s.OrbitalEntryFlip = way == LandWay.FromHere || _s.EntryFlip;
+                _s.OrbitalEntryFlip = way is LandWay.FromHere or LandWay.Glide || _s.EntryFlip;
             }
         }
         LandSolver solver = LandSolverOf(way);
-        DescentFacts descent = LandWays.HasSolver(way) || way == LandWay.Entry ? ReadDescentFacts(vehicle) : default;
+        DescentFacts descent = LandWays.HasSolver(way) || way is LandWay.Entry or LandWay.Glide ? ReadDescentFacts(vehicle) : default;
         DescentFacts judged = _s.Active || _s.SixDofStandby ? default : descent;
         ReadHoverAnswer(vehicle, in judged);
         NoteLandFacts(way, solver, in judged, HasPhysicalAtmosphere(vehicle.Orbit.Parent));
@@ -254,7 +255,7 @@ public static partial class GuidanceWindow
         LandSolver solver = LandSolverOf(way);
         bool canLand = LandEngineOnCraft(vehicle);
         // The glide is a choice where one follows: on LAND NOW where the craft falls through air, and after an orbital entry on a craft with an engine to land on.
-        if (situation.HasAir && (way == LandWay.FromHere ? solver == LandSolver.Entry : way is LandWay.FromOrbit or LandWay.Entry && canLand))
+        if (situation.HasAir && (way == LandWay.FromHere ? solver == LandSolver.Entry : way == LandWay.Glide || way is LandWay.FromOrbit or LandWay.Entry && canLand))
             DrawGlideRow(way);
         ChainStep[] chain = LandChain.For(way, solver, situation.Where, situation.HasAir, GlideFlips(way), canLand, BelowBrakingStart(vehicle), _landHoverFlies, KsaParachutes.Count(vehicle) > 0);
         if (LandChain.Shows(chain))
@@ -433,7 +434,7 @@ public static partial class GuidanceWindow
         }
     }
 
-    /// <summary>The way's GLIDE row chose FLIP LANDING: LAND NOW's own (RETRO BURN by default), or the one after an orbital entry (FLIP LANDING by default).</summary>
+    /// <summary>The way's GLIDE row chose FLIP LANDING: LAND NOW's own (RETRO BURN by default), or the glide's own, on GLIDE and after an orbital entry (FLIP LANDING by default).</summary>
     private static bool GlideFlips(LandWay way) => way == LandWay.FromHere ? _s.LandFlip : _s.EntryFlip;
 
     /// <summary>The GLIDE row: FLIP LANDING or RETRO BURN, kept with the craft, one for LAND NOW and one for after an orbital entry, each with its own default. On LAND NOW either can be picked while the other flies: the commit then takes the craft over, after the question of the footer.</summary>
@@ -675,6 +676,8 @@ public static partial class GuidanceWindow
             DrawLegsNote(vehicle, way);
             if (way == LandWay.Boostback || way == LandWay.FromHere)
                 DrawLiftNote(vehicle, way, roomOnly: way == LandWay.FromHere && LandDrawnSolver != LandSolver.Entry);
+            else if (way == LandWay.Glide && RetroWay(way))
+                DrawLiftNote(vehicle, LandWay.FromHere, roomOnly: false);
         }
         else if (way == LandWay.FromOrbit && DescentLive && Ui.Console.ConsoleFrame.ReadFacts(vehicle).Where == CraftSituation.Orbit)
             DrawPassStrip(big: false);
@@ -709,11 +712,12 @@ public static partial class GuidanceWindow
                 wayParts = [new FoldPart(FoldNames.Burn, true, InExpert(DrawBoostbackBurnSection)), new FoldPart(FoldNames.Glide, true, InExpert(DrawBoostbackGlideSection))];
                 break;
             case LandWay.Entry:
-            case LandWay.FromHere when FlipWay(way):
+            case LandWay.FromHere or LandWay.Glide when FlipWay(way):
                 doubles = Specs.LandOrbitalEntryExpert;
                 bools = Specs.LandOrbitalEntryExpertBools;
                 wayParts = [new FoldPart(FoldNames.Attitude, true, InExpert(DrawOrbitalEntryAttitudeRows)), new FoldPart(FoldNames.Bank, true, InExpert(DrawOrbitalEntryBankRows))];
                 break;
+            case LandWay.Glide:
             case LandWay.FromHere when LandSolverRoute == LandSolver.Entry:
                 doubles = Specs.LandEntryExpert;
                 bools = Specs.LandEntryExpertBools;
@@ -789,7 +793,7 @@ public static partial class GuidanceWindow
             new FoldPart(FoldNames.Distance, siteRows, () => GaugeRowText("DISTANCE TO SITE", Fmt.Distance(AngleBetween(orbit.StateVectors.PositionCci, SiteDirCciAt(parent, 0)) * parent.MeanRadius))),
             new FoldPart(FoldNames.Terrain, siteRows, () => GaugeRowText("SITE TERRAIN", SiteTerrainText(parent))),
             new FoldPart(FoldNames.Impact, impact, DrawBoostbackImpactDetails),
-            new FoldPart(FoldNames.Feasibility, (LandWays.HasSolver(way) || way == LandWay.Entry) && (descent.Known || FirstSolveStops(way, solver)), () => DrawDescentRows(way, solver, in descent, noSite, feasibilityAlone)),
+            new FoldPart(FoldNames.Feasibility, (LandWays.HasSolver(way) || way is LandWay.Entry or LandWay.Glide) && (descent.Known || FirstSolveStops(way, solver)), () => DrawDescentRows(way, solver, in descent, noSite, feasibilityAlone)),
             new FoldPart(FoldNames.Deorbit, deorbit, DrawDeorbitFigures),
         ], 0, foldsOpen, PageText.NumbersTip, value.Length > 0 ? PageText.Numbers + ": " + value : "");
     }
@@ -890,8 +894,11 @@ public static partial class GuidanceWindow
                 DrawBoostbackContent(vehicle, orbit, parent, innerW, liftNote);
                 break;
             case LandWay.Entry when PageHasAir:
-            case LandWay.FromHere when FlipWay(way):
+            case LandWay.FromHere or LandWay.Glide when FlipWay(way):
                 DrawOrbitalEntryContent(vehicle, innerW);
+                break;
+            case LandWay.Glide:
+                Draw3DofLandingContent(vehicle, innerW, liftNote);
                 break;
             case LandWay.Entry:
                 DrawDescentContent(innerW);

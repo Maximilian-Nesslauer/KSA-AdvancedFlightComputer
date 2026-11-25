@@ -499,7 +499,7 @@ internal static partial class AfcConsole
                 || (Page == ConsolePage.Tune && TuneSet == TuneSet.Diag
                     && TuneDiagnostics is TuneDiagnostics.Boostback or TuneDiagnostics.Aero),
             GuidanceWindow.GuidancePage.Deorbit => Page == ConsolePage.Land && LandWay == LandWay.FromOrbit,
-            GuidanceWindow.GuidancePage.Land => Page == ConsolePage.Land && LandWay is LandWay.FromHere or LandWay.Entry,
+            GuidanceWindow.GuidancePage.Land => Page == ConsolePage.Land && LandWay is LandWay.FromHere or LandWay.Entry or LandWay.Glide,
             GuidanceWindow.GuidancePage.Hover => Page == ConsolePage.Land && LandWay == LandWay.Hover,
             _ => false,
         };

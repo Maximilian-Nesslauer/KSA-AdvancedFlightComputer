@@ -128,7 +128,7 @@ internal static class LandPage
         }
 
         GuidanceModeId? mode = ConsolePages.ModeIdFor(ConsolePage.Land, way,
-            GuidanceWindow.LandSolverRoute, GuidanceWindow.CurrentAscentChoice(), ctx.Frame.Situation.HasAir, GuidanceWindow.LandFlipChosen);
+            GuidanceWindow.LandSolverRoute, GuidanceWindow.CurrentAscentChoice(), ctx.Frame.Situation.HasAir, GuidanceWindow.GlideFlipChosen(way));
         CommitSpec commit = Commit(in ctx, mode);
         GuidanceWindow.NoteFooterPicksSite(commit.NextLeads && commit.Secondary!.Verb is PageText.PickSite or PageText.PickArmed);
         return GuidanceWindow.LandWayCannotFly(ctx.Subject, way, in ctx.Frame.Situation) ? commit with { MarkDim = true } : commit;

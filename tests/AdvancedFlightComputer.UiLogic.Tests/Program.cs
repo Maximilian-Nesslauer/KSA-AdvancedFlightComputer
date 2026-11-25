@@ -427,8 +427,10 @@ internal static partial class Program
             float markPx = (mark.Before.Length + mark.Chip.Length + mark.After.Length) * 8.7f + 30f;
             Check("the mark leaves the sentence room: " + owner, 584f - markPx >= 26f * 10.9f, markPx.ToString());
         }
-        foreach (string[] labels in new[] { PageText.ClimbLabels, PageText.AllocatorLabels, OrbitToolCatalog.ToolLabels, LandWays.Labels })
+        foreach (string[] labels in new[] { PageText.ClimbLabels, PageText.AllocatorLabels, OrbitToolCatalog.ToolLabels })
             Check("the choices fit the narrow width: " + labels[0], labels.Sum(l => l.Length) + labels.Length * 2 <= 53, string.Join(" ", labels));
+        // The LAND ways are the steps of the landing path, six of them: their tab row wraps to a second line in the narrow width, as place tabs do.
+        Check("the LAND ways fit two rows of the narrow width", LandWays.Labels.Sum(l => l.Length) + LandWays.Labels.Length * 2 <= 2 * 53, string.Join(" ", LandWays.Labels));
         Check("the strip of passes holds its row", PageText.PassClosest(19999.9, 86400.0).Length <= 53 && PageText.PassFlies(19999.9, 86400.0).Length <= 53);
     }
 
@@ -1754,11 +1756,9 @@ internal static partial class Program
             ConsolePages.ResolveLegacy("RECOVER", "", out ConsolePage barePage, out LandWay? bareWay)
             && barePage == ConsolePage.Land && bareWay == LandWay.Boostback);
         Check("a current key is no old booster key", !ConsolePages.ResolveLegacy("LAND", "BOOSTBACK", out _, out _));
-        Check("land ways in display order", LandWays.DisplayOrder.Length == 5 && LandWays.DisplayOrder.Distinct().Count() == 5
-            && LandWays.DisplayOrder[0] == LandWay.FromOrbit && LandWays.DisplayOrder[1] == LandWay.Boostback
-            && LandWays.DisplayOrder[2] == LandWay.Entry && LandWays.DisplayOrder[3] == LandWay.FromHere && LandWays.DisplayOrder[4] == LandWay.Hover);
+        Check("land ways in display order", LandWays.DisplayOrder.SequenceEqual(new[] { LandWay.FromOrbit, LandWay.Boostback, LandWay.Entry, LandWay.Glide, LandWay.FromHere, LandWay.Hover }));
         Check("every land way is in the row", Enum.GetValues<LandWay>().All(w => LandWays.DisplayIndex(w) >= 0));
-        Check("land way labels", LandWays.Labels.SequenceEqual(new[] { "DEORBIT", "BOOSTBACK", "ENTRY/BRAKING", "LAND NOW", "HOVER" }));
+        Check("land way labels", LandWays.Labels.SequenceEqual(new[] { "DEORBIT", "BOOSTBACK", "ENTRY/BRAKING", "GLIDE", "LAND NOW", "HOVER" }));
         Check("the old land way keys stay", ConsolePages.EnumKey(LandWay.FromOrbit) == "FROMORBIT"
             && ConsolePages.EnumKey(LandWay.FromHere) == "FROMHERE" && ConsolePages.EnumKey(LandWay.Hover) == "HOVER");
         Check("boostback way key round trip",
@@ -2670,6 +2670,11 @@ internal static partial class Program
             && ConsolePages.ModeIdFor(ConsolePage.Land, LandWay.FromHere, LandSolver.Touchdown, AscentChoice.CatsUpfg, flip: true) == GuidanceModeId.SixDofHere);
         Check("the way keys stay", ConsolePages.EnumKey(LandWay.Entry) == "ENTRY" && ConsolePages.EnumFromKey("FROMHERE", LandWay.Entry) == LandWay.FromHere);
         Check("the way says it flies entry or braking", LandWays.Label(LandWay.Entry) == "ENTRY/BRAKING");
+        Check("GLIDE engages the glide on its own: FLIP LANDING through orbital entry, else RETRO BURN", ConsolePages.ModeIdFor(ConsolePage.Land, LandWay.Glide, LandSolver.Touchdown, AscentChoice.CatsUpfg, flip: true) == GuidanceModeId.OrbitalEntry
+            && ConsolePages.ModeIdFor(ConsolePage.Land, LandWay.Glide, LandSolver.Touchdown, AscentChoice.CatsUpfg) == GuidanceModeId.EntryHere);
+        Check("GLIDE's path is the glide, then touchdown", string.Join(" > ", LandChain.For(LandWay.Glide, LandSolver.Entry, CraftSituation.FallingAir, true, flip: true).Select(c => c.Text)) == "BELLYFLOP > TOUCHDOWN"
+            && string.Join(" > ", LandChain.For(LandWay.Glide, LandSolver.Entry, CraftSituation.FallingAir, true).Select(c => c.Text)) == "RETRO BURN > TOUCHDOWN");
+        Check("GLIDE sits between ENTRY/BRAKING and LAND NOW", LandWays.DisplayIndex(LandWay.Glide) == LandWays.DisplayIndex(LandWay.Entry) + 1 && LandWays.DisplayIndex(LandWay.FromHere) == LandWays.DisplayIndex(LandWay.Glide) + 1);
         Check("the glide row has a label and a card each", EntryMethods.GlideLabels.SequenceEqual(new[] { "RETRO BURN", "FLIP LANDING" }) && EntryMethods.GlideCards.Length == EntryMethods.GlideLabels.Length);
         Check("the 3-DOF is RETRO BURN in the console", EntryGuidance.CommitVerb == "RETRO BURN" && EntryGuidance.StopLabel == "STOP RETRO BURN");
 

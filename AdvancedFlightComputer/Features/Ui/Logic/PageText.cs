@@ -12,6 +12,7 @@ internal static class PageText
         LandWay.FromOrbit => "Orbit to site. STOCK AUTO flies the deorbit burn, then ORBITAL ENTRY where there is air or the BRAKING BURN where there is none, and TOUCHDOWN lands.",
         LandWay.Boostback => "Spent booster to its site. AFC slews and aims the fall, RETRO BURN takes the glide and TOUCHDOWN the end of the burn.",
         LandWay.Entry => "Already on the way down, no deorbit burn: ORBITAL ENTRY where there is air, the BRAKING BURN where there is none, then TOUCHDOWN.",
+        LandWay.Glide => "The fall through the air to the landing burn, from any fall: FLIP LANDING (bellyflop) or RETRO BURN, then TOUCHDOWN.",
         LandWay.FromHere => "From where the craft is: FLIP LANDING or RETRO BURN through the air, else TOUCHDOWN.",
         _ => "AFC stops the drift and sinks to the ground. NUDGE moves the touchdown point.",
     };
