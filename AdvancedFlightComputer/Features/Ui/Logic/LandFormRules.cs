@@ -28,6 +28,10 @@ internal static class LandChain
 
     public static bool EndsInImpact(ReadOnlySpan<ChainStep> steps) => steps.Length > 0 && steps[^1].Danger;
 
+    /// <summary>A step of the path that has settings of its own, so a click on it shows them (GuidanceWindow.DrawStepRows). A coast, a hold, the pilot's part and a crash have none, and nor have a boostback's settle and slew.</summary>
+    public static bool HasSettings(string step) => step is StockBurn or StockBurnIfNeeded or Bellyflop or "TOUCHDOWN" or "G-FOLD" or "HOVER" or "BURN" or "GLIDE"
+        || step == EntryMethods.OrbitalLabel || step == EntryMethods.GlideBurnLabel || step == EntryMethods.BrakingLabel;
+
     /// <summary>Every way but HOVER shows its path, also a path of one step: what flies is never left to guess.</summary>
     public static bool Shows(ReadOnlySpan<ChainStep> steps) => steps.Length > 0;
 

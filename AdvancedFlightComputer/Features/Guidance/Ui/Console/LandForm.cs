@@ -252,9 +252,112 @@ public static partial class GuidanceWindow
             DrawGlideRow();
         ChainStep[] chain = LandChain.For(way, solver, situation.Where, situation.HasAir, _s.LandFlip, LandEngineOnCraft(vehicle), BelowBrakingStart(vehicle), _landHoverFlies);
         if (LandChain.Shows(chain))
-            ConsoleUi.ChainStrip(chain, WayCannotFly(vehicle, way, solver, in situation));
+            DrawPathStrip(way, chain, WayCannotFly(vehicle, way, solver, in situation), situation.HasAir);
         DrawPathNotes(way, solver, in situation, read.Descent);
         ConsoleUi.Gap();
+    }
+
+    // The step of the path whose settings show under it, by its name; empty for none. Not kept: the page opens with the path alone.
+    private static string _landStepOpen = "";
+
+    /// <summary>
+    /// The path, each step with settings a button: a click shows that step's settings under the path, the same values as in the folds below (HANDOVER, GNC), and a second click hides them. The Player rows draw first, then the Expert rows of the step, as a GNC fold draws them.
+    /// </summary>
+    private static void DrawPathStrip(LandWay way, ChainStep[] chain, bool cannotFly, bool hasAir)
+    {
+        Span<bool> clickable = stackalloc bool[chain.Length];
+        int open = -1;
+        for (int i = 0; i < chain.Length; i++)
+        {
+            clickable[i] = LandChain.HasSettings(chain[i].Text);
+            if (clickable[i] && chain[i].Text == _landStepOpen)
+                open = i;
+        }
+        int clicked = ConsoleUi.ChainStrip(chain, cannotFly, "AfcLandPath", open, clickable);
+        if (clicked >= 0)
+        {
+            open = clicked == open ? -1 : clicked;
+            _landStepOpen = open >= 0 ? chain[open].Text : "";
+            ConsoleUi.ShapeChanged = true;
+        }
+        ConsoleUi.NoteShape("AfcLandStep", open + 1);
+        if (open < 0)
+            return;
+        string before = open > 0 ? chain[open - 1].Text : "";
+        ImGui.PushID("AfcLandStep");
+        try
+        {
+            ConsoleUi.SectionHead(chain[open].Text);
+            DrawStepRows(way, chain[open].Text, before, hasAir);
+            using (TierScope.Push(UiTier.Expert))
+                DrawStepRows(way, chain[open].Text, before, hasAir);
+        }
+        finally
+        {
+            ImGui.PopID();
+        }
+    }
+
+    /// <summary>The settings of one step of the path, in the scope of the tier drawn now. <paramref name="before"/> is the step before it, whose hand-over to this one this step's rows set.</summary>
+    private static void DrawStepRows(LandWay way, string step, string before, bool hasAir)
+    {
+        float innerW = ConsoleStyle.ContentAvailWidth();
+        switch (step)
+        {
+            case LandChain.StockBurn or LandChain.StockBurnIfNeeded when hasAir:
+                if (TierScope.IsPrimaryPass)
+                    DrawDeorbitFinishRows(LandWay.FromOrbit);
+                DrawEntryAimRows();
+                break;
+            case LandChain.StockBurn or LandChain.StockBurnIfNeeded:
+            case EntryMethods.BrakingLabel:
+                DrawApproachSection(innerW);
+                break;
+            case EntryMethods.OrbitalLabel:
+                GaugeRow(Specs.OrbitalEntryQMaxKPa, ref _s.OrbitalEntryQMaxKPa);
+                GaugeRow(Specs.OrbitalEntryGMax, ref _s.OrbitalEntryGMax);
+                GaugeRow(Specs.OrbitalEntryHeatMaxKWm2, ref _s.OrbitalEntryHeatMaxKWm2);
+                GaugeRow(Specs.OrbitalEntryHandoverMach, ref _s.OrbitalEntryHandoverMach);
+                GaugeRow(Specs.OrbitalEntryHandoverAltKm, ref _s.OrbitalEntryHandoverAltKm);
+                DrawOrbitalEntryAttitudeRows();
+                DrawOrbitalEntryBankRows();
+                break;
+            case LandChain.Bellyflop:
+                GaugeRow(Specs.OrbitalEntryBellyflopArmMach, ref _s.OrbitalEntryBellyflopArmMach);
+                GaugeRow(Specs.OrbitalEntryBellyflopAimUprangeM, ref _s.OrbitalEntryBellyflopAimUprangeM);
+                GaugeRow(Specs.OrbitalEntryBellyflopPitchUpDeg, ref _s.OrbitalEntryBellyflopPitchUpDeg);
+                GaugeRow(Specs.OrbitalEntryBellyflopAngleMaxDeg, ref _s.OrbitalEntryBellyflopAngleMaxDeg);
+                GaugeRow(Specs.OrbitalEntryBellyflopBankMaxDeg, ref _s.OrbitalEntryBellyflopBankMaxDeg);
+                break;
+            case EntryMethods.GlideBurnLabel:
+                if (way == LandWay.Boostback)
+                    using (new ImGuiDisabledScope(ThreeDofLive))
+                    {
+                        GaugeRow(Specs.ThreeDofStandbyQkPa, ref _s.ThreeDofStandbyQkPa);
+                        GaugeRow(Specs.ThreeDofEngageQkPa, ref _s.ThreeDofEngageQkPa);
+                        GaugeRow(Specs.ThreeDofEngageTgoS, ref _s.ThreeDofEngageTgoS);
+                    }
+                DrawBurnLimitRow();
+                DrawGlideAttitudeRows();
+                break;
+            case "TOUCHDOWN":
+                if (before == EntryMethods.GlideBurnLabel)
+                    GaugeRow(Specs.ThreeDofSixDofTimeS, ref _s.ThreeDofSixDofTimeS);
+                else if (before == LandChain.Bellyflop)
+                    GaugeRow(Specs.OrbitalEntryBellyflopTouchdownS, ref _s.OrbitalEntryBellyflopTouchdownS);
+                DrawBurnLimitRow();
+                break;
+            case "G-FOLD":
+            case "HOVER":
+                GaugeRow(Specs.GfoldHoverHandoffAltM, ref _s.GfoldHoverHandoffAltM);
+                break;
+            case "BURN":
+                DrawBoostbackBurnSection();
+                break;
+            case "GLIDE":
+                DrawBoostbackGlideSection();
+                break;
+        }
     }
 
     /// <summary>The GLIDE row of LAND NOW: FLIP LANDING or RETRO BURN, kept with the craft. Either can be picked while the other flies: the commit then takes the craft over, after the question of the footer.</summary>

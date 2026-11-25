@@ -1200,11 +1200,14 @@ internal static class ConsoleUi
     private static float SwatchesRoom(CellSwatch? swatch) => swatch is CellSwatch s ? SwatchRoom * (s.Second != null ? 2f : 1f) : 0f;
 
     /// <summary>A read-only strip of steps with a mark between them, in the small level: a stock step as plain text in the stock colour with a STOCK chip after it, an end that is a crash in the danger colour,...</summary>
-    public static void ChainStrip(ReadOnlySpan<ChainStep> steps, bool cannotFly = false)
+    /// <param name="id">With <paramref name="clickable"/>, the steps marked there are buttons under this id: a step underlines under the mouse, the <paramref name="open"/> step stays underlined on a faint band, and a click returns its index.</param>
+    /// <returns>The index of the step clicked this frame, or -1.</returns>
+    public static int ChainStrip(ReadOnlySpan<ChainStep> steps, bool cannotFly = false, string id = "", int open = -1, ReadOnlySpan<bool> clickable = default)
     {
         SectionRow();
         if (steps.Length == 0)
-            return;
+            return -1;
+        int clicked = -1;
         float scale = ImGuiHelper.InterfaceScale;
         float2 origin = ImGui.GetCursorScreenPos();
         float width = ConsoleStyle.ContentAvailWidth();
@@ -1245,13 +1248,30 @@ internal static class ConsoleUi
             else
             {
                 uint ink = step.Danger ? ConsoleStyle.ApplyAlpha(ConsoleStyle.DangerU32) : step.Warn ? ConsoleStyle.ApplyAlpha(Palette.Warn.U32) : afcInk;
+                if (i == open)
+                    dl.AddRectFilled(at - new float2(2f * scale, 0f), at + new float2(w + 2f * scale, lineH), ConsoleStyle.ApplyAlpha(ConsoleStyle.ButtonHoverLightenU32), ConsoleStyle.FrameRoundingPx);
                 dl.AddText(at + new float2(0f, textY), ink, step.Text);
+            }
+            if (id.Length > 0 && i < clickable.Length && clickable[i])
+            {
+                ImGui.SetCursorScreenPos(at);
+                if (ImGui.InvisibleButton(id + "#" + i, new float2(Math.Max(w, 1f), lineH)))
+                    clicked = i;
+                bool hovered = ImGui.IsItemHovered();
+                if (hovered || i == open)
+                {
+                    float underY = at.Y + textY + ImGui.GetFontSize() + 1f * scale;
+                    dl.AddLine(new float2(at.X, underY), new float2(at.X + w, underY), afcInk, (i == open ? 1.5f : 1f) * scale);
+                }
+                if (hovered)
+                    Tooltip((i == open ? "Hide the settings of " + step.Text + "." : "The settings of " + step.Text + ".").AsSpan());
             }
             x += w;
         }
         ConsoleStyle.PopFont();
         ImGui.SetCursorScreenPos(origin);
         ImGui.Dummy(new float2(width, y + lineH));
+        return clicked;
     }
 
     public static void ChainRowRoom()

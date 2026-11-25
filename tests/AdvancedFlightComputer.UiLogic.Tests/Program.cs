@@ -2899,6 +2899,8 @@ internal static partial class Program
         Check("a boostback with no air has no glide", string.Join(" > ", chain.Select(c => c.Text)) == "SETTLE > SLEW > BURN > FALL > IMPACT" && chain[^1].Danger);
         chain = LandChain.For(LandWay.Hover, LandSolver.Touchdown, CraftSituation.Ground, true);
         Check("a hover has no chain", chain.Length == 0);
+        Check("the steps with settings open on a click", new[] { "DEORBIT BURN", "ORBITAL ENTRY", "BELLYFLOP", "RETRO BURN", "BRAKING BURN", "TOUCHDOWN", "HOVER" }.All(LandChain.HasSettings)
+            && !new[] { "COAST", "HOLD", "YOU FLY", "IMPACT", "SETTLE", "SLEW" }.Any(LandChain.HasSettings));
         chain = LandChain.For(LandWay.FromOrbit, LandSolver.Gfold, CraftSituation.FallingNoAir, false, true, true, belowBrakingStart: true);
         Check("below the braking start only the steps left", string.Join(" > ", chain.Select(c => c.Text)) == "G-FOLD > HOVER" && chain.All(c => !c.Stock));
         chain = LandChain.For(LandWay.FromHere, LandSolver.Gfold, CraftSituation.FallingNoAir, false, true, true, hoverFlies: false);
