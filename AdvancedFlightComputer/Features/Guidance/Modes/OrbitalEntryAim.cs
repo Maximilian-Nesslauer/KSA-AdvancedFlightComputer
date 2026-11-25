@@ -38,7 +38,7 @@ public static partial class GuidanceWindow
             if (st.AimJob == null)
             {
                 st.AimAero = null;
-                if (!KsaAeroSweep.TryStart(vehicle, parent, now, out KsaAeroSweep.Job job, out string error, bellyFirst: true))
+                if (!KsaAeroSweep.TryStart(vehicle, parent, now, out KsaAeroSweep.Job job, out string error, bellyFirst: true, bellySide: EntryBellySideWanted()))
                 {
                     RefuseDeorbit(vehicle, "AIMED ENTRY: AERO SWEEP FAILED: " + error.ToUpperInvariant() + ".");
                     return false;

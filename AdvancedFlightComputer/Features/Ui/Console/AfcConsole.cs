@@ -554,6 +554,14 @@ internal static partial class AfcConsole
         {
             LogHelper.WarnOnce("afc-separation-band:" + ex.GetType().Name, $"[AFC] AFC separation band draw failed: {ex}");
         }
+        try
+        {
+            AeroDataBandWindow.Draw(Frame);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce("afc-aero-data-band:" + ex.GetType().Name, $"[AFC] AFC aero data band draw failed: {ex}");
+        }
     }
 
     internal static void AcknowledgeFailure() => ConsoleHead.AcknowledgeFailure(Frame);

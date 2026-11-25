@@ -68,7 +68,7 @@ public static partial class GuidanceWindow
             return RefuseOrbitalEntry(vehicle, "NO ATMOSPHERE.");
         if (vehicle.ComputeLiveThrust() > 0.0)
             return RefuseOrbitalEntry(vehicle, "AN ENGINE IS BURNING.");
-        if (!KsaAeroSweep.TryStart(vehicle, parent, now, out KsaAeroSweep.Job job, out string error, bellyFirst: true))
+        if (!KsaAeroSweep.TryStart(vehicle, parent, now, out KsaAeroSweep.Job job, out string error, bellyFirst: true, bellySide: EntryBellySideWanted()))
             return RefuseOrbitalEntry(vehicle, "AERO SWEEP FAILED: " + error.ToUpperInvariant() + ".");
 
         if (IsStockDeorbitPhase(_s.LandingPhase))
@@ -211,7 +211,7 @@ public static partial class GuidanceWindow
                 st.TablesReady = true;
                 GuidanceLog.Info(vehicle, $"Orbital entry: belly-first tables on {st.BellyAxisName} taken from the craft's own sweep, {shared.Surfaces?.Length ?? 0} control surfaces.");
             }
-            else if (KsaAeroSweep.TryStart(vehicle, parent, now, out KsaAeroSweep.Job tables, out string tablesError, bellySide: st.BellyIndex))
+            else if (KsaAeroSweep.TryStart(vehicle, parent, now, out KsaAeroSweep.Job tables, out string tablesError, bellyFirst: true, bellySide: st.BellyIndex))
                 st.TablesJob = tables;
             else
                 GuidanceLog.Info(vehicle, "Orbital entry: the belly-first tables could not be swept (" + tablesError + "); the attitude holds without them.");
@@ -792,9 +792,14 @@ public static partial class GuidanceWindow
     {
         why = "";
         trim = null;
+    /// <summary>
+    /// The belly side BELLY AXIS asks for (KsaAeroSweep.BellyAxes index): 0 is the craft's own belly, +Z (index 1): -Z had it upside down, and every flight set 2 by hand (2026-11-21); 1 to 4 name a side; 5 lets the sweep choose, -1 with <paramref name="chooseAny"/>, else the side chosen before if there is one.
+    /// Every belly-first sweep is asked for on this side, trim rows and side tables together, so one sweep serves the aim, the entry and touchdown (2026-11-25: three sweeps of the Starship in a minute, each asking for a set the last had not swept).
+    /// </summary>
+    private static int EntryBellySideWanted(bool chooseAny = false) => _s.BellySideWanted(chooseAny);
+
         index = -1;
         var sweeps = aero.Belly;
-        int choice = (int)Math.Round(_s.OrbitalEntryBellyAxis);
         EntryTrim Make(KsaAeroSweep.BellySweep b) => _s.OrbitalEntryTrimAoa
             ? EntryTrim.Build(b.MachGrid, b.AlphaDeg, b.Cd, b.Cl, b.Cm, _s.OrbitalEntryAoaMinDeg, _s.OrbitalEntryAoaMaxDeg, _s.OrbitalEntryAoaDeg)
             : EntryTrim.Fixed(b.MachGrid, b.AlphaDeg, b.Cd, b.Cl, _s.OrbitalEntryAoaDeg);
@@ -803,8 +808,7 @@ public static partial class GuidanceWindow
         double bestScore = double.NegativeInfinity;
         for (int i = 0; i < sweeps.Length; i++)
         {
-            // 0 is the craft's own belly, +Z (BellyAxes index 1): -Z had it upside down, and every flight set 2 by hand (2026-11-21). 1 to 4 name a side; 5 lets the sweep choose.
-            int wanted = choice is >= 1 and <= 4 ? choice - 1 : choice == 5 ? -1 : 1;
+            int wanted = EntryBellySideWanted(chooseAny: true);
             if (wanted >= 0 && i != wanted)
                 continue;
             EntryTrim t = Make(sweeps[i]);

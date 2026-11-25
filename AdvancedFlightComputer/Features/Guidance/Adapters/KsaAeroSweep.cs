@@ -19,7 +19,7 @@ using AdvancedFlightComputer.Guidance.Numerics.Flight;
 ///  THIS IS A MEASUREMENT, NOT A MODEL. Every Cd below is read off PhysicsStates.ComputeDerivatives - the force function the integrator itself calls every substep - run on a copy of the live vehicle's state, with its part tree, and with the airspeed set per sample. Whatever aero model is active is what gets measured: the game's pressure and skin friction over the craft's aero mesh, or a mod that replaces it, with no knowledge here of which. A KSA update or an aero mod that changes the forces changes these numbers with it.
 ///  The force along the airspeed goes into the drag table, because that is all the solvers model. The force across it is measured too: its size is reported in <see cref="Result.LiftToDragMax"/> so it is visible rather than silently dropped, and its signed component goes into <see cref="Result.Lift"/>, which the boostback glide steers with.
 /// </summary>
-public static class KsaAeroSweep
+public static partial class KsaAeroSweep
 {
     /// <summary>Roll azimuths averaged over per alpha, in 15 degree steps. They land on the 0 and 45 degree extremes of a square section and on the 0, 30 and 60 degree marks of three side boosters.</summary>
     private const int RollSamples = 24;
@@ -122,6 +122,12 @@ public static class KsaAeroSweep
         /// </summary>
         public AeroTable Moment;
         public double[] MomentTable;
+
+        /// <summary>The roll-averaged normal force's moment arm per metre, per Mach row and alpha, as MomentTable lays them out: when the centre of mass moves s metres towards the nose, MomentTable's coefficient changes by -s times this over ReferenceLength (KsaAeroSweepCache moves it). Null in a sweep without moments.</summary>
+        public double[] ArmTable;
+
+        /// <summary>A copy sharing every table, for a view of the same sweep with some of them replaced (KsaAeroSweepCache).</summary>
+        internal Result ShallowCopy() => (Result)MemberwiseClone();
 
         /// <summary>Signed C_m at a Mach number and retrograde-first alpha (radians), positive away from the airflow. Zero when there is no moment table.</summary>
         public double MomentAt(double mach, double alphaRad) => Moment?.Cd(mach, alphaRad) ?? 0.0;
@@ -343,9 +349,31 @@ public static class KsaAeroSweep
         public BodyAeroTable[] BandMoment = [];
         public double SweepMillis;
 
+        /// <summary>The surface's part as the sweep found it - template and place on the craft (KsaAeroSweepCache.PartKey) - so a reloaded craft's new part takes its table.</summary>
+        public string PartKey = "";
+
+        internal SurfaceTable ShallowCopy() => (SurfaceTable)MemberwiseClone();
+
         /// <summary>The per-deflection force tables of a set (TableSet).</summary>
         public BodyAeroTable[] ForceTables(TableSet set) => set switch { TableSet.Nose => NoseForce, TableSet.Belly => BellyForce, TableSet.Sphere => SphereForce, _ => Force };
         public BodyAeroTable[] MomentTables(TableSet set) => set switch { TableSet.Nose => NoseMoment, TableSet.Belly => BellyMoment, TableSet.Sphere => SphereMoment, _ => Moment };
+    }
+
+    /// <summary>The Mach numbers the control surfaces' tables are swept at: the body's rows nearest these, through the transonic dip and out to its top. Own choice: ten rows against the body's 27, a third of the time; a surface's effect is read linearly between them by its table's own fit.</summary>
+    private static readonly double[] SurfaceMachTargets = { 0.0, 0.6, 0.8, 0.95, 1.05, 1.2, 1.6, 2.5, 4.0, 8.0 };
+
+    internal static double[] SurfaceMachRows(double[] bodyMach)
+    {
+        var rows = new SortedSet<double>();
+        foreach (double target in SurfaceMachTargets)
+        {
+            double best = bodyMach[0];
+            foreach (double m in bodyMach)
+                if (Math.Abs(m - target) < Math.Abs(best - target))
+                    best = m;
+            rows.Add(best);
+        }
+        return rows.ToArray();
     }
 
     /// <summary>The deflections a surface is swept at: every SurfaceStepDeg out from rest inside its range, its two ends, and rest.</summary>
@@ -531,6 +559,15 @@ public static class KsaAeroSweep
 
         /// <summary>The control surfaces to sweep (ControlSurfaces), each with the binder that finds it in the private mesh. Whole-craft sweeps only.</summary>
         public List<(ControlSurface Surface, Func<Aerodynamics, Action<double>> Binder)> Surfaces = new();
+
+        /// <summary>Each surface's PartKey, in the order of <see cref="Surfaces"/>: read on the main thread.</summary>
+        public List<string> SurfaceKeys = new();
+
+        /// <summary>The file the finished sweep is saved to (KsaAeroSweepStore), null for none.</summary>
+        public string StorePath;
+
+        /// <summary>What the sweep is doing, for TUNE > DIAG > AERO (KsaAeroSweepStatus); null for one run on the caller's thread.</summary>
+        public SweepProgress Progress;
     }
 
     private static bool HasAir(IParentBody parent) => parent?.GetPhysicalAtmosphere() is { Height: > 0.0 };
@@ -599,7 +636,10 @@ public static class KsaAeroSweep
                 {
                     Func<Aerodynamics, Action<double>> binder = ControlSurfaces.Poser(vehicle, surface);
                     if (binder != null)
+                    {
                         prepared.Surfaces.Add((surface, binder));
+                        prepared.SurfaceKeys.Add(PartKey(surface.Part));
+                    }
                 }
             }
         }
@@ -676,9 +716,16 @@ public static class KsaAeroSweep
         private volatile bool _done;
         private Result _result;
         private string _error = "";
+        // Set once the whole sweep has ended, its surfaces too (Done comes earlier, with the body table).
+        private readonly System.Threading.ManualResetEventSlim _finished = new(false);
+
+        private Job()
+        {
+        }
 
         private Job(Prepared prepared)
         {
+            SweepProgress progress = prepared.Progress = Track(prepared);
             var thread = new System.Threading.Thread(() =>
             {
                 try
@@ -696,14 +743,26 @@ public static class KsaAeroSweep
                         else
                             _error = error;
                     }
+                    if (ok)
+                    {
+                        // Saved with its surfaces, for the next time this craft is asked for (KsaAeroSweepStore).
+                        SaveSweep(prepared.StorePath, result, prepared.BoosterName.Length > 0 ? prepared.BoosterName : prepared.Name, PendingLog.Enqueue);
+                        progress.Enter(SweepProgress.Stage.Done);
+                    }
+                    else
+                        progress.Fail(error);
                 }
                 catch (Exception ex)
                 {
                     _error = $"aero sweep failed ({ex.GetType().Name}: {ex.Message})";
+                    progress.Fail(_error);
                 }
                 finally
                 {
                     _done = true;
+                    if (progress.Running)
+                        progress.Fail("ended without a result");
+                    _finished.Set();
                 }
             })
             {
@@ -715,6 +774,59 @@ public static class KsaAeroSweep
         }
 
         internal static Job StartFor(Prepared prepared) => new(prepared);
+
+        /// <summary>A job already done with a result in hand: a cache hit (KsaAeroSweepCache).</summary>
+        internal static Job Completed(Result result)
+        {
+            var job = new Job { _result = result, _done = true };
+            job._finished.Set();
+            return job;
+        }
+
+        /// <summary>A job whose result is worked out on its own thread from another's: a cached sweep re-linked to a reloaded craft or moved to its centre of mass (KsaAeroSweepCache).</summary>
+        internal static Job Derived(Func<(Result Result, string Error)> work, SweepProgress progress)
+        {
+            var job = new Job();
+            var thread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    (Result result, string error) = work();
+                    job._result = result;
+                    job._error = error ?? "";
+                    if (result != null)
+                        progress?.Enter(SweepProgress.Stage.Done);
+                    else
+                        progress?.Fail(job._error);
+                }
+                catch (Exception ex)
+                {
+                    job._error = $"cached aero tables could not be taken ({ex.GetType().Name}: {ex.Message})";
+                    progress?.Fail(job._error);
+                }
+                finally
+                {
+                    job._done = true;
+                    job._finished.Set();
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "afc-aero-cache",
+                Priority = System.Threading.ThreadPriority.BelowNormal,
+            };
+            thread.Start();
+            return job;
+        }
+
+        /// <summary>Whether the whole sweep has ended, control surfaces too.</summary>
+        internal bool Finished => _finished.IsSet;
+
+        /// <summary>Blocks until the whole sweep has ended. Worker threads only.</summary>
+        internal void WaitFinished() => _finished.Wait();
+
+        /// <summary>The result so far (the body table, with surfaces filling in), or null while there is none or the sweep failed. Any thread; writes no log.</summary>
+        internal Result Peek => _done ? _result : null;
 
         /// <summary>Whether the sweep has its body table, or has failed: what a caller waits on. The surfaces may still be being swept (Result.Surfaces fills in when they are).</summary>
         public bool Done => _done;
@@ -739,15 +851,31 @@ public static class KsaAeroSweep
     /// <param name="noseFirst">Sweep the nose-first tables too (Result.NoseBodyAero), for an ascent.</param>
     /// <param name="bellyFirst">Sweep the belly-first tables too (Result.Belly), for an orbital entry.</param>
     /// <param name="bellySide">Sweep the belly-first body and surface tables on this side (BellyAxes index), for an orbital entry; -1 for none.</param>
-    public static bool TryStart(Vehicle vehicle, IParentBody parent, double simTime, out Job job, out string error, bool noseFirst = false, bool bellyFirst = false, int bellySide = -1)
+    /// <param name="fresh">Sweep again whatever the cache holds: DIAG's RESAMPLE.</param>
+    public static bool TryStart(Vehicle vehicle, IParentBody parent, double simTime, out Job job, out string error, bool noseFirst = false, bool bellyFirst = false, int bellySide = -1, bool fresh = false)
     {
         job = null;
+        error = "";
+        // EVERY TABLE, every time (2026-11-25, the user's call): tail, nose, belly trim rows and the belly side, on the craft's own belly (BELLY AXIS), whichever mode asks. Asked for piecemeal, each mode's set missed the last one's - three sweeps of a Starship in a minute, and one on a side guessed from the attitude in orbit. About twice the body pass (5 to 10 s on a worker thread); the surfaces cost the same.
+        noseFirst = true;
+        bellyFirst = true;
+        if (bellySide < 0 && vehicle != null)
+            bellySide = VehicleAutopilotState.For(vehicle).BellySideWanted();
+        // The same craft swept before, this game session: its tables again, moved to the craft as it is now (KsaAeroSweepCache).
+        ulong hash = LiveMeshHash(vehicle);
+        double3 com = vehicle?.Props is { } props ? new double3(props.CenterOfMassAsmb.X, props.CenterOfMassAsmb.Y, props.CenterOfMassAsmb.Z) : default;
+        if (vehicle != null && !fresh && TryCached(vehicle, parent, hash, "", noseFirst, bellyFirst, bellySide, com, out job))
+            return true;
         if (!TryPrepareCraft(vehicle, parent, simTime, out Prepared prepared, out error))
             return false;
+        // What was swept before on this geometry is swept again with it, so one result serves every mode.
+        CacheUnion(hash, parent, "", ref noseFirst, ref bellyFirst, ref bellySide);
         prepared.NoseFirst = noseFirst;
         prepared.BellyFirst = bellyFirst;
         prepared.BellySide = bellySide;
+        prepared.StorePath = StorePathFor(vehicle, parent, prepared.MeshHash, "", bellySide);
         job = Job.StartFor(prepared);
+        CacheAdd(vehicle, parent, prepared.MeshHash, "", noseFirst, bellyFirst, bellySide, job);
         return true;
     }
 
@@ -758,7 +886,14 @@ public static class KsaAeroSweep
         job = null;
         if (!TryPrepareBooster(vehicle, root, parts, parent, simTime, out Prepared prepared, out error))
             return false;
+        // A booster is keyed by its own geometry's hash, and moved to its own centre of mass.
+        string booster = "BOOSTER " + prepared.BoosterName;
+        double3 com = new(prepared.Props.CenterOfMassAsmb.X, prepared.Props.CenterOfMassAsmb.Y, prepared.Props.CenterOfMassAsmb.Z);
+        if (TryCached(vehicle, parent, prepared.MeshHash, booster, false, false, -1, com, out job))
+            return true;
+        prepared.StorePath = StorePathFor(vehicle, parent, prepared.MeshHash, booster, -1);
         job = Job.StartFor(prepared);
+        CacheAdd(vehicle, parent, prepared.MeshHash, booster, false, false, -1, job);
         return true;
     }
 
@@ -768,6 +903,7 @@ public static class KsaAeroSweep
     {
         result = null;
         error = "";
+        p.Progress?.Enter(SweepProgress.Stage.Body);
         VehicleProperties props = p.Props;
         double3 extents = p.Extents;
         double mass = p.Mass;
@@ -883,13 +1019,26 @@ public static class KsaAeroSweep
         // THE BODY-AXIS TABLE near retrograde (BodyAeroTable): for each alpha and beta, the air direction in body axes, and per Mach row the force the game applies, kept whole - axial, and across the body in y and z - with no averaging over roll. The same calls as above, in the same order: the baseline at a crawl, then the flow prepared for the direction, then the rows.
         double[] bodyMach = machGrid.Where(m => m <= BodyAeroMaxMach + 1e-9).ToArray();
         int nbm = bodyMach.Length, nab = BodyAngleBreakpointsDeg.Length, nan = NoseAngleBreakpointsDeg.Length;
+        // THE CONTROL SURFACES' MACH ROWS (SurfaceMachRows): fewer than the body's - a surface's change to the loads varies slowly with Mach, and each row is a call of the game's force (2026-11-25: four flaps on all 27 rows took 40 s of the sweep's 50). Their rest values are the body's own rows there.
+        double[] surfaceMach = SurfaceMachRows(bodyMach);
+        int nsm = surfaceMach.Length;
+        int[] surfaceRow = surfaceMach.Select(m => Array.IndexOf(bodyMach, m)).ToArray();
+        double[] SurfaceRowsOf(double[] full, int perRow)
+        {
+            var rowsOut = new double[nsm * perRow];
+            for (int i = 0; i < nsm; i++)
+                Array.Copy(full, surfaceRow[i] * perRow, rowsOut, i * perRow, perRow);
+            return rowsOut;
+        }
         double momentLength = dx;
         // One grid of directions flown: per alpha and beta of the grid (about the nose for a nose-first one), the coefficients of the force and the moment, as BodyAeroTable lays them out.
         void FlyGrid(double[] anglesDeg, bool nose, double[] coefficients, double[] moments)
             => FlyFrame(anglesDeg, anglesDeg, nose ? BodyAeroFrame.NoseFirst : BodyAeroFrame.TailFirst, coefficients, moments);
         // The same about any frame, with its own alpha and beta grids.
-        void FlyFrame(double[] alphaDeg, double[] betaDeg, BodyAeroFrame frame, double[] coefficients, double[] moments)
+        void FlyFrame(double[] alphaDeg, double[] betaDeg, BodyAeroFrame frame, double[] coefficients, double[] moments, double[] machs = null)
         {
+            double[] rows = machs ?? bodyMach;
+            int nr = rows.Length;
             int na2 = alphaDeg.Length, nb2 = betaDeg.Length;
             for (int ja = 0; ja < na2; ja++)
             {
@@ -899,9 +1048,9 @@ public static class KsaAeroSweep
                     var u = new double3(ux, uy, uz);
                     probe.Wrench(BaselineSpeed * u, out double3 baseline, out double3 baselineTorque);
                     flow.Prepare(u);
-                    for (int i = 0; i < nbm; i++)
+                    for (int i = 0; i < nr; i++)
                     {
-                        double speed = Math.Max(bodyMach[i], MinProbeMach) * speedOfSound;
+                        double speed = Math.Max(rows[i], MinProbeMach) * speedOfSound;
                         probe.Wrench(speed * u, out double3 rawForce, out double3 rawTorque);
                         double3 force = rawForce - baseline;
                         double3 torque = rawTorque - baselineTorque;
@@ -922,8 +1071,10 @@ public static class KsaAeroSweep
             }
         }
         // The same over the whole sphere, on a longitude and latitude grid about a frame: each distinct direction flown once (the wrapped longitudes and the poles repeat), its rows copied to every node that points there.
-        void FlySphere(double[] lambdaDeg, double[] muDeg, BodyAeroFrame frame, double[] coefficients, double[] moments)
+        void FlySphere(double[] lambdaDeg, double[] muDeg, BodyAeroFrame frame, double[] coefficients, double[] moments, double[] machs = null)
         {
+            double[] rows = machs ?? bodyMach;
+            int nr = rows.Length;
             int nl = lambdaDeg.Length, nmu = muDeg.Length;
             var seen = new Dictionary<(int, int), (int L, int M)>();
             for (int jl = 0; jl < nl; jl++)
@@ -935,7 +1086,7 @@ public static class KsaAeroSweep
                     var key = (lon, (int)Math.Round(muDeg[jm]));
                     if (seen.TryGetValue(key, out var from))
                     {
-                        for (int i = 0; i < nbm; i++)
+                        for (int i = 0; i < nr; i++)
                         {
                             int src = ((i * nl + from.L) * nmu + from.M) * 3, dst = ((i * nl + jl) * nmu + jm) * 3;
                             for (int c = 0; c < 3; c++) { coefficients[dst + c] = coefficients[src + c]; moments[dst + c] = moments[src + c]; }
@@ -947,9 +1098,9 @@ public static class KsaAeroSweep
                     var u = new double3(ux, uy, uz);
                     probe.Wrench(BaselineSpeed * u, out double3 baseline, out double3 baselineTorque);
                     flow.Prepare(u);
-                    for (int i = 0; i < nbm; i++)
+                    for (int i = 0; i < nr; i++)
                     {
-                        double speed = Math.Max(bodyMach[i], MinProbeMach) * speedOfSound;
+                        double speed = Math.Max(rows[i], MinProbeMach) * speedOfSound;
                         probe.Wrench(speed * u, out double3 rawForce, out double3 rawTorque);
                         double3 force = rawForce - baseline;
                         double3 torque = rawTorque - baselineTorque;
@@ -1122,6 +1273,7 @@ public static class KsaAeroSweep
         // The moment coefficient, and the centre of pressure at the balance alpha per Mach row. A torque the game did not report (an aero mod that applies forces without one) leaves the coefficients at zero and every centre of pressure at the centre of mass, which reads as neutral rather than as stable.
         double refLength = dx;
         var cmTable = new double[nm * na];
+        var armTable = new double[nm * na];
         var centreOfPressure = new double[nm];
         int balanceColumn = Array.IndexOf(alphaDeg, BalanceAlphaDeg);
         double worstCp = double.NaN, worstMach = double.NaN;
@@ -1133,6 +1285,8 @@ public static class KsaAeroSweep
                 int cell = i * na + j;
                 double cm = momentSums[cell] / RollSamples / qal;
                 cmTable[cell] = double.IsFinite(cm) ? cm : 0.0;
+                double arm = armSums[cell] / RollSamples / (qal / refLength);
+                armTable[cell] = double.IsFinite(arm) ? arm : 0.0;
             }
             centreOfPressure[i] = double.NaN;
             if (balanceColumn >= 0)
@@ -1150,6 +1304,7 @@ public static class KsaAeroSweep
         }
         res.ReferenceLength = refLength;
         res.MomentTable = cmTable;
+        res.ArmTable = refLength > 0.0 ? armTable : null;
         res.CentreOfPressureM = centreOfPressure;
         res.BalanceWorstM = worstCp;
         res.BalanceWorstMach = worstMach;
@@ -1210,20 +1365,25 @@ public static class KsaAeroSweep
         bodyReady?.Invoke(res);
         if (p.Surfaces.Count == 0)
             return true;
+        p.Progress?.Enter(SweepProgress.Stage.Surfaces);
         try
         {
             // THE CONTROL SURFACES (SurfaceTable): each turned alone to every deflection of its grid, and the body table's directions and rows flown again, the same calls in the same order. Turned back to rest whatever happens, so the next one is swept against the rest of the craft as built.
             var surfaceTables = new List<SurfaceTable>();
+            int surfaceIndex = -1;
             Aerodynamics surfaceMesh = p.Surfaces.Count > 0 && momentLength > 0.0 ? parts?.AwaitAerodynamics() : null;
             foreach ((ControlSurface surface, Func<Aerodynamics, Action<double>> binder) in p.Surfaces)
             {
+                surfaceIndex++;
                 if (surfaceMesh == null)
                     break;
                 var surfaceClock = Stopwatch.StartNew();
+                p.Progress?.SurfaceStarted(surface.Name);
                 Action<double> pose = binder(surfaceMesh);
                 if (pose == null)
                 {
                     log($"[AFC] Control surface '{surface.Name}' of '{name}' is not in its aero mesh; not swept.");
+                    p.Progress?.SurfaceEnded(missing: true);
                     continue;
                 }
                 double[] grid = SurfaceDeflections(surface.MinDeg, surface.MaxDeg);
@@ -1240,9 +1400,9 @@ public static class KsaAeroSweep
                 // The body at rest on the band's grid, once for all the surfaces, before any is turned.
                 if (bellySide >= 0 && bandRest == null)
                 {
-                    bandRest = new double[nbm * BandLambdaDeg.Length * BandMuDeg.Length * 3];
+                    bandRest = new double[nsm * BandLambdaDeg.Length * BandMuDeg.Length * 3];
                     bandRestMoments = new double[bandRest.Length];
-                    FlySphere(BandLambdaDeg, BandMuDeg, sphereFrame, bandRest, bandRestMoments);
+                    FlySphere(BandLambdaDeg, BandMuDeg, sphereFrame, bandRest, bandRestMoments, surfaceMach);
                 }
                 void DeltaBand(int d)
                 {
@@ -1251,22 +1411,22 @@ public static class KsaAeroSweep
                     var dm = new double[n3];
                     if (grid[d] != 0.0)
                     {
-                        FlySphere(BandLambdaDeg, BandMuDeg, sphereFrame, df, dm);
+                        FlySphere(BandLambdaDeg, BandMuDeg, sphereFrame, df, dm, surfaceMach);
                         for (int k = 0; k < n3; k++)
                         {
                             df[k] -= bandRest[k];
                             dm[k] -= bandRestMoments[k];
                         }
                     }
-                    bandForceTables[d] = new BodyAeroTable(bodyMach, BandLambdaDeg, BandMuDeg, df, sphereFrame, sphere: true);
-                    bandMomentTables[d] = new BodyAeroTable(bodyMach, BandLambdaDeg, BandMuDeg, dm, sphereFrame, sphere: true);
+                    bandForceTables[d] = new BodyAeroTable(surfaceMach, BandLambdaDeg, BandMuDeg, df, sphereFrame, sphere: true);
+                    bandMomentTables[d] = new BodyAeroTable(surfaceMach, BandLambdaDeg, BandMuDeg, dm, sphereFrame, sphere: true);
                 }
                 // The body at rest on the fins' coarser sphere, once for all the surfaces, before any is turned.
                 if (bellySide >= 0 && finSphereRest == null)
                 {
-                    finSphereRest = new double[nbm * FinSphereLambdaDeg.Length * FinSphereMuDeg.Length * 3];
+                    finSphereRest = new double[nsm * FinSphereLambdaDeg.Length * FinSphereMuDeg.Length * 3];
                     finSphereRestMoments = new double[finSphereRest.Length];
-                    FlySphere(FinSphereLambdaDeg, FinSphereMuDeg, sphereFrame, finSphereRest, finSphereRestMoments);
+                    FlySphere(FinSphereLambdaDeg, FinSphereMuDeg, sphereFrame, finSphereRest, finSphereRestMoments, surfaceMach);
                 }
                 void DeltaSphere(int d)
                 {
@@ -1275,35 +1435,37 @@ public static class KsaAeroSweep
                     var dm = new double[n3];
                     if (grid[d] != 0.0)
                     {
-                        FlySphere(FinSphereLambdaDeg, FinSphereMuDeg, sphereFrame, df, dm);
+                        FlySphere(FinSphereLambdaDeg, FinSphereMuDeg, sphereFrame, df, dm, surfaceMach);
                         for (int k = 0; k < n3; k++)
                         {
                             df[k] -= finSphereRest[k];
                             dm[k] -= finSphereRestMoments[k];
                         }
                     }
-                    sphereForceTables[d] = new BodyAeroTable(bodyMach, FinSphereLambdaDeg, FinSphereMuDeg, df, sphereFrame, sphere: true);
-                    sphereMomentTables[d] = new BodyAeroTable(bodyMach, FinSphereLambdaDeg, FinSphereMuDeg, dm, sphereFrame, sphere: true);
+                    sphereForceTables[d] = new BodyAeroTable(surfaceMach, FinSphereLambdaDeg, FinSphereMuDeg, df, sphereFrame, sphere: true);
+                    sphereMomentTables[d] = new BodyAeroTable(surfaceMach, FinSphereLambdaDeg, FinSphereMuDeg, dm, sphereFrame, sphere: true);
                 }
                 // The change from the body's own: the grid flown with the surface turned, less the body table at rest.
                 void Delta(double[] anglesDeg, bool nose, double[] restForce, double[] restMoment, int d, BodyAeroTable[] forceOut, BodyAeroTable[] momentOut)
                     => DeltaFrame(anglesDeg, anglesDeg, nose ? BodyAeroFrame.NoseFirst : BodyAeroFrame.TailFirst, restForce, restMoment, d, forceOut, momentOut);
                 void DeltaFrame(double[] alphaDeg, double[] betaDeg, BodyAeroFrame frame, double[] restForce, double[] restMoment, int d, BodyAeroTable[] forceOut, BodyAeroTable[] momentOut)
                 {
-                    int n3 = nbm * alphaDeg.Length * betaDeg.Length * 3;
+                    int perRow = alphaDeg.Length * betaDeg.Length * 3;
+                    int n3 = nsm * perRow;
                     var df = new double[n3];
                     var dm = new double[n3];
                     if (grid[d] != 0.0)
                     {
-                        FlyFrame(alphaDeg, betaDeg, frame, df, dm);
+                        FlyFrame(alphaDeg, betaDeg, frame, df, dm, surfaceMach);
+                        double[] restF = SurfaceRowsOf(restForce, perRow), restM = SurfaceRowsOf(restMoment, perRow);
                         for (int k = 0; k < n3; k++)
                         {
-                            df[k] -= restForce[k];
-                            dm[k] -= restMoment[k];
+                            df[k] -= restF[k];
+                            dm[k] -= restM[k];
                         }
                     }
-                    forceOut[d] = new BodyAeroTable(bodyMach, alphaDeg, betaDeg, df, frame);
-                    momentOut[d] = new BodyAeroTable(bodyMach, alphaDeg, betaDeg, dm, frame);
+                    forceOut[d] = new BodyAeroTable(surfaceMach, alphaDeg, betaDeg, df, frame);
+                    momentOut[d] = new BodyAeroTable(surfaceMach, alphaDeg, betaDeg, dm, frame);
                 }
                 try
                 {
@@ -1335,8 +1497,10 @@ public static class KsaAeroSweep
                     SphereForce = sphereForceTables, SphereMoment = sphereMomentTables,
                     BandForce = bandForceTables, BandMoment = bandMomentTables,
                     SweepMillis = surfaceClock.Elapsed.TotalMilliseconds,
+                    PartKey = surfaceIndex < p.SurfaceKeys.Count ? p.SurfaceKeys[surfaceIndex] : "",
                 };
                 surfaceTables.Add(table);
+                p.Progress?.SurfaceEnded(missing: false);
                 log(FormattableString.Invariant($"[AFC] Control surface '{surface.Name}' of '{name}': {grid.Length - 1} deflections from {grid[0]:0} to {grid[^1]:0} deg, {table.SweepMillis:F0} ms; {SurfaceText(table, 0.4)}."));
             }
             System.Threading.Volatile.Write(ref res.Surfaces, surfaceTables.ToArray());
@@ -1345,6 +1509,7 @@ public static class KsaAeroSweep
         {
             // The body table stands; only the surfaces are missing.
             log($"[AFC] Control surfaces of '{name}' could not be swept ({ex.GetType().Name}: {ex.Message}); the craft's body table stands.");
+            p.Progress?.Note($"surfaces not swept ({ex.GetType().Name}: {ex.Message})");
         }
         return true;
     }

@@ -18,8 +18,12 @@ internal static class SeparationBandWindow
     private const float PaddingPx = 8f;
     private const float GapBelowFailurePx = 4f;
 
+    /// <summary>The band's bottom edge as last drawn, NaN when it did not show: the aero data band stands under it (AeroDataBandWindow).</summary>
+    internal static float DrawnBottom = float.NaN;
+
     public static void Draw(ConsoleFrame f)
     {
+        DrawnBottom = float.NaN;
         if (f.Subject == null)
             return;
         double seconds = GuidanceWindow.SeparationSecondsOf(f.Subject);
@@ -41,6 +45,7 @@ internal static class SeparationBandWindow
             top = FailureBandWindow.DrawnBottom + GapBelowFailurePx * scale;
         float x = Math.Clamp(centerX - size.X * 0.5f, main.Pos.X, Math.Max(main.Pos.X, main.Pos.X + main.Size.X - size.X));
         var min = new float2(x, top);
+        DrawnBottom = min.Y + size.Y;
 
         // Steady until the last seconds, then it pulses, once a second.
         float alpha = StagingCountdown.BandPulses(seconds) ? 0.65f + 0.35f * MathF.Cos((float)ImGui.GetTime() * MathF.Tau) : 1f;

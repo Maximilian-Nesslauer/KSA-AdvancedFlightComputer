@@ -1156,7 +1156,8 @@ public sealed class VehicleAutopilotState
     {
         if (Aero == null) return true;
         if (!ReferenceEquals(Aero.Parent, parent)) return true;
-        if (liveMeshHash != 0 && liveMeshHash != Aero.MeshHash) return true;
+        // The mesh hash decides where both have one: KSAero takes it with every surface at rest, but a part's bounds follow its subparts, so a flap out can change the box when nothing else has.
+        if (liveMeshHash != 0 && Aero.MeshHash != 0) return liveMeshHash != Aero.MeshHash;
         double3 was = Aero.SampledExtents;
         double tol = 1e-3;
         return System.Math.Abs(was.X - liveExtents.X) > tol
@@ -1852,6 +1853,25 @@ public sealed class VehicleAutopilotState
     public double OrbitalEntryAoaMaxDeg = 70.0;
     /// <summary>Which body axis is the belly: 0 the craft's own (+Z), then -Z, +Z, -Y, +Y, and 5 the best of the four by the sweep.</summary>
     public double OrbitalEntryBellyAxis = 0.0;
+
+    /// <summary>HAND FLYING (HandFlying): the PILOT panel's choice, AFC flying the pitch, yaw and roll keys through its own attitude controller, and the share of the craft's turning authority the keys ask for (RATE 30 / 50 / 95 %). For this game session.</summary>
+    public bool HandFlyAfc;
+    public double HandFlyShare = 0.5;
+
+    /// <summary>
+    /// The craft's belly side (KsaAeroSweep.BellyAxes index) from BELLY AXIS: orbital entry's once it has chosen one; else 0 is the craft's own belly, +Z (index 1) - -Z had it upside down, and every flight set 2 by hand (2026-11-21); 1 to 4 name a side; 5 lets the sweep choose: -1 with <paramref name="chooseAny"/>, else the side chosen before, if any. Every whole-craft sweep is taken on this side (KsaAeroSweep.TryStart), never on one guessed from the air.
+    /// </summary>
+    public int BellySideWanted(bool chooseAny = false)
+    {
+        if (!chooseAny && OrbitalEntry?.BellyIndex >= 0)
+            return OrbitalEntry.BellyIndex;
+        int choice = (int)System.Math.Round(OrbitalEntryBellyAxis);
+        if (choice is >= 1 and <= 4)
+            return choice - 1;
+        if (choice == 5)
+            return chooseAny ? -1 : AeroBellySide;
+        return 1;
+    }
     /// <summary>Seconds between re-solves.</summary>
     public double OrbitalEntryResolveS = 2.0;
     /// <summary>Natural frequency of the drag-tracking loop, rad/s: higher pulls the drag onto the plan's faster.</summary>

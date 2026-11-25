@@ -142,6 +142,7 @@ public static partial class GuidanceWindow
                     DrawBoostbackImpactSection(vehicle, parent, innerW);
                     break;
                 case TuneDiagnostics.Aero:
+                    DrawAeroSweepsSection(vehicle);
                     DrawBoostbackSurrogateSection(vehicle, innerW);
                     DrawBoostbackProfileSection(innerW);
                     break;

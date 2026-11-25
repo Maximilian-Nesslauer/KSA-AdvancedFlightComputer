@@ -119,6 +119,9 @@ if (args.Contains("--rcs-refusal"))
 if (args.Contains("--phase-plane"))
     return PhasePlaneCheck.Run();
 
+if (args.Contains("--aero-com-move"))
+    return AeroComMoveCheck.Run();
+
 if (args.Contains("--orbital-entry-gains"))
     return OrbitalEntryCheck.SweepGains();
 
@@ -148,6 +151,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
 
         CORRECTNESS - these should always pass
           --fd            forward-mode AD Jacobians against the JAX reference
+          --aero-com-move aero moments moved to a new centre of mass (the sweep cache) against moments taken there
           --sub-scs       one subproblem against the reference solution
           --loop          the full SCvx loop against the reference trajectory
           --scs-layout    P/Invoke struct layouts against the native SCS build

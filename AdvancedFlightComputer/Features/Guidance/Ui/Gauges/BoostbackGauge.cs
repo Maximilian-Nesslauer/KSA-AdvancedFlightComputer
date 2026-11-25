@@ -354,7 +354,7 @@ public static partial class GuidanceWindow
     /// <summary>
     /// Keeps <see cref="VehicleAutopilotState.Aero"/> current, its sweeps on their own thread (KsaAeroSweep.Job, #223): takes a finished one, and starts one when none runs and the table is stale - or <paramref name="force"/> asks, as DIAG's resample does. The old table flies until the new one lands; a table taken from a craft that changed while it was swept is stale again, and the next call sweeps again.
     ///
-    /// ONE SWEEP FOR A BELLY-FLOPPER, shared with orbital entry and kept between modes. A craft with a belly side (VehicleAutopilotState.AeroBellySide: the side orbital entry's trim chose, or, with none, the side the air meets when it starts sweeping more than BellyFlopTiltDeg off engine first) is swept with its belly-first and whole-sphere tables (KsaAeroSweep.Result.SphereBodyAero), and never falls back to a plain sweep: one without them is stale for it. Entry's table, where it has them, is taken as it lands (OrbitalEntry shares it the other way). Without the sphere, touchdown guidance had only a roll-averaged drag and no moment past 28 deg off engine first, and planned a Starship's flip in the coast on its RCS against 1.1 MN m of air it did not know about (2026-11-24).
+    /// ONE SWEEP FOR A BELLY-FLOPPER, shared with orbital entry and kept between modes. A craft with a belly side (VehicleAutopilotState.AeroBellySide: the side orbital entry's trim chose, or, with none, the craft's own from BELLY AXIS; every whole-craft sweep now takes all the tables on it, KsaAeroSweep.TryStart) is swept with its belly-first and whole-sphere tables (KsaAeroSweep.Result.SphereBodyAero), and never falls back to a plain sweep: one without them is stale for it. Entry's table, where it has them, is taken as it lands (OrbitalEntry shares it the other way). Without the sphere, touchdown guidance had only a roll-averaged drag and no moment past 28 deg off engine first, and planned a Starship's flip in the coast on its RCS against 1.1 MN m of air it did not know about (2026-11-24).
     /// </summary>
     private static void ResampleBoostbackAero(Vehicle vehicle, IParentBody parent, bool force = false)
     {
@@ -395,17 +395,14 @@ public static partial class GuidanceWindow
         bool wrongKind = bellySide >= 0 && (_s.Aero?.SphereBodyAero == null || _s.Aero.BellySide != bellySide);
         if (!force && (SimNow() < _s.AeroRetryAt || (!wrongKind && !_s.AeroStale(LiveBoxExtents(vehicle), KsaAeroSweep.LiveMeshHash(vehicle), parent))))
             return;
-        if (KsaAeroSweep.TryStart(vehicle, parent, SimNow(), out KsaAeroSweep.Job job, out string startError, bellySide: bellySide))
+        if (KsaAeroSweep.TryStart(vehicle, parent, SimNow(), out KsaAeroSweep.Job job, out string startError, bellyFirst: bellySide >= 0, bellySide: bellySide, fresh: force))
             _s.AeroJob = job;
         else
             _s.AeroError = startError;
     }
 
-    /// <summary>How far off engine first the air must be, deg, for a craft with no belly side yet to be taken as a belly-flopper and swept with its belly-first and whole-sphere tables (ResampleBoostbackAero).</summary>
-    private const double BellyFlopTiltDeg = 45.0;
-
     /// <summary>
-    /// The belly side the craft's sweep is taken on (KsaAeroSweep.BellyAxes index), or -1 for a plain one: the side remembered (VehicleAutopilotState.AeroBellySide, orbital entry's choice or an earlier one of these), else, while the air comes more than BellyFlopTiltDeg off engine first, the candidate belly axis the air meets most squarely, remembered from then on. The belly-first air comes from the belly (KsaAeroSweep: from cos(a) x + sin(a) b), so its velocity in body axes runs along -b.
+    /// The belly side the craft's sweep is taken on (KsaAeroSweep.BellyAxes index): the side remembered (VehicleAutopilotState.AeroBellySide, orbital entry's choice), else the craft's own (VehicleAutopilotState.BellySideWanted, from BELLY AXIS).
     /// </summary>
     private static int AeroBellySideFor(Vehicle vehicle)
     {
@@ -414,41 +411,60 @@ public static partial class GuidanceWindow
             _s.AeroBellySide = entrySide;
         if (_s.AeroBellySide >= 0)
             return _s.AeroBellySide;
-        float3 airF = PhysicsStates.ComputeAirVelocityBody(vehicle.BubbleOrigin, vehicle.KinematicStates, vehicle.PhysicsEnvironment);
-        double3 air = double3.Unpack(in airF);
-        double speed = air.Length();
-        if (!(speed > 5.0))
-            return -1;
-        double3 u = air / speed;
-        // Engine first is the air along -x (BodyAero6Dof.Wrench): the tilt off it.
-        if (!(-u.X < Math.Cos(BellyFlopTiltDeg * Math.PI / 180.0)))
-            return -1;
-        int best = -1;
-        double bestDot = 0.0;
-        for (int i = 0; i < KsaAeroSweep.BellyAxes.Length; i++)
-        {
-            double d = -double3.Dot(KsaAeroSweep.BellyAxes[i], u);
-            if (d > bestDot)
-            {
-                bestDot = d;
-                best = i;
-            }
-        }
-        _s.AeroBellySide = best;
-        return best;
+        // The craft's own belly (BELLY AXIS), as every sweep takes it (KsaAeroSweep.TryStart). Not guessed from the air: in orbit that is only the attitude against the orbital velocity, and guessed +Y on a Starship whose belly is +Z, so the aim swept it all again (2026-11-25).
+        return _s.BellySideWanted();
     }
 
     /// <summary>A sweep is not of the craft as it is now: another mesh, or another size (VehicleAutopilotState.AeroStale's test).</summary>
     private static bool SweepStale(KsaAeroSweep.Result sweep, Vehicle vehicle)
     {
+        // The mesh hash decides where both have one: KSAero takes it with every surface at rest, but a part's bounds follow its subparts, so a flap out can change the box when nothing else has.
         ulong hash = KsaAeroSweep.LiveMeshHash(vehicle);
-        if (hash != 0 && hash != sweep.MeshHash)
-            return true;
+        if (hash != 0 && sweep.MeshHash != 0)
+            return hash != sweep.MeshHash;
         double3 live = LiveBoxExtents(vehicle), was = sweep.SampledExtents;
         return Math.Abs(was.X - live.X) > 1e-3 || Math.Abs(was.Y - live.Y) > 1e-3 || Math.Abs(was.Z - live.Z) > 1e-3;
     }
 
     private static bool MachAxisFlat(KsaAeroSweep.Result a) => a.MachSpread < 0.01;
+
+    private static readonly System.Collections.Generic.List<KsaAeroSweep.SweepProgress> _sweepRows = new();
+
+    // The craft's aero sweeps: each one running, and the last few ended. A sweep hands its body table over first and sweeps the control surfaces after, so a mode that starts on the body table flies without its fins or flaps until SURFACES is done.
+    private static void DrawAeroSweepsSection(Vehicle vehicle)
+    {
+        if (!GuidanceRegion.Begin("AERO SWEEPS", GuidanceRegion.Diagnostics))
+            return;
+
+        const UiTier D = UiTier.Diagnostics;
+        KsaAeroSweep.SweepsOf(vehicle.Id, _sweepRows);
+        if (_sweepRows.Count == 0)
+        {
+            GaugeRowText(D, "SWEEPS", "NONE FOR THIS CRAFT SINCE THE GAME LOADED", ConsoleStyle.TextMuted);
+            return;
+        }
+        foreach (KsaAeroSweep.SweepProgress sweep in _sweepRows)
+        {
+            int total = sweep.SurfacesTotal, done = sweep.SurfacesDone, swept = done - sweep.SurfacesMissing;
+            string body = double.IsNaN(sweep.BodyS) ? "" : FormattableString.Invariant($", BODY TABLES IN {sweep.BodyS:F0} S");
+            (string text, float4 ink) = sweep.Now switch
+            {
+                KsaAeroSweep.SweepProgress.Stage.Mesh => (FormattableString.Invariant($"BUILDING ITS MESH, {sweep.ElapsedS:F0} S"), ConsoleUi.WarnInk),
+                KsaAeroSweep.SweepProgress.Stage.Body => (FormattableString.Invariant($"BODY TABLES, {sweep.ElapsedS:F0} S"), ConsoleUi.WarnInk),
+                KsaAeroSweep.SweepProgress.Stage.Surfaces => (FormattableString.Invariant(
+                    $"SURFACE {Math.Min(done + 1, total)} OF {total}: {sweep.Surface}, {sweep.ElapsedS:F0} S{body}; NOT FLOWN YET"), ConsoleUi.WarnInk),
+                KsaAeroSweep.SweepProgress.Stage.Done => (FormattableString.Invariant(
+                    $"DONE IN {sweep.ElapsedS:F0} S{body}, {(total == 0 ? "NO SURFACES" : $"{swept} OF {total} SURFACES")}, {sweep.AgoS:F0} S AGO"),
+                    swept < total ? ConsoleUi.WarnInk : ConsoleStyle.TextPrimary),
+                _ => (FormattableString.Invariant($"FAILED AFTER {sweep.ElapsedS:F0} S, {sweep.AgoS:F0} S AGO"), ConsoleStyle.Danger),
+            };
+            GaugeRowText(D, sweep.Tables, text, ink);
+            if (sweep.Error.Length > 0)
+                GaugeRowText(D, "", sweep.Error, sweep.Now == KsaAeroSweep.SweepProgress.Stage.Failed ? ConsoleStyle.Danger : ConsoleUi.WarnInk);
+            else if (sweep.Now == KsaAeroSweep.SweepProgress.Stage.Done && sweep.SurfacesMissing > 0)
+                GaugeRowText(D, "", FormattableString.Invariant($"{sweep.SurfacesMissing} NOT IN THE AERO MESH, NOT SWEPT"), ConsoleUi.WarnInk);
+        }
+    }
 
     // What was sampled, and the three numbers that say whether it is worth trusting.
     private static void DrawBoostbackSurrogateSection(Vehicle vehicle, float innerW)
