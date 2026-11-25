@@ -140,8 +140,18 @@ internal static class OrbitalEntryCheck
         var model = Model(v);
         var start = EntryPlanner.PredictStart(model, cfg, R0 + 121_000, 7_600, -1.3 * Math.PI / 180, 0);
         if (start == null) { Console.WriteLine($"  FAIL {v.Name} corridor: never meets the air"); return 1; }
-        var (shortM, longM) = EntryPlanner.Corridor(model, cfg, start.Value.E);
+        // The corridor flown from the start state (ReachBand), and the quadrature it replaced, for comparison.
+        var (shortM, longM) = EntryPlanner.Corridor(model, cfg, start.Value.E, start.Value.X);
+        var (oldShortM, oldLongM) = EntryPlanner.Corridor(model, cfg, start.Value.E);
         var planner = new EntryPlanner();
+        string TryAt(double sM, out bool ok)
+        {
+            double[] x = [start.Value.X[0], start.Value.X[1], sM / R0];
+            var r = planner.Solve(model, cfg, start.Value.E, x, null);
+            ok = r.Plan != null && r.Plan.Converged;
+            return r.Plan == null ? "none" : $"{(ok ? "ok" : "refused")} {r.Plan.TerminalRangeErrorM / 1000:F0} km";
+        }
+        string oldLo = TryAt(oldShortM + 0.1 * (oldLongM - oldShortM), out _), oldHi = TryAt(oldShortM + 0.9 * (oldLongM - oldShortM), out _);
         string Try(double f, out bool ok)
         {
             double s = shortM + f * (longM - shortM);
@@ -152,7 +162,8 @@ internal static class OrbitalEntryCheck
         }
         string mid = Try(0.5, out bool midOk);
         string lo = Try(0.1, out _), hi = Try(0.9, out _);
-        Console.WriteLine($"  {(midOk ? "ok  " : "FAIL")} {v.Name} corridor {shortM / 1000:F0}-{longM / 1000:F0} km: middle {mid}; at 0.1 {lo}, at 0.9 {hi}");
+        string edgeLo = Try(0.0, out _), edgeHi = Try(1.0, out _), outLo = Try(-0.2, out _), outHi = Try(1.2, out _);
+        Console.WriteLine($"  {(midOk ? "ok  " : "FAIL")} {v.Name} corridor {shortM / 1000:F0}-{longM / 1000:F0} km: middle {mid}; at 0.1 {lo}, at 0.9 {hi}; edges {edgeLo} / {edgeHi}; 20 % outside {outLo} / {outHi} (the old quadrature's {oldShortM / 1000:F0}-{oldLongM / 1000:F0} km: at 0.1 {oldLo}, at 0.9 {oldHi})");
         return midOk ? 0 : 1;
     }
 

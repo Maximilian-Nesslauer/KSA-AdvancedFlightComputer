@@ -423,6 +423,8 @@ public static partial class GuidanceWindow
             string status = outp.Status;
             // Where the site sits against the corridor at this energy: the TRAJ display's two lines.
             int reach = 0;
+            // The range the reach is judged on: the site's from the craft now, or, in the coast, from where the plan takes hold.
+            double reachRangeM = st.RangeM;
             bool coasting = st.Plan != null && e < st.Plan.E0;
             if (coasting)
             {
@@ -431,6 +433,7 @@ public static partial class GuidanceWindow
                 double aheadAtStart = p0.S[0] * p0.BodyRadius;
                 st.RangeShortM = p0.RangeShortM[0];
                 st.RangeLongM = p0.RangeLongM[0];
+                reachRangeM = aheadAtStart;
                 reach = aheadAtStart < p0.RangeShortM[0] ? 1 : aheadAtStart > p0.RangeLongM[0] ? -1 : 0;
                 status = FormattableString.Invariant(
                     $"COASTING TO THE AIR: THE PLAN TAKES HOLD IN {(double.IsNaN(st.PredictedStartS) ? 0 : st.PredictedStartS):F0} s, THE SITE {aheadAtStart / 1000:F0} KM AHEAD THERE (CORRIDOR {p0.RangeShortM[0] / 1000:F0}-{p0.RangeLongM[0] / 1000:F0}).");
@@ -446,10 +449,12 @@ public static partial class GuidanceWindow
                         $"Orbital entry reach: {(reach > 0 ? "HIGH ENERGY, the site is closer than the most drag can stop at" : reach < 0 ? "LOW ENERGY, the site is further than the craft can glide" : "inside the corridor")} ({st.RangeM / 1000:F0} km to go, corridor {ps.RangeShortM / 1000:F0}-{ps.RangeLongM / 1000:F0} km at {vMag:F0} m/s)."));
             }
             st.Reach = reach;
-            if (reach > 0)
-                status = FormattableString.Invariant($"HIGH ENERGY: SITE {(st.RangeShortM - st.RangeM) / 1000:F0} KM SHORT OF THE CORRIDOR. ") + status;
-            else if (reach < 0)
-                status = FormattableString.Invariant($"LOW ENERGY: SITE {(st.RangeM - st.RangeLongM) / 1000:F0} KM PAST THE CORRIDOR. ") + status;
+            // A converged plan that reaches the site answers the question the warning asks: the site is in reach, whatever the corridor's edges say (2026-11-25: "HIGH ENERGY: SITE -11384 KM SHORT" counted down through a good coast).
+            bool planReaches = st.Plan != null && st.Plan.Converged && Math.Abs(st.Plan.TerminalRangeErrorM) <= cfg.GateRangeM;
+            if (reach > 0 && !planReaches)
+                status = FormattableString.Invariant($"HIGH ENERGY: SITE {(st.RangeShortM - reachRangeM) / 1000:F0} KM SHORT OF THE CORRIDOR. ") + status;
+            else if (reach < 0 && !planReaches)
+                status = FormattableString.Invariant($"LOW ENERGY: SITE {(reachRangeM - st.RangeLongM) / 1000:F0} KM PAST THE CORRIDOR. ") + status;
             // A heating limit the craft cannot hold explains the rest, so it goes first.
             bool heatOut = cfg.HeatingRateMax > 0 && double.IsFinite(st.HeatFloorKWm2) && cfg.HeatingRateMax / 1000.0 < st.HeatFloorKWm2;
             if (heatOut)
@@ -787,17 +792,17 @@ public static partial class GuidanceWindow
         GuidanceLog.Info(vehicle, "Orbital entry schedule with the flaps (alpha deg from nose-first; * the flaps cannot hold it there; C_m about the pitch axis):" + text);
     }
 
-    /// <summary>The trim schedule of a belly-first sweep, and the belly side it flies (KsaAeroSweep.BellyAxes index).</summary>
-    private static bool TryBuildEntryTrim(KsaAeroSweep.Result aero, out EntryTrim trim, out int index, out string why)
-    {
-        why = "";
-        trim = null;
     /// <summary>
     /// The belly side BELLY AXIS asks for (KsaAeroSweep.BellyAxes index): 0 is the craft's own belly, +Z (index 1): -Z had it upside down, and every flight set 2 by hand (2026-11-21); 1 to 4 name a side; 5 lets the sweep choose, -1 with <paramref name="chooseAny"/>, else the side chosen before if there is one.
     /// Every belly-first sweep is asked for on this side, trim rows and side tables together, so one sweep serves the aim, the entry and touchdown (2026-11-25: three sweeps of the Starship in a minute, each asking for a set the last had not swept).
     /// </summary>
     private static int EntryBellySideWanted(bool chooseAny = false) => _s.BellySideWanted(chooseAny);
 
+    /// <summary>The trim schedule of a belly-first sweep, and the belly side it flies (KsaAeroSweep.BellyAxes index).</summary>
+    private static bool TryBuildEntryTrim(KsaAeroSweep.Result aero, out EntryTrim trim, out int index, out string why)
+    {
+        why = "";
+        trim = null;
         index = -1;
         var sweeps = aero.Belly;
         EntryTrim Make(KsaAeroSweep.BellySweep b) => _s.OrbitalEntryTrimAoa

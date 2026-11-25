@@ -85,8 +85,8 @@ public sealed class EntryPlanner
         Shoot(dyn, cfg, e, x0, u, x);
 
         var c = TrapezoidWeights(e);
-        // The corridor at each node, for the margin term: the range left on the most drag and on the glide.
-        CorridorAt(dyn, cfg, e, floor, cosMin, out double[] sShort, out double[] sLong);
+        // The corridor at each node, for the margin term: the range the craft can still fly from the seed's state there (ReachBand).
+        ReachBand(dyn, cfg, e, x, cosMin, cosMax, out double[] sShort, out double[] sLong);
         double widest = 0;
         for (int k = 0; k < n; k++) widest = Math.Max(widest, 0.5 * (sLong[k] - sShort[k]));
         for (int k = 0; k < n; k++) { sShort[k] += sT; sLong[k] += sT; }
@@ -432,25 +432,91 @@ public sealed class EntryPlanner
         }
     }
 
-    /// <summary>The range left from each node to the hand-over flying the most drag (the floors) and the glide (the lateral-reserve bank), rad: EntryPlanner.Corridor's quadrature, node by node.</summary>
-    static void CorridorAt(EntryDynamics dyn, EntryConfig cfg, double[] e, double[] floor, double cosMin, out double[] sShort, out double[] sLong)
+    /// <summary>
+    /// THE CORRIDOR: the range the craft can still fly from each node of a trajectory to the hand-over, rad (the range left, the terminal range not added), flown with the planner's own dynamics from that node's state - its altitude and flight path angle, not an assumed glide.
+    ///  LONG: full lift up (the lateral-reserve bank, BankMinDeg) all the way.
+    ///  SHORT: full lift down (BankMaxDeg) until the craft is down at the floor it can hold, then along that floor (range per energy 1/D there).
+    ///  THE FLOOR IT CAN HOLD (HeldFloor): each path limit's own floor where the glide at full lift lies below it; a limit the craft cannot hold at an energy - its floor above even that glide, as a heating limit under the craft's least peak - does not bound it there, since every flight breaks it.
+    /// WHY (2026-11-25): the quadrature this replaces put a 450 t Starship at L/D 0.29 already on the floor and already on the glide at the start of the air, and took the heating floor it cannot hold as its most drag: a 50 km corridor, 2034-2086 km, that a converged plan from 1983 km and the aim's check from 2192 km both flew outside.
+    /// </summary>
+    static void ReachBand(EntryDynamics dyn, EntryConfig cfg, double[] e, double[,] x, double cosMin, double cosMax, out double[] sShort, out double[] sLong)
     {
         int n = e.Length;
         sShort = new double[n];
         sLong = new double[n];
-        var iS = new double[n];
-        var iL = new double[n];
-        for (int k = 0; k < n; k++)
-        {
-            iS[k] = 1.0 / Math.Max(dyn.Drag(e[k], floor[k]), EntryDynamics.DragFloor);
-            iL[k] = 1.0 / Math.Max(dyn.Drag(e[k], dyn.EquilibriumGlideRadius(e[k], cosMin, cfg)), EntryDynamics.DragFloor);
-        }
+        double[] floor = HeldFloor(dyn, cfg, e, cosMin);
+        // Range along the floor from each node to the end.
+        var alongFloor = new double[n];
         for (int k = n - 2; k >= 0; k--)
         {
             double h = e[k + 1] - e[k];
-            sShort[k] = sShort[k + 1] + 0.5 * h * (iS[k] + iS[k + 1]);
-            sLong[k] = sLong[k + 1] + 0.5 * h * (iL[k] + iL[k + 1]);
+            double i0 = 1.0 / Math.Max(dyn.Drag(e[k], floor[k]), EntryDynamics.DragFloor);
+            double i1 = 1.0 / Math.Max(dyn.Drag(e[k + 1], floor[k + 1]), EntryDynamics.DragFloor);
+            alongFloor[k] = alongFloor[k + 1] + 0.5 * h * (i0 + i1);
         }
+        Span<double> xa = stackalloc double[NX];
+        Span<double> xb = stackalloc double[NX];
+        for (int k = 0; k < n - 1; k++)
+        {
+            // LONG: full lift up from here.
+            for (int j = 0; j < NX; j++) xa[j] = x[k, j];
+            bool ok = true;
+            for (int m = k; m < n - 1 && ok; m++)
+            {
+                double u = cosMin * dyn.LiftToDrag(e[m], xa[IR]);
+                dyn.Propagate(e[m], e[m + 1], xa, u, u, cfg.SubSteps, xb);
+                ok = double.IsFinite(xb[IS]) && double.IsFinite(xb[IR]);
+                xb.CopyTo(xa);
+            }
+            double longS = ok ? x[k, IS] - xa[IS] : alongFloor[k];
+            // SHORT: full lift down until on the floor, then along it.
+            for (int j = 0; j < NX; j++) xa[j] = x[k, j];
+            int at = k;
+            ok = true;
+            while (at < n - 1 && xa[IR] > floor[at] && ok)
+            {
+                double u = cosMax * dyn.LiftToDrag(e[at], xa[IR]);
+                dyn.Propagate(e[at], e[at + 1], xa, u, u, cfg.SubSteps, xb);
+                ok = double.IsFinite(xb[IS]) && double.IsFinite(xb[IR]);
+                if (ok) xb.CopyTo(xa);
+                at++;
+            }
+            double shortS = ok ? (x[k, IS] - xa[IS]) + alongFloor[Math.Min(at, n - 1)] : alongFloor[k];
+            sShort[k] = Math.Min(shortS, longS);
+            sLong[k] = Math.Max(shortS, longS);
+        }
+    }
+
+    /// <summary>The floor the craft can hold at each energy, radius: the highest of the path limits' own floors (heating, dynamic pressure, load factor) that lie at or under the glide at full lift there; the ground floor where none does. See ReachBand.</summary>
+    static double[] HeldFloor(EntryDynamics dyn, EntryConfig cfg, double[] e, double cosMin)
+    {
+        int n = e.Length;
+        var limits = new List<EntryConfig>(3);
+        EntryConfig Only(double heat, double q, double g)
+        {
+            EntryConfig c = cfg.Clone();
+            c.HeatingRateMax = heat;
+            c.DynamicPressureMax = q;
+            c.LoadFactorMax = g;
+            return c;
+        }
+        if (cfg.HeatingRateMax > 0) limits.Add(Only(cfg.HeatingRateMax, 0, 0));
+        if (cfg.DynamicPressureMax > 0) limits.Add(Only(0, cfg.DynamicPressureMax, 0));
+        if (cfg.LoadFactorMax > 0) limits.Add(Only(0, 0, cfg.LoadFactorMax));
+        double rGround = 1.0 + cfg.AltitudeFloor / dyn.Model.BodyRadius;
+        var floor = new double[n];
+        for (int k = 0; k < n; k++)
+        {
+            double glide = dyn.EquilibriumGlideRadius(e[k], cosMin, cfg);
+            double held = rGround;
+            foreach (EntryConfig c in limits)
+            {
+                double f = dyn.FloorRadius(e[k], c);
+                if (f <= glide) held = Math.Max(held, f);
+            }
+            floor[k] = held;
+        }
+        return floor;
     }
 
     /// <summary>The plan's shape terms: the change, the curvature, and the distance from the plan before (warm only), all in vertical L/D over U_s.</summary>
@@ -754,17 +820,11 @@ public sealed class EntryPlanner
             invDMax[k] = 1.0 / Math.Max(dMax, EntryDynamics.DragFloor);
             invDMin[k] = 1.0 / Math.Max(dMin, EntryDynamics.DragFloor);
         }
-        // Reachable range from each node: s' = -1/D with gamma small, integrated back from the hand-over.
+        // Reachable range from each node, flown from the plan's own state there (ReachBand), and the terminal descent's range beyond the hand-over added: the ranges to the site.
+        ReachBand(dyn, cfg, e, x, cosMin, Math.Cos(cfg.BankMaxDeg * Math.PI / 180.0), out double[] sShortRad, out double[] sLongRad);
         var shortM = new double[n];
         var longM = new double[n];
-        for (int k = n - 2; k >= 0; k--)
-        {
-            double h = e[k + 1] - e[k];
-            shortM[k] = shortM[k + 1] + 0.5 * h * (invDMax[k] + invDMax[k + 1]) * r0;
-            longM[k] = longM[k + 1] + 0.5 * h * (invDMin[k] + invDMin[k + 1]) * r0;
-        }
-        // Ranges to the site: the terminal descent's range beyond the hand-over added.
-        for (int k = 0; k < n; k++) { shortM[k] += cfg.TerminalRangeM; longM[k] += cfg.TerminalRangeM; }
+        for (int k = 0; k < n; k++) { shortM[k] = sShortRad[k] * r0 + cfg.TerminalRangeM; longM[k] = sLongRad[k] * r0 + cfg.TerminalRangeM; }
         return new EntryPlan
         {
             E = (double[])e.Clone(), R = R, Gamma = Gm, S = S, U = U,
@@ -782,7 +842,24 @@ public sealed class EntryPlanner
     /// The range still reachable from energy <paramref name="e0"/> to the hand-over, m, without a solve: flying the most drag the limits allow (the altitude floors) gives the shortest, the equilibrium glide at the lateral-reserve bank the longest. Range per unit energy is 1/D with the flight-path angle small, so each is one quadrature of the model (the TRAJ display's two lines, which Publish draws the same way). It leaves out the pull-out after the entry interface and the roll between the extremes, so the real corridor is a little narrower, most at the start.
     /// </summary>
     public static (double ShortM, double LongM) Corridor(EntryModel model, EntryConfig cfg, double e0, int nodes = 40)
+        => Corridor(model, cfg, e0, null, nodes);
+
+    /// <summary>The corridor from a start state <paramref name="x0"/> (r, gamma, s), flown with the planner's dynamics as the plans' own is (ReachBand); without one, the quadrature below.</summary>
+    public static (double ShortM, double LongM) Corridor(EntryModel model, EntryConfig cfg, double e0, double[]? x0, int nodes = 40)
     {
+        if (x0 != null && x0.Length == NX)
+        {
+            var d = new EntryDynamics(model);
+            double eEnd = FinalEnergy(model, cfg);
+            if (!(e0 < eEnd))
+                return (0.0, 0.0);
+            int nn = Math.Max(nodes, 8);
+            double[] grid = Grid(e0, eEnd, x0[IR], cfg, model.BodyRadius, nn);
+            var start = new double[nn, NX];
+            for (int j = 0; j < NX; j++) start[0, j] = x0[j];
+            ReachBand(d, cfg, grid, start, Math.Cos(cfg.BankMinDeg * Math.PI / 180.0), Math.Cos(cfg.BankMaxDeg * Math.PI / 180.0), out double[] sS, out double[] sL);
+            return (sS[0] * model.BodyRadius, sL[0] * model.BodyRadius);
+        }
         var dyn = new EntryDynamics(model);
         double ef = FinalEnergy(model, cfg);
         if (!(e0 < ef))

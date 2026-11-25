@@ -113,10 +113,14 @@ public static partial class GuidanceWindow
                     ClearAim(st);
                     return false;
                 }
-                // Range left at the hand-over: start that much closer. Overshot: that much further.
-                st.AimShiftM -= p.TerminalRangeErrorM;
+                // Where the check starts against where the search aimed: a burn that does not put the site where the search meant to, by more than the gate, is moved by that error. The plan's miss says nothing then - a cold plan from outside the corridor meets the site by breaking its dynamics, miss 0 (2026-11-25: three identical tries, 220 km short each time). Otherwise, range left at the hand-over: start that much closer; overshot: that much further.
+                double startErrorM = (st.AimTargetM - st.AimShiftM) - st.AimStartRangeM;
+                bool startOff = Math.Abs(startErrorM) > cfg.GateRangeM;
+                st.AimShiftM += startOff ? startErrorM : -p.TerminalRangeErrorM;
                 st.AimStage = OrbitalEntryState.AimSteps.Search;
-                return AimWaits("AIMED ENTRY: MOVING THE BURN BY THE PLAN'S MISS.");
+                return AimWaits(startOff
+                    ? FormattableString.Invariant($"AIMED ENTRY: THE BURN PUT THE SITE {Math.Abs(startErrorM) / 1000:F0} KM {(startErrorM > 0 ? "CLOSER" : "FURTHER")} THAN AIMED; MOVING IT.")
+                    : "AIMED ENTRY: MOVING THE BURN BY THE PLAN'S MISS.");
             }
 
             // ---- commit ----
@@ -181,11 +185,11 @@ public static partial class GuidanceWindow
             return;
         double R0 = parent.MeanRadius;
         double rInterface = arrived.PositionCci.Length();
-        // The aimed range ahead of the start of the air, plus the coast from the top of the air to it: the distance of the entry point short of the site, where the site is when the air starts, as the search measured it.
+        // The aimed range ahead of the start of the air, plus the coast from the top of the air to it: the distance of the entry point short of the site, as the search measured it - over the ground, in the planet's turning frame. So it is laid back from where the site is when the craft arrives at the top of the air, where the two frames agree, as SiteGeometry and the check measure it. (Laid back from where the site is when the air starts, as it was, the entry point sat the planet's turn during the coast too far east: 2026-11-25, 855 s of coast put the site 220-240 km closer than aimed and every check refused.)
         double shortM = st.AimTargetM + st.AimCoastRangeM;
         if (!double.IsFinite(shortM) || shortM <= 0.0)
             return;
-        double3 site = double3.Normalize(SiteDirCciAt(parent, arrival + st.AimCoastS - SimNow()));
+        double3 site = double3.Normalize(SiteDirCciAt(parent, arrival - SimNow()));
         StateVectors source = request.Source.GetStateVectorsAt(new UniverseTime(td));
         double3 orbitNormal = double3.Normalize(double3.Cross(source.PositionCci, source.VelocityCci));
         double3 normal = double3.Cross(arrived.PositionCci, site);
@@ -290,7 +294,8 @@ public static partial class GuidanceWindow
         }
         double coastRangeM = -coast.Value.X[EntryDynamics.IS] * R0;
         double coastS = coast.Value.SecondsAhead;
-        (double shortM, double longM) = EntryPlanner.Corridor(model, cfg, coast.Value.E);
+        // Flown from the predicted start of the air itself, as the plans' own corridor is (EntryPlanner.ReachBand).
+        (double shortM, double longM) = EntryPlanner.Corridor(model, cfg, coast.Value.E, coast.Value.X);
         double fraction = Math.Clamp(_s.OrbitalEntryAimFraction, 0.0, 1.0);
         double target = shortM + fraction * (longM - shortM) + st.AimShiftM;
         st.AimShortM = shortM;
@@ -306,7 +311,8 @@ public static partial class GuidanceWindow
             f = crossM = double.NaN;
             if (!EntryDeorbitPlanner.TryArrival(request, t, out double arrival, out StateVectors s))
                 return false;
-            SiteGeometry(parent, s.PositionCci, s.VelocityCci, arrival + coastS, out double down, out double cross, out _);
+            // The site where it is at the arrival, as the coast range is measured: over the ground, in the turning frame (see AimLambert).
+            SiteGeometry(parent, s.PositionCci, s.VelocityCci, arrival, out double down, out double cross, out _);
             crossM = cross * R0;
             f = down * R0 - coastRangeM - target;
             return down > 0.0;
