@@ -2676,6 +2676,13 @@ internal static partial class Program
             && string.Join(" > ", LandChain.For(LandWay.Glide, LandSolver.Entry, CraftSituation.FallingAir, true).Select(c => c.Text)) == "RETRO BURN > TOUCHDOWN");
         Check("GLIDE sits between ENTRY/BRAKING and LAND NOW", LandWays.DisplayIndex(LandWay.Glide) == LandWays.DisplayIndex(LandWay.Entry) + 1 && LandWays.DisplayIndex(LandWay.FromHere) == LandWays.DisplayIndex(LandWay.Glide) + 1);
         Check("the glide row has a label and a card each", EntryMethods.GlideLabels.SequenceEqual(new[] { "RETRO BURN", "FLIP LANDING" }) && EntryMethods.GlideCards.Length == EntryMethods.GlideLabels.Length);
+        for (int i = 0; i < EntryMethods.GlideLabels.Length; i++)
+        {
+            string[] row = EntryMethods.GlideRow(i, "TOUCHDOWN");
+            Check("a GLIDE row is a MODE / USE / END row that fits the narrow width: " + row[0], row.Length == LandSolvers.TableHeads.Length && row.Sum(c => c.Length) <= 49 && row[0].Contains(EntryMethods.GlideLabels[i]));
+        }
+        Check("both glides hand to touchdown, as they declare it", GuidanceModes.NextOf(GuidanceModeId.EntryHere, new PathFacts(LandWay.Glide, HasAir: true)) == GuidanceModeId.SixDofHere
+            && GuidanceModes.NextOf(GuidanceModeId.OrbitalEntry, new PathFacts(LandWay.Glide, HasAir: true, Flip: true)) == GuidanceModeId.SixDofHere);
         Check("the 3-DOF is RETRO BURN in the console", EntryGuidance.CommitVerb == "RETRO BURN" && EntryGuidance.StopLabel == "STOP RETRO BURN");
 
         var orbit = new CommitGates(false, false, "", "", false, Where: CraftSituation.Orbit, HasAir: true);

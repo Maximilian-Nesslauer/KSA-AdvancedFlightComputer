@@ -325,6 +325,15 @@ internal static class EntryMethods
     /// <summary>The GLIDE row of LAND NOW, in the order of <see cref="GuidanceSettingSpecs.LandFlip"/> off, on.</summary>
     public static readonly string[] GlideLabels = { GlideBurnLabel, FlipLabel };
 
+    /// <summary>The MODE column of the GLIDE table, as the landing table of the console names a mode: how it flies, then the mode in brackets. In the order of <see cref="GlideLabels"/>.</summary>
+    public static readonly string[] GlideModes = { "ENGINE FIRST (" + GlideBurnLabel + ")", "BELLY FIRST (" + FlipLabel + ")" };
+
+    /// <summary>The USE column: the craft each suits. A retro burn needs a craft that glides stable engine first, a flip landing one that falls belly first on its flaps.</summary>
+    public static readonly string[] GlideUses = { "TAIL-STABLE", "BELLY FLAPS" };
+
+    /// <summary>A row of the GLIDE table: MODE, USE, and END, the mode it hands to (its declared next mode).</summary>
+    public static string[] GlideRow(int index, string end) => new[] { GlideModes[index], GlideUses[index], end };
+
     public static readonly string[] GlideCards =
     {
         "Glides engine first with the engine off, then lights it for the landing burn. TOUCHDOWN flies the last seconds of the burn.",

@@ -441,7 +441,18 @@ public static partial class GuidanceWindow
     private static void DrawGlideRow(LandWay way)
     {
         bool flip = GlideFlips(way);
-        int picked = ConsoleUi.ChoiceRow("GLIDE", "AfcLandGlide", EntryMethods.GlideLabels, flip ? 1 : 0, cards: EntryMethods.GlideCards);
+        // MODE / USE / END, as the landing table names a mode: END is the mode each hands to, as it declares it.
+        var rows = new string[EntryMethods.GlideLabels.Length][];
+        Span<TableMark> marks = stackalloc TableMark[rows.Length];
+        for (int i = 0; i < rows.Length; i++)
+        {
+            var facts = new PathFacts(way, HasAir: true, Flip: i == 1);
+            GuidanceModeId mode = i == 1 ? GuidanceModeId.OrbitalEntry : GuidanceModeId.EntryHere;
+            string end = GuidanceModes.NextOf(mode, in facts) is GuidanceModeId next ? GuidanceModes.Of(next)?.MethodLabel ?? "" : "";
+            rows[i] = EntryMethods.GlideRow(i, end);
+            marks[i] = LandSolvers.MethodMark(i, false, false);
+        }
+        int picked = ConsoleUi.ChoiceTable("AfcLandGlide", LandSolvers.TableHeads, rows, flip ? 1 : 0, cards: EntryMethods.GlideCards, marks: marks, radio: true);
         if (picked >= 0 && (picked == 1) != flip)
         {
             if (way == LandWay.FromHere)
