@@ -81,7 +81,7 @@ internal sealed class RcsWrenchTable
                     continue;
                 foreach (RocketCore core in rocket.Cores)
                 {
-                    ComputeLiveCoreAsmb(rocket, core, com, ambientPressure,
+                    ComputeLiveCoreAsmb(core, com, ambientPressure,
                         out float3 coreForce, out float3 coreTorque, out float coreMassFlow);
                     forceAsmb += coreForce;
                     torqueAsmb += coreTorque;
@@ -94,14 +94,14 @@ internal sealed class RcsWrenchTable
     }
 
     internal static void ComputeLiveCoreAsmb(
-        Rocket rocket, RocketCore core, float3 com, float ambientPressure,
+        RocketCore core, float3 com, float ambientPressure,
         out float3 force, out float3 torque, out float massFlow)
     {
         float3 forceAsmb = float3.Zero;
         float3 torqueAsmb = float3.Zero;
         massFlow = 0f;
         // Full-throttle probe because thruster pulses always command throttle 1.
-        RocketCoreConditions combustion = rocket.ComputeCoreConditions(core, 1f);
+        RocketCoreConditions combustion = core.ComputeConditions(1f);
         foreach (RocketNozzle nozzle in core.Nozzles)
         {
             float4x4 matrix = float4x4.Pack(nozzle.Parent.MatrixAsmb2VehicleAsmb);

@@ -25,11 +25,24 @@ internal static class VehiclePropellant
             // A lit solid motor counts its remaining grain as propellant, while a quenched one falls back to the equilibrium-pressure check and reads as spent.
             bool isBurning = rocketStates[rocket.StatesIdx].Throttle > 0f;
             burning |= isBurning;
-            fueled |= rocket.ComputePropellantAvailable(moleStates, isBurning);
+            fueled |= IsFueled(rocket, moleStates, isBurning);
             foreach (RocketCore core in rocket.Cores)
                 broken |= core is SolidMotor { Stack.IsValid: false };
         }
         return fueled;
+    }
+
+    /// <summary>
+    /// True when every core of the rocket can draw propellant, the answer of the rocket's own <c>UpdatePropellantAvailability</c>, which is internal: a gas generator cycle runs only while both its chamber and its gas generator are fed.
+    /// </summary>
+    internal static bool IsFueled(Rocket rocket, ReadOnlySpan<MoleState> moleStates, bool burning)
+    {
+        foreach (RocketCore core in rocket.Cores)
+        {
+            if (!core.ComputePropellantAvailable(moleStates, burning))
+                return false;
+        }
+        return true;
     }
 
     /// <summary>
@@ -57,7 +70,7 @@ internal static class VehiclePropellant
         {
             foreach (Rocket rocket in thrusters[i].Rockets)
             {
-                if (rocket.ComputePropellantAvailable(moleStates, rocketStates[rocket.StatesIdx].Throttle > 0f))
+                if (IsFueled(rocket, moleStates, rocketStates[rocket.StatesIdx].Throttle > 0f))
                     return true;
             }
         }

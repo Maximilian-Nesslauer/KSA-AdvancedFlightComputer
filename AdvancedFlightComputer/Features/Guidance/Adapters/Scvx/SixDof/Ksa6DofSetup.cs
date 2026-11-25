@@ -163,7 +163,7 @@ public static class Ksa6DofSetup
     }
 
     /// <summary>
-    /// The thrust the capability figures below are evaluated at: every planning gimbal at its Data.MaximumThrust. KSA computes that at a throttle of 2 and in vacuum (GimbalController.RecomputeStaticData), far beyond what the engines deliver, so a capability is only meaningful per newton of this - the gimbals deliver torque in proportion to the thrust actually through them.
+    /// The thrust the capability figures below are evaluated at: every planning gimbal at its Data.MaximumThrust. KSA computes that at full throttle and in vacuum (GimbalController.RecomputeStaticData), more than the engines deliver in air or throttled down, so a capability is only meaningful per newton of this - the gimbals deliver torque in proportion to the thrust actually through them.
     /// </summary>
     public static double PlanningThrust(Vehicle vehicle)
     {
@@ -210,7 +210,7 @@ public static class Ksa6DofSetup
     }
 
     /// <summary>
-    /// The thrust of every engine the plan runs, at the conditions PlanningThrust is taken at: the planning gimbals' Data.MaximumThrust plus the engines that sit on no gimbal, through the same nozzle evaluation (GimbalController.RecomputeStaticData, a throttle of 2 in vacuum). The model's Tmax is the thrust of all activated engines, and only the part of it that goes through a gimbal makes torque, so the capability per newton of the model's thrust is the allocator's capability over this figure. Over PlanningThrust alone, a craft with one gimballed engine among seven planned with the gimbal range of that engine on the thrust of all seven, about 3.7 times the torque its gimbal gives.
+    /// The thrust of every engine the plan runs, at the conditions PlanningThrust is taken at: the planning gimbals' Data.MaximumThrust plus the engines that sit on no gimbal, through the same nozzle evaluation (GimbalController.RecomputeStaticData, full throttle in vacuum). The model's Tmax is the thrust of all activated engines, and only the part of it that goes through a gimbal makes torque, so the capability per newton of the model's thrust is the allocator's capability over this figure. Over PlanningThrust alone, a craft with one gimballed engine among seven planned with the gimbal range of that engine on the thrust of all seven, about 3.7 times the torque its gimbal gives.
     /// An engine without a gimbal counts when it is activated, or when no gimballed engine is activated, as KsaGimbalControl.CountsForPlanning counts the gimbals. RCS thrusters are rockets too and are left out by their controller type.
     /// </summary>
     public static double PlanningEngineThrust(Vehicle vehicle)
@@ -235,7 +235,7 @@ public static class Ksa6DofSetup
                 continue;
             if (anyActive && !engine.IsActive)
                 continue;
-            RocketCoreConditions combustion = rocket.ComputeCoreConditions(nozzle.Core, 2f);
+            RocketCoreConditions combustion = nozzle.Core.ComputeConditions(1f);
             double thrust = nozzle.ComputePerformance(in combustion, 0f).GetTotalThrust();
             if (double.IsFinite(thrust) && thrust > 0.0)
                 total += thrust;
