@@ -328,8 +328,9 @@ public static partial class GuidanceWindow
 
     private static bool PlanEntryBurn(Vehicle vehicle, DeorbitRequest request)
     {
-        // An orbital entry aims its burn at the site (OrbitalEntryAim); a plain DEORBIT ONLY burns at the next chance.
-        if (_s.OrbitalEntryAfterDeorbit && _s.OrbitalEntryAimDeorbit)
+        // AIM AT SITE times the burn for the orbital entry that follows (OrbitalEntryAim), whether ENTRY AFTER DEORBIT hands the craft over or the player engages it; off, DEORBIT ONLY burns at the next chance.
+        // The aim no longer waits on ENTRY AFTER DEORBIT: a save that kept that switch off (2026-11-25, starship_entry_ksc) turned the aim off with it, and the entry met the air 11,300 km from the site.
+        if (_s.OrbitalEntryAimDeorbit)
             return PlanAimedEntryBurn(vehicle, request.Parent, request);
         _s.DeorbitPlan = EntryDeorbitPlanner.Plan(request, out string reason, _s.DeorbitEntryMeasuredPreparation, SimNow());
         if (_s.DeorbitPlan is not { } entry)

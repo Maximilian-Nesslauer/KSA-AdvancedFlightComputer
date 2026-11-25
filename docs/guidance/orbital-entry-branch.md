@@ -18,7 +18,7 @@ Branch state: 57 commits on top of `origin/main`, one of them the merge of main 
 
 | Phase | Mode | What it does | Hands over when |
 | --- | --- | --- | --- |
-| Deorbit | DEORBIT ONLY with AIM AT SITE | Times the deorbit burn so the site sits mid-corridor of the coming entry. | At burn end, if ENTRY AFTER DEORBIT is on. |
+| Deorbit | DEORBIT ONLY with AIM AT SITE | Times the deorbit burn so the site sits mid-corridor of the coming entry, also with ENTRY AFTER DEORBIT off. | At burn end, if ENTRY AFTER DEORBIT is on. |
 | Entry | ORBITAL ENTRY | Plans vertical L/D against energy (SCvx, Clarabel QP per iteration), flies it with a Shuttle-style drag and sink-rate tracker, bank reversals on the heading error to the site, angle of attack from a trim schedule. | To bellyflop at bellyflop's first converged plan from BELLYFLOP FROM MACH (10); HAND-OVER MACH (5) is the latest. |
 | Terminal descent | BELLYFLOP (last phase of ORBITAL ENTRY) | 3-DOF SCvx in belly axes (pitch, bank, yaw about the airflow), free flight time, falling onto a point BELLYFLOP AIM SHORT (200 m) short of the site. | To touchdown 1 s before touchdown's standby plan turns more than 5 deg from the attitude flown, at the latest 5 s before its ignition or 12 s before bellyflop's ground. |
 | Flip and landing burn | Touchdown guidance (6-DOF SCvx, Clarabel) | Solves on standby from TOUCHDOWN FROM (45 s before bellyflop's ground), then plans the coast, the flip on the whole-sphere aero, and the burn to the pad. | Lands (not achieved yet). |

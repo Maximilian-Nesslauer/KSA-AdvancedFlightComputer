@@ -359,7 +359,7 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec OrbitalEntryAimHorizonH = new("OrbitalEntryAimHorizonH", "AIM HORIZON", "h", E, 24.0, 0.1, 240.0, "%.1f",
         "How far ahead the aimed entry burn is searched for.");
     public static readonly BoolSpec OrbitalEntryAimDeorbit = new("OrbitalEntryAimDeorbit", "AIM AT SITE", P, true,
-        "DEORBIT ONLY times its burn so the site sits at AIM IN CORRIDOR of the corridor when the craft reaches the air. Off, it burns at the next chance.");
+        "DEORBIT ONLY times its burn so the site sits at AIM IN CORRIDOR of the orbital entry's corridor when the craft reaches the air, also with ENTRY AFTER DEORBIT off. Off, it burns at the next chance.");
 
     /// <summary>The limits of the orbital entry plan, on LAND > ENTRY > ORBITAL ENTRY.</summary>
     public static readonly SettingSpec[] LandOrbitalEntryPlayer = { OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2 };

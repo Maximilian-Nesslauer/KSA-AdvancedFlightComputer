@@ -10,7 +10,7 @@ using Brutal.Numerics;
 using KSA;
 
 /// <summary>
-/// AIMING THE DEORBIT AT THE SITE, for an orbital entry (DEORBIT ONLY with ENTRY AFTER DEORBIT and AIM AT SITE on).
+/// AIMING THE DEORBIT AT THE SITE, for an orbital entry (DEORBIT ONLY with AIM AT SITE on, whether ENTRY AFTER DEORBIT hands the craft to the entry or the player engages it).
 ///
 /// A DEORBIT ONLY burn on its own goes at the next chance, so the entry starts wherever the orbit happens to be. On the first flight (2026-11-21) that put the site inside the shortest range the craft could still fly: it overbanked, flew past and turned back. Here the burn time is chosen so the site sits at a fraction of the corridor (AimFraction, half by default) when the craft reaches the air.
 ///  1. MEASURE. The belly-first sweep and its trim schedule, as the entry itself takes them, give the planner's model of the craft.

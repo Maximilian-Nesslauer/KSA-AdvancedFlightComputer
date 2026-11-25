@@ -127,10 +127,9 @@ public static partial class GuidanceWindow
                 {
                     ConsoleUi.InputDoubleRow("ENTRY PERIAPSIS".AsSpan(), "##AfcEntryPeriapsis"u8,
                         ref _s.DeorbitEntryPeriapsisKm, 1.0, 10.0, "%.1f"u8, unit: "km");
-                    // Orbital entry guidance takes the craft after the entry burn, and the burn may be timed so the site sits in its corridor (OrbitalEntryAim).
+                    // Orbital entry guidance takes the craft after the entry burn, and, apart from that, the burn may be timed so the site sits in the entry's corridor (OrbitalEntryAim).
                     GaugeRowCheck(Specs.OrbitalEntryAfterDeorbit, ref _s.OrbitalEntryAfterDeorbit);
-                    using (new ImGuiDisabledScope(!_s.OrbitalEntryAfterDeorbit))
-                        GaugeRowCheck(Specs.OrbitalEntryAimDeorbit, ref _s.OrbitalEntryAimDeorbit);
+                    GaugeRowCheck(Specs.OrbitalEntryAimDeorbit, ref _s.OrbitalEntryAimDeorbit);
                 }
             }
         }
@@ -528,7 +527,7 @@ public static partial class GuidanceWindow
             case LandWay.FromOrbit:
                 doubles = Specs.LandFromOrbitExpert;
                 bools = Specs.LandFromOrbitExpertBools;
-                wayParts = [new FoldPart(FoldNames.Approach, true, InExpert(() => DrawApproachSection(innerW))), new FoldPart(FoldNames.EntryAim, _s.DeorbitOnly && _s.OrbitalEntryAfterDeorbit, InExpert(DrawEntryAimRows))];
+                wayParts = [new FoldPart(FoldNames.Approach, true, InExpert(() => DrawApproachSection(innerW))), new FoldPart(FoldNames.EntryAim, _s.DeorbitOnly && _s.OrbitalEntryAimDeorbit, InExpert(DrawEntryAimRows))];
                 break;
             case LandWay.Boostback:
                 doubles = Specs.LandBoostbackExpert;
