@@ -273,10 +273,18 @@ public static partial class GuidanceWindow
             return;
         SituationFacts situation = Ui.Console.ConsoleFrame.ReadFacts(vehicle);
         LandSolver solver = LandSolverOf(way);
-        ChainStep[] chain = LandChain.For(way, solver, situation.Where, situation.HasAir, way == LandWay.FromHere ? _s.LandFlip : _s.OrbitalEntryFlip, LandEngineOnCraft(vehicle), BelowBrakingStart(vehicle), _landHoverFlies, KsaParachutes.Count(vehicle) > 0);
+        ChainStep[] chain = LandChain.For(way, solver, situation.Where, situation.HasAir, LiveGlideFlips(way), LandEngineOnCraft(vehicle), BelowBrakingStart(vehicle), _landHoverFlies, KsaParachutes.Count(vehicle) > 0);
         if (LandChain.Shows(chain))
             ConsoleUi.ChainStrip(chain, live: LiveStepIndex(chain));
     }
+
+    /// <summary>
+    /// The glide of the path that flies: none while the retro burn flies (it is the glide), the one orbital entry was engaged with while it flies or waits, else the way's own GLIDE choice. The page's choice can differ from what flies: GLIDE picks the after-entry row, which an entry took at its engage.
+    /// </summary>
+    private static bool LiveGlideFlips(LandWay way)
+        => EntryLive(_s) ? false
+            : OrbitalEntryLive || _s.OrbitalEntry.EngagePending ? _s.OrbitalEntryFlip
+            : GlideFlips(way);
 
     /// <summary>Where in the path the craft is: the step of the mode that flies now, found by its name in <paramref name="chain"/>; -1 while nothing flies or the step is not in this way's path.</summary>
     private static int LiveStepIndex(ChainStep[] chain)
