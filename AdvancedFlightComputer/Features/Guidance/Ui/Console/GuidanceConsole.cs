@@ -714,7 +714,8 @@ public static partial class GuidanceWindow
 
         if (!enginesPrepared && SelectedLandingEngines != null)
         {
-            if (mode == GuidanceModeId.DeorbitLand)
+            // The braking burn of an airless deorbit would fly on the landing group from the start. An entry burn (DEORBIT + ENTRY) does not: bellyflop or the retro burn switches the group on before touchdown, after the entry (StepBellyflopTouchdown, PrepareSelectedLandingEngines), so it is not refused.
+            if (mode == GuidanceModeId.DeorbitLand && !_s.DeorbitOnly)
             {
                 _s.WarnLanding("LANDING GROUPS NEED A SEPARATE COAST BEFORE THE APPROACH BURN. USE LAND NOW.");
                 NoteRefusal(vehicle, mode);
