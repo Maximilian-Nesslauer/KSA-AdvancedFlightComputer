@@ -16,6 +16,7 @@ using KSA;
 ///  1. MEASURE. The belly-first sweep and its trim schedule, as the entry itself takes them, give the planner's model of the craft.
 ///  2. CORRIDOR. From one predicted entry state, the coast down to the start drag (EntryPlanner.PredictStart) and the corridor there (EntryPlanner.Corridor): the shortest and longest range still reachable. Every burn time gives the same entry energy, so this is done once.
 ///  3. SEARCH. Departure times are scanned over the coming hours (AimHorizonH) for a pass whose ground track comes within AimMaxCrossKm of the site, and on it the burn time that puts the site at the aimed range ahead of the start of the air, refined by bisection. Burns are horizontal, down to the entry periapsis: they cannot turn the orbit plane, so the crossrange is the pass's.
+///  3b. AIM AT THE POINT. A horizontal burn cannot take out the pass's crossrange. With the departure and flight time the search found, Maxi's Lambert transfer of DEORBIT + LAND (DeorbitPlanner.TryLambert) aims at the entry point itself: at the top of the air, on the great circle to the site, the coast and the aimed corridor point short of it. It is taken when it costs little more than the horizontal burn and meets the air at the same flight path angle, for which the corridor was worked out (AimLambert); else the horizontal burn stands.
 ///  4. CHECK. One cold plan from the predicted start must reach the site: converged, with a small miss. A miss moves the aimed range by the miss and searches again, up to three times; a plan that cannot be had refuses the burn.
 /// </summary>
 public static partial class GuidanceWindow
@@ -72,6 +73,7 @@ public static partial class GuidanceWindow
                 ClearAim(st);
                 return false;
             }
+            AimLambert(vehicle, parent, request, st, cfg);
             st.AimStage = OrbitalEntryState.AimSteps.Check;
             st.AimCheck = null;
             st.AimWorker ??= new Ksa3DofWorker();
@@ -118,7 +120,9 @@ public static partial class GuidanceWindow
             }
 
             // ---- commit ----
-            DeorbitPlan? plan = EntryDeorbitPlanner.PlanAt(request, st.AimDeparture, out string why, _s.DeorbitEntryMeasuredPreparation);
+            DeorbitPlan? plan = st.AimVelocity is { } aimed
+                ? EntryDeorbitPlanner.PlanAtVelocity(request, st.AimDeparture, aimed, out string why, _s.DeorbitEntryMeasuredPreparation)
+                : EntryDeorbitPlanner.PlanAt(request, st.AimDeparture, out why, _s.DeorbitEntryMeasuredPreparation);
             if (plan is not { } entry)
             {
                 GuidanceLog.Info(vehicle, FormattableString.Invariant(
@@ -133,7 +137,7 @@ public static partial class GuidanceWindow
             _s.LandingStatus = FormattableString.Invariant(
                 $"ENTRY BURN AIMED: {entry.DeltaV.Length():F1} M/S IN {Fmt.TimeFine(entry.DepartureTime - now)}, SITE {st.AimStartRangeM / 1000:F0} KM AHEAD AT THE AIR (CORRIDOR {st.AimShortM / 1000:F0}-{st.AimLongM / 1000:F0}), {Math.Abs(st.AimCrossM) / 1000:F0} KM {(st.AimCrossM >= 0 ? "LEFT" : "RIGHT")}");
             GuidanceLog.Info(vehicle, FormattableString.Invariant(
-                $"Aimed entry burn planned: departure in {entry.DepartureTime - now:F1} s, delta-v {entry.DeltaV.Length():F2} m/s, entry interface in {entry.ArrivalTime - now:F1} s, plan miss {p.TerminalRangeErrorM / 1000:F2} km."));
+                $"Aimed entry burn planned: departure in {entry.DepartureTime - now:F1} s, delta-v {entry.DeltaV.Length():F2} m/s ({(st.AimVelocity.HasValue ? "Lambert to the entry point" : "horizontal")}), entry interface in {entry.ArrivalTime - now:F1} s, plan miss {p.TerminalRangeErrorM / 1000:F2} km."));
             st.AimStage = OrbitalEntryState.AimSteps.Ready;
             return true;
         }
@@ -150,11 +154,83 @@ public static partial class GuidanceWindow
 
     private static void ClearAim(OrbitalEntryState st)
     {
+        st.AimVelocity = null;
         st.AimJob = null;
         st.AimStage = OrbitalEntryState.AimSteps.None;
         st.AimCheck = null;
         st.AimShiftM = 0;
         st.AimTries = 0;
+    }
+
+    /// <summary>The most the Lambert burn may cost over the horizontal one: this share of it, and at least <see cref="AimLambertExtraLeastMs"/>. Own choice: the entry's bank reversals take out a crossrange for free, so the burn should only pay for what is cheap.</summary>
+    private const double AimLambertExtraShare = 0.25;
+    private const double AimLambertExtraLeastMs = 10.0;
+
+    /// <summary>The flight path angle at the top of the air may differ from the horizontal burn's by this much, deg: the corridor was worked out for that one.</summary>
+    private const double AimLambertGammaToleranceDeg = 0.5;
+
+    /// <summary>
+    /// Step 3b: with the departure (AimDeparture) and flight time the search found, the Lambert transfer to the entry point on the great circle to the site, the coast and the aimed corridor point short of it. Taken, with the start of the air predicted again from where it arrives, when its delta-v is within <see cref="AimLambertExtraShare"/> of the horizontal burn's and its flight path angle at the top of the air within <see cref="AimLambertGammaToleranceDeg"/>; logged either way.
+    /// </summary>
+    private static void AimLambert(Vehicle vehicle, IParentBody parent, DeorbitRequest request, OrbitalEntryState st, EntryConfig cfg)
+    {
+        st.AimVelocity = null;
+        double td = st.AimDeparture;
+        if (!EntryDeorbitPlanner.TryArrival(request, td, out double arrival, out StateVectors arrived)
+            || !EntryDeorbitPlanner.TryHorizontalBurn(request, td, out double3 dvHorizontal))
+            return;
+        double R0 = parent.MeanRadius;
+        double rInterface = arrived.PositionCci.Length();
+        // The aimed range ahead of the start of the air, plus the coast from the top of the air to it: the distance of the entry point short of the site, where the site is when the air starts, as the search measured it.
+        double shortM = st.AimTargetM + st.AimCoastRangeM;
+        if (!double.IsFinite(shortM) || shortM <= 0.0)
+            return;
+        double3 site = double3.Normalize(SiteDirCciAt(parent, arrival + st.AimCoastS - SimNow()));
+        StateVectors source = request.Source.GetStateVectorsAt(new UniverseTime(td));
+        double3 orbitNormal = double3.Normalize(double3.Cross(source.PositionCci, source.VelocityCci));
+        double3 normal = double3.Cross(arrived.PositionCci, site);
+        if (normal.Length() < 1.0)
+            return;
+        normal = double3.Normalize(normal);
+        if (double3.Dot(normal, orbitNormal) < 0.0)
+            normal = -normal;
+        double3 endpoint = RotateAbout(site, normal, -shortM / R0) * rInterface;
+        if (!DeorbitPlanner.TryLambert(parent.Mu, source.PositionCci, endpoint, arrival - td, orbitNormal, out double3 v1, out double3 v2))
+        {
+            GuidanceLog.Info(vehicle, "Aimed entry: no Lambert transfer to the entry point; the horizontal burn stands.");
+            return;
+        }
+        double3 dvLambert = v1 - source.VelocityCci;
+        double extra = dvLambert.Length() - dvHorizontal.Length();
+        double allowed = Math.Max(AimLambertExtraLeastMs, AimLambertExtraShare * dvHorizontal.Length());
+        double Gamma(double3 r, double3 v) => Math.Asin(Math.Clamp(double3.Dot(double3.Normalize(r), v.NormalizeOrZero()), -1.0, 1.0)) * 180.0 / Math.PI;
+        double gammaHorizontal = Gamma(arrived.PositionCci, arrived.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), arrived.PositionCci));
+        double gammaLambert = Gamma(endpoint, v2 - double3.Cross(parent.GetAngularVelocityCci(), endpoint));
+        bool take = extra <= allowed && Math.Abs(gammaLambert - gammaHorizontal) <= AimLambertGammaToleranceDeg;
+        string verdict = FormattableString.Invariant(
+            $"Aimed entry Lambert to the entry point {shortM / 1000:F0} km short of the site: delta-v {dvLambert.Length():F1} m/s against {dvHorizontal.Length():F1} horizontal (allowed +{allowed:F1}), flight path angle {gammaLambert:F2} against {gammaHorizontal:F2} deg");
+        if (!take)
+        {
+            GuidanceLog.Info(vehicle, verdict + "; the horizontal burn stands.");
+            return;
+        }
+        // The start of the air again, from where the Lambert burn arrives.
+        SiteGeometry(parent, endpoint, v2, arrival, out double down, out double cross, out double3 rel);
+        EntryModel model = st.AimModel.WithRotationAt(parent, endpoint, rel);
+        double gamma = Math.Asin(Math.Clamp(double3.Dot(rel.NormalizeOrZero(), double3.Normalize(endpoint)), -1.0, 1.0));
+        var start = EntryPlanner.PredictStart(model, cfg, endpoint.Length(), rel.Length(), gamma, down);
+        if (start == null)
+        {
+            GuidanceLog.Info(vehicle, verdict + "; its entry does not reach the start drag, the horizontal burn stands.");
+            return;
+        }
+        GuidanceLog.Info(vehicle, verdict + FormattableString.Invariant($"; taken, crossrange {st.AimCrossM / 1000:F1} -> {cross * R0 / 1000:F1} km."));
+        st.AimVelocity = v1;
+        st.AimModel = model;
+        st.AimStartE = start.Value.E;
+        st.AimStartX = start.Value.X;
+        st.AimStartRangeM = start.Value.X[EntryDynamics.IS] * R0;
+        st.AimCrossM = cross * R0;
     }
 
     /// <summary>The site's range along the ground track and its crossrange (+ left), rad, from a state (CCI, inertial) at sim time <paramref name="atSeconds"/>.</summary>
@@ -219,6 +295,8 @@ public static partial class GuidanceWindow
         double target = shortM + fraction * (longM - shortM) + st.AimShiftM;
         st.AimShortM = shortM;
         st.AimLongM = longM;
+        st.AimCoastRangeM = coastRangeM;
+        st.AimCoastS = coastS;
         st.AimTargetM = target;
         double maxCross = Math.Max(_s.OrbitalEntryAimMaxCrossKm, 1.0) * 1000.0;
 

@@ -301,6 +301,8 @@ internal static class GuidanceSettingSpecs
         "Bellyflop starts solving in the background from this Mach and takes over at its first plan that reaches the site. Its belly-first tables reach Mach 8; above it, it plans with their Mach 8 values.");
     public static readonly SettingSpec OrbitalEntryBellyflopAimUprangeM = new("OrbitalEntryBellyflopAimUprangeM", "BELLYFLOP AIM SHORT", "m", P, 200.0, 0.0, 5000.0, "%.0f",
         "How far short of the site, along the bearing to it, bellyflop aims its fall: the ground the flip and landing burn cover after it, so they end on the site rather than past it. A fixed distance for now; the entry's aim takes it into account.");
+    public static readonly SettingSpec OrbitalEntryRetroAimShortKm = new("OrbitalEntryRetroAimShortKm", "RETRO AIM SHORT", "km", P, 30.0, 0.0, 300.0, "%.0f",
+        "How far short of the site the entry aims its hand-over when RETRO BURN follows it: the ground the retro burn's glide covers from the hand-over, engine first, to its landing burn. A fixed distance, an estimate not yet flown; the retro burn's own plan takes the rest.");
     public static readonly SettingSpec OrbitalEntryBellyflopTouchdownS = new("OrbitalEntryBellyflopTouchdownS", "TOUCHDOWN FROM", "s", P, 45.0, 5.0, 300.0, "%.0f",
         "How long before bellyflop's plan reaches the ground touchdown guidance starts solving on standby for the flip and the landing burn. It takes the craft a second before touchdown's plan turns 5 deg away from the attitude bellyflop flies, or 5 s before touchdown's ignition at the latest.");
     public static readonly SettingSpec OrbitalEntryBellyflopAngleMaxDeg = new("OrbitalEntryBellyflopAngleMaxDeg", "BELLYFLOP PITCH DOWN", "deg", E, 20.0, 2.0, 45.0, "%.0f",
@@ -356,7 +358,10 @@ internal static class GuidanceSettingSpecs
         "The deorbit burn before an orbital entry is timed so the site sits at AIM IN CORRIDOR of the entry's corridor when the craft reaches the air. Off, it burns at the next chance.");
     /// <summary>The GLIDE row of LAND NOW: FLIP LANDING (bellyflop, then touchdown guidance for the flip and the burn) or RETRO BURN (the engine-first glide and landing burn, then touchdown guidance).</summary>
     public static readonly BoolSpec LandFlip = new("LandFlip", "FLIP LANDING", P, false,
-        "How the craft falls through the air to its landing burn: FLIP LANDING falls belly first with bellyflop and flips under power in touchdown guidance's plan; RETRO BURN glides engine first and lights the engine for the landing burn. Touchdown guidance flies the end of either.");
+        "How LAND NOW falls through the air to the landing burn: RETRO BURN (the default) glides engine first and lights the engine for the landing burn; FLIP LANDING falls belly first with bellyflop and flips under power in touchdown guidance's plan. Touchdown guidance flies the end of either.");
+    /// <summary>The GLIDE row after an orbital entry, on DEORBIT and ENTRY/BRAKING: FLIP LANDING (bellyflop) by default, as the entry has flown, or RETRO BURN.</summary>
+    public static readonly BoolSpec EntryFlip = new("EntryFlip", "FLIP AFTER ENTRY", P, true,
+        "How the craft falls to its landing burn after an orbital entry: FLIP LANDING (the default) falls belly first with bellyflop and flips under power in touchdown guidance's plan; RETRO BURN turns engine first at the hand-over and glides to the landing burn. Touchdown guidance flies the end of either.");
 
     /// <summary>The limits of the orbital entry plan, on LAND > ENTRY > ORBITAL ENTRY.</summary>
     public static readonly SettingSpec[] LandOrbitalEntryPlayer = { OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2 };
@@ -513,7 +518,7 @@ internal static class GuidanceSettingSpecs
         ThreeDofBurnCeiling, ThreeDofTrackKp, ThreeDofTrackKd, ThreeDofTrackTiltDeg, ThreeDofRcsDeadbandDeg,
         TermTouchdownRate, TermConstAltM, TermQuadK, TermMaxDescRate, TermMaxTiltDeg, TermNudgeStep,
         TermKpV, TermKiV, TermKdV, TermKpL, TermKiL, TermKdL,
-        OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach, OrbitalEntryBellyflopArmMach, OrbitalEntryBellyflopAimUprangeM, OrbitalEntryBellyflopTouchdownS, OrbitalEntryBellyflopAngleMaxDeg, OrbitalEntryBellyflopPitchUpDeg, OrbitalEntryBellyflopBankMaxDeg, OrbitalEntryBellyflopResolveS,
+        OrbitalEntryQMaxKPa, OrbitalEntryGMax, OrbitalEntryHeatMaxKWm2, OrbitalEntryNoseRadiusM, OrbitalEntryHandoverAltKm, OrbitalEntryHandoverMach, OrbitalEntryBellyflopArmMach, OrbitalEntryBellyflopAimUprangeM, OrbitalEntryRetroAimShortKm, OrbitalEntryBellyflopTouchdownS, OrbitalEntryBellyflopAngleMaxDeg, OrbitalEntryBellyflopPitchUpDeg, OrbitalEntryBellyflopBankMaxDeg, OrbitalEntryBellyflopResolveS,
         OrbitalEntryAoaDeg, OrbitalEntryAoaMinDeg, OrbitalEntryAoaMaxDeg, OrbitalEntryBellyAxis,
         OrbitalEntryBankMinDeg, OrbitalEntryBankMaxDeg, OrbitalEntryOverbankDeg, OrbitalEntryReversalBandDeg, OrbitalEntryRollRateDegS, OrbitalEntryTrackRollRateDegS,
         OrbitalEntryStartDragMs2, OrbitalEntryResolveS, OrbitalEntryRcsDeadbandDeg, OrbitalEntryTrackOmega, OrbitalEntryGainDragFloor, OrbitalEntryMeasureSmoothS, OrbitalEntryCorridorWeight, OrbitalEntrySmoothS, OrbitalEntryAimFraction, OrbitalEntryAimMaxCrossKm, OrbitalEntryAimHorizonH,
@@ -525,7 +530,7 @@ internal static class GuidanceSettingSpecs
         FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, AscentOwnAttitude, AscentAeroControl, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
         VehicleHeightAuto, LegsAutoDeploy, ParkIdleEngines, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
         SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ScvxClarabel, ThreeDofNewAttitude,
-        OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude, OrbitalEntryUseRcs, LandFlip,
+        OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude, OrbitalEntryUseRcs, LandFlip, EntryFlip,
     };
 
     #endregion

@@ -41,7 +41,7 @@ public static partial class GuidanceWindow
     private static void UpdateBellyflopRangeTarget(Vehicle vehicle, IParentBody parent, OrbitalEntryState st)
     {
         var bf = st.Bellyflop;
-        if (!_s.OrbitalEntryBellyflop || !st.TablesReady || st.Aero?.BellyBodyAero == null || st.Plan == null)
+        if (!EntryFlips || !st.TablesReady || st.Aero?.BellyBodyAero == null || st.Plan == null)
             return;
         var frame = BellyflopSiteFrame(parent, out double siteRadius);
         BellyflopModel model = KsaBellyflopSetup.Build(vehicle, parent, frame, siteRadius, st.Aero, new double3(1, 0, 0), BellyflopForceScale(st), out _);
@@ -124,7 +124,7 @@ public static partial class GuidanceWindow
     private static void StepBellyflop(Vehicle vehicle, IParentBody parent, OrbitalEntryState st, double mach, double now, double dt)
     {
         var bf = st.Bellyflop;
-        if (!_s.OrbitalEntryBellyflop || !st.TablesReady || st.Aero?.BellyBodyAero == null || st.BellyIndex < 0)
+        if (!EntryFlips || !st.TablesReady || st.Aero?.BellyBodyAero == null || st.BellyIndex < 0)
             return;
         bool flying = st.Phase == OrbitalEntryPhase.Bellyflop;
         if (!flying && mach > _s.OrbitalEntryBellyflopArmMach)

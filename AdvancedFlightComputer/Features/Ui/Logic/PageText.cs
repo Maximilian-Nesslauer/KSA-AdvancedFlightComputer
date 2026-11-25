@@ -782,7 +782,7 @@ internal static class PageText
                     ? (f.Solver.Length > 0 ? "Lands with " + f.Solver + ", with a stock burn first if needed." : "Lands, with a stock burn first if needed.")
                     : (f.Solver.Length > 0 ? "Burns out of orbit, then lands with " + f.Solver + "." : "Burns out of orbit, then lands.");
             case GuidanceModeId.OrbitalEntry:
-                return "Flies the entry to the hand-over, then BELLYFLOP onto the site, and TOUCHDOWN flips the craft and lands.";
+                return "Flies the entry to the hand-over, then the fall the path shows: BELLYFLOP or RETRO BURN, and TOUCHDOWN lands; or the parachutes.";
             case GuidanceModeId.EntryHere:
                 return "Glides engine off, then flies the landing burn."
                        + (f.HandToTouchdown && double.IsFinite(f.TouchdownLastS)
@@ -1304,8 +1304,9 @@ internal static class PageText
     public const string HoverHandOverTip = "Height where G-FOLD hands over to the hover, if the craft can hover there.";
 
     /// <summary>The HAND-OVERS fold of ORBITAL ENTRY: where the entry ends, and what flies after it.</summary>
-    public static string OrbitalHandOversLabel(double handoverMach, double handoverKm, bool bellyflop)
-        => string.Create(Inv, $"HANDOVER: MACH {handoverMach:0.#} OR {handoverKm:0.#} km, ") + (bellyflop ? "BELLYFLOP" : "HOLD ATTITUDE");
+    /// <param name="next">What takes the craft at the hand-over: BELLYFLOP, RETRO BURN, PARACHUTES or HOLD ATTITUDE.</param>
+    public static string OrbitalHandOversLabel(double handoverMach, double handoverKm, string next)
+        => string.Create(Inv, $"HANDOVER: MACH {handoverMach:0.#} OR {handoverKm:0.#} km, ") + next;
 
     public const string OrbitalHandOversTip = "Where orbital entry ends, and where BELLYFLOP and TOUCHDOWN take the craft after it.";
 

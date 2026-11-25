@@ -51,6 +51,10 @@ public sealed class OrbitalEntryState
     /// BELLYFLOP DIRECT: engaged already past the hand-over (a save in the bellyflop, or a fall through the low air), so the entry is skipped and bellyflop takes the craft at its first plan; until then the attitude the craft had is held (HoldNoseCci, HoldBellyCci), not the entry's angle of attack.
     /// </summary>
     public bool BellyflopDirect;
+    /// <summary>The hold after the hand-over asked RETRO BURN for the craft, once: a refusal is not asked again, and the entry holds its attitude.</summary>
+    public bool RetroAsked;
+    /// <summary>The parachutes were armed at the hand-over (a craft with no engine to land on): they open by themselves at their deploy altitude, and the entry lets go once one does.</summary>
+    public bool ChutesArmed;
     public bool HoldLatched;
     public Brutal.Numerics.double3 HoldNoseCci, HoldBellyCci;
     public string LastRefusal = "";
@@ -102,6 +106,10 @@ public sealed class OrbitalEntryState
     public volatile EntryPlanner.Result AimCheck;
     public double AimDeparture, AimStartE, AimStartRangeM, AimCrossM, AimShortM, AimLongM, AimTargetM, AimShiftM;
     public double[] AimStartX;
+    /// <summary>The velocity after the aimed burn when the Lambert transfer to the entry point was taken (AimLambert), else null for the horizontal burn.</summary>
+    public Brutal.Numerics.double3? AimVelocity;
+    /// <summary>The coast from the top of the air to the start of the air, from the search: its range, m, and its time, s.</summary>
+    public double AimCoastRangeM, AimCoastS;
     public int AimTries;
 
     // ---- status ----
@@ -134,7 +142,7 @@ public sealed class OrbitalEntryState
         BellyIndex = -1;
         NextSolveAt = double.NegativeInfinity;
         Solves = Refusals = 0;
-        BellyflopDirect = HoldLatched = false;
+        BellyflopDirect = HoldLatched = RetroAsked = ChutesArmed = false;
         LastRefusal = "";
         LastSolveMs = 0;
         PredictedStartS = double.NaN;

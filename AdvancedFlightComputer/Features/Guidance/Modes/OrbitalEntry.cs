@@ -21,6 +21,12 @@ public static partial class GuidanceWindow
 {
     public enum OrbitalEntryPhase { Idle, Sweeping, Entry, Holding, Bellyflop }
 
+    /// <summary>After the hand-over BELLYFLOP flies (FLIP LANDING, on a craft with an engine to land on).</summary>
+    internal static bool EntryFlips => _s.OrbitalEntryBellyflop && _s.OrbitalEntryFlip;
+
+    /// <summary>After the hand-over RETRO BURN takes the craft (the 3-DOF), which turns it engine first.</summary>
+    internal static bool EntryRetro => _s.OrbitalEntryBellyflop && !_s.OrbitalEntryFlip;
+
     internal static bool OrbitalEntryLive => _s.OrbitalEntry.Phase is OrbitalEntryPhase.Sweeping or OrbitalEntryPhase.Entry or OrbitalEntryPhase.Holding or OrbitalEntryPhase.Bellyflop;
 
     private static bool OrbitalEntryLiveFor(VehicleAutopilotState s)
@@ -97,6 +103,40 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>Stop orbital entry: its solver and attitude let go, the engine left as it is.</summary>
+    /// <summary>
+    /// The hand-over to what follows the entry, other than bellyflop (which takes the craft at its own first plan, StepBellyflop).
+    ///  RETRO BURN: the 3-DOF is asked for once, as the boostback's glide asks for it (ThreeDofEngagePending): its claim ends the entry, while it waits for its sweep or its landing engines (the engage asks again itself) the entry holds its attitude, and after a refusal the entry goes on holding. It turns the craft engine first itself.
+    ///  PARACHUTES (a craft with no engine to land on): armed once, as the part menu's ARM does; each opens by itself at its deploy altitude, and the entry lets go of the craft once one has.
+    /// </summary>
+    private static void StepEntryHandOver(Vehicle vehicle, OrbitalEntryState st, double mach, double alt)
+    {
+        if (EntryRetro)
+        {
+            if (st.RetroAsked)
+                return;
+            GuidanceLog.Info(vehicle, FormattableString.Invariant($"Orbital entry hands the craft to RETRO BURN at Mach {mach:F2}, {alt / 1000:F1} km, {st.RangeM / 1000:F1} km to go."));
+            st.RetroAsked = true;
+            _s.ThreeDofEngagePending = true;
+            return;
+        }
+        if (_s.OrbitalEntryBellyflop)
+            return;
+        if (!st.ChutesArmed)
+        {
+            int count = KsaParachutes.Count(vehicle);
+            if (count == 0)
+                return;
+            int armed = KsaParachutes.ArmAll(vehicle);
+            st.ChutesArmed = true;
+            GuidanceLog.Info(vehicle, FormattableString.Invariant($"Orbital entry hand-over: {armed} of {count} parachutes armed at Mach {mach:F2}, {alt / 1000:F1} km; each opens at its own deploy altitude."));
+        }
+        if (KsaParachutes.AnyOpen(vehicle))
+        {
+            StopOrbitalEntry(vehicle, FormattableString.Invariant($"PARACHUTES OPEN AT {alt / 1000:F1} KM. CONTROL RELEASED."));
+            return;
+        }
+    }
+
     private static void StopOrbitalEntry(Vehicle vehicle, string why)
     {
         var st = _s.OrbitalEntry;
@@ -307,13 +347,16 @@ public static partial class GuidanceWindow
         {
             using var _queue = new AdvancedFlightComputer.Core.PerfTracker.Scope("Entry.QueueSolve");
             // BELLYFLOP: the entry aims at the ground through bellyflop's predicted fall from the hand-over.
-            if (_s.OrbitalEntryBellyflop)
+            if (EntryFlips)
             {
                 UpdateBellyflopRangeTarget(vehicle, parent, st);
                 cfg.TerminalRangeM = st.Bellyflop.TerminalRangeM;
                 cfg.TerminalRangeShortM = st.Bellyflop.TerminalShortM;
                 cfg.TerminalRangeLongM = st.Bellyflop.TerminalLongM;
             }
+            // RETRO BURN: the hand-over short of the site by the ground the retro burn's glide covers, a fixed estimate (RETRO AIM SHORT).
+            else if (EntryRetro)
+                cfg.TerminalRangeM = Math.Max(_s.OrbitalEntryRetroAimShortKm, 0.0) * 1000.0;
             QueueOrbitalEntrySolve(vehicle, parent, st, cfg, nominal, e, rMag, vMag, gamma, rangeRad, drag, now);
         }
 
@@ -322,15 +365,21 @@ public static partial class GuidanceWindow
         {
             st.Phase = OrbitalEntryPhase.Holding;
             // Past the hand-over before the entry ever planned: engaged in the bellyflop's own air, so bellyflop takes the craft at its first plan (BELLYFLOP DIRECT).
-            if (st.Solves == 0 && st.Plan == null && _s.OrbitalEntryBellyflop)
+            if (st.Solves == 0 && st.Plan == null && EntryFlips)
             {
                 st.BellyflopDirect = true;
                 GuidanceLog.Info(vehicle, FormattableString.Invariant(
                     $"BELLYFLOP DIRECT: engaged past the hand-over, at Mach {mach:F2} and {alt / 1000:F1} km, {st.RangeM / 1000:F1} km to go: no entry, bellyflop takes the craft at its first plan; the attitude it has is held until then."));
             }
             GuidanceLog.Info(vehicle, FormattableString.Invariant(
-                $"Orbital entry hand-over: Mach {mach:F2} at {alt / 1000:F1} km, {st.RangeM / 1000:F1} km to go, {st.CrossrangeM / 1000:F1} km across{(_s.OrbitalEntryBellyflop ? FormattableString.Invariant($" (bellyflop's fall {st.Bellyflop.TerminalRangeM / 1000:F1} km)") : "")}."));
+                $"Orbital entry hand-over: Mach {mach:F2} at {alt / 1000:F1} km, {st.RangeM / 1000:F1} km to go, {st.CrossrangeM / 1000:F1} km across{(EntryFlips ? FormattableString.Invariant($" (bellyflop's fall {st.Bellyflop.TerminalRangeM / 1000:F1} km)") : "")}."));
         }
+
+        // ---- after the hand-over: RETRO BURN takes the craft, or the parachutes are armed ----
+        if (st.Phase == OrbitalEntryPhase.Holding && !st.BellyflopDirect)
+            StepEntryHandOver(vehicle, st, mach, alt);
+        if (st.Phase == OrbitalEntryPhase.Idle)
+            return;
 
         // ---- bellyflop: solving in the background, taking over at the hand-over ----
         using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Entry.Bellyflop"))
@@ -356,7 +405,10 @@ public static partial class GuidanceWindow
             double b = st.Tracker.BankDeg;
             bankDeg = Math.Abs(b) <= step ? 0.0 : b - Math.Sign(b) * step;
             st.Tracker.Reset();
-            st.SetStatus(FormattableString.Invariant($"HAND-OVER: MACH {mach:F1} AT {alt / 1000:F1} KM, {st.RangeM / 1000:F0} KM TO GO. HOLDING ENTRY ATTITUDE."));
+            string next = st.ChutesArmed ? "PARACHUTES ARMED: THEY OPEN AT THEIR DEPLOY ALTITUDE."
+                : st.RetroAsked ? "HOLDING ENTRY ATTITUDE UNTIL RETRO BURN TAKES THE CRAFT."
+                : "HOLDING ENTRY ATTITUDE.";
+            st.SetStatus(FormattableString.Invariant($"HAND-OVER: MACH {mach:F1} AT {alt / 1000:F1} KM, {st.RangeM / 1000:F0} KM TO GO. ") + next);
         }
         else
         {

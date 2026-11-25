@@ -1805,6 +1805,8 @@ public sealed class VehicleAutopilotState
 
     /// <summary>How far short of the site, along the bearing to it, bellyflop aims its fall, m: the ground the flip and landing burn will cover after it.</summary>
     public double OrbitalEntryBellyflopAimUprangeM = 200.0;
+    /// <summary>How far short of the site the entry aims its hand-over when RETRO BURN follows it, km (RETRO AIM SHORT).</summary>
+    public double OrbitalEntryRetroAimShortKm = 30.0;
     /// <summary>Nose radius for the heating estimate, m.</summary>
     public double OrbitalEntryNoseRadiusM = 1.0;
     /// <summary>Smallest bank the plan uses, deg: side lift kept for the roll reversals.</summary>
@@ -1867,6 +1869,10 @@ public sealed class VehicleAutopilotState
     public bool OrbitalEntryAimDeorbit = true;
     /// <summary>LAND NOW's GLIDE row: FLIP LANDING (orbital entry's bellyflop, then touchdown guidance) instead of RETRO BURN (the 3-DOF glide and landing burn, then touchdown guidance).</summary>
     public bool LandFlip;
+    /// <summary>The GLIDE row after an orbital entry (DEORBIT, ENTRY/BRAKING): FLIP LANDING, else RETRO BURN.</summary>
+    public bool EntryFlip = true;
+    /// <summary>What the orbital entry that flies or is next hands to, set by the LAND page from the way it engages: LAND NOW's FLIP LANDING, or the entry's own GLIDE row. Not kept.</summary>
+    public bool OrbitalEntryFlip = true;
     /// <summary>Where in the corridor the site is aimed: 0 at its short end (most drag), 1 at its long end (the glide).</summary>
     public double OrbitalEntryAimFraction = 0.5;
     /// <summary>The farthest the site may sit off the pass's ground track, km.</summary>

@@ -119,8 +119,12 @@ public static partial class GuidanceWindow
                 _s.DeorbitOnly = air;
                 _s.DeorbitBrakingOnly = way == LandWay.Entry;
             }
-            if (!EntryLive(_s))
+            if (!OrbitalEntryLive && !_s.OrbitalEntry.EngagePending)
+            {
                 _s.OrbitalEntryBellyflop = LandEngineOnCraft(vehicle);
+                // LAND NOW engages orbital entry only for its FLIP LANDING; DEORBIT and ENTRY/BRAKING by their own GLIDE row.
+                _s.OrbitalEntryFlip = way == LandWay.FromHere || _s.EntryFlip;
+            }
         }
         LandSolver solver = LandSolverOf(way);
         DescentFacts descent = LandWays.HasSolver(way) || way == LandWay.Entry ? ReadDescentFacts(vehicle) : default;
@@ -248,13 +252,80 @@ public static partial class GuidanceWindow
         if (vehicle.Orbit?.Parent == null || way == LandWay.Hover)
             return;
         LandSolver solver = LandSolverOf(way);
-        if (way == LandWay.FromHere && solver == LandSolver.Entry && situation.HasAir)
-            DrawGlideRow();
-        ChainStep[] chain = LandChain.For(way, solver, situation.Where, situation.HasAir, _s.LandFlip, LandEngineOnCraft(vehicle), BelowBrakingStart(vehicle), _landHoverFlies);
+        bool canLand = LandEngineOnCraft(vehicle);
+        // The glide is a choice where one follows: on LAND NOW where the craft falls through air, and after an orbital entry on a craft with an engine to land on.
+        if (situation.HasAir && (way == LandWay.FromHere ? solver == LandSolver.Entry : way is LandWay.FromOrbit or LandWay.Entry && canLand))
+            DrawGlideRow(way);
+        ChainStep[] chain = LandChain.For(way, solver, situation.Where, situation.HasAir, GlideFlips(way), canLand, BelowBrakingStart(vehicle), _landHoverFlies, KsaParachutes.Count(vehicle) > 0);
         if (LandChain.Shows(chain))
             DrawPathStrip(way, chain, WayCannotFly(vehicle, way, solver, in situation), situation.HasAir);
         DrawPathNotes(way, solver, in situation, read.Descent);
         ConsoleUi.Gap();
+    }
+
+    /// <summary>
+    /// The path while the way flies, above its live rows, with the step flying now in brackets: the same path the form drew before the press. The steps are not buttons here; the PLAN row opens the form with them.
+    /// </summary>
+    private static void DrawLivePath(Vehicle vehicle, LandWay way)
+    {
+        if (way == LandWay.Hover)
+            return;
+        SituationFacts situation = Ui.Console.ConsoleFrame.ReadFacts(vehicle);
+        LandSolver solver = LandSolverOf(way);
+        ChainStep[] chain = LandChain.For(way, solver, situation.Where, situation.HasAir, way == LandWay.FromHere ? _s.LandFlip : _s.OrbitalEntryFlip, LandEngineOnCraft(vehicle), BelowBrakingStart(vehicle), _landHoverFlies, KsaParachutes.Count(vehicle) > 0);
+        if (LandChain.Shows(chain))
+            ConsoleUi.ChainStrip(chain, live: LiveStepIndex(chain));
+    }
+
+    /// <summary>Where in the path the craft is: the step of the mode that flies now, found by its name in <paramref name="chain"/>; -1 while nothing flies or the step is not in this way's path.</summary>
+    private static int LiveStepIndex(ChainStep[] chain)
+    {
+        string live = LiveStepText();
+        if (live.Length == 0)
+            return -1;
+        for (int i = 0; i < chain.Length; i++)
+            if (chain[i].Text == live)
+                return i;
+        return -1;
+    }
+
+    /// <summary>The name in the path of what flies now, the mode closest to the ground first: touchdown guidance, the hover, the retro burn, orbital entry and its bellyflop, the deorbit's phases, the boostback's.</summary>
+    private static string LiveStepText()
+    {
+        if (_s.Active || _s.EngagePending)
+            return LandSolvers.Label(LandSolver.Touchdown);
+        if (_s.LandingPhase is LandingPhase.TerminalHover or LandingPhase.TerminalCoast or LandingPhase.TerminalBrake)
+            return "HOVER";
+        if (EntryLive(_s))
+            return EntryMethods.GlideBurnLabel;
+        if (OrbitalEntryLive || _s.OrbitalEntry.EngagePending)
+            return _s.OrbitalEntry.Phase switch
+            {
+                OrbitalEntryPhase.Bellyflop => LandChain.Bellyflop,
+                OrbitalEntryPhase.Holding when _s.OrbitalEntry.ChutesArmed => LandChain.Parachutes,
+                OrbitalEntryPhase.Holding when _s.OrbitalEntryBellyflop => EntryMethods.OrbitalLabel,
+                OrbitalEntryPhase.Holding => LandChain.Hold,
+                _ => EntryMethods.OrbitalLabel,
+            };
+        switch (_s.LandingPhase)
+        {
+            case LandingPhase.DeorbitPlanning or LandingPhase.DeorbitCoast or LandingPhase.DeorbitNodePending or LandingPhase.DeorbitBurn:
+                return SituationText.IsFalling(Ui.Console.AfcConsole.Frame.Situation.Where) ? LandChain.StockBurnIfNeeded : LandChain.StockBurn;
+            case LandingPhase.TransferPlanning or LandingPhase.TransferCoast or LandingPhase.Coast:
+                return "COAST";
+            case LandingPhase.Prep or LandingPhase.Burn:
+                return EntryMethods.BrakingLabel;
+            case LandingPhase.GfoldDescent:
+                return LandSolvers.Label(LandSolver.Gfold);
+        }
+        return _s.BoostbackPhase switch
+        {
+            BoostbackPhase.Separation => "SETTLE",
+            BoostbackPhase.Rotation => "SLEW",
+            BoostbackPhase.Boostback => "BURN",
+            BoostbackPhase.Glide => "GLIDE",
+            _ => "",
+        };
     }
 
     // The step of the path whose settings show under it, by its name; empty for none. Not kept: the page opens with the path alone.
@@ -273,7 +344,7 @@ public static partial class GuidanceWindow
             if (clickable[i] && chain[i].Text == _landStepOpen)
                 open = i;
         }
-        int clicked = ConsoleUi.ChainStrip(chain, cannotFly, "AfcLandPath", open, clickable);
+        int clicked = ConsoleUi.ChainStrip(chain, cannotFly, "AfcLandPath", open, clickable, LiveStepIndex(chain));
         if (clicked >= 0)
         {
             open = clicked == open ? -1 : clicked;
@@ -314,6 +385,8 @@ public static partial class GuidanceWindow
                 DrawApproachSection(innerW);
                 break;
             case EntryMethods.OrbitalLabel:
+                if (EntryRetro)
+                    GaugeRow(Specs.OrbitalEntryRetroAimShortKm, ref _s.OrbitalEntryRetroAimShortKm);
                 GaugeRow(Specs.OrbitalEntryQMaxKPa, ref _s.OrbitalEntryQMaxKPa);
                 GaugeRow(Specs.OrbitalEntryGMax, ref _s.OrbitalEntryGMax);
                 GaugeRow(Specs.OrbitalEntryHeatMaxKWm2, ref _s.OrbitalEntryHeatMaxKWm2);
@@ -360,18 +433,25 @@ public static partial class GuidanceWindow
         }
     }
 
-    /// <summary>The GLIDE row of LAND NOW: FLIP LANDING or RETRO BURN, kept with the craft. Either can be picked while the other flies: the commit then takes the craft over, after the question of the footer.</summary>
-    private static void DrawGlideRow()
+    /// <summary>The way's GLIDE row chose FLIP LANDING: LAND NOW's own (RETRO BURN by default), or the one after an orbital entry (FLIP LANDING by default).</summary>
+    private static bool GlideFlips(LandWay way) => way == LandWay.FromHere ? _s.LandFlip : _s.EntryFlip;
+
+    /// <summary>The GLIDE row: FLIP LANDING or RETRO BURN, kept with the craft, one for LAND NOW and one for after an orbital entry, each with its own default. On LAND NOW either can be picked while the other flies: the commit then takes the craft over, after the question of the footer.</summary>
+    private static void DrawGlideRow(LandWay way)
     {
-        int picked = ConsoleUi.ChoiceRow("GLIDE", "AfcLandGlide", EntryMethods.GlideLabels, _s.LandFlip ? 1 : 0, cards: EntryMethods.GlideCards);
-        if (picked >= 0 && (picked == 1) != _s.LandFlip)
+        bool flip = GlideFlips(way);
+        int picked = ConsoleUi.ChoiceRow("GLIDE", "AfcLandGlide", EntryMethods.GlideLabels, flip ? 1 : 0, cards: EntryMethods.GlideCards);
+        if (picked >= 0 && (picked == 1) != flip)
         {
-            _s.LandFlip = picked == 1;
+            if (way == LandWay.FromHere)
+                _s.LandFlip = picked == 1;
+            else
+                _s.EntryFlip = picked == 1;
             ConsoleUi.ShapeChanged = true;
         }
     }
 
-    /// <summary>Under the path: what stands against the powered end (LandSolvers.NoteOf), why touchdown guidance is held while G-FOLD flies, and the G-FOLD fallback.</summary>
+    /// <summary>Under the path: what stands against the powered end (LandSolvers.NoteOf), and why touchdown guidance is held while G-FOLD flies.</summary>
     private static void DrawPathNotes(LandWay way, LandSolver solver, in SituationFacts situation, in DescentFacts descent)
     {
         bool powered = LandWays.HasSolver(way) && solver != LandSolver.Entry;
@@ -385,10 +465,6 @@ public static partial class GuidanceWindow
         ConsoleUi.NoteShape("AfcLandHeld", line.Length);
         if (line.Length > 0)
             ConsoleUi.Sentence(line.AsSpan(), ConsoleStyle.TextLabel);
-        string fallback = powered ? LandSolvers.FallbackLine(in facts) : "";
-        ConsoleUi.NoteShape("AfcLandFallback", fallback.Length);
-        if (fallback.Length > 0)
-            ConsoleUi.MutedWrapped(fallback);
     }
 
     private static bool WayCannotFly(Vehicle vehicle, LandWay way, LandSolver solver, in SituationFacts situation)
@@ -405,6 +481,7 @@ public static partial class GuidanceWindow
         IParentBody parent = orbit?.Parent;
         if (parent == null)
             return;
+        DrawLivePath(vehicle, way);
         DrawLegsNote(vehicle, way);
         DrawLandWay(vehicle, orbit, parent, parent.MeanRadius, innerW, way);
     }
@@ -852,7 +929,7 @@ public static partial class GuidanceWindow
                 ConsoleUi.FoldEmpty(PageText.NoHandOversLabel, PageText.NoHandOversTip(solver));
             return;
         }
-        string label = orbital ? PageText.OrbitalHandOversLabel(_s.OrbitalEntryHandoverMach, _s.OrbitalEntryHandoverAltKm, _s.OrbitalEntryBellyflop)
+        string label = orbital ? PageText.OrbitalHandOversLabel(_s.OrbitalEntryHandoverMach, _s.OrbitalEntryHandoverAltKm, EntryFlips ? LandChain.Bellyflop : EntryRetro ? EntryMethods.GlideBurnLabel : KsaParachutes.Count(Program.ControlledVehicle) > 0 ? LandChain.Parachutes : "HOLD ATTITUDE")
             : entryRows
             ? PageText.HandOversLabel(_s.ThreeDofEngageTgoS, _s.ThreeDofSixDofTimeS, _s.ThreeDofEngageQkPa)
             : PageText.HoverHandOverLabel(_s.GfoldHoverHandoffAltM, hoverCanFly, _landHoverKnown);

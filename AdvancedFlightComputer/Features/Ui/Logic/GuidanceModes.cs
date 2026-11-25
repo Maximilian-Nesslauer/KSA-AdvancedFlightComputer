@@ -26,7 +26,9 @@ internal sealed record GuidanceModeDescriptor(
     string StopLabel = "",
     string StopOutcome = "",
     string StopDetail = "",
-    string ModeName = "");
+    string ModeName = "",
+    Func<PathFacts, ChainStep[]>? Steps = null,
+    Func<PathFacts, GuidanceModeId?>? Next = null);
 
 internal enum StepPlace { Done, Now, Next, Dropped }
 
@@ -118,21 +120,74 @@ internal static class GuidanceModes
     {
         // While the G-FOLD landing machine flies, the landing stop ends the descent, also when touchdown guidance is still engaged beside it.
         new(GuidanceModeId.SixDofHere, ConsolePage.Land, "TOUCHDOWN", 10,
-            a => a.SixDofEngaged && !a.LandingMachineLive, _ => StopTarget.SixDof, SixDofPhases),
+            a => a.SixDofEngaged && !a.LandingMachineLive, _ => StopTarget.SixDof, SixDofPhases,
+            Steps: _ => [new ChainStep(TouchdownStep)], Next: _ => null),
         new(GuidanceModeId.Hover, ConsolePage.Land, "HOVER", 20,
-            a => a.HoverLive, _ => StopTarget.Hover, HoverPhases),
+            a => a.HoverLive, _ => StopTarget.Hover, HoverPhases,
+            Steps: _ => [new ChainStep("HOVER")], Next: _ => null),
         new(GuidanceModeId.GfoldHere, ConsolePage.Land, "G-FOLD", 30,
-            a => a.LandingMachineLive, _ => StopTarget.Landing, GfoldPhases),
+            a => a.LandingMachineLive, _ => StopTarget.Landing, GfoldPhases,
+            Steps: _ => [new ChainStep("G-FOLD")], Next: f => f.HoverFlies ? GuidanceModeId.Hover : null),
         new(GuidanceModeId.DeorbitLand, ConsolePage.Land, "DEORBIT + LAND", 40,
-            a => a.DescentLive, _ => StopTarget.Landing, DeorbitPhases),
+            a => a.DescentLive, _ => StopTarget.Landing, DeorbitPhases,
+            Steps: DeorbitSteps, Next: f => f.HasAir ? GuidanceModeId.OrbitalEntry : f.GfoldFlies ? GuidanceModeId.GfoldHere : GuidanceModeId.SixDofHere),
         new(GuidanceModeId.Boostback, ConsolePage.Land, "BOOSTBACK", 50,
-            a => a.BoostbackLive || a.BoostbackPending, _ => StopTarget.Boostback, BoostbackPhases),
+            a => a.BoostbackLive || a.BoostbackPending, _ => StopTarget.Boostback, BoostbackPhases,
+            Steps: f => f.HasAir
+                ? [new ChainStep("SETTLE"), new ChainStep("SLEW"), new ChainStep("BURN"), new ChainStep("GLIDE")]
+                : [new ChainStep("SETTLE"), new ChainStep("SLEW"), new ChainStep("BURN"), new ChainStep("FALL"), new ChainStep(LandChain.Impact, Danger: true)],
+            Next: f => f.HasAir ? GuidanceModeId.EntryHere : null),
         new(GuidanceModeId.AscentUpfg, ConsolePage.Launch, "CAT-S / UPFG", 60,
             a => a.AscentRunning || a.LaunchArmed || a.ConvexLaunchPending,
-            a => a.AscentRunning ? StopTarget.Ascent : StopTarget.LaunchArmed, AscentPhases),
+            a => a.AscentRunning ? StopTarget.Ascent : StopTarget.LaunchArmed, AscentPhases, Next: _ => null),
         new(GuidanceModeId.AscentGravityTurn, ConsolePage.Launch, "GRAVITY TURN", 70,
             _ => false, _ => StopTarget.Ascent, Array.Empty<string>(),
-            Available: false, UnavailableReason: GravityTurnUnavailable),
+            Available: false, UnavailableReason: GravityTurnUnavailable, Next: _ => null),
+    };
+
+    /// <summary>The landing path's last step: touchdown guidance ends every powered landing.</summary>
+    public const string TouchdownStep = "TOUCHDOWN";
+
+    /// <summary>
+    /// The deorbit's own steps: through air only the entry burn, which hands to orbital entry. With no air the burn (only if needed when the craft already falls), the coast and the braking burn, or the braking burn alone where the way flies it with no deorbit burn (ENTRY/BRAKING); below the braking start, none, and the landing mode takes it.
+    /// </summary>
+    private static ChainStep[] DeorbitSteps(PathFacts f)
+    {
+        if (f.HasAir)
+            return [new ChainStep(LandChain.StockBurn, Stock: true)];
+        if (f.BrakingOnly)
+            return [new ChainStep(EntryMethods.BrakingLabel)];
+        bool falling = SituationText.IsFalling(f.Where);
+        if (falling && f.BelowBrakingStart)
+            return [];
+        return [new ChainStep(falling ? LandChain.StockBurnIfNeeded : LandChain.StockBurn, Stock: true), new ChainStep("COAST"), new ChainStep(EntryMethods.BrakingLabel)];
+    }
+
+    /// <summary>The steps a mode flies on the landing path, as it declares them; a mode that declares none is one step under its name.</summary>
+    public static ChainStep[] StepsOf(GuidanceModeId id, in PathFacts f)
+    {
+        GuidanceModeDescriptor? mode = Of(id);
+        return mode?.Steps is { } steps ? steps(f) : [new ChainStep(mode?.MethodLabel is { Length: > 0 } label ? label : DefaultLabel(id))];
+    }
+
+    /// <summary>The mode a mode hands the craft to, as it declares it; a mode that declares none hands to the default (<see cref="DefaultNext"/>). Null ends the path.</summary>
+    public static GuidanceModeId? NextOf(GuidanceModeId id, in PathFacts f)
+    {
+        GuidanceModeDescriptor? mode = Of(id);
+        return mode?.Next is { } next ? next(f) : DefaultNext(id, mode?.Page);
+    }
+
+    /// <summary>The default hand-over, for a mode that declares none: a landing mode hands to touchdown guidance, which ends every powered landing, and touchdown, the hover and any other mode end the path.</summary>
+    public static GuidanceModeId? DefaultNext(GuidanceModeId id, ConsolePage? page = null)
+        => (page ?? ConsolePage.Land) == ConsolePage.Land && id is not (GuidanceModeId.SixDofHere or GuidanceModeId.Hover or GuidanceModeId.GfoldHere)
+            ? GuidanceModeId.SixDofHere
+            : null;
+
+    private static string DefaultLabel(GuidanceModeId id) => id switch
+    {
+        GuidanceModeId.OrbitalEntry => EntryMethods.OrbitalLabel,
+        GuidanceModeId.EntryHere => EntryMethods.GlideBurnLabel,
+        _ => id.ToString().ToUpperInvariant(),
     };
 
     private static GuidanceModeDescriptor[]? _byStopOrder;
@@ -175,11 +230,12 @@ internal static class GuidanceModes
     /// </summary>
     public static GuidanceModeDescriptor Registered(
         GuidanceModeId id, ConsolePage page, string methodLabel, int stopOrder, IReadOnlyList<string> phases,
-        string commitVerb, string stopLabel, string stopOutcome, string stopDetail, string modeName = "")
+        string commitVerb, string stopLabel, string stopOutcome, string stopDetail, string modeName = "",
+        Func<PathFacts, ChainStep[]>? steps = null, Func<PathFacts, GuidanceModeId?>? next = null)
         => new(id, page, methodLabel, stopOrder,
             a => a.RegisteredModeLive == id, _ => StopTarget.Registered, phases,
             CommitVerb: commitVerb, StopLabel: stopLabel, StopOutcome: stopOutcome, StopDetail: stopDetail,
-            ModeName: modeName);
+            ModeName: modeName, Steps: steps, Next: next);
 
     /// <summary>Back to the built-in modes, for the mod unload.</summary>
     public static void ResetToBuiltIns()

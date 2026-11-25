@@ -8,8 +8,9 @@ internal readonly record struct ChainStep(string Text, bool Stock = false, bool 
 /// <summary>
 /// The path of modes a LAND way flies, drawn under the way's rows before the engage and marked while it flies:
 /// DEORBIT (the burn) > ENTRY/BRAKING (orbital entry where there is air, the braking burn where there is none) >
-/// the fall to the landing burn after an entry (FLIP LANDING: bellyflop) > TOUCHDOWN, which ends every powered
-/// landing. The commit engages the same path (ConsolePages.ModeIdFor), so the line says what the press flies.
+/// the fall to the landing burn after an entry (FLIP LANDING: bellyflop, or RETRO BURN) > TOUCHDOWN, which ends every
+/// powered landing. Each mode declares its own steps and the mode it hands to (GuidanceModeDescriptor.Steps, .Next),
+/// and the path follows them from the mode the commit engages (ConsolePages.ModeIdFor), so the line says what the press flies.
 /// </summary>
 internal static class LandChain
 {
@@ -26,83 +27,48 @@ internal static class LandChain
 
     public const string YouFly = "YOU FLY";
 
-    public static bool EndsInImpact(ReadOnlySpan<ChainStep> steps) => steps.Length > 0 && steps[^1].Danger;
+    /// <summary>The end of an entry for a craft with parachutes and no engine to land on: orbital entry arms them at the hand-over, and each opens at its own deploy altitude.</summary>
+    public const string Parachutes = "PARACHUTES";
 
-    /// <summary>A step of the path that has settings of its own, so a click on it shows them (GuidanceWindow.DrawStepRows). A coast, a hold, the pilot's part and a crash have none, and nor have a boostback's settle and slew.</summary>
-    public static bool HasSettings(string step) => step is StockBurn or StockBurnIfNeeded or Bellyflop or "TOUCHDOWN" or "G-FOLD" or "HOVER" or "BURN" or "GLIDE"
-        || step == EntryMethods.OrbitalLabel || step == EntryMethods.GlideBurnLabel || step == EntryMethods.BrakingLabel;
+    public static bool EndsInImpact(ReadOnlySpan<ChainStep> steps) => steps.Length > 0 && steps[^1].Danger;
 
     /// <summary>Every way but HOVER shows its path, also a path of one step: what flies is never left to guess.</summary>
     public static bool Shows(ReadOnlySpan<ChainStep> steps) => steps.Length > 0;
 
-    /// <param name="flip">LAND NOW's glide is FLIP LANDING, not RETRO BURN.</param>
-    /// <param name="canLand">The craft has an engine to land on; with none, an entry ends in HOLD and the pilot flies the rest.</param>
-    public static ChainStep[] For(LandWay way, LandSolver solver, CraftSituation where, bool hasAir, bool flip = false, bool canLand = true, bool belowBrakingStart = false, bool hoverFlies = true)
+    /// <summary>
+    /// The path of a way: from the mode its commit engages (ConsolePages.ModeIdFor), each mode's own steps (GuidanceModeDescriptor.Steps), then the mode it hands to (GuidanceModeDescriptor.Next, else GuidanceModes.DefaultNext), until a mode hands to none. HOVER shows no path.
+    /// </summary>
+    /// <param name="flip">The way's glide is FLIP LANDING, not RETRO BURN: LAND NOW's own, or the one after an orbital entry.</param>
+    /// <param name="canLand">The craft has an engine to land on; with none, an entry ends in PARACHUTES where it has them, else in HOLD and the pilot flies the rest.</param>
+    /// <param name="chutes">The craft has parachutes.</param>
+    public static ChainStep[] For(LandWay way, LandSolver solver, CraftSituation where, bool hasAir, bool flip = false, bool canLand = true, bool belowBrakingStart = false, bool hoverFlies = true, bool chutes = false)
+    {
+        if (way == LandWay.Hover)
+            return [];
+        var facts = new PathFacts(way, hasAir, canLand, chutes, flip, hoverFlies, where, belowBrakingStart,
+            GfoldFlies: solver == LandSolver.Gfold, BrakingOnly: way == LandWay.Entry && !hasAir);
+        return Follow(ConsolePages.ModeIdFor(ConsolePage.Land, way, solver, AscentChoice.CatsUpfg, hasAir, flip && hasAir && way == LandWay.FromHere), in facts);
+    }
+
+    /// <summary>The steps from <paramref name="first"/> on, each mode once.</summary>
+    public static ChainStep[] Follow(GuidanceModeId? first, in PathFacts facts)
     {
         var steps = new List<ChainStep>(8);
-        switch (way)
-        {
-            case LandWay.FromOrbit when hasAir:
-                steps.Add(new ChainStep(StockBurn, Stock: true));
-                AddEntry(steps, canLand);
-                break;
-            case LandWay.FromOrbit:
-                if (!(SituationText.IsFalling(where) && belowBrakingStart))
-                    steps.AddRange([new ChainStep(SituationText.IsFalling(where) ? StockBurnIfNeeded : StockBurn, Stock: true), new ChainStep("COAST"), new ChainStep(EntryMethods.BrakingLabel)]);
-                AddPoweredEnd(steps, solver, hoverFlies);
-                break;
-            case LandWay.Entry when hasAir:
-                AddEntry(steps, canLand);
-                break;
-            case LandWay.Entry:
-                steps.Add(new ChainStep(EntryMethods.BrakingLabel));
-                AddPoweredEnd(steps, solver == LandSolver.Entry ? LandSolver.Touchdown : solver, hoverFlies);
-                break;
-            case LandWay.FromHere when solver == LandSolver.Entry:
-                if (!hasAir)
-                {
-                    steps.Add(new ChainStep("NO PLAN, ENGINE OFF", Warn: true));
-                    steps.Add(new ChainStep(Impact, Danger: true));
-                    break;
-                }
-                steps.Add(new ChainStep(flip ? Bellyflop : EntryMethods.GlideBurnLabel));
-                steps.Add(new ChainStep(LandSolvers.Label(LandSolver.Touchdown)));
-                break;
-            case LandWay.FromHere:
-                AddPoweredEnd(steps, solver, hoverFlies);
-                break;
-            case LandWay.Boostback:
-                steps.AddRange([new ChainStep("SETTLE"), new ChainStep("SLEW"), new ChainStep("BURN"), new ChainStep(hasAir ? "GLIDE" : "FALL")]);
-                if (hasAir)
-                {
-                    steps.Add(new ChainStep(EntryMethods.GlideBurnLabel));
-                    steps.Add(new ChainStep(LandSolvers.Label(LandSolver.Touchdown)));
-                }
-                else
-                    steps.Add(new ChainStep(Impact, Danger: true));
-                break;
-            default:
-                break;
-        }
+        var seen = new HashSet<GuidanceModeId>();
+        for (GuidanceModeId? id = first; id is GuidanceModeId mode && seen.Add(mode); id = GuidanceModes.NextOf(mode, in facts))
+            steps.AddRange(GuidanceModes.StepsOf(mode, in facts));
         return steps.ToArray();
     }
 
-    private static void AddEntry(List<ChainStep> steps, bool canLand)
-    {
-        steps.Add(new ChainStep(EntryMethods.OrbitalLabel));
-        if (canLand)
-            steps.AddRange([new ChainStep(Bellyflop), new ChainStep(LandSolvers.Label(LandSolver.Touchdown))]);
-        else
-            steps.AddRange([new ChainStep(Hold), new ChainStep(YouFly, Warn: true)]);
-    }
-
-    private static void AddPoweredEnd(List<ChainStep> steps, LandSolver solver, bool hoverFlies)
-    {
-        steps.Add(new ChainStep(LandSolvers.Label(solver)));
-        if (solver == LandSolver.Gfold && hoverFlies)
-            steps.Add(new ChainStep("HOVER"));
-    }
+    /// <summary>A step of the path that has settings of its own, so a click on it shows them (GuidanceWindow.DrawStepRows). A coast, a hold, the pilot's part, the parachutes and a crash have none, and nor have a boostback's settle and slew.</summary>
+    public static bool HasSettings(string step) => step is StockBurn or StockBurnIfNeeded or Bellyflop or "TOUCHDOWN" or "G-FOLD" or "HOVER" or "BURN" or "GLIDE"
+        || step == EntryMethods.OrbitalLabel || step == EntryMethods.GlideBurnLabel || step == EntryMethods.BrakingLabel;
 }
+
+/// <summary>What the modes of a landing path decide their steps and their hand-over by: the way, the body's air, the craft (an engine to land on, parachutes, whether it can hover) and the player's glide.</summary>
+internal readonly record struct PathFacts(
+    LandWay Way, bool HasAir, bool CanLand = true, bool Chutes = false, bool Flip = true, bool HoverFlies = true,
+    CraftSituation Where = CraftSituation.Unknown, bool BelowBrakingStart = false, bool GfoldFlies = false, bool BrakingOnly = false);
 
 /// <summary>What the craft can do at the landing site, read once a frame. <see cref="DescentMs"/> and <see cref="AltToGoM"/> stand in the frame of the site, as the stop check reads them. <see cref="SinkMs"/> and <see cref="HeightM"/> are the local vertical speed and the height above the ground under the craft, for the rows that tell a pilot how he sinks: motion past a far site reads as a descent in the frame of the site, and a craft in an orbit does not sink.</summary>
 internal readonly record struct DescentFacts(

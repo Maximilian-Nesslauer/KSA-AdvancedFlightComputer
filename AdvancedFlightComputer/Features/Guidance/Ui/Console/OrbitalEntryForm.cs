@@ -71,7 +71,7 @@ public static partial class GuidanceWindow
         GaugeRowText("BANK", FormattableString.Invariant($"{(o.BankDeg >= 0 ? "R" : "L")}{Math.Abs(o.BankDeg):F0} deg (PLAN {o.BankRefDeg:F0}){(o.Overbanked ? ", OVERBANK" : "")}"));
         GaugeRowText("DRAG", FormattableString.Invariant($"{st.DragMs2:F1} OF {o.DragRefMs2:F1} m/s^2"));
         GaugeRowText("ANGLE OF ATTACK", FormattableString.Invariant($"{st.AlphaFlownDeg:F0} deg (ASKED {st.AlphaDeg:F0})"));
-        if (_s.OrbitalEntryBellyflop && double.IsFinite(st.Bellyflop.TerminalRangeM) && st.Bellyflop.TerminalRangeM > 0)
+        if (EntryFlips && double.IsFinite(st.Bellyflop.TerminalRangeM) && st.Bellyflop.TerminalRangeM > 0)
             GaugeRowText("BELLYFLOP FALL", FormattableString.Invariant($"{st.Bellyflop.TerminalRangeM / 1000:F1} km FROM THE HAND-OVER"));
     }
 
@@ -81,7 +81,12 @@ public static partial class GuidanceWindow
         GaugeRow(Specs.OrbitalEntryHandoverMach, ref _s.OrbitalEntryHandoverMach);
         GaugeRow(Specs.OrbitalEntryHandoverAltKm, ref _s.OrbitalEntryHandoverAltKm);
         // Bellyflop and touchdown follow the entry wherever the craft has an engine to land on (the path shows it), so only where they take over is set here.
-        using (ConsoleUi.Dim(!_s.OrbitalEntryBellyflop))
+        if (EntryRetro)
+        {
+            GaugeRow(Specs.OrbitalEntryRetroAimShortKm, ref _s.OrbitalEntryRetroAimShortKm);
+            return;
+        }
+        using (ConsoleUi.Dim(!EntryFlips))
         {
             GaugeRow(Specs.OrbitalEntryBellyflopArmMach, ref _s.OrbitalEntryBellyflopArmMach);
             GaugeRow(Specs.OrbitalEntryBellyflopAimUprangeM, ref _s.OrbitalEntryBellyflopAimUprangeM);

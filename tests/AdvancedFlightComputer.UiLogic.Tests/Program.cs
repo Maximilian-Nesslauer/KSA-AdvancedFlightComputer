@@ -142,6 +142,9 @@ internal static partial class Program
         Check("a path of more steps shows", LandChain.Shows(LandChain.For(LandWay.FromOrbit, LandSolver.Touchdown, CraftSituation.Orbit, false)));
         Check("G-FOLD with no answer about the hover has one step", LandChain.For(LandWay.FromHere, LandSolver.Gfold, CraftSituation.FallingNoAir, false, hoverFlies: false).Length == 1);
         Check("a hover shows no path", !LandChain.Shows(LandChain.For(LandWay.Hover, LandSolver.Touchdown, CraftSituation.Ground, true)));
+        // The entry modes declare their steps and hand-overs in their descriptors, which the game registers at load.
+        GuidanceModes.Register(EntryGuidance.Descriptor());
+        GuidanceModes.Register(OrbitalEntryGuidance.Descriptor());
         Check("a way that ends in a crash says so", LandChain.EndsInImpact(LandChain.For(LandWay.FromHere, LandSolver.Entry, CraftSituation.FallingNoAir, false))
             && !LandChain.EndsInImpact(one) && !LandChain.EndsInImpact([]));
 
@@ -1438,7 +1441,8 @@ internal static partial class Program
         Check("the hand-over switches are gone: the path decides", typeof(GuidanceSettingSpecs).GetField("ThreeDofFromGlide") == null
             && typeof(GuidanceSettingSpecs).GetField("ThreeDofSixDofHandover") == null && typeof(GuidanceSettingSpecs).GetField("OrbitalEntryAfterDeorbit") == null
             && typeof(GuidanceSettingSpecs).GetField("OrbitalEntryBellyflop") == null && typeof(GuidanceSettingSpecs).GetField("OrbitalEntryBellyflopTouchdown") == null);
-        Check("FLIP LANDING is a player choice kept with the craft", GuidanceSettingSpecs.LandFlip.Tier == UiTier.Player && !GuidanceSettingSpecs.LandFlip.Default
+        Check("the glide is a player choice kept with the craft: RETRO BURN on LAND NOW, FLIP LANDING after an entry", GuidanceSettingSpecs.LandFlip.Tier == UiTier.Player && !GuidanceSettingSpecs.LandFlip.Default
+            && GuidanceSettingSpecs.EntryFlip.Tier == UiTier.Player && GuidanceSettingSpecs.EntryFlip.Default && Array.IndexOf(GuidanceSettingSpecs.AllBools, GuidanceSettingSpecs.EntryFlip) >= 0
             && Array.IndexOf(GuidanceSettingSpecs.AllBools, GuidanceSettingSpecs.LandFlip) >= 0);
         Check("vehicle height is measured by default", GuidanceSettingSpecs.VehicleHeightAuto.Default
             && GuidanceSettingSpecs.VehicleHeightAuto.Tier == UiTier.Player);
@@ -2536,6 +2540,7 @@ internal static partial class Program
 
     private static void ModeRegistry()
     {
+        GuidanceModes.ResetToBuiltIns();
         Check("entry guidance is not built in", GuidanceModes.Of(GuidanceModeId.EntryHere) == null);
         // Entry guidance arrives through the registry, as GuidanceWindow.EnsureAfcModes registers it on the game side.
         GuidanceModes.Register(EntryGuidance.Descriptor());
@@ -2706,11 +2711,15 @@ internal static partial class Program
         }
         Check("orbital entry phases end in bellyflop", OrbitalEntryGuidance.Phases[^1] == "BELLYFLOP");
 
-        ChainStep[] chain = LandChain.For(LandWay.Entry, LandSolver.Entry, CraftSituation.Orbit, true);
+        ChainStep[] chain = LandChain.For(LandWay.Entry, LandSolver.Entry, CraftSituation.Orbit, true, flip: true);
         Check("an entry flies bellyflop and touchdown", string.Join(" > ", chain.Select(c => c.Text)) == "ORBITAL ENTRY > BELLYFLOP > TOUCHDOWN" && !LandChain.EndsInImpact(chain));
         chain = LandChain.For(LandWay.Entry, LandSolver.Entry, CraftSituation.Orbit, true, canLand: false);
-        Check("a craft with no engine to land on holds after the entry and the pilot flies", string.Join(" > ", chain.Select(c => c.Text)) == "ORBITAL ENTRY > HOLD > YOU FLY" && chain[^1].Warn);
-        chain = LandChain.For(LandWay.FromOrbit, LandSolver.Touchdown, CraftSituation.Orbit, true);
+        Check("a craft with no engine to land on and no parachutes holds after the entry and the pilot flies", string.Join(" > ", chain.Select(c => c.Text)) == "ORBITAL ENTRY > HOLD > YOU FLY" && chain[^1].Warn);
+        chain = LandChain.For(LandWay.Entry, LandSolver.Entry, CraftSituation.Orbit, true, canLand: false, chutes: true);
+        Check("a capsule's entry ends in its parachutes", string.Join(" > ", chain.Select(c => c.Text)) == "ORBITAL ENTRY > PARACHUTES" && !chain[^1].Warn);
+        chain = LandChain.For(LandWay.FromOrbit, LandSolver.Touchdown, CraftSituation.Orbit, true, flip: false);
+        Check("an entry can hand to the retro burn", string.Join(" > ", chain.Select(c => c.Text)) == "DEORBIT BURN > ORBITAL ENTRY > RETRO BURN > TOUCHDOWN");
+        chain = LandChain.For(LandWay.FromOrbit, LandSolver.Touchdown, CraftSituation.Orbit, true, flip: true);
         Check("a deorbit through air is the burn, then the entry", string.Join(" > ", chain.Select(c => c.Text)) == "DEORBIT BURN > ORBITAL ENTRY > BELLYFLOP > TOUCHDOWN" && chain[0].Stock);
         chain = LandChain.For(LandWay.Entry, LandSolver.Touchdown, CraftSituation.FallingNoAir, false);
         Check("ENTRY/BRAKING with no air is the braking burn, no deorbit burn", string.Join(" > ", chain.Select(c => c.Text)) == "BRAKING BURN > TOUCHDOWN");
@@ -2724,8 +2733,8 @@ internal static partial class Program
         Check("the TUNE part of orbital entry is in the landing count", GuidanceSettingSpecs.TuningOrbitalEntry.All(s => Array.IndexOf(GuidanceSettingSpecs.TuningLanding, s) >= 0));
         Check("the deorbit's aim stays with DEORBIT", Array.IndexOf(GuidanceSettingSpecs.LandFromOrbitExpert, GuidanceSettingSpecs.OrbitalEntryAimFraction) >= 0
             && GuidanceSettingSpecs.OrbitalEntryAimDeorbit.Tier == UiTier.Player);
-        Check("the hand-over of orbital entry says its values", PageText.OrbitalHandOversLabel(3.0, 30.0, true) == "HANDOVER: MACH 3 OR 30 km, BELLYFLOP"
-            && PageText.OrbitalHandOversLabel(2.5, 25.0, false).EndsWith("HOLD ATTITUDE"));
+        Check("the hand-over of orbital entry says its values", PageText.OrbitalHandOversLabel(3.0, 30.0, "BELLYFLOP") == "HANDOVER: MACH 3 OR 30 km, BELLYFLOP"
+            && PageText.OrbitalHandOversLabel(2.5, 25.0, "HOLD ATTITUDE").EndsWith("HOLD ATTITUDE"));
     }
 
     // Entry guidance through the registry: it outranks the boostback whose glide it takes over, touchdown guidance outranks it when it takes the burn, and the stop says what Disengage3Dof does to the engine in each stage.
@@ -2831,10 +2840,6 @@ internal static partial class Program
         var gfoldHolds = new LandNowFacts(LandWay.FromHere, LandSolver.Gfold, false, false, true);
         Check("a flying G-FOLD holds touchdown", LandSolvers.NoteOf(LandSolver.Touchdown, in gfoldHolds).Text == LandSolvers.HeldNote && LandSolvers.HeldLine(in gfoldHolds) == "TOUCHDOWN HELD: G-FOLD ACTIVE.");
         Check("with nothing held there is no sentence", LandSolvers.HeldLine(in noAirHere).Length == 0);
-        Check("DEORBIT with TOUCHDOWN chosen names the G-FOLD fallback", LandSolvers.FallbackLine(heldRows with { Way = LandWay.FromOrbit }) == LandSolvers.TouchdownFallback);
-        Check("LAND NOW with TOUCHDOWN chosen names the G-FOLD fallback too", LandSolvers.FallbackLine(in heldRows) == LandSolvers.TouchdownFallback);
-        Check("ENTRY, a flying G-FOLD or HOVER has no fallback line", LandSolvers.FallbackLine(heldRows with { Chosen = LandSolver.Entry }).Length == 0
-            && LandSolvers.FallbackLine(heldRows with { Way = LandWay.FromOrbit, Chosen = LandSolver.Gfold }).Length == 0 && LandSolvers.FallbackLine(heldRows with { Way = LandWay.Hover }).Length == 0);
         static List<TableMark> Marks(LandSolver solver, int row, bool chosen, RowNote note, bool air)
         {
             var marks = new List<TableMark>();
@@ -2865,6 +2870,9 @@ internal static partial class Program
         Check("a row that cannot fly on this body stays dim also while its way flies", LandSolvers.ChainCannotFly(LandWay.FromHere, LandSolver.Entry, false, CraftSituation.FallingNoAir, false, flies: true));
         Check("the method word follows the test of the chain", LandSolvers.MethodMark(1, false, false) == new TableMark(1, 0, TableInk.Method)
             && LandSolvers.MethodMark(1, true, false).Ink == TableInk.MethodDim && LandSolvers.MethodMark(1, false, true).Ink == TableInk.MethodDim);
+        // The entry modes declare their steps and hand-overs in their descriptors, which the game registers at load.
+        GuidanceModes.Register(EntryGuidance.Descriptor());
+        GuidanceModes.Register(OrbitalEntryGuidance.Descriptor());
         Check("the cause of a crash in the chain warns", LandChain.For(LandWay.FromHere, LandSolver.Entry, CraftSituation.Orbit, false, false, false) is [{ Warn: true, Danger: false }, { Danger: true }]);
         foreach (LandWay way in new[] { LandWay.FromOrbit, LandWay.FromHere })
             foreach (LandSolver s in Enum.GetValues<LandSolver>())
@@ -2877,6 +2885,20 @@ internal static partial class Program
                         string[] noted = LandSolvers.TableRow(s, 10.0, LandSolvers.HoverFlies(in d), air, now);
                         Check("a row with its note fits the narrow width", noted.Sum(c => c.Length) <= 49, string.Join(" | ", noted));
                     }
+
+        GuidanceModes.Register(EntryGuidance.Descriptor());
+        GuidanceModes.Register(OrbitalEntryGuidance.Descriptor());
+        foreach (GuidanceModeDescriptor mode in GuidanceModes.ByStopOrder)
+            Check("every mode declares the mode it hands to: " + mode.Id, mode.Next != null);
+        Check("a mode that declares no hand-over hands to the default: touchdown for a landing mode, none for touchdown itself",
+            GuidanceModes.DefaultNext(GuidanceModeId.OrbitalEntry) == GuidanceModeId.SixDofHere && GuidanceModes.DefaultNext(GuidanceModeId.SixDofHere) == null
+            && GuidanceModes.DefaultNext(GuidanceModeId.AscentUpfg, ConsolePage.Launch) == null);
+        var through = new PathFacts(LandWay.FromOrbit, HasAir: true);
+        Check("the deorbit through air hands to orbital entry, the entry to touchdown after bellyflop",
+            GuidanceModes.NextOf(GuidanceModeId.DeorbitLand, in through) == GuidanceModeId.OrbitalEntry && GuidanceModes.NextOf(GuidanceModeId.OrbitalEntry, in through) == GuidanceModeId.SixDofHere
+            && GuidanceModes.NextOf(GuidanceModeId.OrbitalEntry, through with { Flip = false }) == GuidanceModeId.EntryHere
+            && GuidanceModes.NextOf(GuidanceModeId.OrbitalEntry, through with { CanLand = false }) == null);
+        Check("the path follows each mode once", LandChain.Follow(GuidanceModeId.SixDofHere, in through).Length == 1);
 
         ChainStep[] chain = LandChain.For(LandWay.FromOrbit, LandSolver.Touchdown, CraftSituation.Orbit, false);
         Check("the deorbit chain starts with the stock burn", chain[0] == new ChainStep(LandChain.StockBurn, true) && chain.Skip(1).All(c => !c.Stock));

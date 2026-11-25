@@ -101,7 +101,6 @@ internal static class LandSolvers
     public static string HeldLine(in LandNowFacts f)
         => f.Way != LandWay.FromOrbit && f.GfoldFlies ? GfoldHoldsRow : "";
 
-    public const string TouchdownFallback = "If TOUCHDOWN has no plan for this craft, G-FOLD flies the descent where it can: no air, gimballed engine. Else LAND refuses the craft.";
 
     public const string EntryFirst = EntryMethods.GlideBurnLabel + " flies the fall through air first and hands its burn to TOUCHDOWN.";
 
@@ -114,9 +113,6 @@ internal static class LandSolvers
     public static bool EntryApplies(bool hasAir, CraftSituation where, bool thrust, double fallS)
         => hasAir && !thrust && (where is CraftSituation.FallingAir or CraftSituation.CoastingUp) && fallS >= EntryMinFallS;
 
-    /// <summary>The braking burn of DEORBIT + LAND (GuidanceWindow.StepBrakingHandover) and touchdown guidance in the air (GuidanceWindow.FallBackToGfold) hand a craft that touchdown guidance has no plan for to G-FOLD when G-FOLD can fly it, so the table says so while TOUCHDOWN is chosen.</summary>
-    public static string FallbackLine(in LandNowFacts f)
-        => f.Chosen == LandSolver.Touchdown && LandWays.HasSolver(f.Way) ? TouchdownFallback : "";
 
     public static void MarksOf(LandSolver solver, int row, bool chosen, in RowNote note, bool hasAir, List<TableMark> marks)
     {
@@ -284,7 +280,9 @@ internal static class EntryGuidance
 
     public static GuidanceModeDescriptor Descriptor()
         => GuidanceModes.Registered(GuidanceModeId.EntryHere, ConsolePage.Land, MethodLabel, StopOrder, Phases,
-            CommitVerb, StopLabel, FallbackOutcome, FallbackDetail, EntryMethods.GlideBurnLabel);
+            CommitVerb, StopLabel, FallbackOutcome, FallbackDetail, EntryMethods.GlideBurnLabel,
+            steps: f => f.HasAir ? [new ChainStep(EntryMethods.GlideBurnLabel)] : [new ChainStep("NO PLAN, ENGINE OFF", Warn: true), new ChainStep(LandChain.Impact, Danger: true)],
+            next: f => f.HasAir ? GuidanceModeId.SixDofHere : null);
 
     // The descriptor texts are read only when the stage texts of StopText are missing, so they hold for every stage.
     private const string FallbackOutcome = "ENGINE LIT IN BURN, ELSE CUT";
@@ -353,7 +351,26 @@ internal static class OrbitalEntryGuidance
 
     public static GuidanceModeDescriptor Descriptor()
         => GuidanceModes.Registered(GuidanceModeId.OrbitalEntry, ConsolePage.Land, MethodLabel, StopOrder, Phases,
-            CommitVerb, StopLabel, "ENGINE UNCHANGED", "Ends orbital entry guidance. AFC stops steering. The engine is not touched.", EntryMethods.OrbitalLabel);
+            CommitVerb, StopLabel, "ENGINE UNCHANGED", "Ends orbital entry guidance. AFC stops steering. The engine is not touched.", EntryMethods.OrbitalLabel,
+            steps: Steps, next: Next);
+
+    /// <summary>
+    /// Orbital entry's steps: the entry, then bellyflop where it flips (bellyflop is its last phase). LAND NOW's FLIP LANDING starts at bellyflop. A craft with no engine to land on ends in its parachutes, armed at the hand-over, or in a hold that the pilot flies on from.
+    /// </summary>
+    private static ChainStep[] Steps(PathFacts f)
+    {
+        if (f.Way == LandWay.FromHere)
+            return [new ChainStep(LandChain.Bellyflop)];
+        if (!f.CanLand)
+            return f.Chutes
+                ? [new ChainStep(EntryMethods.OrbitalLabel), new ChainStep(LandChain.Parachutes)]
+                : [new ChainStep(EntryMethods.OrbitalLabel), new ChainStep(LandChain.Hold), new ChainStep(LandChain.YouFly, Warn: true)];
+        return f.Flip ? [new ChainStep(EntryMethods.OrbitalLabel), new ChainStep(LandChain.Bellyflop)] : [new ChainStep(EntryMethods.OrbitalLabel)];
+    }
+
+    /// <summary>After bellyflop touchdown guidance takes the craft for the flip and the burn; after a plain entry RETRO BURN; a craft with no engine to land on ends the path here.</summary>
+    private static GuidanceModeId? Next(PathFacts f)
+        => !f.CanLand ? null : f.Flip || f.Way == LandWay.FromHere ? GuidanceModeId.SixDofHere : GuidanceModeId.EntryHere;
 
     public static (string Outcome, string Detail) StopText(OrbitalEntryStage stage) => stage switch
     {
