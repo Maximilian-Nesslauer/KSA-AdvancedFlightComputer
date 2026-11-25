@@ -241,8 +241,8 @@ public static partial class GuidanceWindow
                 GuidanceLog.Info(vehicle, "Orbital entry: the belly-first table sweep gave nothing (" + sweptError + ").");
         }
 
-        // Once the flaps' belly-first tables are in, the schedule is redone with their reach.
-        if (st.TablesReady && !st.FlapTrimDone && st.Aero.Surfaces is { Length: > 0 })
+        // Once the flaps' belly-first tables are in, the schedule is redone with their reach - only while TRIM AoA is on: off, ENTRY AoA is flown throughout.
+        if (_s.OrbitalEntryTrimAoa && st.TablesReady && !st.FlapTrimDone && st.Aero.Surfaces is { Length: > 0 })
             using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Entry.RetrimWithFlaps"))
                 RetrimWithFlaps(vehicle, st);
 

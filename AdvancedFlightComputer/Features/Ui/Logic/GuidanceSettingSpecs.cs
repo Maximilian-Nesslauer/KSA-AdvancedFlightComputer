@@ -315,7 +315,7 @@ internal static class GuidanceSettingSpecs
         "Seconds between bellyflop's re-solves, each warm from the plan before.");
     public static readonly SettingSpec OrbitalEntryStartDragMs2 = new("OrbitalEntryStartDragMs2", "START DRAG", "m/s^2", E, 0.02, 0.01, 20.0, "%.2f",
         "Drag at which the tracker takes hold, latched once reached. Above the air the craft holds its entry attitude lift-up.");
-    public static readonly SettingSpec OrbitalEntryAoaDeg = new("OrbitalEntryAoaDeg", "ENTRY AoA", "deg", E, 60.0, 0.0, 180.0, "%.0f",
+    public static readonly SettingSpec OrbitalEntryAoaDeg = new("OrbitalEntryAoaDeg", "ENTRY AoA", "deg", E, 55.0, 0.0, 180.0, "%.0f",
         "Angle of attack from nose-first: the trim angle nearest this where a Mach row has several, and the angle flown where it has none.");
     public static readonly SettingSpec OrbitalEntryAoaMinDeg = new("OrbitalEntryAoaMinDeg", "TRIM AoA MIN", "deg", E, 40.0, 0.0, 180.0, "%.0f",
         "Lowest pitch-trim angle of attack the schedule accepts.");
@@ -325,7 +325,7 @@ internal static class GuidanceSettingSpecs
         "Which body axis faces the air belly first: 0 the craft's own belly (+Z), 1 -Z, 2 +Z, 3 -Y, 4 +Y, 5 the best of the four by the sweep.");
     public static readonly SettingSpec OrbitalEntryResolveS = new("OrbitalEntryResolveS", "RE-SOLVE EVERY", "s", T, 2.0, 0.25, 60.0, "%.2f",
         "Seconds between orbital entry re-solves, each warm from the plan before.");
-    public static readonly BoolSpec OrbitalEntryTrimAoa = new("OrbitalEntryTrimAoa", "TRIM AoA", E, true,
+    public static readonly BoolSpec OrbitalEntryTrimAoa = new("OrbitalEntryTrimAoa", "TRIM AoA", E, false,
         "Fly the pitch-trim angle of attack at each Mach, from the belly-first sweep. Off flies ENTRY AoA throughout.");
     public static readonly BoolSpec OrbitalEntryOwnAttitude = new("OrbitalEntryOwnAttitude", "OWN ATTITUDE", E, true,
         "Fly the entry attitude with AFC's own attitude controller (surfaces and RCS). Off steers through the stock flight computer.");

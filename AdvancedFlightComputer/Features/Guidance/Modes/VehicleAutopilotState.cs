@@ -1845,10 +1845,10 @@ public sealed class VehicleAutopilotState
     public bool OrbitalEntryEngageInAir = true;
     /// <summary>Time constant of the low-pass on the commanded vertical L/D, s.</summary>
     public double OrbitalEntrySmoothS = 0.0;
-    /// <summary>Fly the pitch-trim angle of attack at each Mach (from the belly-first sweep); off flies OrbitalEntryAoaDeg throughout.</summary>
-    public bool OrbitalEntryTrimAoa = true;
+    /// <summary>Fly the pitch-trim angle of attack at each Mach (from the belly-first sweep); off flies OrbitalEntryAoaDeg throughout. Off by default, flying 55 deg for every craft, for now (2026-11-25, the user's call); the flap re-trim (RetrimWithFlaps) is skipped with it.</summary>
+    public bool OrbitalEntryTrimAoa = false;
     /// <summary>Preferred (and fallback) angle of attack from nose-first, deg, and the band a trim must lie in.</summary>
-    public double OrbitalEntryAoaDeg = 60.0;
+    public double OrbitalEntryAoaDeg = 55.0;
     public double OrbitalEntryAoaMinDeg = 40.0;
     public double OrbitalEntryAoaMaxDeg = 70.0;
     /// <summary>Which body axis is the belly: 0 the craft's own (+Z), then -Z, +Z, -Y, +Y, and 5 the best of the four by the sweep.</summary>
