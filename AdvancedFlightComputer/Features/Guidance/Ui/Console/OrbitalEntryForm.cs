@@ -80,16 +80,12 @@ public static partial class GuidanceWindow
     {
         GaugeRow(Specs.OrbitalEntryHandoverMach, ref _s.OrbitalEntryHandoverMach);
         GaugeRow(Specs.OrbitalEntryHandoverAltKm, ref _s.OrbitalEntryHandoverAltKm);
-        // Bellyflop is chosen at the take-over, so a switch in the bellyflop phase would change nothing.
-        using (new ImGuiDisabledScope(_s.OrbitalEntry.Phase == OrbitalEntryPhase.Bellyflop))
-            GaugeRowCheck(Specs.OrbitalEntryBellyflop, ref _s.OrbitalEntryBellyflop);
-        using (new ImGuiDisabledScope(!_s.OrbitalEntryBellyflop))
+        // Bellyflop and touchdown follow the entry wherever the craft has an engine to land on (the path shows it), so only where they take over is set here.
+        using (ConsoleUi.Dim(!_s.OrbitalEntryBellyflop))
         {
             GaugeRow(Specs.OrbitalEntryBellyflopArmMach, ref _s.OrbitalEntryBellyflopArmMach);
             GaugeRow(Specs.OrbitalEntryBellyflopAimUprangeM, ref _s.OrbitalEntryBellyflopAimUprangeM);
-            GaugeRowCheck(Specs.OrbitalEntryBellyflopTouchdown, ref _s.OrbitalEntryBellyflopTouchdown);
-            using (new ImGuiDisabledScope(!_s.OrbitalEntryBellyflopTouchdown))
-                GaugeRow(Specs.OrbitalEntryBellyflopTouchdownS, ref _s.OrbitalEntryBellyflopTouchdownS);
+            GaugeRow(Specs.OrbitalEntryBellyflopTouchdownS, ref _s.OrbitalEntryBellyflopTouchdownS);
         }
     }
 

@@ -289,16 +289,16 @@ internal static class EntryGuidance
     // The descriptor texts are read only when the stage texts of StopText are missing, so they hold for every stage.
     private const string FallbackOutcome = "ENGINE LIT IN BURN, ELSE CUT";
     private const string FallbackDetail =
-        "Ends GLIDE + BURN. In the landing burn the engine stays lit. In the glide it is cut.";
+        "Ends RETRO BURN. In the landing burn the engine stays lit. In the glide it is cut.";
 
     public static (string Outcome, string Detail) StopText(EntryStage stage, bool controlAcquired)
     {
         if (stage == EntryStage.Requested)
             return ("NOTHING STARTED, ENGINE UNCHANGED",
-                "Cancels the GLIDE + BURN request before it starts. The engine is not touched.");
+                "Cancels the RETRO BURN request before it starts. The engine is not touched.");
         if (!controlAcquired)
             return ("ENGINE UNCHANGED",
-                "Ends GLIDE + BURN. It holds no control yet. The engine is not touched.");
+                "Ends RETRO BURN. It holds no control yet. The engine is not touched.");
         return stage == EntryStage.Burn
             ? ("ENGINE LIT", "Engine stays lit at the last throttle. AFC stops steering.")
             : ("ENGINE OFF", "Engine stays off. AFC stops steering.");
@@ -312,30 +312,25 @@ internal static class EntryGuidance
         "NO AIR: NO PLAN, ENGINE OFF. STOP, THEN USE TOUCHDOWN.";
 }
 
-/// <summary>The METHOD row of LAND > ENTRY, as plain rules: ORBITAL ENTRY from the top of the air, or GLIDE + BURN (the 3-DOF) from wherever the craft falls through air.</summary>
+/// <summary>The names of the landing path's air steps, as plain rules: ORBITAL ENTRY from orbit or the top of the air, and the two ways of falling to the landing burn, FLIP LANDING (bellyflop) and RETRO BURN (the 3-DOF's engine-first glide and landing burn). Touchdown guidance flies the end of both.</summary>
 internal static class EntryMethods
 {
     public const string OrbitalLabel = "ORBITAL ENTRY";
 
-    /// <summary>The 3-DOF's name in the console: its glide with the engine off, then its landing burn.</summary>
-    public const string GlideBurnLabel = "GLIDE + BURN";
+    /// <summary>The 3-DOF's name in the console: its engine-first glide, then its landing burn.</summary>
+    public const string GlideBurnLabel = "RETRO BURN";
 
-    public static readonly string[] Labels = { OrbitalLabel, GlideBurnLabel };
+    public const string FlipLabel = "FLIP LANDING";
 
-    public static string Label(EntryMethod method) => method == EntryMethod.GlideBurn ? GlideBurnLabel : OrbitalLabel;
+    public const string BrakingLabel = "BRAKING BURN";
 
-    public static string Card(EntryMethod method) => method == EntryMethod.GlideBurn
-        ? "From the current state through air: glides with the engine off, then flies the landing burn to the site. Starts from any fall through air, also a reloaded one."
-        : "From orbit or the top of the air: flies the entry belly first, banking to hold its planned drag, and hands over to BELLYFLOP to fall onto the site, and TOUCHDOWN for the flip and the landing burn. Engaged below the hand-over, it starts at BELLYFLOP.";
+    /// <summary>The GLIDE row of LAND NOW, in the order of <see cref="GuidanceSettingSpecs.LandFlip"/> off, on.</summary>
+    public static readonly string[] GlideLabels = { GlideBurnLabel, FlipLabel };
 
-    public static readonly string[] Cards = { Card(EntryMethod.Orbital), Card(EntryMethod.GlideBurn) };
-
-    /// <summary>The method of a mode that flies, so the row follows it; null for any other mode.</summary>
-    public static EntryMethod? Of(GuidanceModeId? live) => live switch
+    public static readonly string[] GlideCards =
     {
-        GuidanceModeId.OrbitalEntry => EntryMethod.Orbital,
-        GuidanceModeId.EntryHere => EntryMethod.GlideBurn,
-        _ => null,
+        "Glides engine first with the engine off, then lights it for the landing burn. TOUCHDOWN flies the last seconds of the burn.",
+        "Falls belly first with BELLYFLOP onto a point short of the site, then TOUCHDOWN flips the craft under power and flies the landing burn. Above the hand-over it flies ORBITAL ENTRY first.",
     };
 }
 
@@ -351,7 +346,7 @@ internal static class OrbitalEntryGuidance
     public const string CommitVerb = EntryMethods.OrbitalLabel;
     public const string StopLabel = "STOP ORBITAL ENTRY";
 
-    /// <summary>Ahead of the deorbit (40), whose entry burn hands the craft to it, and behind GLIDE + BURN (15) and touchdown guidance (10), which fly lower.</summary>
+    /// <summary>Ahead of the deorbit (40), whose entry burn hands the craft to it, and behind RETRO BURN (15) and touchdown guidance (10), which fly lower.</summary>
     public const int StopOrder = 35;
 
     public static readonly string[] Phases = { "SWEEP", "ENTRY", "HOLD", "BELLYFLOP" };

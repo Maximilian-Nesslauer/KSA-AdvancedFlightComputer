@@ -5,7 +5,12 @@ namespace AdvancedFlightComputer.Features.Ui.Logic;
 
 internal readonly record struct ChainStep(string Text, bool Stock = false, bool Danger = false, bool Warn = false);
 
-/// <summary>A deorbit starts with the burn stock AUTO flies, unless the craft already falls and the planner finds a direct approach (DeorbitPlanner.DirectSteps).</summary>
+/// <summary>
+/// The path of modes a LAND way flies, drawn under the way's rows before the engage and marked while it flies:
+/// DEORBIT (the burn) > ENTRY/BRAKING (orbital entry where there is air, the braking burn where there is none) >
+/// the fall to the landing burn after an entry (FLIP LANDING: bellyflop) > TOUCHDOWN, which ends every powered
+/// landing. The commit engages the same path (ConsolePages.ModeIdFor), so the line says what the press flies.
+/// </summary>
 internal static class LandChain
 {
     public const string StockBurn = "DEORBIT BURN";
@@ -14,21 +19,41 @@ internal static class LandChain
 
     public const string Impact = "IMPACT";
 
+    public const string Bellyflop = "BELLYFLOP";
+
+    /// <summary>The end of an entry for a craft with no engine to land on: orbital entry holds its attitude after the hand-over, and the pilot flies the rest (the parachutes).</summary>
+    public const string Hold = "HOLD";
+
+    public const string YouFly = "YOU FLY";
+
     public static bool EndsInImpact(ReadOnlySpan<ChainStep> steps) => steps.Length > 0 && steps[^1].Danger;
 
-    public static bool Shows(ReadOnlySpan<ChainStep> steps) => steps.Length > 1;
+    /// <summary>Every way but HOVER shows its path, also a path of one step: what flies is never left to guess.</summary>
+    public static bool Shows(ReadOnlySpan<ChainStep> steps) => steps.Length > 0;
 
-    public static ChainStep[] For(LandWay way, LandSolver solver, CraftSituation where, bool hasAir, bool entryTakesGlide, bool touchdownTakesBurn, bool belowBrakingStart = false, bool hoverFlies = true)
+    /// <param name="flip">LAND NOW's glide is FLIP LANDING, not RETRO BURN.</param>
+    /// <param name="canLand">The craft has an engine to land on; with none, an entry ends in HOLD and the pilot flies the rest.</param>
+    public static ChainStep[] For(LandWay way, LandSolver solver, CraftSituation where, bool hasAir, bool flip = false, bool canLand = true, bool belowBrakingStart = false, bool hoverFlies = true)
     {
         var steps = new List<ChainStep>(8);
         switch (way)
         {
+            case LandWay.FromOrbit when hasAir:
+                steps.Add(new ChainStep(StockBurn, Stock: true));
+                AddEntry(steps, canLand);
+                break;
             case LandWay.FromOrbit:
                 if (!(SituationText.IsFalling(where) && belowBrakingStart))
-                    steps.AddRange([new ChainStep(SituationText.IsFalling(where) ? StockBurnIfNeeded : StockBurn, Stock: true), new ChainStep("COAST"), new ChainStep("BRAKING BURN")]);
+                    steps.AddRange([new ChainStep(SituationText.IsFalling(where) ? StockBurnIfNeeded : StockBurn, Stock: true), new ChainStep("COAST"), new ChainStep(EntryMethods.BrakingLabel)]);
                 AddPoweredEnd(steps, solver, hoverFlies);
                 break;
+            case LandWay.Entry when hasAir:
+                AddEntry(steps, canLand);
+                break;
             case LandWay.Entry:
+                steps.Add(new ChainStep(EntryMethods.BrakingLabel));
+                AddPoweredEnd(steps, solver == LandSolver.Entry ? LandSolver.Touchdown : solver, hoverFlies);
+                break;
             case LandWay.FromHere when solver == LandSolver.Entry:
                 if (!hasAir)
                 {
@@ -36,18 +61,18 @@ internal static class LandChain
                     steps.Add(new ChainStep(Impact, Danger: true));
                     break;
                 }
-                steps.Add(new ChainStep("GLIDE"));
-                AddEntryBurnEnd(steps, touchdownTakesBurn);
+                steps.Add(new ChainStep(flip ? Bellyflop : EntryMethods.GlideBurnLabel));
+                steps.Add(new ChainStep(LandSolvers.Label(LandSolver.Touchdown)));
                 break;
             case LandWay.FromHere:
                 AddPoweredEnd(steps, solver, hoverFlies);
                 break;
             case LandWay.Boostback:
                 steps.AddRange([new ChainStep("SETTLE"), new ChainStep("SLEW"), new ChainStep("BURN"), new ChainStep(hasAir ? "GLIDE" : "FALL")]);
-                if (hasAir && entryTakesGlide)
+                if (hasAir)
                 {
-                    steps.Add(new ChainStep(LandSolvers.Label(LandSolver.Entry)));
-                    AddEntryBurnEnd(steps, touchdownTakesBurn);
+                    steps.Add(new ChainStep(EntryMethods.GlideBurnLabel));
+                    steps.Add(new ChainStep(LandSolvers.Label(LandSolver.Touchdown)));
                 }
                 else
                     steps.Add(new ChainStep(Impact, Danger: true));
@@ -58,22 +83,13 @@ internal static class LandChain
         return steps.ToArray();
     }
 
-    public const string NoLandingBurn = "NO LANDING BURN YET";
-
-    /// <summary>
-    /// The chain of LAND > ENTRY. GLIDE + BURN is the glide and landing burn of LAND NOW. ORBITAL ENTRY flies the entry to its hand-over, then BELLYFLOP where it is on, or holds the entry attitude; neither has a landing burn yet, so the chain ends in impact.
-    /// </summary>
-    public static ChainStep[] ForEntry(EntryMethod method, bool hasAir, bool bellyflop, bool touchdownTakesBurn)
+    private static void AddEntry(List<ChainStep> steps, bool canLand)
     {
-        if (method == EntryMethod.GlideBurn)
-            return For(LandWay.Entry, LandSolver.Entry, CraftSituation.Unknown, hasAir, false, touchdownTakesBurn);
-        if (!hasAir)
-            return [new ChainStep("NO AIR", Warn: true), new ChainStep(Impact, Danger: true)];
-        return
-        [
-            new ChainStep("SWEEP"), new ChainStep("ENTRY"), new ChainStep(bellyflop ? "BELLYFLOP" : "HOLD"),
-            new ChainStep(NoLandingBurn, Warn: true), new ChainStep(Impact, Danger: true),
-        ];
+        steps.Add(new ChainStep(EntryMethods.OrbitalLabel));
+        if (canLand)
+            steps.AddRange([new ChainStep(Bellyflop), new ChainStep(LandSolvers.Label(LandSolver.Touchdown))]);
+        else
+            steps.AddRange([new ChainStep(Hold), new ChainStep(YouFly, Warn: true)]);
     }
 
     private static void AddPoweredEnd(List<ChainStep> steps, LandSolver solver, bool hoverFlies)
@@ -81,13 +97,6 @@ internal static class LandChain
         steps.Add(new ChainStep(LandSolvers.Label(solver)));
         if (solver == LandSolver.Gfold && hoverFlies)
             steps.Add(new ChainStep("HOVER"));
-    }
-
-    private static void AddEntryBurnEnd(List<ChainStep> steps, bool touchdownTakesBurn)
-    {
-        steps.Add(new ChainStep("LANDING BURN"));
-        if (touchdownTakesBurn)
-            steps.Add(new ChainStep(LandSolvers.Label(LandSolver.Touchdown)));
     }
 }
 

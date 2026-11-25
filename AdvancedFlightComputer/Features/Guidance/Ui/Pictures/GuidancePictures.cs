@@ -822,7 +822,7 @@ public static partial class GuidanceWindow
             return;
         }
 
-        if (way == LandWay.Entry && Ui.Console.AfcConsole.EntryMethod == EntryMethod.Orbital)
+        if (OrbitalEntryPictureFor(vehicle, way))
         {
             DrawOrbitalEntryPicture(height, sentence);
             return;

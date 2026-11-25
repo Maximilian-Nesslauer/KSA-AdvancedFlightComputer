@@ -155,7 +155,7 @@ internal static class SituationVerbs
             LandWay.FromOrbit => GuidanceModeId.DeorbitLand,
             LandWay.Boostback => GuidanceModeId.Boostback,
             LandWay.FromHere => GuidanceModeId.SixDofHere,
-            LandWay.Entry => GuidanceModeId.OrbitalEntry,
+            LandWay.Entry => hasAir ? GuidanceModeId.OrbitalEntry : GuidanceModeId.DeorbitLand,
             _ => GuidanceModeId.Hover,
         };
         var gates = new CommitGates(false, false, "", "", false, Where: where, HasAir: hasAir, BelowBrakingStart: belowBrakingStart, NoStageHome: noStageHome);

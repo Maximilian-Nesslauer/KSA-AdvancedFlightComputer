@@ -265,7 +265,7 @@ internal static partial class AfcConsole
             return false;
         CraftActivity a = Frame.Activity;
         if (Page is ConsolePage.Launch or ConsolePage.Land)
-            return Frame.GuidanceOn && (FlightView.PageFlies(Page, LandWay, GuidanceWindow.LandSolverRoute, GuidanceWindow.CurrentAscentChoice(), in a, Frame.TransferPasses, EntryMethod)
+            return Frame.GuidanceOn && (FlightView.PageFlies(Page, LandWay, GuidanceWindow.LandSolverRoute, GuidanceWindow.CurrentAscentChoice(), in a, Frame.TransferPasses, Frame.Situation.HasAir, GuidanceWindow.LandFlipChosen)
                 || (Page == ConsolePage.Land && FlightView.PickHolds(LandWay, in a)));
         bool ownSource = Page switch
         {

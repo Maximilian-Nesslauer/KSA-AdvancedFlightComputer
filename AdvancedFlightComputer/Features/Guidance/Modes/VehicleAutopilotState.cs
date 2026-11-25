@@ -634,7 +634,10 @@ public sealed class VehicleAutopilotState
     internal bool RcsGimbalLostAxis;
     public bool DeorbitArrivalAngleEnabled;
     public double DeorbitArrivalDescentDeg = 5;
+    /// <summary>The deorbit ends in the entry burn, and orbital entry guidance takes the craft from there. The LAND page sets it from the body: an orbital entry where there is air, the braking burn where there is none.</summary>
     public bool DeorbitOnly;
+    /// <summary>The braking burn only, from where the craft flies now, with no deorbit burn before it (LAND > ENTRY/BRAKING on a body with no air): the deorbit planner takes only a direct approach and refuses otherwise.</summary>
+    public bool DeorbitBrakingOnly;
     public double DeorbitEntryPeriapsisKm = 30.0;
     internal DeorbitRequest DeorbitRequest;
     internal DeorbitPlanner DeorbitPlanner;
@@ -1736,7 +1739,7 @@ public sealed class VehicleAutopilotState
     /// Fly entry guidance's glide with AFC's own attitude controller (AttitudeController): a feedforward of the air's moment from the sweep's tables plus filtered PD feedback and a slow integral, shared between the control surfaces and the RCS in one programme that spends the RCS only on what the fins cannot give, with an optional deadband (0, off, by default) inside which only the feedforward and integral fly. Off points the craft through the stock flight computer, as before 2026-11-20, which fired the RCS every way against the air it knows nothing of. The controller's natural frequency, rad/s, and its deadband, degrees.
     /// </summary>
     public bool ThreeDofOwnAttitude = true;
-    /// <summary>GLIDE + BURN's glide flies orbital entry's attitude control: the authority-aware capture, each axis owned by the flaps or the RCS, and the RCS on the stock flight computer's phase plane (AttitudeController). Off flies the joint flap and RCS programme as before.</summary>
+    /// <summary>RETRO BURN's glide flies orbital entry's attitude control: the authority-aware capture, each axis owned by the flaps or the RCS, and the RCS on the stock flight computer's phase plane (AttitudeController). Off flies the joint flap and RCS programme as before.</summary>
     public bool ThreeDofNewAttitude = true;
     /// <summary>The band the RCS holds an axis in under NEW ATTITUDE CONTROL, deg (stock's Balanced 1 deg).</summary>
     public double ThreeDofRcsDeadbandDeg = 1.0;
@@ -1862,6 +1865,8 @@ public sealed class VehicleAutopilotState
     public bool OrbitalEntryAfterDeorbit = true;
     /// <summary>Time that DEORBIT ONLY burn so the site sits at OrbitalEntryAimFraction of the corridor at the start of the air (OrbitalEntryAim).</summary>
     public bool OrbitalEntryAimDeorbit = true;
+    /// <summary>LAND NOW's GLIDE row: FLIP LANDING (orbital entry's bellyflop, then touchdown guidance) instead of RETRO BURN (the 3-DOF glide and landing burn, then touchdown guidance).</summary>
+    public bool LandFlip;
     /// <summary>Where in the corridor the site is aimed: 0 at its short end (most drag), 1 at its long end (the glide).</summary>
     public double OrbitalEntryAimFraction = 0.5;
     /// <summary>The farthest the site may sit off the pass's ground track, km.</summary>

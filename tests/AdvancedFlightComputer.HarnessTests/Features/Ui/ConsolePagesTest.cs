@@ -24,7 +24,6 @@ public sealed class ConsolePagesTest : AfcTest
         bool route = PlannerRoute.Active;
         ConsolePage page = AfcConsole.Page;
         LandWay way = AfcConsole.LandWay;
-        EntryMethod method = AfcConsole.EntryMethod;
         try
         {
             AfcConsole.Enabled = true;
@@ -52,14 +51,11 @@ public sealed class ConsolePagesTest : AfcTest
 
             AfcConsole.LandWay = LandWay.FromOrbit;
             AfcConsole.Navigate(ConsolePages.CueTarget(ConsolePage.Land, ConsolePages.EnumKey(LandWay.Entry)));
-            t.Check("a LAND/ENTRY cue opens the entry", AfcConsole.Page == ConsolePage.Land && AfcConsole.LandWay == LandWay.Entry);
+            t.Check("a LAND/ENTRY cue opens ENTRY/BRAKING", AfcConsole.Page == ConsolePage.Land && AfcConsole.LandWay == LandWay.Entry);
 
-            AfcConsole.EntryMethod = EntryMethod.GlideBurn;
+            UiConfig.Set("console_entry_method", "GLIDEBURN");
             AfcConsole.SavePreferences();
-            AfcConsole.EntryMethod = EntryMethod.Orbital;
-            AfcConsole.LoadPreferences();
-            t.Check("the ENTRY method is saved and read back", AfcConsole.EntryMethod == EntryMethod.GlideBurn
-                && UiConfig.GetString(AfcConsole.KeyEntryMethod, "") == ConsolePages.EnumKey(EntryMethod.GlideBurn));
+            t.Check("the old ENTRY METHOD key is dropped: the body decides entry or braking", UiConfig.GetString("console_entry_method", "") == "");
 
             AfcConsole.LandWay = LandWay.FromOrbit;
             AfcConsole.Navigate(ConsolePages.RecoverAlias + "/AFTERSEPARATION");
@@ -96,7 +92,6 @@ public sealed class ConsolePagesTest : AfcTest
             AfcConsole.DrawerOpen = drawer;
             AfcConsole.Page = page;
             AfcConsole.LandWay = way;
-            AfcConsole.EntryMethod = method;
             AfcConsole.SavePreferences();
             // LoadPreferences reads the routing switch again, so the state from before the test is put back.
             PlannerRoute.Active = route;

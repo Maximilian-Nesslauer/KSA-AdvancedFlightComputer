@@ -30,7 +30,7 @@ public static partial class GuidanceWindow
             GuidanceRegion.End();
         }
 
-        if (GuidanceRegion.Begin("GLIDE + BURN PARAMETERS", GuidanceRegion.Tuning))
+        if (GuidanceRegion.Begin("RETRO BURN PARAMETERS", GuidanceRegion.Tuning))
         {
             Draw3DofParameters();
             GuidanceRegion.End();

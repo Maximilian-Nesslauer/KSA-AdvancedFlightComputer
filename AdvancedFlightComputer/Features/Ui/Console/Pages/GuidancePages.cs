@@ -78,11 +78,11 @@ internal static class LaunchPage
 }
 
 /// <summary>
-/// LAND: the five ways down, from high energy to the ground, each one phase lower than the one before
-/// it. DEORBIT flies the whole chain from orbit, BOOSTBACK turns a spent booster back to its site,
-/// ENTRY flies the fall through air with the engine off (ORBITAL ENTRY from orbit, or GLIDE + BURN
-/// from any fall through air), LAND NOW flies the powered descent from where the craft is (GLIDE +
-/// BURN, touchdown guidance or G-FOLD) and HOVER sinks to the ground.
+/// LAND: the five ways down, from high energy to the ground, each one the step of the landing path
+/// it starts from. DEORBIT flies the whole path from orbit (the burn, then orbital entry where there is
+/// air or the braking burn where there is none, then touchdown), BOOSTBACK turns a spent booster back to
+/// its site, ENTRY/BRAKING flies the same path with no deorbit burn, LAND NOW flies the landing from where
+/// the craft is (FLIP LANDING or RETRO BURN through air, else touchdown guidance) and HOVER sinks to the ground.
 /// </summary>
 internal static class LandPage
 {
@@ -118,8 +118,8 @@ internal static class LandPage
             ctx.ToInputs();
             GuidanceWindow.DrawDeorbitFinishRows(way);
             GuidanceWindow.DrawLandSiteRows(ctx.Subject, way, in ctx.Frame.Situation, pickSite: true);
-            if (!(way == LandWay.Entry && AfcConsole.EntryMethod == EntryMethod.Orbital))
-                GuidanceWindow.DrawLandEngineRows(ctx.Subject);
+            // Every path but the hover ends in touchdown guidance, which lights the landing group: also an entry's, at bellyflop's hand-over.
+            GuidanceWindow.DrawLandEngineRows(ctx.Subject);
             ctx.ToPicture();
             GuidanceWindow.DrawLandMethodRows(ctx.Subject, way, in ctx.Frame.Situation, in read);
             GuidanceWindow.DrawLandPicture(ctx.Subject, ctx.PictureHeight, way, sentence: !AfcConsole.HasPanes || !LandWays.HasSolver(way));
@@ -128,7 +128,7 @@ internal static class LandPage
         }
 
         GuidanceModeId? mode = ConsolePages.ModeIdFor(ConsolePage.Land, way,
-            GuidanceWindow.LandSolverRoute, GuidanceWindow.CurrentAscentChoice(), AfcConsole.EntryMethod);
+            GuidanceWindow.LandSolverRoute, GuidanceWindow.CurrentAscentChoice(), ctx.Frame.Situation.HasAir, GuidanceWindow.LandFlipChosen);
         CommitSpec commit = Commit(in ctx, mode);
         GuidanceWindow.NoteFooterPicksSite(commit.NextLeads && commit.Secondary!.Verb is PageText.PickSite or PageText.PickArmed);
         return GuidanceWindow.LandWayCannotFly(ctx.Subject, way, in ctx.Frame.Situation) ? commit with { MarkDim = true } : commit;

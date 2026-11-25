@@ -6,8 +6,6 @@ internal enum ConsolePage { Launch, Land, Orbit, Transfer, Rcs, Staging, Tune }
 
 /// <summary>The ways of the LAND page. The saved keys are the enum names, so a new way goes at the end; the WAY row draws them in <see cref="LandWays.DisplayOrder"/>.</summary>
 internal enum LandWay { FromOrbit, FromHere, Hover, Boostback, Entry }
-/// <summary>The METHOD of LAND > ENTRY: orbital entry guidance (with bellyflop as its last phase) or the glide and landing burn of the 3-DOF. The saved key is the enum name.</summary>
-internal enum EntryMethod { Orbital, GlideBurn }
 internal enum TuneSet { Afc, Ascent, Recover, Landing, Diag }
 /// <summary>The parts of TUNE > LANDING, in the order of their tabs. The saved key is the enum name, so the order may change.</summary>
 internal enum TuneLanding { Approach, OrbitalEntry, Entry, SixDof, Gfold, Hover }
@@ -111,8 +109,8 @@ internal static class ConsolePages
         _ => "DIAG",
     };
 
-    /// <summary>The guidance mode the footer of a page commits, or null for a page that commits no guidance mode. LAND > ENTRY commits the mode of its METHOD.</summary>
-    public static GuidanceModeId? ModeIdFor(ConsolePage page, LandWay way, LandSolver solver, AscentChoice ascent, EntryMethod entry = EntryMethod.Orbital)
+    /// <summary>The guidance mode the footer of a page commits, or null for a page that commits no guidance mode. LAND > ENTRY/BRAKING commits orbital entry where there is air and the braking burn (the deorbit's, braking only) where there is none. LAND NOW's glide is FLIP LANDING (orbital entry, which starts at bellyflop past its hand-over) or RETRO BURN.</summary>
+    public static GuidanceModeId? ModeIdFor(ConsolePage page, LandWay way, LandSolver solver, AscentChoice ascent, bool hasAir = true, bool flip = false)
         => page switch
         {
             ConsolePage.Launch => ascent == AscentChoice.GravityTurn ? GuidanceModeId.AscentGravityTurn : GuidanceModeId.AscentUpfg,
@@ -120,10 +118,10 @@ internal static class ConsolePages
             {
                 LandWay.FromOrbit => GuidanceModeId.DeorbitLand,
                 LandWay.Boostback => GuidanceModeId.Boostback,
-                LandWay.Entry => entry == EntryMethod.GlideBurn ? GuidanceModeId.EntryHere : GuidanceModeId.OrbitalEntry,
+                LandWay.Entry => hasAir ? GuidanceModeId.OrbitalEntry : GuidanceModeId.DeorbitLand,
                 LandWay.FromHere => solver switch
                 {
-                    LandSolver.Entry => GuidanceModeId.EntryHere,
+                    LandSolver.Entry => flip ? GuidanceModeId.OrbitalEntry : GuidanceModeId.EntryHere,
                     LandSolver.Touchdown => GuidanceModeId.SixDofHere,
                     _ => GuidanceModeId.GfoldHere,
                 },
@@ -174,7 +172,7 @@ internal static class LandWays
     {
         LandWay.FromOrbit => "DEORBIT",
         LandWay.Boostback => "BOOSTBACK",
-        LandWay.Entry => "ENTRY",
+        LandWay.Entry => "ENTRY/BRAKING",
         LandWay.FromHere => "LAND NOW",
         _ => "HOVER",
     };

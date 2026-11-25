@@ -227,12 +227,13 @@ public static partial class GuidanceWindow
             AutoStageArms: LaunchFlownByNote(vehicle).Length > 0,
             Target: _s.TargetId.Length > 0 ? _s.TargetId : _s.PlaneTarget?.Label ?? "",
             Solver: LandSolvers.Label(LandSolvers.Shown(LandSolvers.Chosen(false, _s.UseSixDofLanding), LandingMachineLive)),
-            HandToTouchdown: _s.ThreeDofSixDofHandover, TouchdownLastS: _s.ThreeDofSixDofTimeS,
+            HandToTouchdown: true, TouchdownLastS: _s.ThreeDofSixDofTimeS,
             HoverFromM: _s.GfoldHoverHandoffAltM,
             MayFly: _s.Engage && _s.AutoStage,
             HoverFlies: _landHoverFlies,
             HoverKnown: _landHoverKnown,
-            DeorbitOnly: _s.DeorbitOnly);
+            DeorbitOnly: _s.DeorbitOnly,
+            BrakingOnly: !_s.DeorbitOnly && _s.DeorbitBrakingOnly);
 
     #endregion
 
@@ -534,7 +535,7 @@ public static partial class GuidanceWindow
         // Step3Dof never plans on a body with no air, so this one needs no wait.
         bool noAir = EntryHasNoAir(_s);
         if (noAir)
-            failures.Add(new CraftFailure("NO GLIDE + BURN PLAN", EntryGuidance.NoAirText));
+            failures.Add(new CraftFailure("NO RETRO BURN PLAN", EntryGuidance.NoAirText));
         string detail = "";
         string noPlan = noAir ? "" : NoPlanNow(out detail);
         if (problems.NoPlan.Lasts(noPlan, now, realMs))
@@ -548,7 +549,7 @@ public static partial class GuidanceWindow
         if (ThreeDofLive && _s.ThreeDofPlan == null)
         {
             detail = _s.ThreeDofStatus;
-            return "NO GLIDE + BURN PLAN";
+            return "NO RETRO BURN PLAN";
         }
         if (_s.Active && (_s.Guidance == null || !_s.Guidance.HasPlan))
         {
@@ -619,7 +620,8 @@ public static partial class GuidanceWindow
         bool entryBurnOnly = mode == GuidanceModeId.DeorbitLand && _s.DeorbitOnly;
         if (parent != null)
         {
-            if (!entryBurnOnly && NoSitePicked(parent))
+            // An entry burn aimed at the site needs the site, as a landing does.
+            if ((!entryBurnOnly || _s.OrbitalEntryAimDeorbit) && NoSitePicked(parent))
                 noSite = PageText.NoSiteAnswer(SituationVerbs.VerbName(mode), _s.SiteLatDeg, _s.SiteLonDeg);
             else if (mode is GuidanceModeId.SixDofHere or GuidanceModeId.GfoldHere)
             {
@@ -664,7 +666,8 @@ public static partial class GuidanceWindow
             SiteRefusal: mode == GuidanceModeId.DeorbitLand && !entryBurnOnly && noSite.Length == 0
                 ? SiteSlopeText.Refusal(SiteSlopeText.Verdict(SiteSlopeNowDeg(vehicle.Orbit?.Parent), _s.SiteTipDeg, _s.SiteStandDeg), _s.SiteSlopeDeg, _s.SiteStandDeg)
                 : "",
-            DeorbitOnly: entryBurnOnly);
+            DeorbitOnly: entryBurnOnly,
+            BrakingOnly: mode == GuidanceModeId.DeorbitLand && !_s.DeorbitOnly && _s.DeorbitBrakingOnly);
     }
 
     // The backup choice counts only while the failure it answered is still shown.

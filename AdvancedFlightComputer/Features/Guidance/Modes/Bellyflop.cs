@@ -387,7 +387,7 @@ public static partial class GuidanceWindow
         if (!_s.OrbitalEntryBellyflopTouchdown || plan == null || !(plan.EndTime - now <= _s.OrbitalEntryBellyflopTouchdownS) || now < bf.TouchdownHandoffRetryAt)
             return;
         double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
-        // THE LANDING GROUP chosen on LAND, switched on before touchdown's standby builds its model, as GLIDE + BURN does at its engage (PrepareSelectedLandingEngines): ORBITAL ENTRY never applied it, so bellyflop handed touchdown every engine that was active, a Starship's three sea-level Raptors whose 39 % floor is more than twice its weight (2026-11-24). Bellyflop flies on while the engines are switched; a group that cannot be confirmed is said once, and touchdown plans on the engines active then.
+        // THE LANDING GROUP chosen on LAND, switched on before touchdown's standby builds its model, as RETRO BURN does at its engage (PrepareSelectedLandingEngines): ORBITAL ENTRY never applied it, so bellyflop handed touchdown every engine that was active, a Starship's three sea-level Raptors whose 39 % floor is more than twice its weight (2026-11-24). Bellyflop flies on while the engines are switched; a group that cannot be confirmed is said once, and touchdown plans on the engines active then.
         if (!bf.TouchdownStandby && SelectedLandingEngines != null && !bf.LandingGroupSettled)
         {
             LandingEnginePreparation engines = PrepareSelectedLandingEngines(vehicle, now, false, out string groupWhy);

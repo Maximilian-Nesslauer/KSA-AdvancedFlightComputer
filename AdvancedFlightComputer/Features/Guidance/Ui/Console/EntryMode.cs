@@ -160,7 +160,7 @@ public static partial class GuidanceWindow
     {
         _s.ThreeDofEngagePending = false;
         if (ThreeDofLive)
-            Disengage3Dof("GLIDE + BURN STOPPED");
+            Disengage3Dof("RETRO BURN STOPPED");
         else if (!BoostbackLive)
             ResetLandingEngineSelection();
     }

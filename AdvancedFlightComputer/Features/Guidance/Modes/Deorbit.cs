@@ -312,7 +312,8 @@ public static partial class GuidanceWindow
         DeorbitRequest request = _s.DeorbitRequest;
         if (request.Settings.EntryPeriapsis.HasValue)
             return PlanEntryBurn(vehicle, request);
-        _s.DeorbitPlanner = new DeorbitPlanner(request);
+        // LAND > ENTRY/BRAKING flies the braking burn from where the craft is, with no deorbit burn: the planner takes a direct approach only.
+        _s.DeorbitPlanner = new DeorbitPlanner(request, brakingOnly: _s.DeorbitBrakingOnly);
         _s.DeorbitNextValidationTick = GuidanceClock.NowMs + DeorbitRevalidateMs;
         StateVectors captured = request.Source.StateVectors;
         string thrust = request.Engines.Length == 0 ? "NO USABLE ENGINE"

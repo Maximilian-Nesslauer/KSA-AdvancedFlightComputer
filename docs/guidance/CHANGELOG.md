@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- **LAND shows the path of modes a press flies, and offers only real choices** (#303). The path is DEORBIT (the burn) > ENTRY/BRAKING > the fall to the landing burn > TOUCHDOWN, which ends every powered landing.
+  - The body decides the second step: ORBITAL ENTRY where there is air, the BRAKING BURN where there is none. So DEORBIT through air is the aimed entry burn then orbital entry (commit **DEORBIT + ENTRY**). The old AFTER DEORBIT row (LAND / ENTRY BURN ONLY) and the "USE DEORBIT ONLY" refusal are gone.
+  - **ENTRY/BRAKING** (was ENTRY) flies the same path with no deorbit burn: orbital entry through air, or on an airless body the braking burn alone (commit **BRAKING BURN**; the deorbit planner takes a direct approach only and refuses otherwise). Its METHOD row is gone.
+  - **LAND NOW** has a GLIDE row where a glide flies first: **FLIP LANDING** (bellyflop, from orbital entry past its hand-over, then touchdown) or **RETRO BURN**. Else its path is TOUCHDOWN alone. The choice is kept with the craft (`LandFlip`).
+  - **GLIDE + BURN is called RETRO BURN** in the console. Saved keys are unchanged.
+  - The MODE / USE / END table is gone. What stood on its TOUCHDOWN row stands under the path, as do the G-FOLD fallback and the hold while G-FOLD flies. Every way but HOVER shows its path, also a path of one step.
+  - The hand-over switches are gone, fixed at what the path says: ENTRY AFTER DEORBIT, BELLYFLOP, BELLYFLOP TO TOUCHDOWN, TOUCHDOWN FOR BURN END and RETRO BURN ON GLIDE. A save that holds them skips them. BELLYFLOP now follows the craft: an entry hands to bellyflop and touchdown when the craft has an engine to land on, and holds its attitude after the hand-over when it has none (the path then ends HOLD > YOU FLY).
+  - An entry burn aimed at the site needs a site picked, as a landing does.
+
 - **AIM AT SITE no longer depends on ENTRY AFTER DEORBIT.** DEORBIT ONLY aimed its burn only with both switches on, and the AIM AT SITE row was greyed out under ENTRY AFTER DEORBIT. A save that kept ENTRY AFTER DEORBIT off (2026-11-25) turned the aim off as well. The burn then went at the next chance, and the entry, engaged by hand, met the air 11,300 km from the site, against a 2,100–2,900 km corridor. Now AIM AT SITE alone decides, and the ENTRY AIM fold shows whenever it is on.
 - **RCS LP's final check: the round-off allowance scales with the firing too.** The allowance added for the belly flop's 48 thrusters (a millionth of the row's largest coefficient) let large coefficients alone pass a demand no firing meets, and a tiny infeasible problem came back solved: `afc-rcs-lp-solver` failed 2 of 49 checks. It is now a millionth of the row's largest coefficient times the largest firing (`RcsLpSolver.SatisfiesConstraints`), still 0.05 N m on a 51 kN m row at full firing; `--rcs-refusal` still solves all 3472 reachable demands. The flopper harness test also ends when the craft stands still in CCI, an impact the game did not report headless, instead of running to the watchdog.
 
