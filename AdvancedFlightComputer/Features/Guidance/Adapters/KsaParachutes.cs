@@ -40,14 +40,14 @@ internal static class KsaParachutes
         return armed;
     }
 
-    /// <summary>Whether any parachute of <paramref name="vehicle"/> has left its bag: past armed, line stretch onwards.</summary>
+    /// <summary>Whether any parachute of <paramref name="vehicle"/> is open now: line stretch to full. A chute cut away or torn before the entry does not count, or the entry would let go at its hand-over.</summary>
     public static bool AnyOpen(Vehicle vehicle)
     {
         PartTree tree = vehicle?.Parts;
         if (tree == null)
             return false;
         foreach (Parachute chute in tree.Modules.Get<Parachute>())
-            if (chute.State > ChuteState.Armed)
+            if (chute.State is ChuteState.LineStretch or ChuteState.Reefed or ChuteState.Disreefing or ChuteState.Full)
                 return true;
         return false;
     }
