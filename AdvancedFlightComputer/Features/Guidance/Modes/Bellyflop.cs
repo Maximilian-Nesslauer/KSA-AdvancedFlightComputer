@@ -369,7 +369,8 @@ public static partial class GuidanceWindow
                 axis[0] = 0; axis[1] = 0; axis[2] = 1;
             }
             // Per unit of mass: the builder clamps it into the engines' range and corrects it for the end; the craft's weight and the braking.
-            thrustN = Math.Max(model.Mass, 1.0) * (vi / burn + 9.81);
+            double gSurface = model.BodyRadius > 0.0 && model.Mu > 0.0 ? model.Mu / (model.BodyRadius * model.BodyRadius) : 9.81;
+            thrustN = Math.Max(model.Mass, 1.0) * (vi / burn + gSurface);
             return true;
         };
     }
@@ -508,13 +509,14 @@ public static partial class GuidanceWindow
         {
             double h = Math.Min(maxStep, span - done);
             done += h;
-            // Semi-implicit: the rate first, then the angle with the new rate.
+            // Semi-implicit: the rate first, then the angle with the new rate. Wrap yaw across +-pi so a heading crossing 180 deg takes the short turn.
+            double dPsi = Math.IEEERemainder(tp - bf.CmdPsi, 2.0 * Math.PI);
             bf.CmdAlphaRate += h * (w * w * (ta - bf.CmdAlpha) - 2.0 * w * bf.CmdAlphaRate);
             bf.CmdBetaRate += h * (w * w * (tb - bf.CmdBeta) - 2.0 * w * bf.CmdBetaRate);
-            bf.CmdPsiRate += h * (w * w * (tp - bf.CmdPsi) - 2.0 * w * bf.CmdPsiRate);
+            bf.CmdPsiRate += h * (w * w * dPsi - 2.0 * w * bf.CmdPsiRate);
             bf.CmdAlpha += h * bf.CmdAlphaRate;
             bf.CmdBeta += h * bf.CmdBetaRate;
-            bf.CmdPsi += h * bf.CmdPsiRate;
+            bf.CmdPsi = Math.IEEERemainder(bf.CmdPsi + h * bf.CmdPsiRate, 2.0 * Math.PI);
         }
         double a = bf.CmdAlpha, b = bf.CmdBeta, p = bf.CmdPsi;
         if (!model.Axes(x14.AsSpan(0, 6), a, b, p, out V3 nose, out _, out V3 belly, out _))

@@ -55,8 +55,22 @@ internal static class BellyflopCheck
         Console.WriteLine(" as flown 2026-11-23 (taken over at Mach 4.85, 10 km across, the entry banked 63 deg), force 15 % weak:");
         bad += FlightLike();
         bad += BearingCheck();
+        bad += ShrinkingSigmaCheck();
         Console.WriteLine(bad == 0 ? "PASS bellyflop" : $"FAIL bellyflop ({bad})");
         return bad == 0 ? 0 : 1;
+    }
+
+    static int ShrinkingSigmaCheck()
+    {
+        var model = Model();
+        var cfg = new BellyflopConfig { PitchUpMaxDeg = 35.0, AngleMaxDeg = 20.0, BankMaxDeg = 25.0 };
+        // Start well above PitchUpMaxDeg (65 deg) so shortening sigma must stay primal feasible against rate limits.
+        double[] x0 = HandOver(45_000.0, 2_000.0, 4.0, 32_000.0);
+        var res = new BellyflopPlanner().Solve(model, cfg, x0, 0.0, 65.0 * Deg, 35.0 * Deg, 0.0, null);
+        bool ok = res.Plan != null && res.Plan.Converged && res.Plan.MissM <= 100.0;
+        Console.WriteLine(FormattableString.Invariant(
+            $"  {(ok ? "ok  " : "FAIL")} shrinking-sigma steep hand-over (alpha 65 deg > 35 deg limit): converged {res.Plan?.Converged}, miss {res.Plan?.MissM ?? double.NaN:F1} m, defect {res.Plan?.MaxDefect ?? double.NaN:F4}, sigma {res.Plan?.Sigma ?? double.NaN:F1} s"));
+        return ok ? 0 : 1;
     }
 
     /// <summary>
