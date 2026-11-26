@@ -70,7 +70,8 @@ public static partial class KsaAeroSweep
                     return 0.0;
                 if (Cached)
                     return Math.Max(2.0 - ElapsedS, 1.0);
-                double perSurface = _surfacesTimed > 0 ? _surfaceSecondsSum / _surfacesTimed : Volatile.Read(ref _surfacePriorS);
+                int timed = Volatile.Read(ref _surfacesTimed);
+                double perSurface = timed > 0 ? Volatile.Read(ref _surfaceSecondsSum) / timed : Volatile.Read(ref _surfacePriorS);
                 int left = Math.Max(SurfacesTotal - SurfacesDone, 0);
                 // A stage that runs past its estimate is not nearly done: it is taken to need a tenth of the estimate again, then another, so the time left grows with it rather than sitting at a second (2026-11-25: flaps took 24 s in the air against a 4 s prior, and the band read ~1 S for 20 s each).
                 static double Left(double estimate, double gone) => Math.Max(estimate - gone, 0.1 * Math.Max(estimate, gone));
@@ -110,10 +111,10 @@ public static partial class KsaAeroSweep
                 Interlocked.Increment(ref _surfacesMissing);
             else if (Volatile.Read(ref _surfaceStarted) is long started && started != 0)
             {
-                // Written by the sweep's own thread only; read for the estimate.
+                // Written by the sweep thread only; write sum before count so the UI thread never divides a stale sum.
                 double took = Seconds(started, Stopwatch.GetTimestamp());
-                _surfaceSecondsSum += took;
-                _surfacesTimed++;
+                Volatile.Write(ref _surfaceSecondsSum, _surfaceSecondsSum + took);
+                Volatile.Write(ref _surfacesTimed, _surfacesTimed + 1);
                 Volatile.Write(ref _surfacePriorS, took);
             }
             Interlocked.Increment(ref _surfacesDone);

@@ -1156,8 +1156,8 @@ public sealed class VehicleAutopilotState
     {
         if (Aero == null) return true;
         if (!ReferenceEquals(Aero.Parent, parent)) return true;
-        // The mesh hash decides where both have one: KSAero takes it with every surface at rest, but a part's bounds follow its subparts, so a flap out can change the box when nothing else has.
-        if (liveMeshHash != 0 && Aero.MeshHash != 0) return liveMeshHash != Aero.MeshHash;
+        // A published live mesh hash decides even against a hashless fallback table; a flap out can change part bounds when nothing else has.
+        if (liveMeshHash != 0) return liveMeshHash != Aero.MeshHash;
         double3 was = Aero.SampledExtents;
         double tol = 1e-3;
         return System.Math.Abs(was.X - liveExtents.X) > tol

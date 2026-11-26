@@ -65,6 +65,7 @@ internal static class GuidanceFeature
         harmony.CreateClassProcessor(typeof(EditorBalanceWindow)).Patch();
 
         SaveLoadObserver.SaveLoaded += OnSaveLoaded;
+        SaveLoadObserver.SystemSwapped += OnSystemSwapped;
         SaveLoadObserver.SaveWritten += CraftSettings.OnSaveWritten;
         AutoStage.StagingHooks.DecouplerActivating += GuidanceWindow.OnDecouplerActivating;
         BodySettings.LoadFile();
@@ -83,6 +84,19 @@ internal static class GuidanceFeature
         }
     }
 
+    // A star-system swap destroys every body and vehicle, so cached sweeps holding old IParentBody and Part graphs must be dropped too.
+    private static void OnSystemSwapped()
+    {
+        try
+        {
+            GuidanceWindow.ReleaseAllVehicles();
+        }
+        finally
+        {
+            KsaAeroSweep.ClearCache();
+        }
+    }
+
     /// <summary>The postfix that gives a save record the player's RCS mode. It has its own patch set, so a failure costs this repair and not the driver.</summary>
     internal static void ApplySaveRcsPatch(Harmony harmony)
     {
@@ -98,11 +112,19 @@ internal static class GuidanceFeature
     internal static void DisableDriver()
     {
         SaveLoadObserver.SaveLoaded -= OnSaveLoaded;
+        SaveLoadObserver.SystemSwapped -= OnSystemSwapped;
         SaveLoadObserver.SaveWritten -= CraftSettings.OnSaveWritten;
         AutoStage.StagingHooks.DecouplerActivating -= GuidanceWindow.OnDecouplerActivating;
 
         // The feature flag is already off, so no later step retries a failed cleanup.
-        GuidanceWindow.ReleaseAllVehicles();
+        try
+        {
+            GuidanceWindow.ReleaseAllVehicles();
+        }
+        finally
+        {
+            KsaAeroSweep.ClearCache();
+        }
     }
 
     private static void OnSerializeFlightComputer(FlightComputer __instance, FlightComputerData __result)
