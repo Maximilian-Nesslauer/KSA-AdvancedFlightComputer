@@ -37,6 +37,23 @@ public sealed class UpfgGuidance
     /// </summary>
     public const double AimHoldTgoS = 45.0;
 
+    /// <summary>
+    /// Maximum thrust-direction offset from the primer vector lambda before the small-angle
+    /// thrust integral (1 - 0.5 * phi^2) breaks down and the step is treated as diverged, rad.
+    /// </summary>
+    public const double MaxValidTurnAngleRad = 70.0 * Math.PI / 180.0;
+
+    /// <summary>
+    /// Minimum relative tgo increase above expected (prevTgo - dt) in one cycle that clears Converged,
+    /// paired with <see cref="RunawayTgoGrowthMinS"/> so small near-cutoff jitter stays latched.
+    /// </summary>
+    public const double RunawayTgoGrowthFraction = 0.25;
+
+    /// <summary>Minimum absolute tgo increase above expected (prevTgo - dt) in one cycle to count as runaway growth, s.</summary>
+    public const double RunawayTgoGrowthMinS = 5.0;
+
+    private const int StackStageLimit = 16;
+
     private sealed class State
     {
         public CseState Cser;
@@ -45,6 +62,7 @@ public sealed class UpfgGuidance
         public double3 Rgrav;
         public double Tgo;
         public double3 V;
+        public double3 G;
         public double3 Vgo;
         public double K;
         public UpfgTarget.Insertion Aim;
@@ -103,7 +121,7 @@ public sealed class UpfgGuidance
             _prev = new State
             {
                 Cser = _prev.Cser, Rbias = _prev.Rbias, Rd = _prev.Rd, Rgrav = _prev.Rgrav, Tgo = _prev.Tgo,
-                V = _prev.V, Vgo = _prev.Vgo, K = _prev.K, Aim = _prev.Aim, AimArgPe = _prev.AimArgPe, AimHeld = _prev.AimHeld,
+                V = _prev.V, G = _prev.G, Vgo = _prev.Vgo, K = _prev.K, Aim = _prev.Aim, AimArgPe = _prev.AimArgPe, AimHeld = _prev.AimHeld,
             },
             _setup = _setup,
             _mode = _mode,
@@ -166,14 +184,16 @@ public sealed class UpfgGuidance
                               + Math.Sin(aim.Fpa) * (desR * (1.0 / desR.Length()))) - v;
         }
 
+        double3 g0 = GravVector(mu, r);
         _prev = new State
         {
             Cser = CseState.Zero,
             Rbias = new double3(0, 0, 0),
             Rd = desR,
-            Rgrav = 0.5 * GravVector(mu, r),
+            Rgrav = 0.5 * g0,
             Tgo = 100,
             V = v,
+            G = g0,
             Vgo = tgoV,
             K = 1,
             Aim = aim,
@@ -195,39 +215,47 @@ public sealed class UpfgGuidance
         double3 rd = _prev.Rd;
         double3 rgrav = _prev.Rgrav;
         double3 vprev = _prev.V;
+        double3 gprev = _prev.G;
         double3 vgo = _prev.Vgo;
         double K = _prev.K;
 
-        // 1 - Stage parameters
+        // 1 - Stage parameters (stack-allocated for typical stage counts to avoid per-solve GC pressure)
         int n = vehicle.Stages.Count;
-        var stageModes = new List<int>();
-        var accelLimits = new List<double>();
-        var massFlows = new List<double>();
-        var exhaustVel = new List<double>();
-        var thrusts = new List<double>();
-        var thrustAccel = new List<double>();
-        var charTimes = new List<double>();
-        var burnTimes = new List<double>();
+        if (n <= 0)
+        {
+            Reset();
+            return;
+        }
+        Span<int> stageModes = n <= StackStageLimit ? stackalloc int[n] : new int[n];
+        Span<double> accelLimits = n <= StackStageLimit ? stackalloc double[n] : new double[n];
+        Span<double> exhaustVel = n <= StackStageLimit ? stackalloc double[n] : new double[n];
+        Span<double> thrusts = n <= StackStageLimit ? stackalloc double[n] : new double[n];
+        Span<double> thrustAccel = n <= StackStageLimit ? stackalloc double[n] : new double[n];
+        Span<double> charTimes = n <= StackStageLimit ? stackalloc double[n] : new double[n];
+        Span<double> burnTimes = n <= StackStageLimit ? stackalloc double[n] : new double[n];
+        Span<double> Li = n <= StackStageLimit ? stackalloc double[n] : new double[n];
+        Span<double> tgoi = n <= StackStageLimit ? stackalloc double[n] : new double[n];
         for (int i = 0; i < n; i++)
         {
             UpfgStage s = vehicle.Stages[i];
             double massflow = s.Thrust / (s.Isp * G0);
-            stageModes.Add(s.Mode);
-            accelLimits.Add(s.GLim * G0);
-            thrusts.Add(s.Thrust * K);
-            massFlows.Add(massflow);
-            exhaustVel.Add(s.Isp * G0);
-            thrustAccel.Add(s.Thrust / s.MassTotal);
-            charTimes.Add(exhaustVel[i] / thrustAccel[i]);
+            stageModes[i] = s.Mode;
+            accelLimits[i] = s.GLim * G0;
+            thrusts[i] = s.Thrust * K;
+            exhaustVel[i] = s.Isp * G0;
+            thrustAccel[i] = s.Thrust / s.MassTotal;
+            charTimes[i] = exhaustVel[i] / thrustAccel[i];
             // Constant-acceleration stages burn dv = ve*ln(m0/m1) at a fixed accel, so their burn time is exact rather than the full-throttle estimate.
             if (s.Mode == 2)
-                burnTimes.Add(exhaustVel[i] * Math.Log(s.MassTotal / s.MassDry) / accelLimits[i]);
+                burnTimes[i] = exhaustVel[i] * Math.Log(s.MassTotal / s.MassDry) / accelLimits[i];
             else
-                burnTimes.Add((s.MassTotal - s.MassDry) / massflow);
+                burnTimes[i] = (s.MassTotal - s.MassDry) / massflow;
         }
 
-        // 2 - Accelerations (subtract sensed dv). No tb correction: the stage list is rebuilt from live data each step, so burnTimes[0] is already remaining.
-        double3 dvsensed = v - vprev;
+        // 2 - Accelerations: subtract only non-gravitational sensed velocity change between CSE updates
+        // so gravity is not double-counted against v_grav. No tb correction: live burnTimes[0] is remaining time.
+        double3 gCurr = GravVector(mu, r);
+        double3 dvsensed = SensedDeltaV(vprev, v, gprev, gCurr, dt);
         vgo -= dvsensed;
 
         // Update first stage with current mass
@@ -261,7 +289,7 @@ public sealed class UpfgGuidance
 
         // 3 - Burn times
         ComputeBurnTimes(stageModes, accelLimits, exhaustVel, charTimes, burnTimes, vgo,
-            out List<double> Li, out double L, out List<double> tgoi, out double tgo);
+            Li, out double L, tgoi, out double tgo);
 
         // If the remaining delta-v exceeds vgo, the last stage is not needed. Drop it and re-solve so its burn time does not become negative.
         if (L > vgo.Length() && vehicle.Stages.Count > 1)
@@ -273,6 +301,12 @@ public sealed class UpfgGuidance
             return;
         }
 
+        if (!IsFinite(tgo) || !(tgo > 0.0))
+        {
+            Reset();
+            return;
+        }
+
         // 4 - Thrust integrals
         ComputeThrustIntegrals(stageModes, Li, tgoi, charTimes, exhaustVel, burnTimes, accelLimits,
             out double J, out double S, out double Q, out double H, out double P, out L);
@@ -280,7 +314,7 @@ public sealed class UpfgGuidance
         // 5 - Guidance vectors
         ComputeGuidanceVectors(vgo, rd, r, v, tgo, _prev.Tgo, rgrav, iy, S, L, J, Q, H, P, rbias,
             out double3 lambda, out double3 rgo, out double3 iF, out double3 vthrust,
-            out double3 rthrust, out double3 vbias, out double3 lambdadot, out bool singular);
+            out double3 rthrust, out double3 vbias, out double3 lambdadot, out bool invalidStep);
         rbias = rgo - rthrust;
         Rgo = rgo;   // latched for the RGO readout of the console head; not used by the solver
 
@@ -318,7 +352,7 @@ public sealed class UpfgGuidance
             vd = vdval * iz3 - target.DescentRate * ix3;
             double drz = double3.Dot(iz3, target.Rdes - rp);
             double vgoz = double3.Dot(iz3, vgo);
-            if (Math.Abs(vgoz) > 1e-6 && burnTimes.Count > 0)
+            if (Math.Abs(vgoz) > 1e-6 && burnTimes.Length > 0)
             {
                 double dtgo = -2.0 * drz / vgoz;
                 if (burnTimes[0] + dtgo > 1e-3)
@@ -351,33 +385,33 @@ public sealed class UpfgGuidance
         }
         vgo = vd - v - vgrav + vbias;
 
-        // A transient bad input (e.g. the zero-thrust frame mid-staging) can drive the solution non-finite. Committing it would poison the persistent state (vgo, cser, rd) and corrupt every later step - so discard it and re-seed from the live vehicle state on the next call instead.
-        if (!IsFinite(tgo) || !IsFinite(rd) || !IsFinite(vgo) || !IsFinite(iF) || !IsFinite(rgrav))
+        // A transient bad input (e.g. the zero-thrust frame mid-staging) can drive the solution non-finite. Committing it would poison the persistent state (vgo, cser, rd) and corrupt every later step - so discard it, clear Converged, and re-seed from the live vehicle state on the next call instead.
+        if (!IsFinite(tgo) || !(tgo > 0.0) || !IsFinite(rd) || !IsFinite(vgo) || !IsFinite(iF)
+            || !IsFinite(rgrav) || !IsFinite(lambda) || !IsFinite(lambdadot))
         {
             Reset();
             return;
         }
 
-        // Convergence: tgo settled between iterations. Do not latch convergence on a singular step.
-        if (singular)
+        // Convergence: tgo settled between iterations. Clear convergence on singular geometry,
+        // excessive turning angles, or runaway tgo growth.
+        if (invalidStep)
             Converged = false;
         else
             EvaluateConvergence(prevTgoForConvergence, tgo, dt);
 
-        _prev = new State
-        {
-            Cser = cser,
-            Rbias = rbias,
-            Rd = rd,
-            Rgrav = rgrav,
-            Tgo = tgo,
-            V = v,
-            Vgo = vgo,
-            K = K,
-            Aim = aim,
-            AimArgPe = _mode == 1 ? target.ArgPe : double.NaN,
-            AimHeld = aimHeld,
-        };
+        _prev.Cser = cser;
+        _prev.Rbias = rbias;
+        _prev.Rd = rd;
+        _prev.Rgrav = rgrav;
+        _prev.Tgo = tgo;
+        _prev.V = v;
+        _prev.G = gCurr;
+        _prev.Vgo = vgo;
+        _prev.K = K;
+        _prev.Aim = aim;
+        _prev.AimArgPe = _mode == 1 ? target.ArgPe : double.NaN;
+        _prev.AimHeld = aimHeld;
 
         Steering = double3.Normalize(iF);
         VgoMag = vgo.Length();
@@ -386,6 +420,16 @@ public sealed class UpfgGuidance
         // In precision-landing mode the throttle command is K itself (the g-limit block above only applies to constant-acceleration stages).
         if (_mode == 3)
             Throttle = K;
+    }
+
+    /// <summary>
+    /// Non-gravitational sensed velocity change over <paramref name="dt"/> using trapezoidal gravity integration.
+    /// When <paramref name="dt"/> is non-positive (static-state probes), returns the raw velocity difference.
+    /// </summary>
+    internal static double3 SensedDeltaV(double3 vPrev, double3 vCurr, double3 gPrev, double3 gCurr, double dt)
+    {
+        double3 dvInertial = vCurr - vPrev;
+        return dt > 0.0 ? dvInertial - 0.5 * (gPrev + gCurr) * dt : dvInertial;
     }
 
     /// <summary>
@@ -431,12 +475,11 @@ public sealed class UpfgGuidance
     }
 
     private static void ComputeBurnTimes(
-        List<int> stageModes, List<double> accelLimits, List<double> exhaustVel,
-        List<double> charTimes, List<double> burnTimes, double3 vgo,
-        out List<double> Li, out double L, out List<double> tgoi, out double tgo)
+        ReadOnlySpan<int> stageModes, ReadOnlySpan<double> accelLimits, ReadOnlySpan<double> exhaustVel,
+        ReadOnlySpan<double> charTimes, Span<double> burnTimes, double3 vgo,
+        Span<double> Li, out double L, Span<double> tgoi, out double tgo)
     {
-        int n = stageModes.Count;
-        Li = new List<double>();
+        int n = stageModes.Length;
         L = 0;
         for (int i = 0; i < n - 1; i++)
         {
@@ -445,17 +488,16 @@ public sealed class UpfgGuidance
                 double denom = Math.Max(charTimes[i] - burnTimes[i], 1e-6);
                 double ratio = charTimes[i] / denom;
                 if (ratio <= 0) ratio = 1e-6;
-                Li.Add(exhaustVel[i] * Math.Log(ratio));
+                Li[i] = exhaustVel[i] * Math.Log(ratio);
             }
             else
             {
-                Li.Add(accelLimits[i] * burnTimes[i]);
+                Li[i] = accelLimits[i] * burnTimes[i];
             }
             L += Li[i];
         }
 
-        Li.Add(vgo.Length() - L);
-        tgoi = new List<double>();
+        Li[n - 1] = vgo.Length() - L;
         for (int i = 0; i < n; i++)
         {
             if (stageModes[i] == 1)
@@ -467,17 +509,17 @@ public sealed class UpfgGuidance
             {
                 burnTimes[i] = Li[i] / accelLimits[i];
             }
-            tgoi.Add(i == 0 ? burnTimes[i] : tgoi[i - 1] + burnTimes[i]);
+            tgoi[i] = i == 0 ? burnTimes[i] : tgoi[i - 1] + burnTimes[i];
         }
         tgo = tgoi[n - 1];
     }
 
     private static void ComputeThrustIntegrals(
-        List<int> stageModes, List<double> Li, List<double> tgoi, List<double> charTimes,
-        List<double> exhaustVel, List<double> burnTimes, List<double> accelLimits,
+        ReadOnlySpan<int> stageModes, ReadOnlySpan<double> Li, ReadOnlySpan<double> tgoi, ReadOnlySpan<double> charTimes,
+        ReadOnlySpan<double> exhaustVel, ReadOnlySpan<double> burnTimes, ReadOnlySpan<double> accelLimits,
         out double J, out double S, out double Q, out double H, out double P, out double L)
     {
-        int n = stageModes.Count;
+        int n = stageModes.Length;
         L = 0; J = 0; S = 0; Q = 0; H = 0; P = 0;
         for (int i = 0; i < n; i++)
         {
@@ -514,9 +556,9 @@ public sealed class UpfgGuidance
         double3 vgo, double3 rd, double3 r, double3 v, double tgo, double prevTgo, double3 rgrav,
         double3 iy, double S, double L, double J, double Q, double H, double P, double3 rbias,
         out double3 lambda, out double3 rgo, out double3 iF, out double3 vthrust,
-        out double3 rthrust, out double3 vbias, out double3 lambdadotOut, out bool singular)
+        out double3 rthrust, out double3 vbias, out double3 lambdadotOut, out bool invalidStep)
     {
-        singular = false;
+        invalidStep = false;
         lambda = double3.Normalize(vgo);
         if (prevTgo > 0)
             rgrav = Math.Pow(tgo / prevTgo, 2) * rgrav;
@@ -535,7 +577,7 @@ public sealed class UpfgGuidance
         else
         {
             rgoz = Math.Clamp(double3.Dot(iz, rgo), -Math.Abs(S), Math.Abs(S));
-            singular = true;
+            invalidStep = true;
         }
         rgo = rgoxy + rgoz * iz + rbias;
 
@@ -548,7 +590,10 @@ public sealed class UpfgGuidance
 
         double phi = Math.Acos(Math.Clamp(double3.Dot(iF, lambda) / (iF.Length() * lambda.Length()), -1.0, 1.0));
         double phidot = Math.Abs(J) > 1e-9 ? -phi * L / J : 0.0;
-        vthrust = (L - 0.5 * L * phi * phi - J * phi * phidot - 0.5 * H * phidot * phidot) * lambda;
+        double vthrustScalar = L - 0.5 * L * phi * phi - J * phi * phidot - 0.5 * H * phidot * phidot;
+        vthrust = vthrustScalar * lambda;
+        if (!IsFinite(phi) || phi > MaxValidTurnAngleRad || vthrustScalar <= 0.0)
+            invalidStep = true;
         double rthrustMag = S - 0.5 * S * phi * phi - Q * phi * phidot - 0.5 * P * phidot * phidot;
         double ldLen = lambdadot.Length();
         rthrust = ldLen > 1e-12
@@ -558,25 +603,21 @@ public sealed class UpfgGuidance
     }
 
     /// <summary>
-    /// "tgo has settled" - the original's convergence test, made rate-independent.
+    /// Evaluates whether tgo has settled or diverged between cycles.
     ///
-    /// A converged solution's tgo does not stand still, it counts DOWN in real time,
-    /// so the quantity that goes to zero on convergence is the change in tgo net of
-    /// the interval that has passed. The original compared raw successive values,
-    /// which is the same thing when the caller runs one cycle per second (as the
-    /// reference implementation did) and is vacuously true when it runs at 60 Hz.
-    /// Callers that do not pass dt keep the original test.
-    ///
-    /// Latching is deliberate: the phase machine promotes the turn to closed loop on
-    /// this flag and arms the terminal countdown with it, and neither should be given
-    /// back over one noisy cycle mid-ascent.
+    /// A converged solution's tgo counts down in real time, so the quantity that approaches
+    /// zero on convergence is the change in tgo net of the elapsed interval <paramref name="dt"/>.
+    /// Small transient noise keeps Converged latched, while runaway tgo growth clears it.
     /// </summary>
     private void EvaluateConvergence(double prevTgo, double curTgo, double dt)
     {
         if (prevTgo <= 0) return;
-        double tgodiff = (curTgo - (prevTgo - dt)) / prevTgo;
+        double tgoDelta = curTgo - (prevTgo - dt);
+        double tgodiff = tgoDelta / prevTgo;
         if (Math.Abs(tgodiff) < 0.01)
             Converged = true;
+        else if (tgoDelta > RunawayTgoGrowthMinS && tgodiff > RunawayTgoGrowthFraction)
+            Converged = false;
     }
 
     private static bool IsFinite(double d) => !double.IsNaN(d) && !double.IsInfinity(d);

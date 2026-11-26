@@ -89,11 +89,11 @@ public sealed class UpfgInsertionSearch
     /// <summary>How far tgo may range over a settle window and still count as converged, s.</summary>
     public const double SettleTgoS = 0.01;
 
-    /// <summary>Most solves one probe gets to converge. The slowest seen took about 2800, next to the insertion where the end of the burn moves across a staging.</summary>
-    public const int MaxProbeSolves = 3000;
+    /// <summary>Most solves one probe gets to converge before being skipped.</summary>
+    public const int MaxProbeSolves = 1500;
 
-    /// <summary>Most solves one search spends across its whole grid; past it the grid is left with gaps.</summary>
-    public const int MaxSearchSolves = 40000;
+    /// <summary>Hard ceiling on total UPFG solves spent by one synchronous search on the main thread.</summary>
+    public const int MaxSearchSolves = 12000;
 
     /// <summary>
     /// A probe whose vgo passes this multiple of the VgoMag of the solution TryPrice is given as its bound (the live solution, or the last probe that priced on the same side) is abandoned there and then. An insertion with no fixed point from this instant does not wander: re-solved, its vgo creeps up and then blows out to several times that before collapsing and starting again.
@@ -172,8 +172,10 @@ public sealed class UpfgInsertionSearch
     public void Step(double time, double dt, bool enabled, bool allowed, UpfgGuidance live, UpfgTarget target,
                      double3 r, double3 v, double mass, double mu, UpfgVehicle vehicle)
     {
-        if (!enabled)
+        if (!enabled || target.Ecc < UpfgTarget.MinArgPeEccentricity)
         {
+            // A near-circular target has identical (radius, speed, FPA = 0) at every true anomaly under
+            // continuous-burn UPFG, so skip the anomaly sweep and clear any stale eccentric savings.
             GoalNu = DefaultNu;
             SavingS = double.NaN;
             SavingMs = double.NaN;
@@ -183,8 +185,7 @@ public sealed class UpfgInsertionSearch
             if (!Frozen && live.Converged
                 && (live.Tgo < FreezeTgoS || live.VgoMag < FreezeVgoFraction * _firstSearchVgo))
                 Frozen = true;
-            if (allowed && !Frozen && target.Ecc >= UpfgTarget.MinArgPeEccentricity
-                && time - LastSearchTime >= SearchIntervalS)
+            if (allowed && !Frozen && time - LastSearchTime >= SearchIntervalS)
             {
                 LastSearchTime = time;
                 if (Search(live, target, r, v, mass, mu, vehicle) && double.IsNaN(_firstSearchVgo))
@@ -255,10 +256,12 @@ public sealed class UpfgInsertionSearch
         UpfgGuidance PriceAt(UpfgGuidance bound, double offset)
         {
             LastSearchPoints++;
-            if (LastSearchSolves >= MaxSearchSolves)
+            int remaining = MaxSearchSolves - LastSearchSolves;
+            if (remaining <= 0)
                 return null;
+            int probeBudget = Math.Min(MaxProbeSolves, remaining);
             bool ok = TryPrice(bound, target, UpfgTarget.WrapPi(anchor + offset), r, v, mass, mu, vehicle,
-                out double cost, out UpfgGuidance probe, out int solves);
+                out double cost, out UpfgGuidance probe, out int solves, probeBudget);
             LastSearchSolves += solves;
             if (!ok)
                 return null;
@@ -370,33 +373,52 @@ public sealed class UpfgInsertionSearch
     /// What inserting at true anomaly <paramref name="nu"/> costs from this instant: the tgo, in seconds of burn, that a new solver converges on when solved for that free insertion again and again from (r, v, mass). The solver is returned too - its VgoMag is the same price as thrust dV. False when it went non-finite, blew out past DivergedVgoFactor times the VgoMag of <paramref name="from"/> (a solution of this instant, only read) or had not converged within MaxProbeSolves, which prices nothing.
     /// </summary>
     public static bool TryPrice(UpfgGuidance from, UpfgTarget target, double nu, double3 r, double3 v, double mass,
-                                double mu, UpfgVehicle vehicle, out double cost, out UpfgGuidance probe, out int solves)
+                                double mu, UpfgVehicle vehicle, out double cost, out UpfgGuidance probe, out int solves,
+                                int maxSolves = MaxProbeSolves)
     {
         cost = double.NaN;
         probe = new UpfgGuidance();
+        int cap = Math.Clamp(maxSolves, 0, MaxProbeSolves);
+        if (cap <= 0)
+        {
+            solves = 0;
+            return false;
+        }
         UpfgTarget pinned = target.WithFreeInsertion(nu);
         double runaway = DivergedVgoFactor * from.VgoMag;
-        // Converged means tgo stayed inside SettleTgoS for every solve of a window, not that two samples a window apart agree: a solution cycling with a period that divides the window reads the same at both ends.
+        // Converged means tgo stayed inside SettleTgoS across SettleWindowSolves consecutive solves
+        // after setup: any excursion resets the run immediately, so periodic cycles cannot fool it.
         double low = double.PositiveInfinity, high = double.NegativeInfinity;
-        for (solves = 1; solves <= MaxProbeSolves; solves++)
+        int settledRun = 0;
+        for (solves = 1; solves <= cap; solves++)
         {
             probe.Step(r, v, mass, mu, pinned, vehicle, 1, 0.0);
             if (!double.IsFinite(probe.Tgo) || !double.IsFinite(probe.VgoMag) || probe.Tgo <= 0.0
                 || (runaway > 0.0 && probe.VgoMag > runaway))
                 return false;
-            low = Math.Min(low, probe.Tgo);
-            high = Math.Max(high, probe.Tgo);
-            if (solves % SettleWindowSolves != 0)
+            if (solves == 1)
                 continue;
-            if (high - low <= SettleTgoS)
+            double candLow = Math.Min(low, probe.Tgo);
+            double candHigh = Math.Max(high, probe.Tgo);
+            if (candHigh - candLow <= SettleTgoS)
             {
-                cost = probe.Tgo;
-                return true;
+                low = candLow;
+                high = candHigh;
+                settledRun++;
+                if (settledRun >= SettleWindowSolves)
+                {
+                    cost = probe.Tgo;
+                    return true;
+                }
             }
-            low = double.PositiveInfinity;
-            high = double.NegativeInfinity;
+            else
+            {
+                low = probe.Tgo;
+                high = probe.Tgo;
+                settledRun = 1;
+            }
         }
-        solves = MaxProbeSolves;
+        solves = cap;
         return false;
     }
 

@@ -63,6 +63,7 @@ internal static partial class Program
         IdleEngineParkingRules();
         AscentEscapeGuardRules();
         AscentTerminalCutoffRules();
+        UpfgGuidanceRules();
         So3AxisAngleRules();
         BurnTurnChecks();
         PrintfTexts();
