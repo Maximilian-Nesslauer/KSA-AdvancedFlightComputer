@@ -160,7 +160,7 @@ public sealed class BodyAeroTable
     ///  False where the craft is not within <paramref name="maxTiltRad"/> of engine first, or the axes are degenerate (b along w, flat and square to its own ground track, which a returning booster never flies): the caller then uses its whole-sphere tables.
     /// </summary>
     public bool WorldCoefficients(Dual mach, Dual bx, Dual by, Dual bz, Dual hx, Dual hy, Dual hz,
-                                  double wx, double wy, double wz, double maxTiltRad,
+                                  Dual wx, Dual wy, Dual wz, double maxTiltRad,
                                   out Dual cx, out Dual cy, out Dual cz)
     {
         cx = cy = cz = default;

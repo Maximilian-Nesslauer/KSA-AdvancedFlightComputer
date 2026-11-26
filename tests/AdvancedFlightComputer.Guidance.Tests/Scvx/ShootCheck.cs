@@ -497,6 +497,141 @@ internal static class ShootCheck
             Check("d(Fx, Fy)/d(duration) matches central finite differences in vacuum",
                   adVac.Valid && pPlus.Valid && pMinus.Valid && relErrFx < 1e-6 && relErrFy < 1e-6,
                   $"rel err Fx={relErrFx:E2}, Fy={relErrFy:E2}");
+
+            // With atmospheric drag enabled, Dual cutoff mass propagates d(Area/m)/d(duration) through the coast.
+            ShotResult adDrag = BoostbackShooter.ShootAt(
+                in sys, in eqFrame, eqX0, Mass0,
+                new Dual(pitchRad), default, default, default,
+                Dual.Seed(burnS), target, in opt, scratch, nodes: 16);
+            ShotResult dPlus = BoostbackShooter.ShootAt(
+                in sys, in eqFrame, eqX0, Mass0,
+                new Dual(pitchRad), default, default, default,
+                new Dual(burnS + eps), target, in opt, scratch, nodes: 16);
+            ShotResult dMinus = BoostbackShooter.ShootAt(
+                in sys, in eqFrame, eqX0, Mass0,
+                new Dual(pitchRad), default, default, default,
+                new Dual(burnS - eps), target, in opt, scratch, nodes: 16);
+            double fdDragFx = (dPlus.Fx.V - dMinus.Fx.V) / (2.0 * eps);
+            double fdDragFy = (dPlus.Fy.V - dMinus.Fy.V) / (2.0 * eps);
+            double relDragFx = Math.Abs(adDrag.Fx.D - fdDragFx) / Math.Max(Math.Abs(fdDragFx), 1.0);
+            double relDragFy = Math.Abs(adDrag.Fy.D - fdDragFy) / Math.Max(Math.Abs(fdDragFy), 1.0);
+            Check("d(Fx, Fy)/d(duration) matches central FD with drag (Dual cutoff mass)",
+                  adDrag.Valid && dPlus.Valid && dMinus.Valid && relDragFx < 1e-5 && relDragFy < 1e-5,
+                  $"rel err Fx={relDragFx:E2}, Fy={relDragFy:E2}");
+
+            // With asymmetric BodyAero and held RollRef, Dual RollRefTime propagates d(turn)/d(duration).
+            double[] mGrid = [0.0, 2.0, 6.0];
+            double[] aGrid = [-20.0, 0.0, 20.0];
+            double[] bGrid = [-20.0, 0.0, 20.0];
+            var coeffs = new double[3 * mGrid.Length * aGrid.Length * bGrid.Length];
+            int idx = 0;
+            for (int mi = 0; mi < mGrid.Length; mi++)
+                for (int ai = 0; ai < aGrid.Length; ai++)
+                    for (int bi = 0; bi < bGrid.Length; bi++)
+                    {
+                        double ar = aGrid[ai] * Math.PI / 180.0, br = bGrid[bi] * Math.PI / 180.0;
+                        coeffs[idx++] = 1.2 + 0.3 * ar * ar + 0.1 * br * br; // Cx
+                        coeffs[idx++] = 0.25 - 1.5 * br;                     // Cy (asymmetric side force)
+                        coeffs[idx++] = -0.35 - 2.0 * ar;                    // Cz (asymmetric lift)
+                    }
+            var bodySys = sys;
+            bodySys.BodyAero = new BodyAeroTable(mGrid, aGrid, bGrid, coeffs);
+            bodySys.RollRefX = 0.0; bodySys.RollRefY = 1.0; bodySys.RollRefZ = 0.0;
+            ShotResult adBody = BoostbackShooter.ShootAt(
+                in bodySys, in eqFrame, eqX0, Mass0,
+                new Dual(pitchRad), default, default, default,
+                Dual.Seed(burnS), target, in opt, scratch, nodes: 16);
+            ShotResult bPlus = BoostbackShooter.ShootAt(
+                in bodySys, in eqFrame, eqX0, Mass0,
+                new Dual(pitchRad), default, default, default,
+                new Dual(burnS + eps), target, in opt, scratch, nodes: 16);
+            ShotResult bMinus = BoostbackShooter.ShootAt(
+                in bodySys, in eqFrame, eqX0, Mass0,
+                new Dual(pitchRad), default, default, default,
+                new Dual(burnS - eps), target, in opt, scratch, nodes: 16);
+            double fdBodyFx = (bPlus.Fx.V - bMinus.Fx.V) / (2.0 * eps);
+            double fdBodyFy = (bPlus.Fy.V - bMinus.Fy.V) / (2.0 * eps);
+            double relBodyFx = Math.Abs(adBody.Fx.D - fdBodyFx) / Math.Max(Math.Abs(fdBodyFx), 1.0);
+            double relBodyFy = Math.Abs(adBody.Fy.D - fdBodyFy) / Math.Max(Math.Abs(fdBodyFy), 1.0);
+            Check("d(Fx, Fy)/d(duration) matches central FD with BodyAero + RollRefTime",
+                  adBody.Valid && bPlus.Valid && bMinus.Valid && relBodyFx < 1e-5 && relBodyFy < 1e-5,
+                  $"rel err Fx={relBodyFx:E2}, Fy={relBodyFy:E2}");
+
+            // Altitude-varying back-pressure thrust across 12 km -> 35 km climb-burn.
+            double[] lowX0 = { R + 12000.0, 0.0, 0.0, 650.0, 1100.0, 0.0 };
+            BoostbackShooter.Frame lowFrame = BoostbackShooter.Frame.FromState(lowX0);
+            const double tVac = 920000.0, tSl = 740000.0;
+            double slope = (tVac - tSl) / atm.SeaLevelPressure;
+            var altSys = sys;
+            altSys.Thrust = tVac;
+            altSys.ThrustPressureSlope = slope;
+            var constSys = sys;
+            constSys.Thrust = tVac - slope * atm.Pressure(12000.0);
+            constSys.ThrustPressureSlope = 0.0;
+
+            ShotResult adAlt = BoostbackShooter.ShootAt(
+                in altSys, in lowFrame, lowX0, Mass0,
+                new Dual(20.0 * Math.PI / 180.0), default, default, default,
+                Dual.Seed(25.0), target, in opt, scratch, nodes: 16);
+            ShotResult aPlus = BoostbackShooter.ShootAt(
+                in altSys, in lowFrame, lowX0, Mass0,
+                new Dual(20.0 * Math.PI / 180.0), default, default, default,
+                new Dual(25.0 + eps), target, in opt, scratch, nodes: 16);
+            ShotResult aMinus = BoostbackShooter.ShootAt(
+                in altSys, in lowFrame, lowX0, Mass0,
+                new Dual(20.0 * Math.PI / 180.0), default, default, default,
+                new Dual(25.0 - eps), target, in opt, scratch, nodes: 16);
+            double fdAltFx = (aPlus.Fx.V - aMinus.Fx.V) / (2.0 * eps);
+            double fdAltFy = (aPlus.Fy.V - aMinus.Fy.V) / (2.0 * eps);
+            double relAltFx = Math.Abs(adAlt.Fx.D - fdAltFx) / Math.Max(Math.Abs(fdAltFx), 1.0);
+            double relAltFy = Math.Abs(adAlt.Fy.D - fdAltFy) / Math.Max(Math.Abs(fdAltFy), 1.0);
+            Check("d(Fx, Fy)/d(duration) matches central FD with altitude-varying thrust",
+                  adAlt.Valid && aPlus.Valid && aMinus.Valid && relAltFx < 1e-5 && relAltFy < 1e-5,
+                  $"rel err Fx={relAltFx:E2}, Fy={relAltFy:E2}");
+
+            // Plan with constant ignition-altitude thrust vs altitude-varying thrust against altitude-varying truth.
+            double[] lowTarget = [adAlt.Fx.V, adAlt.Fy.V, adAlt.Fz.V];
+            var altGuess = new BurnParameters { PitchDeg = 20.0, Duration = 22.0 };
+            BoostbackShooter.SolveResult altSol = BoostbackShooter.Solve(
+                in altSys, lowX0, Mass0, lowTarget, in altGuess, in opt, scratch,
+                minPitchDeg: 0.0, maxDuration: maxBurn, searchRates: false);
+            BoostbackShooter.SolveResult constSol = BoostbackShooter.Solve(
+                in constSys, lowX0, Mass0, lowTarget, in altGuess, in opt, scratch,
+                minPitchDeg: 0.0, maxDuration: maxBurn, searchRates: false);
+            ShotResult altEval = ShootWithNodes(in altSys, in lowFrame, lowX0, Mass0, altSol.Parameters, lowTarget, in opt, scratch, 64);
+            ShotResult constEval = ShootWithNodes(in altSys, in lowFrame, lowX0, Mass0, constSol.Parameters, lowTarget, in opt, scratch, 64);
+            double altMiss = Math.Sqrt(altEval.MissDownrange.V * altEval.MissDownrange.V + altEval.MissCrossrange.V * altEval.MissCrossrange.V);
+            double constMiss = Math.Sqrt(constEval.MissDownrange.V * constEval.MissDownrange.V + constEval.MissCrossrange.V * constEval.MissCrossrange.V);
+            Check("altitude-varying thrust beats constant ignition-pressure model across 12-35 km burn",
+                  altSol.Converged && constSol.Converged && altMiss < 0.1 * constMiss && altMiss < 100.0,
+                  $"alt-varying {altMiss:F1} m vs constant-pressure {constMiss:F1} m");
+
+            // Benchmark searchRates and terminal cadence on closed-loop FlyPlan.
+            Console.WriteLine();
+            Console.WriteLine("  searchRates and terminal cadence benchmark (3% thrust err / 25% drag err)");
+            var truth3 = sys;
+            truth3.Thrust = sys.Thrust * 0.97;
+            var truthDrag = truth3;
+            truthDrag.ReferenceArea = sys.ReferenceArea * 1.25;
+            foreach ((string label, bool rates, double termCadence) in new[]
+            {
+                ("rates=false, term=0.2s", false, 0.2),
+                ("rates=false, term=0.5s", false, 0.5),
+                ("rates=false, term=1.0s", false, 1.0),
+                ("rates=true,  term=0.2s", true,  0.2),
+                ("rates=true,  term=0.5s", true,  0.5),
+            })
+            {
+                var swB = System.Diagnostics.Stopwatch.StartNew();
+                double mThrust = FlyPlan(in sys, in truth3, x0, Mass0, target, in opt,
+                    replanS: 2.0, terminalS: 5.0, lockS: 1.0, terminalReplanS: termCadence,
+                    out int sT, out double bT, out int shT, searchRates: rates);
+                double msT = swB.Elapsed.TotalMilliseconds;
+                double mDrag = FlyPlan(in sys, in truthDrag, x0, Mass0, target, in opt,
+                    replanS: 2.0, terminalS: 5.0, lockS: 1.0, terminalReplanS: termCadence,
+                    out int sD, out double bD, out _, searchRates: rates);
+                Console.WriteLine($"    {label,-24} thrust-3%: miss {mThrust,6:F1} m, burn {bT,5:F2} s, {sT,2} solves ({shT,4} shots, {msT,5:F1} ms) | drag+25%: miss {mDrag,6:F1} m, burn {bD,5:F2} s");
+            }
         }
 
         Console.WriteLine();
@@ -535,7 +670,8 @@ internal static class ShootCheck
                                   in ImpactOptions opt,
                                   double replanS, double terminalS, double lockS,
                                   double terminalReplanS,
-                                  out int solves, out double burnFlown, out int shots)
+                                  out int solves, out double burnFlown, out int shots,
+                                  bool searchRates = false)
     {
         const int N = PoweredBurnSystem.N;
         Span<Dual> scratch = stackalloc Dual[BoostbackShooter.ScratchLength];
@@ -583,7 +719,7 @@ internal static class ShootCheck
                 ];
                 BoostbackShooter.SolveResult sol = BoostbackShooter.Solve(
                     in model, state, mass, targetNow, in guess, in opt, scratch,
-                    minPitchDeg: 0.0, searchRates: false,
+                    minPitchDeg: 0.0, searchRates: searchRates,
                     maxSweeps: have ? 4 : 10,
                     initialPitchStepDeg: have ? 2.0 : 8.0,
                     // Continuity for the frame's zero across the moment the burn

@@ -116,16 +116,8 @@ public static partial class GuidanceWindow
     /// </summary>
     private const double BoostbackTerminalS = 5.0;
 
-    /// <summary>
-    /// Plan cadence inside the terminal window, s - 5 Hz.
-    ///
-    /// Affordable because these solves are the WARMEST the burn ever produces: two
-    /// tenths of a second on, the previous plan is very nearly the answer, so the
-    /// pattern search starts at its floor and converges almost at once. Five a second
-    /// for five seconds is twenty-five solves at the far end of a burn that has already
-    /// paid for twenty.
-    /// </summary>
-    private const double BoostbackTerminalIntervalS = 0.2;
+    /// <summary>Plan cadence inside the terminal window, s (2 Hz): matches 5 Hz accuracy while cutting terminal main-thread solves.</summary>
+    private const double BoostbackTerminalIntervalS = 0.5;
 
     /// <summary>
     /// Burn time remaining at which the plan stops being re-solved and the last of it is
@@ -830,6 +822,19 @@ public static partial class GuidanceWindow
             _s.BoostbackPlanError = "NO ENGINE MODEL";
             return;
         }
+        double thrustVac = thrust;
+        double thrustPressureSlope = 0.0;
+        if (aero.Atmosphere != null && aero.Atmosphere.SeaLevelPressure > 0.0)
+        {
+            double pSl = aero.Atmosphere.SeaLevelPressure;
+            (double tVac, _) = KsaEnginePerf.AtPressure(vehicle, 0.0);
+            (double tSl, _) = KsaEnginePerf.AtPressure(vehicle, pSl);
+            if (tVac > 0.0 && tSl >= 0.0 && tVac >= tSl)
+            {
+                thrustVac = tVac;
+                thrustPressureSlope = (tVac - tSl) / pSl;
+            }
+        }
 
         var sys = new PoweredBurnSystem
         {
@@ -837,7 +842,8 @@ public static partial class GuidanceWindow
             OmegaZ = parent.GetAngularVelocity(),
             MeanRadius = parent.MeanRadius,
             ReferenceArea = aero.ReferenceArea,
-            Thrust = thrust,
+            Thrust = thrustVac,
+            ThrustPressureSlope = thrustPressureSlope,
             MassFlow = massFlow,
             Table = aero.Table,
             Atmosphere = aero.Atmosphere,
