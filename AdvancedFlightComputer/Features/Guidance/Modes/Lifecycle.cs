@@ -20,6 +20,7 @@ public static partial class GuidanceWindow
     {
         _stopRequests.RemoveAll(r => ReferenceEquals(r.Vehicle, vehicle));
         RealSpeedHold.Forget(vehicle);
+        HandFlying.Forget(vehicle);
         DropVehicle(vehicle, release: false);
     }
 

@@ -62,7 +62,7 @@ internal static class GuidanceFeature
             postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnPartTreeModified)));
         GuidanceWindow.ApplyProbePowerWarpPatch(harmony);
         // The editor's belly-flop balance window draws from the vehicle editor's own UI pass.
-        harmony.CreateClassProcessor(typeof(EditorBalanceWindow)).Patch();
+        EditorBalanceWindow.ApplyPatches(harmony);
 
         SaveLoadObserver.SaveLoaded += OnSaveLoaded;
         SaveLoadObserver.SystemSwapped += OnSystemSwapped;
@@ -76,6 +76,8 @@ internal static class GuidanceFeature
     {
         try
         {
+            HandFlying.Reset();
+            EditorBalanceWindow.Reset();
             GuidanceWindow.ReleaseAllVehicles();
         }
         finally
@@ -89,6 +91,8 @@ internal static class GuidanceFeature
     {
         try
         {
+            HandFlying.Reset();
+            EditorBalanceWindow.Reset();
             GuidanceWindow.ReleaseAllVehicles();
         }
         finally
@@ -119,6 +123,8 @@ internal static class GuidanceFeature
         // The feature flag is already off, so no later step retries a failed cleanup.
         try
         {
+            HandFlying.Reset();
+            EditorBalanceWindow.Reset();
             GuidanceWindow.ReleaseAllVehicles();
         }
         finally

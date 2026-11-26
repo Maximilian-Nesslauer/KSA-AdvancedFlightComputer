@@ -2,6 +2,7 @@ using System.Reflection;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
+using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
@@ -40,6 +41,10 @@ public sealed class ReflectionTargetsTest : AfcTest
         t.Check("ModLibrary.AllParts anchor", GameReflection.ModLibrary_AllParts != null);
         t.Check("FlightComputer.SerializeSave anchor", GameReflection.FlightComputer_SerializeSave != null);
         t.Check("Program.SwapSystem anchor", GameReflection.Program_SwapSystem != null);
+        t.Check("Vehicle.ToggleEnum anchor", GameReflection.Vehicle_ToggleEnum != null);
+        t.Check("GaugeButtonFlightComputer.IsDisabled anchor", GameReflection.GaugeButtonFlightComputer_IsDisabled != null);
+        t.Check("GaugeButtonFlightComputer.PackData anchor", GameReflection.GaugeButtonFlightComputer_PackData != null);
+        t.Check("VehicleEditor.OnDrawUi anchor", GameReflection.VehicleEditor_OnDrawUi != null);
         // Without this check every kFS program could fly against AFC unseen, because KfsOwns reads false.
         t.Check("kFS control check builds", GameReflection.KfsControlsVehicle != null);
         // RcsWarpPatch binds by its attribute, so the overload it names is checked here.
@@ -56,6 +61,21 @@ public sealed class ReflectionTargetsTest : AfcTest
             AutoStageFeature.InjectGaugeEnum() && AutoStageFeature.GaugeEnumInjected);
         if (!wasInjected)
             AutoStageFeature.RemoveGaugeEnum();
+
+        bool pilotWasInjected = HandFlying.GaugeEnumInjected;
+        t.Check("AfcPilot injects into GaugeButtonFlightComputer.EnumTypes",
+            HandFlying.InjectGaugeEnum() && HandFlying.GaugeEnumInjected);
+        if (!pilotWasInjected)
+            HandFlying.RemoveGaugeEnum();
+
+        // Verify directional lead damping allows turn reversal and orthogonal turns at MaxLeadDeg while stopping outward lead growth.
+        var leadAtMax = new Brutal.Numerics.double3(HandFlying.MaxLeadDeg * Math.PI / 180.0, 0.0, 0.0);
+        var outwardDamped = HandFlying.DampLeadRate(new Brutal.Numerics.double3(0.5, 0.0, 0.0), leadAtMax, HandFlying.SoftLeadDeg, HandFlying.MaxLeadDeg);
+        var reverseDamped = HandFlying.DampLeadRate(new Brutal.Numerics.double3(-0.5, 0.0, 0.0), leadAtMax, HandFlying.SoftLeadDeg, HandFlying.MaxLeadDeg);
+        var orthoDamped = HandFlying.DampLeadRate(new Brutal.Numerics.double3(0.0, 0.4, 0.0), leadAtMax, HandFlying.SoftLeadDeg, HandFlying.MaxLeadDeg);
+        t.Check("HandFlying DampLeadRate stops outward growth at MaxLeadDeg", Math.Abs(outwardDamped.X) < 1e-12);
+        t.Check("HandFlying DampLeadRate preserves full reversal at MaxLeadDeg", Math.Abs(reverseDamped.X - (-0.5)) < 1e-12);
+        t.Check("HandFlying DampLeadRate preserves orthogonal turn at MaxLeadDeg", Math.Abs(orthoDamped.Y - 0.4) < 1e-12);
 
         // StagingExecution clones SequenceList.ActivateNextSequence rather than patching it, and
         // nothing the compiler checks ties the clone to stock's row activation.

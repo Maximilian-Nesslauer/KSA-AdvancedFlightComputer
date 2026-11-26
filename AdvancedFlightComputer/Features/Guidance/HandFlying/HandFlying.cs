@@ -77,8 +77,7 @@ internal static class HandFlying
 
     private static readonly ConditionalWeakTable<Vehicle, Slot> Slots = new();
 
-    private static readonly AccessTools.FieldRef<Vehicle, ManualControlInputs> Inputs =
-        AccessTools.Field(typeof(Vehicle), "_manualControlInputs") is { } f ? AccessTools.FieldRefAccess<Vehicle, ManualControlInputs>(f) : null;
+    private static AccessTools.FieldRef<Vehicle, ManualControlInputs> Inputs => GameReflection.Vehicle_manualControlInputsRef;
 
     internal static bool Available => Inputs != null;
 
@@ -143,12 +142,20 @@ internal static class HandFlying
             return;
         }
 
-        // MANUAL INTERVENTION OVERRIDES: a running AFC programme stops (including a stock deorbit claim, with its engine left as it is), an RCS burn is asked to cancel and flies nothing more meanwhile, any stock Auto burn is handed back to MANUAL (keeping a burning engine lit), and the stock flight computer goes to MANUAL, out of any burn or docking frame.
-        if (s.ControlAcquired || s.DeorbitNodeClaimed || GuidanceWindow.IsStockDeorbitActive(s))
+        // MANUAL INTERVENTION OVERRIDES: any running or newly engaged AFC programme stops (including a stock deorbit claim, with its engine left as it is), an RCS burn is asked to cancel and flies nothing more meanwhile, any stock Auto burn is handed back to MANUAL (keeping a burning engine lit), and the stock flight computer goes to MANUAL, out of any burn or docking frame.
+        if (GuidanceWindow.HoldsReleasableState(s) || VehicleControlOwnership.Holds(vehicle, ControlClaimant.Guidance))
             GuidanceWindow.StopForManualIntervention(vehicle);
         if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution exec) && exec.IsActive)
         {
             RcsExecutor.RequestCancel(exec, "AFC MANUAL INTERVENTION");
+            if (slot.Active)
+                StandDown(vehicle, release: false);
+            return;
+        }
+        if (!VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.HandFlying, out _))
+        {
+            if (slot.Active)
+                StandDown(vehicle, release: false);
             return;
         }
         if (fc.BurnMode == FlightComputerBurnMode.Auto)
@@ -226,10 +233,9 @@ internal static class HandFlying
         if (LeadDeg(slot.Raw, body2Cci) > MaxLeadDeg)
             slot.Raw = Toward(body2Cci, slot.Raw, MaxLeadDeg);
 
-        // THE COMMANDED ATTITUDE turns at that rate, about its own axes, slowing as it leads the craft past SoftLeadDeg.
-        double lead = LeadDeg(slot.Raw, body2Cci);
-        double ease = Math.Clamp((MaxLeadDeg - lead) / (MaxLeadDeg - SoftLeadDeg), 0.0, 1.0);
-        double3 rawRateCci = (ease * (slot.RateModel.X * mx + slot.RateModel.Y * my + slot.RateModel.Z * mz)).Transform(slot.Raw);
+        // THE COMMANDED ATTITUDE turns at that rate, about its own axes, damping only outward lead growth past SoftLeadDeg so reversing back toward the craft is never locked out.
+        double3 desiredRateCci = (slot.RateModel.X * mx + slot.RateModel.Y * my + slot.RateModel.Z * mz).Transform(slot.Raw);
+        double3 rawRateCci = DampLeadRate(desiredRateCci, RotationVector(body2Cci, slot.Raw), SoftLeadDeg, MaxLeadDeg);
         slot.Raw = Turned(slot.Raw, rawRateCci, dt);
 
         // BELLYFLOP'S FILTER (BellyflopAttitude), on the attitude: critically damped, second order, semi-implicit in 20 ms steps, towards the command read 2/omega ahead (the filter's lag on a ramp), so the flown attitude, its rate and its acceleration are all continuous.
@@ -290,20 +296,84 @@ internal static class HandFlying
         slot.Hidden = ThrusterMapFlags.None;
     }
 
+    /// <summary>Damps only the component of <paramref name="desiredRateCci"/> that increases lead past <paramref name="softLeadDeg"/>, keeping reverse and orthogonal turns unattenuated.</summary>
+    internal static double3 DampLeadRate(double3 desiredRateCci, double3 leadVecCci, double softLeadDeg, double maxLeadDeg)
+    {
+        double leadRad = leadVecCci.Length();
+        double leadDeg = leadRad * 180.0 / Math.PI;
+        if (leadDeg <= softLeadDeg || leadRad < 1e-12)
+            return desiredRateCci;
+        double3 outDir = leadVecCci / leadRad;
+        double outward = double3.Dot(desiredRateCci, outDir);
+        if (outward <= 0.0)
+            return desiredRateCci;
+        double span = Math.Max(maxLeadDeg - softLeadDeg, 1e-6);
+        double ease = Math.Clamp((maxLeadDeg - leadDeg) / span, 0.0, 1.0);
+        return desiredRateCci - (1.0 - ease) * outward * outDir;
+    }
+
     /// <summary>Hand flying lets go: the controller's actuators are handed back unless a guidance mode has taken the craft, which flies them now.</summary>
     private static void StandDown(Vehicle vehicle, bool release)
     {
         if (Slots.TryGetValue(vehicle, out Slot slot))
         {
             slot.Active = false;
+            slot.Hidden = ThrusterMapFlags.None;
             slot.RateModel = default;
             slot.LastT = double.NaN;
             slot.Log?.Close();
             slot.Log = null;
             slot.LogAt = double.NegativeInfinity;
         }
+        VehicleControlOwnership.Release(vehicle, ControlClaimant.HandFlying);
         if (release)
             AttitudeController.Release(vehicle);
+    }
+
+    /// <summary>Flushes and forgets one disposed vehicle's hand-flying slot.</summary>
+    internal static void Forget(Vehicle vehicle)
+    {
+        if (vehicle == null)
+            return;
+        if (Slots.TryGetValue(vehicle, out Slot slot))
+        {
+            slot.Active = false;
+            slot.Hidden = ThrusterMapFlags.None;
+            slot.Log?.Close();
+            slot.Log = null;
+            Slots.Remove(vehicle);
+        }
+        VehicleControlOwnership.Release(vehicle, ControlClaimant.HandFlying);
+    }
+
+    /// <summary>Closes all active hand-flying logs, releases active actuators on live craft, and clears all slots on save load, system swap, or mod unload.</summary>
+    internal static void Reset()
+    {
+        foreach (var entry in Slots)
+        {
+            bool wasActive = entry.Value.Active;
+            entry.Value.Active = false;
+            entry.Value.Hidden = ThrusterMapFlags.None;
+            entry.Value.RateModel = default;
+            entry.Value.LastT = double.NaN;
+            entry.Value.Log?.Close();
+            entry.Value.Log = null;
+            entry.Value.LogAt = double.NegativeInfinity;
+            VehicleControlOwnership.Release(entry.Key, ControlClaimant.HandFlying);
+            if (wasActive && !entry.Key.IsDisposed)
+            {
+                try
+                {
+                    AttitudeController.Release(entry.Key);
+                }
+                catch (Exception ex)
+                {
+                    LogHelper.WarnOnce($"hand-flying-release:{ex.GetType().Name}",
+                        $"[AFC] Hand flying could not release actuators for '{entry.Key.Id}': {ex}");
+                }
+            }
+        }
+        Slots.Clear();
     }
 
     /// <summary>An attitude (body to CCI) turned for <paramref name="seconds"/> at <paramref name="rateCci"/>.</summary>
@@ -352,26 +422,53 @@ internal static class HandFlying
 
     private static bool _enumInjected;
 
+    internal static bool GaugeEnumInjected =>
+        GameReflection.GaugeButtonFlightComputer_EnumTypes?.GetValue(null) is System.Collections.Generic.List<EnumTypeOption> list
+        && list.Exists(o => o.Type == typeof(AfcPilot));
+
     /// <summary>Before the game reads the gauges (Mod.OnBeforeMain): the PILOT buttons' enum goes into the list the gauge buttons bind their Action by name from.</summary>
-    internal static void InjectGaugeEnum()
+    internal static bool InjectGaugeEnum()
     {
         if (GameReflection.GaugeButtonFlightComputer_EnumTypes?.GetValue(null) is not System.Collections.Generic.List<EnumTypeOption> list)
         {
             DefaultCategory.Log.Warning("[AFC] GaugeButtonFlightComputer.EnumTypes is not a List<EnumTypeOption>; the PILOT gauge buttons are not registered.");
-            return;
+            return false;
         }
         if (!list.Exists(o => o.Type == typeof(AfcPilot)))
             list.Add(new EnumTypeOption(typeof(AfcPilot)));
         _enumInjected = true;
+        return true;
+    }
+
+    internal static void RemoveGaugeEnum()
+    {
+        if (_enumInjected && GameReflection.GaugeButtonFlightComputer_EnumTypes?.GetValue(null) is System.Collections.Generic.List<EnumTypeOption> list)
+            list.RemoveAll(o => o.Type == typeof(AfcPilot));
+        _enumInjected = false;
     }
 
     internal static void ApplyPatches(Harmony harmony)
     {
         if (!_enumInjected)
             InjectGaugeEnum();
-        harmony.CreateClassProcessor(typeof(TogglePatch)).Patch();
-        harmony.CreateClassProcessor(typeof(ButtonIsDisabledPatch)).Patch();
-        harmony.CreateClassProcessor(typeof(ButtonPackDataPatch)).Patch();
+        MethodInfo toggle = GameReflection.Vehicle_ToggleEnum;
+        MethodInfo isDisabled = GameReflection.GaugeButtonFlightComputer_IsDisabled;
+        MethodInfo packData = GameReflection.GaugeButtonFlightComputer_PackData;
+        if (toggle == null || isDisabled == null || packData == null || GameReflection.GaugeButtonFlightComputer_enumValueRef == null)
+        {
+            DefaultCategory.Log.Warning("[AFC] HandFlying gauge anchors were not found; PILOT gauge buttons are disabled while Guidance continues.");
+            return;
+        }
+        try
+        {
+            harmony.Patch(toggle, prefix: new HarmonyMethod(typeof(TogglePatch), nameof(TogglePatch.Prefix)));
+            harmony.Patch(isDisabled, postfix: new HarmonyMethod(typeof(ButtonIsDisabledPatch), nameof(ButtonIsDisabledPatch.Postfix)));
+            harmony.Patch(packData, postfix: new HarmonyMethod(typeof(ButtonPackDataPatch), nameof(ButtonPackDataPatch.Postfix)));
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Warning($"[AFC] Could not patch HandFlying PILOT gauge buttons, so only manual intervention buttons are disabled: {ex}");
+        }
     }
 
     private static bool IsPilotButton(GaugeButtonFlightComputer button, out AfcPilot value)
@@ -385,10 +482,9 @@ internal static class HandFlying
         return false;
     }
 
-    [HarmonyPatch(typeof(Vehicle), nameof(Vehicle.ToggleEnum), new[] { typeof(Enum) })]
     internal static class TogglePatch
     {
-        static bool Prefix(Vehicle __instance, Enum enumValue)
+        internal static bool Prefix(Vehicle __instance, Enum enumValue)
         {
             if (enumValue is not AfcPilot button)
                 return true;
@@ -397,21 +493,19 @@ internal static class HandFlying
         }
     }
 
-    [HarmonyPatch(typeof(GaugeButtonFlightComputer), nameof(GaugeButtonFlightComputer.IsDisabled), new Type[0])]
     internal static class ButtonIsDisabledPatch
     {
-        static void Postfix(GaugeButtonFlightComputer __instance, ref bool __result)
+        internal static void Postfix(GaugeButtonFlightComputer __instance, ref bool __result)
         {
             if (IsPilotButton(__instance, out _))
                 __result = Program.ControlledVehicle is null or KittenEva || !Available;
         }
     }
 
-    [HarmonyPatch(typeof(GaugeButtonFlightComputer), nameof(GaugeButtonFlightComputer.PackData), new Type[0])]
     internal static class ButtonPackDataPatch
     {
         // Bit 0 clicked, bit 1 lit, bit 2 disabled, bit 3 enabled, as stock packs them.
-        static void Postfix(GaugeButtonFlightComputer __instance, ref uint2 __result)
+        internal static void Postfix(GaugeButtonFlightComputer __instance, ref uint2 __result)
         {
             if (!IsPilotButton(__instance, out AfcPilot button) || Program.ControlledVehicle is not { } vehicle || vehicle is KittenEva)
                 return;

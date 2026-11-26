@@ -8,6 +8,7 @@ internal enum ControlClaimant
     None,
     RcsTranslation,
     Guidance,
+    HandFlying,
 }
 
 /// <summary>
@@ -88,6 +89,7 @@ internal static class VehicleControlOwnership
     {
         ControlClaimant.RcsTranslation => "an RCS burn",
         ControlClaimant.Guidance => "guidance",
+        ControlClaimant.HandFlying => "manual intervention",
         _ => "another feature",
     };
 }
