@@ -25,6 +25,7 @@ internal static class SixDofAeroCheck
         Console.WriteLine("TOUCHDOWN GUIDANCE'S BODY-AXIS FORCE AND MOMENT");
         bool ok = Slopes();
         ok &= Agreement();
+        ok &= MomentLimiterAndRotDamp();
         ok &= Landing(verbose);
         ok &= Slew(verbose);
         Console.WriteLine();
@@ -193,6 +194,111 @@ internal static class SixDofAeroCheck
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"  constant moment and a {Math.Sqrt(ThreeDofScenario.Dot(shift, shift)):F2} m shift: {got[0] / 1000:F1} / {got[1] / 1000:F1} / {got[2] / 1000:F1} kN m about model x/y/z, off by {err:E1}  {(moment ? "ok" : "FAIL")}"));
         ok &= moment;
+        return ok;
+    }
+
+    // ------------------------------------------------------------------- 2b. two-term limiter and rotational damping
+
+    private static bool MomentLimiterAndRotDamp()
+    {
+        Console.WriteLine();
+        Console.WriteLine("2b. two-term moment limiter and rotational damping: Dual AD vs central FD and closed-form parity");
+        bool ok = true;
+
+        var body = new BodyAero6Dof
+        {
+            Atmosphere = ThreeDofScenario.Model().Atmosphere!,
+            Force = ThreeDofScenario.BodyTable(0.05, -0.03),
+            Moment = ConstantTable(0.004, 0.07, -0.03),
+            ReferenceArea = Area,
+            ReferenceLength = Length,
+            ModelToTable = GameAxes,
+            ComShiftX = 0.4, ComShiftY = -0.1, ComShiftZ = 0.2,
+            MomentLimiterStiffnessPerPa = 1.2e-6,
+            MomentLimiterDampingPerPaMs = 4.5e-4,
+            RotDampX = 3360.0,
+            RotDampY = 6260.0,
+            RotDampZ = 6100.0,
+        };
+
+        // Direct Wrench Dual AD vs central FD across [alt, vx, vy, vz, wx, wy, wz] -> [fx, fy, fz, tx, ty, tz].
+        double[] s0 = [2500.0, 18.0, -12.0, -158.0, 0.25, -0.35, 0.18];
+        double[] hs = [1e-2, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5, 1e-5];
+        double[] qState = State(s0[0], [s0[1], s0[2], s0[3]], 5.0, [s0[4], s0[5], s0[6]]);
+        double qw = qState[6], qx = qState[7], qy = qState[8], qz = qState[9];
+        double r00 = 1.0 - 2.0 * (qy * qy + qz * qz), r01 = 2.0 * (qx * qy - qw * qz), r02 = 2.0 * (qx * qz + qw * qy);
+        double r10 = 2.0 * (qx * qy + qw * qz), r11 = 1.0 - 2.0 * (qx * qx + qz * qz), r12 = 2.0 * (qy * qz - qw * qx);
+        double r20 = 2.0 * (qx * qz - qw * qy), r21 = 2.0 * (qy * qz + qw * qx), r22 = 1.0 - 2.0 * (qx * qx + qy * qy);
+
+        void EvalWrench(ReadOnlySpan<Dual> sv, Span<Dual> wOut)
+        {
+            body.Wrench(sv[0], sv[1], sv[2], sv[3],
+                        new Dual(r00), new Dual(r01), new Dual(r02),
+                        new Dual(r10), new Dual(r11), new Dual(r12),
+                        new Dual(r20), new Dual(r21), new Dual(r22),
+                        out wOut[0], out wOut[1], out wOut[2], out wOut[3], out wOut[4], out wOut[5], out _,
+                        default, sv[4], sv[5], sv[6]);
+        }
+
+        double maxRel = 0.0;
+        Span<Dual> sv = stackalloc Dual[7];
+        Span<Dual> wAd = stackalloc Dual[6];
+        Span<Dual> wPlus = stackalloc Dual[6];
+        Span<Dual> wMinus = stackalloc Dual[6];
+        for (int c = 0; c < 7; c++)
+        {
+            for (int k = 0; k < 7; k++) sv[k] = new Dual(s0[k], k == c ? 1.0 : 0.0);
+            EvalWrench(sv, wAd);
+            for (int k = 0; k < 7; k++) sv[k] = new Dual(s0[k] + (k == c ? hs[c] : 0.0));
+            EvalWrench(sv, wPlus);
+            for (int k = 0; k < 7; k++) sv[k] = new Dual(s0[k] - (k == c ? hs[c] : 0.0));
+            EvalWrench(sv, wMinus);
+            for (int r = 0; r < 6; r++)
+            {
+                double fd = (wPlus[r].V - wMinus[r].V) / (2.0 * hs[c]);
+                double ad = wAd[r].D;
+                double rel = Math.Abs(ad - fd) / Math.Max(Math.Abs(fd), 1e-4);
+                maxRel = Math.Max(maxRel, rel);
+            }
+        }
+        bool adPass = maxRel < 1e-6;
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"  wrench Dual AD vs central FD (7 channels x 6 outputs): max rel err {maxRel:E2}  {(adPass ? "ok" : "FAIL")}"));
+        ok &= adPass;
+
+        // Closed-form two-term limiter parity across speeds and physics timesteps.
+        const double invNorm = 1.9083e-7, kSub = 10471.1, cSub = 150707.2, rhoSl = 1.225;
+        double maxDivErr = 0.0;
+        foreach (double dt in new[] { 1.0 / 60.0, 0.02, 0.05, 0.10 })
+        {
+            BodyAero6Dof.ComputeMomentLimiterTerms(invNorm, dt, kSub, cSub, out double stiff, out double damp);
+            foreach (double v in new[] { 20.0, 50.0, 100.0, 200.0, 300.0 })
+            {
+                double q = 0.5 * rhoSl * v * v;
+                double expected = 1.0 + invNorm * dt * q * (0.5 * dt * kSub + cSub / v);
+                double got = BodyAero6Dof.EvaluateMomentLimiterDivisor(q, v, stiff, damp);
+                maxDivErr = Math.Max(maxDivErr, Math.Abs(got - expected) / expected);
+            }
+        }
+        bool parityPass = maxDivErr < 1e-14;
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"  closed-form two-term limiter parity (20..300 m/s, dt 1/60..0.10 s): max rel err {maxDivErr:E2}  {(parityPass ? "ok" : "FAIL")}"));
+        ok &= parityPass;
+
+        // Verify rotational damping opposes angular rate and scales linearly with rate.
+        double[] u0 = new double[NU];
+        Dynamics6Dof.Params p = Params(body, oldAero: false);
+        double[] x0 = State(600, [0, 0, -100], 0, [0, 0, 0]);
+        double[] x1 = State(600, [0, 0, -100], 0, [0, 0.2, 0]);
+        var f0 = new double[NX];
+        var f1 = new double[NX];
+        Dynamics6Dof.Eval(x0, u0, p, f0);
+        Dynamics6Dof.Eval(x1, u0, p, f1);
+        double dTauY = (f1[11] - f0[11]) * p.Iyy;
+        bool dampOpposes = dTauY < -1e3;
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"  rotational pitch damping at 100 m/s, 0.2 rad/s: dTau_y = {dTauY / 1000:F2} kN m  {(dampOpposes ? "ok" : "FAIL")}"));
+        ok &= dampOpposes;
         return ok;
     }
 

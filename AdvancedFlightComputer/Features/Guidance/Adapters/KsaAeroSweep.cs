@@ -258,6 +258,15 @@ public static partial class KsaAeroSweep
         /// <summary>The body the sweep was taken over. The atmosphere, and on an airless body the zero tables, belong to it.</summary>
         public IParentBody Parent;
 
+        /// <summary>Subsonic aerodynamic moment stiffness bound from LocalInclinationLaw.ComputeLoads, m^3.</summary>
+        public double MomentStiffnessBoundSub;
+
+        /// <summary>Subsonic aerodynamic moment damping bound from LocalInclinationLaw.ComputeLoads, m^4.</summary>
+        public double MomentDampingBoundSub;
+
+        /// <summary>Rotational aerodynamic damping coefficients (C_lp, C_mq, C_nr) in table body axes, m^4.</summary>
+        public double3 RotDampCoeff;
+
         public int MachCount => MachGrid.Length;
         public int AlphaCount => AlphaGridDeg.Length;
 
@@ -1135,6 +1144,38 @@ public static partial class KsaAeroSweep
         var bodyCoefficients = new double[nbm * nab * nab * 3];
         var bodyMoments = new double[nbm * nab * nab * 3];
         FlyGrid(BodyAngleBreakpointsDeg, false, bodyCoefficients, bodyMoments);
+
+        // Measure KSA moment-limiter geometry bounds (K_sub, C_sub) and rotational damping coefficients (C_lp, C_mq, C_nr).
+        AeroSurfaceFlow surfFlow = parts?.AwaitAerodynamics()?.GetSurfaceFlow();
+        if (surfFlow != null && sea.Density > 0.0 && speedOfSound > 0.0)
+        {
+            (double ux5, double uy5, double uz5) = BodyAeroTable.AirDirection(5.0 * Math.PI / 180.0, 0.0, noseFirst: false);
+            var u5 = new double3(ux5, uy5, uz5);
+            flow.Prepare(u5);
+            double gamma = physical.Mixture.ComputeGamma(seaTemperature);
+            var lawSub = new LocalInclinationLaw((float)(150.0 / speedOfSound), (float)gamma);
+            var fricSub = new SkinFrictionLaw(physical.Mixture, seaTemperature, sea.Density, 150.0, null);
+            SurfaceLoads loadsSub = lawSub.ComputeLoads(surfFlow, in fricSub, (-u5).ToBepu(), Vector3.Zero, props.CenterOfMassAsmb.ToBepu());
+            if (double.IsFinite(loadsSub.MomentStiffnessBound) && loadsSub.MomentStiffnessBound >= 0.0)
+                res.MomentStiffnessBoundSub = loadsSub.MomentStiffnessBound;
+            if (double.IsFinite(loadsSub.MomentDampingBound) && loadsSub.MomentDampingBound >= 0.0)
+                res.MomentDampingBoundSub = loadsSub.MomentDampingBound;
+        }
+        if (sea.Density > 0.0)
+        {
+            var uRetro = new double3(-1.0, 0.0, 0.0);
+            const double vDamp = 100.0, wDamp = 0.10;
+            flow.Prepare(uRetro);
+            probe.WrenchWithRates(vDamp * uRetro, double3.Zero, out _, out double3 m0);
+            probe.WrenchWithRates(vDamp * uRetro, new double3(wDamp, 0.0, 0.0), out _, out double3 mx);
+            probe.WrenchWithRates(vDamp * uRetro, new double3(0.0, wDamp, 0.0), out _, out double3 my);
+            probe.WrenchWithRates(vDamp * uRetro, new double3(0.0, 0.0, wDamp), out _, out double3 mz);
+            double denom = 0.5 * sea.Density * vDamp * wDamp;
+            res.RotDampCoeff = new double3(
+                double.IsFinite(mx.X - m0.X) ? Math.Max(0.0, -(mx.X - m0.X) / denom) : 0.0,
+                double.IsFinite(my.Y - m0.Y) ? Math.Max(0.0, -(my.Y - m0.Y) / denom) : 0.0,
+                double.IsFinite(mz.Z - m0.Z) ? Math.Max(0.0, -(mz.Z - m0.Z) / denom) : 0.0);
+        }
         // NOSE FIRST, for an ascent (#216): the same, about the nose.
         double[] noseCoefficients = null, noseMoments = null;
         if (p.NoseFirst)
@@ -1485,7 +1526,10 @@ public static partial class KsaAeroSweep
                     for (int d = 0; d < grid.Length; d++)
                     {
                         if (grid[d] != 0.0)
+                        {
                             pose(grid[d]);
+                            flow.Invalidate();
+                        }
                         Delta(BodyAngleBreakpointsDeg, false, bodyCoefficients, bodyMoments, d, forceTables, momentTables);
                         if (p.NoseFirst)
                             Delta(NoseAngleBreakpointsDeg, true, noseCoefficients, noseMoments, d, noseForceTables, noseMomentTables);
@@ -1500,6 +1544,7 @@ public static partial class KsaAeroSweep
                 finally
                 {
                     pose(0.0);
+                    flow.Invalidate();
                 }
                 var table = new SurfaceTable
                 {
@@ -1530,17 +1575,35 @@ public static partial class KsaAeroSweep
     /// <summary>The surface flow of a sweep's private mesh, turned to each sample direction before its rows. Nothing else steps it.</summary>
     private sealed class SamplingFlow
     {
+        private static readonly float TurnThresholdCosine = MathF.Cos(MathF.PI / 180f);
         private readonly AeroSurfaceFlow _flow;
+        private Vector3 _lastFlowDir;
+        private bool _hasLast;
+        private bool _forceBust;
 
         public SamplingFlow(PartTree parts)
         {
             _flow = parts?.AwaitAerodynamics()?.GetSurfaceFlow();
         }
 
+        public void Invalidate()
+        {
+            _forceBust = true;
+        }
+
         public void Prepare(double3 airDirection)
         {
-            // Stock reuses geometry within one degree. An opposite wind forces fresh geometry for the next sample.
-            _flow?.Update(airDirection.ToBepu());
+            if (_flow == null)
+                return;
+            // PhysicsStates.ComputeAerodynamicLoads passes -airVelocityBody / speed to AeroSurfaceFlow.Update.
+            // Bust the 1-deg shielding cache only when the next direction stays inside the threshold or geometry moved.
+            Vector3 targetFlow = (-airDirection).ToBepu();
+            if (_forceBust || (_hasLast && Vector3.Dot(_lastFlowDir, targetFlow) >= TurnThresholdCosine))
+                _flow.Update(airDirection.ToBepu());
+            _flow.Update(targetFlow);
+            _lastFlowDir = targetFlow;
+            _hasLast = true;
+            _forceBust = false;
         }
     }
 
@@ -1624,6 +1687,27 @@ public static partial class KsaAeroSweep
                 0.0, 0.0, _origin.PositionBub, _origin.VelocityBub, default, default, _parts);
             force = d.ForceBody;
             torque = d.TorqueBody;
+        }
+
+        /// <summary>The body-axis force and torque at an air velocity and angular rate (rad/s), restoring zero rates on exit.</summary>
+        public void WrenchWithRates(double3 airVelocityBody, double3 bodyRatesRadS, out double3 force, out double3 torque)
+        {
+            var state = new PhysicsStates
+            {
+                Origin = ref _origin,
+                Kinematic = ref _kinematic,
+                Props = ref _props,
+                Environment = ref _environment,
+            };
+            state.SetBodyRates(bodyRatesRadS);
+            try
+            {
+                Wrench(airVelocityBody, out force, out torque);
+            }
+            finally
+            {
+                state.SetBodyRates(double3.Zero);
+            }
         }
     }
 
@@ -1831,6 +1915,50 @@ public static partial class KsaAeroSweep
         forceBody = d.ForceBody - d0.ForceBody;
         torqueBody = d.TorqueBody - d0.TorqueBody;
         return double.IsFinite(forceBody.X) && double.IsFinite(forceBody.Y) && double.IsFinite(forceBody.Z);
+    }
+
+    /// <summary>
+    /// Infinity norm bound on the inverse inertia tensor, matching KSA's PhysicsStates.InertiaInvNormBound, 1/(kg m^2).
+    /// </summary>
+    public static double InertiaInvNormBound(in VehicleProperties props)
+    {
+        BepuUtilities.Symmetric3x3 invI = props.TotalMassPropsInvAsmb.Props.Inertia;
+        double r1 = Math.Abs((double)invI.XX) + Math.Abs((double)invI.YX) + Math.Abs((double)invI.ZX);
+        double r2 = Math.Abs((double)invI.YX) + Math.Abs((double)invI.YY) + Math.Abs((double)invI.ZY);
+        double r3 = Math.Abs((double)invI.ZX) + Math.Abs((double)invI.ZY) + Math.Abs((double)invI.ZZ);
+        return Math.Max(r1, Math.Max(r2, r3));
+    }
+
+    /// <summary>
+    /// Computes KSA's two-term aerodynamic moment limiter in closed form from sweep bounds, live inverse inertia, and physics substep.
+    /// Eliminates runtime ComputeDerivatives polling and filter lag across mass drain, speed, and timestep changes.
+    /// </summary>
+    public static bool TryComputeMomentLimiterClosedForm(Vehicle vehicle, Result aero,
+                                                         out double stiffPerPa, out double dampPerPaMs,
+                                                         out double perPaNow, out double divisorNow)
+    {
+        stiffPerPa = dampPerPaMs = perPaNow = divisorNow = 0.0;
+        if (vehicle == null || aero == null)
+            return false;
+        if (!(aero.MomentStiffnessBoundSub > 0.0 || aero.MomentDampingBoundSub > 0.0))
+            return false;
+        double dt = vehicle.KinematicMeasurements.DeltaTime;
+        if (!(dt > 0.0) || !double.IsFinite(dt))
+            return false;
+        double invNorm = InertiaInvNormBound(vehicle.Props);
+        if (!(invNorm > 0.0) || !double.IsFinite(invNorm))
+            return false;
+        AdvancedFlightComputer.Guidance.Scvx.SixDof.BodyAero6Dof.ComputeMomentLimiterTerms(
+            invNorm, dt, aero.MomentStiffnessBoundSub, aero.MomentDampingBoundSub,
+            out stiffPerPa, out dampPerPaMs);
+        float3 air = PhysicsStates.ComputeAirVelocityBody(vehicle.BubbleOrigin, vehicle.KinematicStates, vehicle.PhysicsEnvironment);
+        double v2 = double3.Unpack(in air).LengthSquared();
+        double v = Math.Sqrt(v2);
+        double q = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * v2;
+        perPaNow = v > 1.0 ? stiffPerPa + dampPerPaMs / v : stiffPerPa;
+        divisorNow = v > 1.0 ? 1.0 + q * perPaNow : 1.0;
+        return double.IsFinite(stiffPerPa) && double.IsFinite(dampPerPaMs)
+               && double.IsFinite(perPaNow) && double.IsFinite(divisorNow);
     }
 
     /// <summary>
