@@ -73,7 +73,7 @@ public static partial class GuidanceWindow
     internal static bool OrbitalEntryPictureFor(Vehicle vehicle, LandWay way) => OrbitalEntryWay(way);
 
     /// <summary>
-    /// The craft has a rocket engine with propellant available to land on, active or not: an entry hands it to bellyflop and touchdown. With none (a capsule or a craft whose engines are dry), orbital entry arms parachutes when present or holds its attitude after the hand-over.
+    /// The craft has a throttleable rocket engine with propellant available to land on, active or not: an entry hands it to bellyflop and touchdown. With none (a capsule, a craft with only solid motors, or a craft whose liquid engines are dry), orbital entry arms parachutes when present or holds its attitude after the hand-over.
     /// </summary>
     private static bool LandEngineOnCraft(Vehicle vehicle)
     {
@@ -84,6 +84,9 @@ public static partial class GuidanceWindow
         foreach (var engine in engines.ModulesAndStates)
         {
             if (engine.Module.Rockets is not { Length: > 0 } rockets)
+                continue;
+            // Match LandingEngineSelection: an EngineController activates all of its rockets together, so any non-throttleable rocket disqualifies it.
+            if (Array.Exists(rockets, rocket => !KsaEnginePerf.FollowsThrottle(rocket)))
                 continue;
             if (engine.State.IsPropellantAvailable)
                 return true;

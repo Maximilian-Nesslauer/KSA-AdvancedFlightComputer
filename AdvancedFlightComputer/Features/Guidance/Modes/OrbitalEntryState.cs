@@ -96,6 +96,7 @@ public sealed class OrbitalEntryState
     public double NextTraceAt = double.NegativeInfinity;
 
     // ---- aiming the deorbit burn (OrbitalEntryAim), kept across the entry's own resets ----
+    public sealed class AimCheckSlot { public EntryPlanner.Result Result; }
     public enum AimSteps { None, Search, Check, Ready }
     public AimSteps AimStage;
     public KsaAeroSweep.Job AimJob;
@@ -104,7 +105,7 @@ public sealed class OrbitalEntryState
     public string AimTrimKey = "";
     public EntryModel AimModel;
     public Ksa3DofWorker AimWorker;
-    public volatile EntryPlanner.Result AimCheck;
+    public AimCheckSlot AimCheck;
     public double AimDeparture, AimStartE, AimStartRangeM, AimCrossM, AimShortM, AimLongM, AimTargetM, AimShiftM;
     public double[] AimStartX;
     /// <summary>The velocity after the aimed burn when the Lambert transfer to the entry point was taken (AimLambert), else null for the horizontal burn.</summary>
@@ -165,6 +166,22 @@ public sealed class OrbitalEntryState
         TrajLayout = null;
         DragErrorF = double.NaN;
         PrevNoseCci = PrevRollRefCci = TargetRateCci = default;
+    }
+
+    public void DisposeAim()
+    {
+        AimWorker?.Dispose();
+        AimWorker = null;
+        AimJob = null;
+        AimAero = null;
+        AimTrim = null;
+        AimTrimKey = "";
+        AimModel = null;
+        AimCheck = null;
+        AimVelocity = null;
+        AimStage = AimSteps.None;
+        AimShiftM = 0;
+        AimTries = 0;
     }
 }
 
