@@ -60,9 +60,8 @@ public struct DragCoastSystem : IOdeSystem
     /// mean radius even when the impact target radius is not.</summary>
     public double MeanRadius;
 
-    /// <summary>Reference area over mass, m^2/kg. The area must be the one the Cd
-    /// table is referenced to; KsaAeroSweep uses KSA's own nose face.</summary>
-    public double AreaOverMass;
+    /// <summary>Reference area over mass, m^2/kg. Dual so powered-burn cutoff mass sensitivity d(A/m)/d(duration) propagates through the coast.</summary>
+    public Dual AreaOverMass;
 
     /// <summary>Angle of attack held through the coast, radians, retrograde-first.
     /// Zero is engine-first. See the type summary. With a <see cref="LiftTable"/> a
@@ -96,8 +95,8 @@ public struct DragCoastSystem : IOdeSystem
     /// </summary>
     public double RollRefX, RollRefY, RollRefZ;
 
-    /// <summary>Seconds from when <see cref="RollRefX"/> was taken to this coast's t = 0: the burn's duration, for a coast that starts at a burn's cutoff.</summary>
-    public double RollRefTime;
+    /// <summary>Seconds from when <see cref="RollRefX"/> was taken to this coast's t = 0: Dual so burn-duration sensitivity propagates into the held-roll rotation.</summary>
+    public Dual RollRefTime;
 
     /// <summary>Largest tilt off engine first the body table is read at, radians, as KsaPointMassModel.BodyAeroMaxTiltRad.</summary>
     private const double BodyAeroMaxTiltRad = 30.0 * Math.PI / 180.0;
@@ -205,10 +204,10 @@ public struct DragCoastSystem : IOdeSystem
             by = -(c * hy + s * py / pn);
             bz = -(c * hz + s * pz / pn);
         }
-        double turn = OmegaZ * (t.V + RollRefTime);
-        double ct = Math.Cos(turn), st = Math.Sin(turn);
-        double wx = ct * RollRefX - st * RollRefY, wy = st * RollRefX + ct * RollRefY;
-        if (!BodyAero!.WorldCoefficients(mach, bx, by, bz, hx, hy, hz, wx, wy, RollRefZ, BodyAeroMaxTiltRad,
+        Dual turn = OmegaZ * (t + RollRefTime);
+        Dual ct = Dual.Cos(turn), st = Dual.Sin(turn);
+        Dual wx = ct * RollRefX - st * RollRefY, wy = st * RollRefX + ct * RollRefY;
+        if (!BodyAero!.WorldCoefficients(mach, bx, by, bz, hx, hy, hz, wx, wy, new Dual(RollRefZ), BodyAeroMaxTiltRad,
                                          out Dual cx, out Dual cy, out Dual cz))
             return false;
         Dual k = 0.5 * rho * speed2 * AreaOverMass;

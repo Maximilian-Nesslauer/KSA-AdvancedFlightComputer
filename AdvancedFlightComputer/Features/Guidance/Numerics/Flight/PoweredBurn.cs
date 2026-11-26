@@ -64,8 +64,11 @@ public struct PoweredBurnSystem : IOdeSystem
     /// <summary>Reference area the Cd table is written against, m^2.</summary>
     public double ReferenceArea;
 
-    /// <summary>Thrust, N. Constant - boostback runs at full throttle.</summary>
+    /// <summary>Thrust, N (vacuum thrust when <see cref="ThrustPressureSlope"/> is positive, or constant thrust when zero).</summary>
     public double Thrust;
+
+    /// <summary>Ambient back-pressure thrust loss slope (T_vac - T_sl) / P_sl in N/Pa (m^2). Zero holds constant <see cref="Thrust"/>.</summary>
+    public double ThrustPressureSlope;
 
     /// <summary>Propellant mass flow, kg/s.</summary>
     public double MassFlow;
@@ -109,13 +112,21 @@ public struct PoweredBurnSystem : IOdeSystem
         Dual slen = Dual.Sqrt(sx * sx + sy * sy + sz * sz + 1e-18);
         Dual ix = sx / slen, iy = sy / slen, iz = sz / slen;
 
-        // Thrust acceleration.
-        Dual acc = Thrust / m;
+        // Thrust acceleration, with optional altitude-varying ambient back-pressure loss T(h) = Thrust - ThrustPressureSlope * P(h).
+        Dual alt = rlen - MeanRadius;
+        Dual thrust = new Dual(Thrust);
+        if (ThrustPressureSlope > 0.0 && Atmosphere != null)
+        {
+            Dual pa = Atmosphere.Pressure(alt);
+            Dual tAmb = thrust - ThrustPressureSlope * pa;
+            thrust = tAmb.V > 0.0 ? tAmb : default;
+        }
+        Dual acc = thrust / m;
         dx[3] += acc * ix; dx[4] += acc * iy; dx[5] += acc * iz;
 
         dx[6] = new Dual(-MassFlow);
 
-        if (!HasDrag)
+        if (Table == null || Atmosphere == null)
             return;
 
         // Air-relative velocity: the atmosphere co-rotates.
@@ -125,7 +136,6 @@ public struct PoweredBurnSystem : IOdeSystem
         Dual sp2 = ax * ax + ay * ay + az * az + 1e-18;
         Dual sp = Dual.Sqrt(sp2);
 
-        Dual alt = rlen - MeanRadius;
         Dual rho = Atmosphere.Density(alt);
         if (rho.V == 0.0)
             return;
@@ -507,14 +517,14 @@ public static class BoostbackShooter
             Mu = sys.Mu,
             OmegaZ = sys.OmegaZ,
             MeanRadius = sys.MeanRadius,
-            AreaOverMass = sys.ReferenceArea / end[6].V,
+            AreaOverMass = new Dual(sys.ReferenceArea) / end[6],
             Alpha = sys.GlideAlpha,
             Table = sys.Table,
             LiftTable = sys.LiftTable,
             Atmosphere = sys.Atmosphere,
             BodyAero = sys.BodyAero,
             RollRefX = sys.RollRefX, RollRefY = sys.RollRefY, RollRefZ = sys.RollRefZ,
-            RollRefTime = duration.V,
+            RollRefTime = duration,
         };
 
         Span<Dual> cs = stackalloc Dual[ImpactPredictor.N];
