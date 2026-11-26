@@ -100,19 +100,16 @@ public static partial class GuidanceWindow
             return false;
         }
 
-        // No pacing: the solve is off the sim thread, so there is no frame to protect.
-        // Under the braking burn the craft brakes at many times the local gravity with its thrust axis near the horizon. There the cold solve starts from the braking path, and the subproblems of this guidance get the time they need, also after it takes the craft, because its solves run on the worker and a solve cut short gives no plan at all.
+        // Capture all live vehicle and state inputs on the main thread before handing ownership to the worker.
         bool braking = _s.LandingPhase == LandingPhase.Burn;
-        var guidance = new Ksa6DofGuidance(cfg, dyn, Ksa6DofSetup.LateralTorqueLead(vehicle))
-        {
-            FixedTime = false, ColdIterationIntervalS = 0.0,
-            BrakingSeed = braking, LongBudgetMs = braking ? BrakingStandbyBudgetMs : 0.0,
-        };
-        // A standby that takes the craft before ignition plans the coast too, from entry guidance's time to ignition, seeded along entry's plan.
-        guidance.ColdSeedPath = _s.SixDofCoastPending ? EntrySeedPath(now) ?? BellyflopSeedPath(now) : null;
-        guidance.BeginCold(x, xf, sigmaSeed, _s.SixDofCoastPending ? _s.SixDofCoastSeedS : double.NaN, now);
-        _s.Guidance = guidance;
-        _s.Worker = new Ksa6DofSolveWorker();
+        double leadS = Ksa6DofSetup.LateralTorqueLead(vehicle);
+        SeedPath seedPath = _s.SixDofCoastPending ? EntrySeedPath(now) ?? BellyflopSeedPath(now) : null;
+        double coastSeed = _s.SixDofCoastPending ? _s.SixDofCoastSeedS : double.NaN;
+        double[] xfCopy = (double[])xf.Clone();
+
+        var worker = new Ksa6DofSolveWorker();
+        _s.Guidance = null;
+        _s.Worker = worker;
         _s.SixDofStandby = true;
         _s.SixDofStandbyEngines = CaptureStandbyEngines(vehicle);
         _s.SixDofStandbyStart = now;
@@ -137,17 +134,28 @@ public static partial class GuidanceWindow
         if (_s.SixDofLogging)
         {
             SixDofLog.Start(_s, vehicle.ToString(), parent.ToString());
-            SixDofLog.Event(_s, now, $"STANDBY at alt {x[2]:F0} m: cold solve on the worker, {what}{(guidance.SeededAlongPath ? ", SEEDED ALONG ENTRY'S PLAN" : cfg.HasCoast ? ", FREE-COAST SEED" : "")}");
-            // The cold seed of a coast standby, before anything has iterated on it.
-            if (cfg.HasCoast)
-                SixDofLog.PlanSnapshot(_s, now, guidance.WorkingPlan(now), "seed");
+            SixDofLog.Event(_s, now, $"STANDBY at alt {x[2]:F0} m: cold solve on the worker, {what}");
         }
         GuidanceLog.Info(vehicle, $"Touchdown guidance standby at {x[2]:F0} m: cold solve on its own thread, {what}.");
-        // The engines' own moment (Dynamics6Dof.Params.ThrustMoment*), the trim deflection the plan's gimbal cone is centred on (Scvx6DofConfig.GimbalTrimX/Y), and the cone's width around it, in degrees.
         double rad = 180.0 / Math.PI;
         GuidanceLog.Info(vehicle, FormattableString.Invariant(
             $"Touchdown guidance thrust moment {dyn.ThrustMomentX:F3} {dyn.ThrustMomentY:F3} {dyn.ThrustMomentZ:F3} m (N m per N): gimbal cone centred on a {Math.Atan(cfg.GimbalTrim) * rad:F2} deg trim, {cfg.GimbalMaxDeg:F2} deg around it."));
         GuidanceLog.Debug(vehicle, FormattableString.Invariant($"Touchdown guidance model: air moment limiter {_s.MomentLimiterPerPa * 1e3:F3} per kPa (divides by {_s.MomentLimiterDivisor:F2} now), Tmax {cfg.Tmax:F0} N, floor {cfg.ThrottleFloor:F3}, gimbal {cfg.GimbalMaxDeg:F2} deg, roll torque {cfg.TauRollMax:F0} N m{(cfg.TerminalRollFree ? " (roll left free)" : "")}, engine arm {dyn.LArm:F2} m, inertia {dyn.Ixx:F0} {dyn.Iyy:F0} {dyn.Izz:F0} kg m2, Isp {dyn.Isp:F0} s, tilt limit {cfg.TiltMaxDeg:F0} deg, scales {cfg.XScale[0]:F0} m {cfg.XScale[3]:F0} m/s, plan ends {_s.SixDofTargetComAltM:F2} m over the site of which {_s.SiteEarlyContactM:F2} m for the ground under the footprint, which rises {(_s.SiteGround?.Within(_s.SiteGround.ReachM) ?? 0.0):F2} m within {(_s.SiteGround?.ReachM ?? 0.0):F0} m of the site."));
+
+        // Dispatch after all cfg/dyn log reads complete so only the worker accesses them during cold init.
+        worker.TryDispatchInitCold((sx, st) =>
+        {
+            var g = new Ksa6DofGuidance(cfg, dyn, leadS)
+            {
+                FixedTime = false,
+                ColdIterationIntervalS = 0.0,
+                BrakingSeed = braking,
+                LongBudgetMs = braking ? BrakingStandbyBudgetMs : 0.0,
+                ColdSeedPath = seedPath,
+            };
+            g.BeginCold(sx, xfCopy, sigmaSeed, coastSeed, st);
+            return g;
+        }, x, now);
         return true;
     }
 
@@ -224,12 +232,34 @@ public static partial class GuidanceWindow
         _s.LastMass = vehicle.TotalMass;
 
         Ksa6DofSolveResult result = null;
-        if (_s.Worker.TryCollect(out result) && result.Job == Ksa6DofJob.Rebuild)
+        if (_s.Worker.TryCollect(out result))
         {
-            // A node step reseeded on the worker (BeginRebuild).
-            FinishNodeRebuild(result, now);
-            result = null;
+            if (result.Job == Ksa6DofJob.InitCold)
+            {
+                if (result.Faulted || !result.Ok || result.Produced == null)
+                {
+                    GuidanceLog.Info(vehicle, "Touchdown guidance standby init faulted: " + result.Error + " - retrying.");
+                    StopSixDofStandby();
+                    _s.SixDofStandbyRetryAt = now + SixDofStandbyRetryS;
+                    return;
+                }
+                _s.Guidance = result.Produced;
+                if (_s.SixDofLogging && _s.Guidance.HasCoast)
+                {
+                    SixDofLog.Event(_s, now, _s.Guidance.SeededAlongPath ? "STANDBY COAST SEEDED ALONG ENTRY'S PLAN" : "STANDBY FREE-COAST SEED");
+                    SixDofLog.PlanSnapshot(_s, now, _s.Guidance.WorkingPlan(now), "seed");
+                }
+                result = null;
+            }
+            else if (result.Job == Ksa6DofJob.Rebuild)
+            {
+                // A node step reseeded on the worker (BeginRebuild).
+                FinishNodeRebuild(result, now);
+                result = null;
+            }
         }
+        if (_s.Guidance == null)
+            return;
         if (result != null
             && result.Matches(_s.Converging ? Ksa6DofJob.StepCold : Ksa6DofJob.Track, _s.Guidance))
         {

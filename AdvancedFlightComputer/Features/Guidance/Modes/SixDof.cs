@@ -1473,8 +1473,12 @@ public static partial class GuidanceWindow
                 firstBrakingCommand = _s.SixDofFromBrakingBurn;
                 PromoteSixDofStandby(vehicle, now, x);
             }
-            else if (!Engage6Dof(vehicle, parent, siteCci, x, now))
-                return;
+            else
+            {
+                StopSixDofStandby();
+                if (!Engage6Dof(vehicle, parent, siteCci, x, now))
+                    return;
+            }
             double speed = Universe.GetSimulationSpeed();
             if (Universe.IsAutoWarpActive || speed > 1.0)
             {

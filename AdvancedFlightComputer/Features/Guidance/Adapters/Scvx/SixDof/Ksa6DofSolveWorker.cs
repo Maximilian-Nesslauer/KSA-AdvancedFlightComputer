@@ -7,6 +7,7 @@ using System.Threading;
 
 public enum Ksa6DofJob
 {
+    InitCold,
     Update,
     StepCold,
     Rebuild,
@@ -58,6 +59,9 @@ public sealed class Ksa6DofSolveWorker : IDisposable
     public int Completed { get { lock (_gate) return _completed; } }
     public int Skipped { get { lock (_gate) return _skipped; } }
     public double LastSolveMs { get { lock (_gate) return _solveMs; } }
+
+    public bool TryDispatchInitCold(Func<double[], double, Ksa6DofGuidance> init, double[] x0, double now)
+        => Dispatch(Ksa6DofJob.InitCold, null, x0, now, 1, (_, sx, st) => init(sx, st));
 
     public bool TryDispatchUpdate(Ksa6DofGuidance guidance, double[] x0, double now, int maxIterations)
         => Dispatch(Ksa6DofJob.Update, guidance, x0, now, maxIterations, null);
@@ -150,6 +154,11 @@ public sealed class Ksa6DofSolveWorker : IDisposable
                 {
                     switch (request.Job)
                     {
+                        case Ksa6DofJob.InitCold:
+                            produced = request.Rebuild(null, request.X0, request.Now);
+                            ok = produced != null;
+                            if (!ok) error = "cold init failed";
+                            break;
                         case Ksa6DofJob.Update:
                             ok = request.Guidance.Update(request.X0, request.Now, request.MaxIterations);
                             if (!ok) error = request.Guidance.Error;
@@ -177,6 +186,8 @@ public sealed class Ksa6DofSolveWorker : IDisposable
                     error = $"solve threw: {e.Message} ({e.GetType().Name} at {where})";
                 }
 
+                Ksa6DofGuidance orphan = null;
+                bool exitLoop;
                 lock (_gate)
                 {
                     _solveMs = sw.Elapsed.TotalMilliseconds;
@@ -185,10 +196,15 @@ public sealed class Ksa6DofSolveWorker : IDisposable
                     if (_running)
                         _result = new Ksa6DofSolveResult(request.Job, request.Guidance,
                             ok, error, faulted, produced);
+                    else
+                        orphan = produced;
                     _request = null;
                     _busy = false;
-                    if (!_running) return;
+                    exitLoop = !_running;
                 }
+                if (orphan is IDisposable disposable)
+                    try { disposable.Dispose(); } catch { }
+                if (exitLoop) return;
             }
         }
         finally
@@ -198,13 +214,15 @@ public sealed class Ksa6DofSolveWorker : IDisposable
     }
 
     // Called under the gate. Only the worker disposes the semaphore after it exits.
-    private void Stop()
+    private Ksa6DofGuidance Stop()
     {
-        if (!_running) return;
+        if (!_running) return null;
         _running = false;
+        Ksa6DofGuidance orphan = _result?.Produced;
         _result = null;
         if (_work.CurrentCount == 0)
             _work.Release();
+        return orphan;
     }
 
     /// <summary>
@@ -213,6 +231,9 @@ public sealed class Ksa6DofSolveWorker : IDisposable
     /// </summary>
     public void Dispose()
     {
-        lock (_gate) Stop();
+        Ksa6DofGuidance orphan;
+        lock (_gate) orphan = Stop();
+        if (orphan is IDisposable disposable)
+            try { disposable.Dispose(); } catch { }
     }
 }

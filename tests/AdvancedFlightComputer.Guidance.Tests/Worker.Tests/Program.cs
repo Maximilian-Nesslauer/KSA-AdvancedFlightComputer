@@ -9,6 +9,9 @@ internal static class Program
             ColdFailureKeepsItsCause,
             ColdRefusalIsNotAnException,
             RebuildKeepsSourceIdentity,
+            InitColdProducesGuidanceOffCallerThread,
+            InitColdFaultAndNullHandling,
+            DisposedWorkerDisposesOrphanProducedGuidance,
             DisposedWorkerCannotReturnLateResults,
             ConcurrentDispatchHasOneWinner,
             DisposeBeforePickupIsSafe,
@@ -113,6 +116,75 @@ internal static class Program
         Require(ReferenceEquals(result.Produced, next), "rebuilt guidance returned");
     }
 
+    private static void InitColdProducesGuidanceOffCallerThread()
+    {
+        using var worker = new Ksa6DofSolveWorker();
+        int callerThread = Environment.CurrentManagedThreadId;
+        int workerThread = 0;
+        var created = new Ksa6DofGuidance();
+        double[] input = [11.5];
+        Require(worker.TryDispatchInitCold((x, now) =>
+        {
+            workerThread = Environment.CurrentManagedThreadId;
+            Require(x[0] == 11.5 && now == 9.0, "init cold request snapshot");
+            return created;
+        }, input, 9.0), "dispatch init cold");
+        input[0] = -99.0;
+        Finished(worker);
+        Require(workerThread != 0 && workerThread != callerThread, "init cold runs on worker thread");
+        Require(worker.TryCollect(out var result), "collect init cold");
+        Require(result.Job == Ksa6DofJob.InitCold && result.Source == null, "init cold job and source");
+        Require(result.Ok && !result.Faulted && ReferenceEquals(result.Produced, created), "init cold produced guidance");
+    }
+
+    private static void InitColdFaultAndNullHandling()
+    {
+        using var worker = new Ksa6DofSolveWorker();
+        Require(worker.TryDispatchInitCold((_, _) => null, [1], 2), "dispatch null init cold");
+        Finished(worker);
+        Require(worker.TryCollect(out var nullResult), "collect null init cold");
+        Require(nullResult.Job == Ksa6DofJob.InitCold && !nullResult.Ok && !nullResult.Faulted
+            && nullResult.Error == "cold init failed", "null init cold error");
+
+        Require(worker.TryDispatchInitCold((_, _) => throw new InvalidOperationException("bad seed"), [1], 3),
+            "dispatch faulting init cold");
+        Finished(worker);
+        Require(worker.TryCollect(out var faultResult), "collect faulting init cold");
+        Require(faultResult.Job == Ksa6DofJob.InitCold && !faultResult.Ok && faultResult.Faulted
+            && faultResult.Error.StartsWith("solve threw: bad seed (InvalidOperationException at ", StringComparison.Ordinal),
+            "faulting init cold retains cause");
+    }
+
+    private static void DisposedWorkerDisposesOrphanProducedGuidance()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var worker = new Ksa6DofSolveWorker();
+        var late = new Ksa6DofGuidance();
+        Require(worker.TryDispatchInitCold((_, _) =>
+        {
+            entered.Set();
+            Wait(release, "orphan init cold release");
+            return late;
+        }, [0], 0), "dispatch orphan init cold");
+        try
+        {
+            Wait(entered, "orphan init cold entry");
+            worker.Dispose();
+        }
+        finally { release.Set(); }
+        Finished(worker);
+        Require(!worker.TryCollect(out _), "disposed init cold result discarded");
+        Require(late.Disposed, "late init cold guidance disposed");
+
+        using var worker2 = new Ksa6DofSolveWorker();
+        var uncollected = new Ksa6DofGuidance();
+        Require(worker2.TryDispatchInitCold((_, _) => uncollected, [0], 0), "dispatch uncollected init cold");
+        Finished(worker2);
+        worker2.Dispose();
+        Require(uncollected.Disposed, "uncollected init cold guidance disposed on worker dispose");
+    }
+
     private static void DisposedWorkerCannotReturnLateResults()
     {
         using var entered = new ManualResetEventSlim();
@@ -198,11 +270,13 @@ internal static class Program
 
 // Event-controlled solver work makes ownership races reproducible without a game
 // or native solver. The production worker is compiled directly into this runner.
-public sealed class Ksa6DofGuidance
+public sealed class Ksa6DofGuidance : IDisposable
 {
     public Func<double[], double, int, bool> Solve = (_, _, _) => false;
     public string Error = "";
+    public bool Disposed;
     public bool Update(double[] x, double now, int iterations) => Solve(x, now, iterations);
     public bool StepCold(double[] x, double now) => Solve(x, now, 1);
     public bool Track(double[] x, double now, int iterations) => Solve(x, now, iterations);
+    public void Dispose() => Disposed = true;
 }

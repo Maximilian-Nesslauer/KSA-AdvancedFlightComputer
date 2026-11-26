@@ -1557,7 +1557,11 @@ public sealed class Ksa6DofGuidance : IDisposable
     {
         LastGateRefusal = false;
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        Status = _solver.Solve(maxIterations, budgetMs > 0.0 ? budgetMs : CycleBudgetMs);
+        // Synchronous cold solves (Plan, PlanFromSeed, PlanSearch) pass budgetMs = 0 and must not be truncated to the warm CycleBudgetMs.
+        double effectiveBudget = budgetMs > 0.0
+            ? budgetMs
+            : (cold && maxIterations > 0 ? Math.Max(LongBudgetMs, 5000.0) : CycleBudgetMs);
+        Status = _solver.Solve(maxIterations, effectiveBudget);
         LastSolveMs = sw.Elapsed.TotalMilliseconds;
 
         // A zero-iteration Finish judges work done by StepCold and has no solve time to learn from.
