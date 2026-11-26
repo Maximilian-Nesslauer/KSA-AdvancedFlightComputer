@@ -147,6 +147,22 @@ internal static class OrbitalEntryCheck
         Console.WriteLine($"  {(holdOk ? "ok  " : "FAIL")} holding bank slew: {b0:F2} -> {b1:F2} -> {b2:F2} deg");
         if (!holdOk) f++;
 
+        // 6. EquilibriumGlideRadius stays bounded above ground floor for both hyperbolic (e < 0) and high-energy (rTop <= rGround) inputs.
+        double eqHypR = dHyp.EquilibriumGlideRadius(eHyp, Math.Cos(15.0 * Math.PI / 180.0), cfgHeat);
+        double eqHighR = dHyp.EquilibriumGlideRadius(1.05, Math.Cos(15.0 * Math.PI / 180.0), cfgHeat);
+        double rGround = 1.0 + cfgHeat.AltitudeFloor / R0;
+        bool eqGuardOk = double.IsFinite(eqHypR) && eqHypR >= rGround - 1e-12 && Math.Abs(eqHighR - rGround) < 1e-12;
+        Console.WriteLine($"  {(eqGuardOk ? "ok  " : "FAIL")} eq-glide bounds: hyp h={dHyp.Altitude(eqHypR) / 1000:F1} km, high-e h={dHyp.Altitude(eqHighR) / 1000:F1} km");
+        if (!eqGuardOk) f++;
+
+        // 7. EntryPlanner.Corridor(x0) with firstOnly matches Publish's node-0 reach band.
+        var (corShort, corLong) = EntryPlanner.Corridor(mTr, cfgTr, stTr.E, stTr.X, cfgTr.Nodes);
+        bool corOk = double.IsFinite(corShort) && double.IsFinite(corLong) && corLong > corShort && corShort > 0.0
+                     && Math.Abs(corShort - (pTr.RangeShortM[0] - cfgTr.TerminalRangeM)) < 1.0
+                     && Math.Abs(corLong - (pTr.RangeLongM[0] - cfgTr.TerminalRangeM)) < 1.0;
+        Console.WriteLine($"  {(corOk ? "ok  " : "FAIL")} corridor firstOnly matches plan node 0: {corShort / 1000:F1}-{corLong / 1000:F1} km");
+        if (!corOk) f++;
+
         return f;
     }
 
