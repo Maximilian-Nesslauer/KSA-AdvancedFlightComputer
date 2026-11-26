@@ -42,7 +42,9 @@ public static partial class GuidanceWindow
         // ---- 1. measure ----
         int wantedSide = EntryBellySideWanted();
         string trimKey = AimTrimKeyNow();
-        bool aeroStale = st.AimAero == null || st.AimAero.MeshHash != KsaAeroSweep.LiveMeshHash(vehicle)
+        bool aeroStale = st.AimAero == null
+                         || !ReferenceEquals(st.AimAero.Parent, parent)
+                         || st.AimAero.MeshHash != KsaAeroSweep.LiveMeshHash(vehicle)
                          || (wantedSide >= 0 && st.AimAero.BellySide != wantedSide);
         if (aeroStale)
         {
@@ -92,6 +94,8 @@ public static partial class GuidanceWindow
         // ---- 2 and 3. corridor and search ----
         if (st.AimStage == OrbitalEntryState.AimSteps.Search)
         {
+            if (st.AimWorker is { Busy: true })
+                return AimWaits("AIMED ENTRY: WAITING FOR PREVIOUS CHECK TO FINISH.");
             if (!SearchAimedDeparture(vehicle, parent, request, st, cfg, now, out string refusal))
             {
                 RefuseDeorbit(vehicle, refusal);
@@ -99,21 +103,32 @@ public static partial class GuidanceWindow
                 return false;
             }
             AimLambert(vehicle, parent, request, st, cfg);
-            st.AimStage = OrbitalEntryState.AimSteps.Check;
-            st.AimCheck = null;
             st.AimWorker ??= new Ksa3DofWorker();
+            var slot = new OrbitalEntryState.AimCheckSlot();
             EntryModel model = st.AimModel;
             double e0 = st.AimStartE;
             double[] x0 = st.AimStartX;
             // The check has the iterations of two cold solves: it is solved once, not every two seconds.
             EntryConfig checkCfg = cfg.Clone();
             checkCfg.ColdIterations = Math.Max(cfg.ColdIterations * 2, 50);
-            st.AimWorker.TryRun(st, ct => { st.AimCheck = _entryPlanner.Solve(model, checkCfg, e0, x0, null); });
+            if (!st.AimWorker.TryRun(st, ct =>
+            {
+                var solved = _entryPlanner.Solve(model, checkCfg, e0, x0, null);
+                if (!ct.IsCancellationRequested)
+                    Volatile.Write(ref slot.Result, solved);
+            }))
+            {
+                return AimWaits("AIMED ENTRY: WAITING FOR PLANNER WORKER.");
+            }
+            st.AimCheck = slot;
+            st.AimStage = OrbitalEntryState.AimSteps.Check;
         }
 
         // ---- 4. check ----
         if (st.AimStage == OrbitalEntryState.AimSteps.Check)
         {
+            // Snapshot Busy before reading error/result because the worker publishes them before clearing _busy.
+            bool workerBusy = st.AimWorker?.Busy ?? false;
             string workerError = st.AimWorker?.TakeError(st) ?? "";
             if (workerError.Length > 0)
             {
@@ -122,9 +137,10 @@ public static partial class GuidanceWindow
                 ClearAim(st);
                 return false;
             }
-            if (Interlocked.Exchange(ref st.AimCheck, null) is not { } check)
+            EntryPlanner.Result check = st.AimCheck != null ? Interlocked.Exchange(ref st.AimCheck.Result, null) : null;
+            if (check == null)
             {
-                if (st.AimWorker == null || !st.AimWorker.Busy)
+                if (!workerBusy)
                 {
                     RefuseDeorbit(vehicle, "AIMED ENTRY: PLANNER ENDED WITHOUT A RESULT.");
                     ClearAim(st);
@@ -183,6 +199,8 @@ public static partial class GuidanceWindow
                 $"ENTRY BURN AIMED: {entry.DeltaV.Length():F1} M/S IN {Fmt.TimeFine(entry.DepartureTime - now)}, SITE {st.AimStartRangeM / 1000:F0} KM AHEAD AT THE AIR (CORRIDOR {st.AimShortM / 1000:F0}-{st.AimLongM / 1000:F0}), {Math.Abs(st.AimCrossM) / 1000:F0} KM {(st.AimCrossM >= 0 ? "LEFT" : "RIGHT")}");
             GuidanceLog.Info(vehicle, FormattableString.Invariant(
                 $"Aimed entry burn planned: departure in {entry.DepartureTime - now:F1} s, delta-v {entry.DeltaV.Length():F2} m/s ({(st.AimVelocity.HasValue ? "Lambert to the entry point" : "horizontal")}), entry interface in {entry.ArrivalTime - now:F1} s, plan miss {p.TerminalRangeErrorM / 1000:F2} km."));
+            st.AimWorker?.Dispose();
+            st.AimWorker = null;
             st.AimStage = OrbitalEntryState.AimSteps.Ready;
             return true;
         }
@@ -199,6 +217,8 @@ public static partial class GuidanceWindow
 
     private static void ClearAim(OrbitalEntryState st)
     {
+        st.AimWorker?.Dispose();
+        st.AimWorker = null;
         st.AimVelocity = null;
         st.AimJob = null;
         st.AimStage = OrbitalEntryState.AimSteps.None;

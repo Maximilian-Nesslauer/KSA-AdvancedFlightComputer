@@ -86,6 +86,35 @@ public static partial class GuidanceWindow
 
         try
         {
+            OrbitalEntryLog.Stop(_s.OrbitalEntry);
+        }
+        catch (Exception error)
+        {
+            ReportLogStop(error.Message);
+        }
+        try
+        {
+            _s.OrbitalEntry.Reset();
+        }
+        catch (Exception error)
+        {
+            AdvancedFlightComputer.Core.LogHelper.WarnOnce($"guidance-entry-cleanup:{error.GetType().Name}",
+                "[AFC] Orbital entry cleanup failed: " + error);
+        }
+        try
+        {
+            _s.OrbitalEntry.DisposeAim();
+        }
+        catch (Exception error)
+        {
+            AdvancedFlightComputer.Core.LogHelper.WarnOnce($"guidance-aim-cleanup:{error.GetType().Name}",
+                "[AFC] Orbital entry aim cleanup failed: " + error);
+        }
+        _s.OrbitalEntry.Phase = OrbitalEntryPhase.Idle;
+        _s.OrbitalEntry.EngagePending = false;
+
+        try
+        {
             ReportLogStop(SixDofLog.Stop(_s));
         }
         catch (Exception error)

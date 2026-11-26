@@ -130,6 +130,7 @@ public static partial class GuidanceWindow
         _s.BurnStartTime = 0;
         _s.BurnDownrangeKm = 0;
         _s.DirectBrakingRefusal = "";
+        ClearAim(_s.OrbitalEntry);
     }
 
     // DEORBIT + LAND claims the landing and starts planning. The search itself runs in slices from StepDeorbitPlanning.
