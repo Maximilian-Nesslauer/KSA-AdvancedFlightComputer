@@ -1082,8 +1082,8 @@ public static partial class KsaAeroSweep
                 for (int jm = 0; jm < nmu; jm++)
                 {
                     bool pole = Math.Abs(Math.Abs(muDeg[jm]) - 90.0) < 1e-9;
-                    int lon = pole ? 0 : (int)Math.Round(((lambdaDeg[jl] % 360.0) + 540.0) % 360.0 - 180.0);
-                    var key = (lon, (int)Math.Round(muDeg[jm]));
+                    int lon = pole ? 0 : (int)Math.Round((((lambdaDeg[jl] % 360.0) + 540.0) % 360.0 - 180.0) * 100.0);
+                    var key = (lon, (int)Math.Round(muDeg[jm] * 100.0));
                     if (seen.TryGetValue(key, out var from))
                     {
                         for (int i = 0; i < nr; i++)
@@ -1397,12 +1397,12 @@ public static partial class KsaAeroSweep
                 var sphereMomentTables = bellySide >= 0 ? new BodyAeroTable[grid.Length] : [];
                 var bandForceTables = bellySide >= 0 ? new BodyAeroTable[grid.Length] : [];
                 var bandMomentTables = bellySide >= 0 ? new BodyAeroTable[grid.Length] : [];
-                // The body at rest on the band's grid, once for all the surfaces, before any is turned.
+                // The body at rest on the band's grid, sliced from the body pass's band tables rather than re-flown.
                 if (bellySide >= 0 && bandRest == null)
                 {
-                    bandRest = new double[nsm * BandLambdaDeg.Length * BandMuDeg.Length * 3];
-                    bandRestMoments = new double[bandRest.Length];
-                    FlySphere(BandLambdaDeg, BandMuDeg, sphereFrame, bandRest, bandRestMoments, surfaceMach);
+                    int bandPerRow = BandLambdaDeg.Length * BandMuDeg.Length * 3;
+                    bandRest = SurfaceRowsOf(bandCoefficients, bandPerRow);
+                    bandRestMoments = SurfaceRowsOf(bandMoments, bandPerRow);
                 }
                 void DeltaBand(int d)
                 {

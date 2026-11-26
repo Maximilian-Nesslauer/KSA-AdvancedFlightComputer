@@ -18,6 +18,7 @@ internal static class SaveLoadObserver
 
     // Notify subscribers after registry work is complete. SaveWritten supplies both IDs because CurrentSaveId already contains the new ID when the event fires.
     public static event Action? SaveLoaded;
+    public static event Action? SystemSwapped;
     public static event Action<string, string>? SaveWritten;
 
     public static void Reset()
@@ -25,6 +26,7 @@ internal static class SaveLoadObserver
         CurrentSaveId = string.Empty;
         CurrentSaveDirectory = null;
         SaveLoaded = null;
+        SystemSwapped = null;
         SaveWritten = null;
     }
 
@@ -32,9 +34,50 @@ internal static class SaveLoadObserver
     {
         harmony.CreateClassProcessor(typeof(LoadPatch)).Patch();
         harmony.CreateClassProcessor(typeof(WritePatch)).Patch();
+        if (GameReflection.Program_SwapSystem is { } swapSystem && swapSystem.ReturnType == typeof(SystemSwapResult))
+        {
+            try
+            {
+                harmony.Patch(swapSystem,
+                    postfix: new HarmonyMethod(typeof(SaveLoadObserver), nameof(OnSystemSwapped)));
+            }
+            catch (Exception ex)
+            {
+                DefaultCategory.Log.Warning($"[AFC] Could not patch Program.SwapSystem, so star-system swaps without a save load will not reset save-scoped state: {ex}");
+            }
+        }
+        else
+        {
+            DefaultCategory.Log.Warning("[AFC] Program.SwapSystem was not found with the expected signature, so star-system swaps without a save load will not reset save-scoped state.");
+        }
 
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug("[AFC] SaveLoadObserver: patches applied.");
+    }
+
+    private static void OnSystemSwapped(SystemSwapResult __result)
+    {
+        if (__result != SystemSwapResult.Swapped)
+            return;
+
+        CurrentSaveId = string.Empty;
+        CurrentSaveDirectory = null;
+
+        RunStage(string.Empty, "reset the save-scoped state on system swap", SaveScopedState.ResetAll);
+        RunStage(string.Empty, "notify the system-swapped subscribers", () => SystemSwapped?.Invoke());
+    }
+
+    private static void RunStage(string saveId, string stageName, Action stage)
+    {
+        try
+        {
+            stage();
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Warning(
+                $"[AFC] SaveLoadObserver: could not {stageName} for save '{saveId}': {ex}");
+        }
     }
 
     // UncompressedSave.Load only reads the file and hands ApplyLoaded to SaveSystemSwap.RequestLoad, which runs it at once for a save of the running system, on a later frame through SaveSystemSwap.OnFrame after Program.SwapSystem for a save of another system, in a new process for a save whose system needs a restart, and never for a save of a system that is not installed or a load the editor refuses.
@@ -54,19 +97,6 @@ internal static class SaveLoadObserver
             RunStage(saveId, "notify the save-loaded subscribers", () => SaveLoaded?.Invoke());
             if (DebugConfig.MultiPass)
                 RunStage(saveId, "log the loaded state", () => LogLoadedState(saveId));
-        }
-
-        private static void RunStage(string saveId, string stageName, Action stage)
-        {
-            try
-            {
-                stage();
-            }
-            catch (Exception ex)
-            {
-                DefaultCategory.Log.Warning(
-                    $"[AFC] SaveLoadObserver.LoadPatch: could not {stageName} for save '{saveId}': {ex}");
-            }
         }
 
         private static void LogLoadedState(string saveId)

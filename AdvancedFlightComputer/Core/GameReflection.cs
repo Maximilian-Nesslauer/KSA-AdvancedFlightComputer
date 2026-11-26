@@ -156,6 +156,12 @@ internal static class GameReflection
         AccessTools.Method(typeof(Program), nameof(Program.DrawMenuBar),
             new[] { typeof(IGameViewport), typeof(int) });
 
+    // Resets save-scoped state and cached aero tables on star-system swaps, including multiplayer joins that skip UncompressedSave.ApplyLoaded.
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly MethodInfo? Program_SwapSystem =
+        AccessTools.Method(typeof(Program), nameof(Program.SwapSystem),
+            new[] { typeof(SystemTemplate) });
+
     #endregion
 
     #region Save, tick and vehicle lifetime

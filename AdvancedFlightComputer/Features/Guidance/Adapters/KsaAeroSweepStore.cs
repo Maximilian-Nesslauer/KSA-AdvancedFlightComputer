@@ -89,6 +89,16 @@ public static partial class KsaAeroSweep
         return h;
     }
 
+    private static string SanitizeFilePart(string raw, string fallback)
+    {
+        if (string.IsNullOrEmpty(raw))
+            return fallback;
+        var safe = new StringBuilder(raw.Length);
+        foreach (char c in raw)
+            safe.Append(char.IsLetterOrDigit(c) || c == '-' ? c : '_');
+        return safe.Length > 0 ? safe.ToString() : fallback;
+    }
+
     /// <summary>The file a craft's sweep is kept in, or null where it cannot be (no mesh, no hash). Main thread.</summary>
     private static string StorePathFor(Vehicle vehicle, IParentBody parent, ulong hash, string booster, int side)
     {
@@ -96,12 +106,9 @@ public static partial class KsaAeroSweep
         if (hash == 0 || fingerprint == 0)
             return null;
         ulong surfaceHash = SurfaceFingerprint(vehicle, booster);
-        string craft = booster.Length > 0 ? booster : vehicle?.Id ?? "craft";
-        var safe = new StringBuilder();
-        foreach (char c in craft)
-            safe.Append(char.IsLetterOrDigit(c) || c == '-' ? c : '_');
-        string body = BodyKey(parent);
-        return Path.Combine(StoreDirectory, $"{safe}_{hash:x16}_{fingerprint:x16}_{surfaceHash:x16}_{body}_s{side}.aero.gz");
+        string craft = SanitizeFilePart(booster.Length > 0 ? booster : vehicle?.Id, "craft");
+        string body = SanitizeFilePart(BodyKey(parent), "body");
+        return Path.Combine(StoreDirectory, $"{craft}_{hash:x16}_{fingerprint:x16}_{surfaceHash:x16}_{body}_s{side}.aero.gz");
     }
 
     // ---- the stored form ----
@@ -150,11 +157,25 @@ public static partial class KsaAeroSweep
         F = [t.Frame.LX, t.Frame.LY, t.Frame.LZ, t.Frame.AX, t.Frame.AY, t.Frame.AZ, t.Frame.BX, t.Frame.BY, t.Frame.BZ],
     };
 
-    private static BodyAeroTable Table(StoredTable s) => s?.V == null ? null
-        : new BodyAeroTable(s.M, s.A, s.B, s.V, new BodyAeroFrame(s.F[0], s.F[1], s.F[2], s.F[3], s.F[4], s.F[5], s.F[6], s.F[7], s.F[8]), s.S);
+    private static BodyAeroTable Table(StoredTable s)
+    {
+        if (s == null)
+            return null;
+        if (s.V == null || s.M == null || s.A == null || s.B == null || s.F is not { Length: 9 })
+            throw new InvalidDataException("Stored aero table is truncated.");
+        return new BodyAeroTable(s.M, s.A, s.B, s.V, new BodyAeroFrame(s.F[0], s.F[1], s.F[2], s.F[3], s.F[4], s.F[5], s.F[6], s.F[7], s.F[8]), s.S);
+    }
 
     private static StoredTable[] Store(BodyAeroTable[] t) => t?.Select(Store).ToArray();
-    private static BodyAeroTable[] Tables(StoredTable[] s) => s?.Select(Table).ToArray() ?? [];
+    private static BodyAeroTable[] Tables(StoredTable[] s)
+    {
+        if (s == null)
+            return [];
+        var result = new BodyAeroTable[s.Length];
+        for (int i = 0; i < s.Length; i++)
+            result[i] = Table(s[i]) ?? throw new InvalidDataException("Stored surface table entry is null.");
+        return result;
+    }
 
     /// <summary>A finished sweep written to its file, replacing any before. Any thread; a failure is logged and the sweep stands.</summary>
     internal static void SaveSweep(string path, Result r, string craft, System.Action<string> log)
@@ -237,39 +258,48 @@ public static partial class KsaAeroSweep
             why = $"{Path.GetFileName(path)} is of another version ({s?.Version})";
             return null;
         }
-        var r = new Result
+        Result r;
+        try
         {
-            MachGrid = s.MachGrid, AlphaGridDeg = s.AlphaGridDeg, CdTable = s.CdTable, LiftTable = s.LiftTable,
-            MomentTable = s.MomentTable, ArmTable = s.ArmTable, CentreOfPressureM = s.CentreOfPressureM,
-            ReferenceLength = s.ReferenceLength, ReferenceArea = s.ReferenceArea, BalanceWorstM = s.BalanceWorstM, BalanceWorstMach = s.BalanceWorstMach,
-            Mass = s.Mass, CdTailFirst = s.CdTailFirst, CdBroadside = s.CdBroadside, CdNoseFirst = s.CdNoseFirst,
-            PointingSensitivity = s.PointingSensitivity, AttitudeSensitivity = s.AttitudeSensitivity, RollSpread = s.RollSpread,
-            MachSpread = s.MachSpread, LiftToDragMax = s.LiftToDragMax, SampledAt = s.SampledAt, SweepMillis = s.SweepMillis,
-            BodyMomentComAsmb = D3(s.Com), BoxExtents = D3(s.Box), SampledExtents = D3(s.SampledExtents),
-            BodyAero = Table(s.Body), BodyMoment = Table(s.BodyM), NoseBodyAero = Table(s.Nose), NoseBodyMoment = Table(s.NoseM),
-            BellyBodyAero = Table(s.Belly), BellyBodyMoment = Table(s.BellyM), SphereBodyAero = Table(s.Sphere), SphereBodyMoment = Table(s.SphereM),
-            BandBodyAero = Table(s.Band), BandBodyMoment = Table(s.BandM), BellySide = s.BellySide,
-            MeshHash = s.Hash, Parent = parent, BodyName = s.BodyName ?? "",
-        };
-        if (s.MachGrid != null && s.AlphaGridDeg != null)
-        {
-            if (s.CdTable != null) r.Table = new AeroTable(s.MachGrid, s.AlphaGridDeg, s.CdTable);
-            if (s.LiftTable != null) r.Lift = new AeroTable(s.MachGrid, s.AlphaGridDeg, s.LiftTable);
-            if (s.MomentTable != null && s.ReferenceLength > 0.0) r.Moment = new AeroTable(s.MachGrid, s.AlphaGridDeg, s.MomentTable);
+            r = new Result
+            {
+                MachGrid = s.MachGrid, AlphaGridDeg = s.AlphaGridDeg, CdTable = s.CdTable, LiftTable = s.LiftTable,
+                MomentTable = s.MomentTable, ArmTable = s.ArmTable, CentreOfPressureM = s.CentreOfPressureM,
+                ReferenceLength = s.ReferenceLength, ReferenceArea = s.ReferenceArea, BalanceWorstM = s.BalanceWorstM, BalanceWorstMach = s.BalanceWorstMach,
+                Mass = s.Mass, CdTailFirst = s.CdTailFirst, CdBroadside = s.CdBroadside, CdNoseFirst = s.CdNoseFirst,
+                PointingSensitivity = s.PointingSensitivity, AttitudeSensitivity = s.AttitudeSensitivity, RollSpread = s.RollSpread,
+                MachSpread = s.MachSpread, LiftToDragMax = s.LiftToDragMax, SampledAt = s.SampledAt, SweepMillis = s.SweepMillis,
+                BodyMomentComAsmb = D3(s.Com), BoxExtents = D3(s.Box), SampledExtents = D3(s.SampledExtents),
+                BodyAero = Table(s.Body), BodyMoment = Table(s.BodyM), NoseBodyAero = Table(s.Nose), NoseBodyMoment = Table(s.NoseM),
+                BellyBodyAero = Table(s.Belly), BellyBodyMoment = Table(s.BellyM), SphereBodyAero = Table(s.Sphere), SphereBodyMoment = Table(s.SphereM),
+                BandBodyAero = Table(s.Band), BandBodyMoment = Table(s.BandM), BellySide = s.BellySide,
+                MeshHash = s.Hash, Parent = parent, BodyName = s.BodyName ?? "",
+            };
+            if (s.MachGrid != null && s.AlphaGridDeg != null)
+            {
+                if (s.CdTable != null) r.Table = new AeroTable(s.MachGrid, s.AlphaGridDeg, s.CdTable);
+                if (s.LiftTable != null) r.Lift = new AeroTable(s.MachGrid, s.AlphaGridDeg, s.LiftTable);
+                if (s.MomentTable != null && s.ReferenceLength > 0.0) r.Moment = new AeroTable(s.MachGrid, s.AlphaGridDeg, s.MomentTable);
+            }
+            r.Belly = s.BellyRows?.Select(b => new BellySweep
+            {
+                Axis = D3(b.Axis), MachGrid = b.Mach, AlphaDeg = b.Alpha, Cd = b.Cd, Cl = b.Cl, Cm = b.Cm, ReferenceArea = b.Area, ReferenceLength = b.Length,
+            }).ToArray();
+            r.Surfaces = (s.Surfaces ?? []).Select(t => new SurfaceTable
+            {
+                Name = t.Name ?? "", PartKey = t.Key ?? "", MinDeg = t.Min, MaxDeg = t.Max, SweepMillis = t.Millis, DeflectionDeg = t.Deg ?? [],
+                Force = Tables(t.F), Moment = Tables(t.Mo), NoseForce = Tables(t.NF), NoseMoment = Tables(t.NM),
+                BellyForce = Tables(t.BF), BellyMoment = Tables(t.BM), SphereForce = Tables(t.SF), SphereMoment = Tables(t.SM),
+                BandForce = Tables(t.DF), BandMoment = Tables(t.DM),
+            }).ToArray();
+            if (parent != null)
+                BuildAtmosphere(parent, r);
         }
-        r.Belly = s.BellyRows?.Select(b => new BellySweep
+        catch (Exception ex)
         {
-            Axis = D3(b.Axis), MachGrid = b.Mach, AlphaDeg = b.Alpha, Cd = b.Cd, Cl = b.Cl, Cm = b.Cm, ReferenceArea = b.Area, ReferenceLength = b.Length,
-        }).ToArray();
-        r.Surfaces = (s.Surfaces ?? []).Select(t => new SurfaceTable
-        {
-            Name = t.Name ?? "", PartKey = t.Key ?? "", MinDeg = t.Min, MaxDeg = t.Max, SweepMillis = t.Millis, DeflectionDeg = t.Deg ?? [],
-            Force = Tables(t.F), Moment = Tables(t.Mo), NoseForce = Tables(t.NF), NoseMoment = Tables(t.NM),
-            BellyForce = Tables(t.BF), BellyMoment = Tables(t.BM), SphereForce = Tables(t.SF), SphereMoment = Tables(t.SM),
-            BandForce = Tables(t.DF), BandMoment = Tables(t.DM),
-        }).ToArray();
-        if (parent != null)
-            BuildAtmosphere(parent, r);
+            why = $"invalid table data in {Path.GetFileName(path)} ({ex.GetType().Name}: {ex.Message})";
+            return null;
+        }
         return r;
     }
 }

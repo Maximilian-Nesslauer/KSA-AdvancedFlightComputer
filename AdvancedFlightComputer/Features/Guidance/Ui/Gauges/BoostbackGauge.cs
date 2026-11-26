@@ -418,9 +418,9 @@ public static partial class GuidanceWindow
     /// <summary>A sweep is not of the craft as it is now: another mesh, or another size (VehicleAutopilotState.AeroStale's test).</summary>
     private static bool SweepStale(KsaAeroSweep.Result sweep, Vehicle vehicle)
     {
-        // The mesh hash decides where both have one: KSAero takes it with every surface at rest, but a part's bounds follow its subparts, so a flap out can change the box when nothing else has.
+        // A published live mesh hash decides even against a hashless fallback table; a flap out can change part bounds when nothing else has.
         ulong hash = KsaAeroSweep.LiveMeshHash(vehicle);
-        if (hash != 0 && sweep.MeshHash != 0)
+        if (hash != 0)
             return hash != sweep.MeshHash;
         double3 live = LiveBoxExtents(vehicle), was = sweep.SampledExtents;
         return Math.Abs(was.X - live.X) > 1e-3 || Math.Abs(was.Y - live.Y) > 1e-3 || Math.Abs(was.Z - live.Z) > 1e-3;

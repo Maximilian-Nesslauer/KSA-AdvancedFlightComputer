@@ -36,6 +36,7 @@ public static partial class KsaAeroSweep
         public ulong Hash;
         public ulong SurfaceHash;
         public string Body = "";
+        public WeakReference<IParentBody> Parent;
         public string Booster = "";
         public bool Nose, Trim;
         public int Side = -1;
@@ -84,6 +85,23 @@ public static partial class KsaAeroSweep
         return text;
     }
 
+    /// <summary>Drops all cached sweeps and progress rows so old star-system bodies and parts can be collected on system swap or mod unload. Main thread.</summary>
+    internal static void ClearCache()
+    {
+        Cache.Clear();
+        lock (SweepsGate)
+            Sweeps.Clear();
+    }
+
+    private static bool SameParent(CacheEntry e, IParentBody parent)
+    {
+        if (parent == null)
+            return e.Parent == null;
+        if (e.Parent == null || !e.Parent.TryGetTarget(out IParentBody cached) || !ReferenceEquals(cached, parent))
+            return false;
+        return e.Job.Peek is not { } peek || ReferenceEquals(peek.Parent, parent);
+    }
+
     /// <summary>Drops sweeps that failed. Main thread.</summary>
     private static void CachePrune()
     {
@@ -105,7 +123,7 @@ public static partial class KsaAeroSweep
         for (int i = Cache.Count - 1; i >= 0 && hit == null; i--)
         {
             CacheEntry e = Cache[i];
-            if (e.Hash == hash && e.SurfaceHash == surfaceHash && e.Body == body && e.Booster == booster && Covers(e, nose, trim, side))
+            if (e.Hash == hash && e.SurfaceHash == surfaceHash && e.Body == body && SameParent(e, parent) && e.Booster == booster && Covers(e, nose, trim, side))
                 hit = e;
         }
         if (hit == null)
@@ -154,7 +172,9 @@ public static partial class KsaAeroSweep
         // The view is this craft's from now on: the next ask, with the centre of mass where it is, takes it as it is.
         Cache.Add(new CacheEntry
         {
-            Hash = hit.Hash, SurfaceHash = hit.SurfaceHash, Body = hit.Body, Booster = hit.Booster, Nose = hit.Nose, Trim = hit.Trim, Side = hit.Side,
+            Hash = hit.Hash, SurfaceHash = hit.SurfaceHash, Body = hit.Body,
+            Parent = parent != null ? new WeakReference<IParentBody>(parent) : null,
+            Booster = hit.Booster, Nose = hit.Nose, Trim = hit.Trim, Side = hit.Side,
             Job = job, Owner = new WeakReference<Vehicle>(vehicle), Craft = vehicle?.Id ?? "",
         });
         CachePrune();
@@ -173,7 +193,9 @@ public static partial class KsaAeroSweep
         Dictionary<string, List<(Part Part, string Name)>> parts = booster.Length > 0 ? null : SurfacePartsByKey(vehicle);
         var entry = new CacheEntry
         {
-            Hash = hash, SurfaceHash = surfaceHash, Body = BodyKey(parent), Booster = booster,
+            Hash = hash, SurfaceHash = surfaceHash, Body = BodyKey(parent),
+            Parent = parent != null ? new WeakReference<IParentBody>(parent) : null,
+            Booster = booster,
             Nose = booster.Length == 0, Trim = booster.Length == 0, Side = booster.Length > 0 ? -1 : side,
             Owner = new WeakReference<Vehicle>(vehicle), Craft = vehicle?.Id ?? "",
         };
@@ -210,7 +232,7 @@ public static partial class KsaAeroSweep
         for (int i = Cache.Count - 1; i >= 0; i--)
         {
             CacheEntry e = Cache[i];
-            if (e.Hash != hash || e.SurfaceHash != surfaceHash || e.Body != body || e.Booster != booster || (e.Job.Finished && e.Job.Peek == null))
+            if (e.Hash != hash || e.SurfaceHash != surfaceHash || e.Body != body || !SameParent(e, parent) || e.Booster != booster || (e.Job.Finished && e.Job.Peek == null))
                 continue;
             nose |= e.Nose;
             trim |= e.Trim;
@@ -227,7 +249,9 @@ public static partial class KsaAeroSweep
             return;
         Cache.Add(new CacheEntry
         {
-            Hash = hash, SurfaceHash = SurfaceFingerprint(vehicle, booster), Body = BodyKey(parent), Booster = booster, Nose = nose, Trim = trim, Side = side,
+            Hash = hash, SurfaceHash = SurfaceFingerprint(vehicle, booster), Body = BodyKey(parent),
+            Parent = parent != null ? new WeakReference<IParentBody>(parent) : null,
+            Booster = booster, Nose = nose, Trim = trim, Side = side,
             Job = job, Owner = new WeakReference<Vehicle>(vehicle), Craft = vehicle?.Id ?? "",
         });
         CachePrune();
