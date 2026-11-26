@@ -1903,12 +1903,12 @@ public static partial class GuidanceWindow
             for (int i = 0; i < Math.Min(flown.Length, surfaces.Count); i++)
                 flown[i] = surfaces[i].DeflectionDeg;
             Span<double> w = stackalloc double[6];
-            if (!g.ModelAeroWrench(x, flown, w))
+            if (!g.ModelAeroWrench(x, flown, w, out double3 modelBiasPerPa))
                 return _s.MomentBiasPerPa;
             KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
             var game = new double3(double3.Dot(tGameBody, mx), double3.Dot(tGameBody, my), double3.Dot(tGameBody, mz));
             // The model's own, without the error it already carries.
-            double3 model = new double3(w[3], w[4], w[5]) - g.ModelMomentBiasPerPa * q;
+            double3 model = new double3(w[3], w[4], w[5]) - modelBiasPerPa * q;
             double3 target = (game - model) / q;
             double3 b = _s.MomentBiasPerPa + Math.Min(dt / MomentBiasTauS, 1.0) * (target - _s.MomentBiasPerPa);
             double cap = MomentBiasCap * Math.Max(game.Length(), model.Length()) / q;
@@ -1975,7 +1975,7 @@ public static partial class GuidanceWindow
             for (int i = 0; i < Math.Min(nf, surfaces.Count); i++)
                 flown[i] = surfaces[i].DeflectionDeg;
             Span<double> wFlown = stackalloc double[6], wRest = stackalloc double[6];
-            if (!g.ModelAeroWrench(x, flown, wFlown) || !g.ModelAeroWrench(x, ReadOnlySpan<double>.Empty, wRest))
+            if (!g.ModelAeroWrenchPair(x, flown, wFlown, wRest, out double3 modelBiasPerPa))
                 return;
             // The model's force, site frame, into its body axes: R's transpose, R from the state's quaternion (body to site).
             double qw = x[Dynamics6Dof.IQ], qx = x[Dynamics6Dof.IQ + 1], qy = x[Dynamics6Dof.IQ + 2], qz = x[Dynamics6Dof.IQ + 3];
@@ -1996,7 +1996,7 @@ public static partial class GuidanceWindow
                 $"AERO CHECK ({phase}) at {x[2]:F0} m, {speed:F1} m/s, tilt {tilt:F1} deg: force model {K(fModel)} kN, game {K(Model(fGame))} kN; ")
                 + FormattableString.Invariant($"moment model {K(tModel)} kN m (body {K(tBody)}, flaps {K(tModel - tBody)}), game {K(Model(tGame))} kN m")
                 + (applied ? $" (applied {K(Model(tApplied))})" : "")
-                + $"; flaps flown {Deg(flown)} deg, plan {Deg(g.FinDeflectionDeg)}; model limiter {_s.MomentLimiterPerPa * 1e3:F3} per kPa; moment error learnt {K(g.ModelMomentBiasPerPa * (0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * speed * speed))} kN m (in the model above).";
+                + $"; flaps flown {Deg(flown)} deg, plan {Deg(g.FinDeflectionDeg)}; model limiter {_s.MomentLimiterPerPa * 1e3:F3} per kPa; moment error learnt {K(modelBiasPerPa * (0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * speed * speed))} kN m (in the model above).";
             GuidanceLog.Info(vehicle, text);
             SixDofLog.Event(_s, now, text);
         }

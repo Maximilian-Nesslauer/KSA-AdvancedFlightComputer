@@ -44,6 +44,9 @@ public sealed class BodyAero6Dof
     public double MomentBiasYPerPa { get; set; }
     public double MomentBiasZPerPa { get; set; }
 
+    /// <summary>Shallow copy sharing immutable aero tables while isolating mutable runtime limiter and bias fields for cross-thread snapshots.</summary>
+    public BodyAero6Dof ShallowClone() => (BodyAero6Dof)MemberwiseClone();
+
     /// <summary>Which of a fin's table sets to read (FinCoefficients).</summary>
     public enum FinSet { Engine, Belly, Band, Sphere }
 
@@ -129,8 +132,14 @@ public sealed class BodyAero6Dof
         }
         t[k].Coefficients(m0, alpha, beta, out Dual l0, out Dual l1, out Dual l2);
         t[k + 1].Coefficients(m0, alpha, beta, out Dual h0, out Dual h1, out Dual h2);
-        // Held at the ends: past them the deflection moves nothing.
-        Dual w = deg.V <= d[0] ? new Dual(0.0) : deg.V >= d[n - 1] ? new Dual(1.0) : (deg - d[k]) / (d[k + 1] - d[k]);
+        // Preserve the inward one-sided slope at stops (including solver feasibility overshoot within 1e-6 deg) so SCvx can back a fin off its limit.
+        const double stopTol = 1e-6;
+        double invSpan = 1.0 / (d[k + 1] - d[k]);
+        Dual w = deg.V <= d[0]
+            ? (deg.V >= d[0] - stopTol ? new Dual(0.0, deg.D * invSpan) : new Dual(0.0))
+            : deg.V >= d[n - 1]
+                ? (deg.V <= d[n - 1] + stopTol ? new Dual(1.0, deg.D * invSpan) : new Dual(1.0))
+                : (deg - d[k]) * invSpan;
         c0 = l0 + w * (h0 - l0);
         c1 = l1 + w * (h1 - l1);
         c2 = l2 + w * (h2 - l2);

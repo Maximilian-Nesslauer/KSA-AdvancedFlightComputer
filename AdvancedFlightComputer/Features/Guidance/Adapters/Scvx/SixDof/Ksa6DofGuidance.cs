@@ -32,6 +32,33 @@ public sealed class Ksa6DofGuidance : IDisposable
     private readonly int _n;
     private readonly double _lateralTorqueLeadS;
 
+    // Immutable snapshot of mutable _dyn and _dyn.BodyAero fields published after each CommitInputs so main-thread readers never race with the solve worker.
+    private sealed class ModelSnapshot
+    {
+        public readonly Dynamics6Dof.Params Dyn;
+        public readonly double3 Inertia;
+        public readonly double3 MomentBiasPerPa;
+        public readonly double3 AccelBias;
+
+        public ModelSnapshot(Dynamics6Dof.Params dyn, double3 accelBias)
+        {
+            Dyn = dyn;
+            Inertia = new double3(dyn.Ixx, dyn.Iyy, dyn.Izz);
+            MomentBiasPerPa = dyn.BodyAero is { } b ? new double3(b.MomentBiasXPerPa, b.MomentBiasYPerPa, b.MomentBiasZPerPa) : default;
+            AccelBias = accelBias;
+        }
+    }
+
+    private volatile ModelSnapshot _snapshot;
+
+    private static ModelSnapshot SnapshotOf(Dynamics6Dof.Params dyn, double3 accelBias)
+    {
+        Dynamics6Dof.Params copy = dyn.ShallowClone();
+        if (copy.BodyAero != null)
+            copy.BodyAero = copy.BodyAero.ShallowClone();
+        return new ModelSnapshot(copy, accelBias);
+    }
+
     /// <summary>
     /// The plan as the SIM THREAD sees it - the only guidance state that crosses a thread boundary. Written by one reference assignment at the end of a successful solve, so a reader gets a whole plan or the previous whole plan, never a mixture. See Ksa6DofPlan.
     ///  volatile so the publish is not reordered ahead of the array writes that build it. Everything else in this class is the solve's own working state and stays private to whichever thread is solving.
@@ -209,22 +236,17 @@ public sealed class Ksa6DofGuidance : IDisposable
         if (inputs.Iyy > 0.0) _dyn.Iyy = inputs.Iyy;
         if (inputs.Izz > 0.0) _dyn.Izz = inputs.Izz;
 
-        if (!_haveBaseGravity)
-        {
-            _baseGravity = new double3(_dyn.Gx, _dyn.Gy, _dyn.Gz);
-            _haveBaseGravity = true;
-        }
-        AccelBias = inputs.AccelBias;
-        _dyn.Gx = _baseGravity.X + AccelBias.X;
-        _dyn.Gy = _baseGravity.Y + AccelBias.Y;
-        _dyn.Gz = _baseGravity.Z + AccelBias.Z;
+        double3 accelBias = inputs.AccelBias;
+        _dyn.Gx = _baseGravity.X + accelBias.X;
+        _dyn.Gy = _baseGravity.Y + accelBias.Y;
+        _dyn.Gz = _baseGravity.Z + accelBias.Z;
+        _snapshot = SnapshotOf(_dyn, accelBias);
     }
 
     /// <summary>Inertia currently in the model, for the readout.</summary>
-    public double3 Inertia => new(_dyn.Ixx, _dyn.Iyy, _dyn.Izz);
+    public double3 Inertia => _snapshot.Inertia;
 
-    private double3 _baseGravity;
-    private bool _haveBaseGravity;
+    private readonly double3 _baseGravity;
 
     /// <summary>
     /// Unmodelled acceleration, site frame, m/s^2 - added to the model's gravity so the OPTIMISER plans around it rather than fighting it.
@@ -237,22 +259,42 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// </summary>
     public double3 ModelAeroAccel(double[] x)
     {
-        if ((_dyn.Aero == null && _dyn.BodyAero == null) || x == null || x.Length < NX || !(x[Dynamics6Dof.IM] > 0.0))
+        Dynamics6Dof.Params dyn = _snapshot.Dyn;
+        if ((dyn.Aero == null && dyn.BodyAero == null) || x == null || x.Length < NX || !(x[Dynamics6Dof.IM] > 0.0))
             return default;
-        Dynamics6Dof.AeroForce(x, _dyn, out double fx, out double fy, out double fz);
+        Dynamics6Dof.AeroForce(x, dyn, out double fx, out double fy, out double fz);
         double m = x[Dynamics6Dof.IM];
         return new double3(fx / m, fy / m, fz / m);
     }
 
     /// <summary>The air moment's error the model holds now, per pascal, model body axes (BodyAero6Dof.MomentBias*PerPa): what its wrench already carries.</summary>
-    public double3 ModelMomentBiasPerPa => _dyn.BodyAero is { } b ? new double3(b.MomentBiasXPerPa, b.MomentBiasYPerPa, b.MomentBiasZPerPa) : default;
+    public double3 ModelMomentBiasPerPa => _snapshot.MomentBiasPerPa;
 
     /// <summary>The model's aerodynamic wrench at state x with the fins at <paramref name="finDeg"/> (Dynamics6Dof.AeroWrenchAt): force site frame, N, then moment model body axes, N m. False with no aero model.</summary>
     public bool ModelAeroWrench(double[] x, ReadOnlySpan<double> finDeg, Span<double> wrench)
+        => ModelAeroWrench(x, finDeg, wrench, out _);
+
+    /// <summary>Evaluates the model aerodynamic wrench and returns the matching moment bias from the same immutable snapshot.</summary>
+    public bool ModelAeroWrench(double[] x, ReadOnlySpan<double> finDeg, Span<double> wrench, out double3 momentBiasPerPa)
     {
-        if ((_dyn.Aero == null && _dyn.BodyAero == null) || x == null || x.Length < NX)
+        ModelSnapshot snap = _snapshot;
+        momentBiasPerPa = snap.MomentBiasPerPa;
+        Dynamics6Dof.Params dyn = snap.Dyn;
+        if ((dyn.Aero == null && dyn.BodyAero == null) || x == null || x.Length < NX)
             return false;
-        return Dynamics6Dof.AeroWrenchAt(x, _dyn, finDeg, wrench);
+        return Dynamics6Dof.AeroWrenchAt(x, dyn, finDeg, wrench);
+    }
+
+    /// <summary>Evaluates both flown and rest aerodynamic wrenches plus moment bias against one immutable snapshot.</summary>
+    public bool ModelAeroWrenchPair(double[] x, ReadOnlySpan<double> finDeg, Span<double> wrenchFlown, Span<double> wrenchRest, out double3 momentBiasPerPa)
+    {
+        ModelSnapshot snap = _snapshot;
+        momentBiasPerPa = snap.MomentBiasPerPa;
+        Dynamics6Dof.Params dyn = snap.Dyn;
+        if ((dyn.Aero == null && dyn.BodyAero == null) || x == null || x.Length < NX)
+            return false;
+        return Dynamics6Dof.AeroWrenchAt(x, dyn, finDeg, wrenchFlown)
+            && Dynamics6Dof.AeroWrenchAt(x, dyn, ReadOnlySpan<double>.Empty, wrenchRest);
     }
 
     /// <summary>Lateral (pitch/yaw) torque the model allows per newton of axial thrust, N m/N: the gimbal arm times the cone's tangent.</summary>
@@ -269,10 +311,10 @@ public sealed class Ksa6DofGuidance : IDisposable
     public bool HasAero => _dyn.Aero != null || _dyn.BodyAero != null;
 
     /// <summary>The bias actually IN the model, i.e. as of the last CommitInputs.</summary>
-    public double3 AccelBias { get; private set; }
+    public double3 AccelBias => _snapshot.AccelBias;
 
     /// <summary>Gravity the config was built with, before any bias - for the readout.</summary>
-    public double3 BaseGravity => _haveBaseGravity ? _baseGravity : new double3(_dyn.Gx, _dyn.Gy, _dyn.Gz);
+    public double3 BaseGravity => _baseGravity;
 
     /// <summary>
     /// Fly a FIXED burn time instead of letting the solver choose it.
@@ -534,6 +576,8 @@ public sealed class Ksa6DofGuidance : IDisposable
     {
         _cfg = cfg;
         _dyn = dyn;
+        _baseGravity = new double3(dyn.Gx, dyn.Gy, dyn.Gz);
+        _snapshot = SnapshotOf(dyn, default);
         _n = cfg.Nodes;
         _lateralTorqueLeadS = lateralTorqueLeadS;
         // The price the config asks for is where pricing ends up, not where it starts; see PricingStage.
@@ -1803,7 +1847,8 @@ public sealed class Ksa6DofGuidance : IDisposable
             // The gimbals' cone is centred where the plan's is (Scvx6DofConfig.GimbalTrimX/Y): the torque of the deflection that holds the engines' own moment, (L y T, -L x T).
             var gimbalCentre = InCoast ? default
                 : new double3(_dyn.LArm * _cfg.GimbalTrimY * axial, -_dyn.LArm * _cfg.GimbalTrimX * axial, 0.0);
-            AttitudeFeedback6Dof.Result fb = attitude.Correct(plan, k, f, x, _dyn.Ixx, _dyn.Iyy, _dyn.Izz,
+            double3 inertia = _snapshot.Inertia;
+            AttitudeFeedback6Dof.Result fb = attitude.Correct(plan, k, f, x, inertia.X, inertia.Y, inertia.Z,
                                                               torqueModel, RcsTorqueModel, lateralNm, rollNm, rcsPos, rcsNeg, simNow, gimbalCentre);
             torqueModel += fb.Gimbal;
             if (_dyn.Rcs != null)

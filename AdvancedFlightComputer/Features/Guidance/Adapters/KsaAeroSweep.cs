@@ -189,8 +189,8 @@ public static partial class KsaAeroSweep
         public BodyAeroTable BandBodyMoment;
 
         /// <summary>The body-axis force and moment tables of a set (TableSet).</summary>
-        public BodyAeroTable BodyForceFor(TableSet set) => set switch { TableSet.Nose => NoseBodyAero, TableSet.Belly => BellyBodyAero, TableSet.Sphere => SphereBodyAero, _ => BodyAero };
-        public BodyAeroTable BodyMomentFor(TableSet set) => set switch { TableSet.Nose => NoseBodyMoment, TableSet.Belly => BellyBodyMoment, TableSet.Sphere => SphereBodyMoment, _ => BodyMoment };
+        public BodyAeroTable BodyForceFor(TableSet set) => set switch { TableSet.Nose => NoseBodyAero, TableSet.Belly => BellyBodyAero, TableSet.Band => BandBodyAero, TableSet.Sphere => SphereBodyAero, _ => BodyAero };
+        public BodyAeroTable BodyMomentFor(TableSet set) => set switch { TableSet.Nose => NoseBodyMoment, TableSet.Belly => BellyBodyMoment, TableSet.Band => BandBodyMoment, TableSet.Sphere => SphereBodyMoment, _ => BodyMoment };
 
         /// <summary>
         /// Each control surface's effect (ControlSurfaces), swept like the body table and on its grid: the change its deflection makes to the body-axis force and moment, per deflection swept. Empty for a craft with none, or one swept on an airless body.
@@ -355,8 +355,8 @@ public static partial class KsaAeroSweep
         internal SurfaceTable ShallowCopy() => (SurfaceTable)MemberwiseClone();
 
         /// <summary>The per-deflection force tables of a set (TableSet).</summary>
-        public BodyAeroTable[] ForceTables(TableSet set) => set switch { TableSet.Nose => NoseForce, TableSet.Belly => BellyForce, TableSet.Sphere => SphereForce, _ => Force };
-        public BodyAeroTable[] MomentTables(TableSet set) => set switch { TableSet.Nose => NoseMoment, TableSet.Belly => BellyMoment, TableSet.Sphere => SphereMoment, _ => Moment };
+        public BodyAeroTable[] ForceTables(TableSet set) => set switch { TableSet.Nose => NoseForce, TableSet.Belly => BellyForce, TableSet.Band => BandForce, TableSet.Sphere => SphereForce, _ => Force };
+        public BodyAeroTable[] MomentTables(TableSet set) => set switch { TableSet.Nose => NoseMoment, TableSet.Belly => BellyMoment, TableSet.Band => BandMoment, TableSet.Sphere => SphereMoment, _ => Moment };
     }
 
     /// <summary>The Mach numbers the control surfaces' tables are swept at: the body's rows nearest these, through the transonic dip and out to its top. Own choice: ten rows against the body's 27, a third of the time; a surface's effect is read linearly between them by its table's own fit.</summary>
@@ -408,8 +408,8 @@ public static partial class KsaAeroSweep
         public string AxisName => Axis.Z < -0.5 ? "-Z" : Axis.Z > 0.5 ? "+Z" : Axis.Y < -0.5 ? "-Y" : "+Y";
     }
 
-    /// <summary>The body-axis tables a reader can fly with: engine first (BodyAero), nose first (NoseBodyAero), belly first (BellyBodyAero), or every air direction (SphereBodyAero, its angles the sphere's longitude and latitude, BodyAeroTable.SphereAngles).</summary>
-    public enum TableSet { Tail, Nose, Belly, Sphere }
+    /// <summary>The body-axis tables a reader can fly with: engine first (BodyAero), nose first (NoseBodyAero), belly first (BellyBodyAero), the flip band (BandBodyAero), or every air direction (SphereBodyAero, its angles the sphere's longitude and latitude, BodyAeroTable.SphereAngles).</summary>
+    public enum TableSet { Tail, Nose, Belly, Band, Sphere }
 
     /// <summary>
     /// THE ONE RULE for which body-axis tables describe the air as it is now: belly first where the sweep has those tables and the air is inside them, else nose first likewise, else engine first likewise, else the whole sphere where the sweep has it (a belly-flop's: every air direction, coarser). Without the sphere a Starship banked past the belly-first tables' 45 deg had no air moment and no flaps, and tumbled (2026-11-24, twice). With <paramref name="surfacesToo"/>, a set counts only where every swept surface has it too. False where the air is inside none. <paramref name="u"/> is the craft's velocity through the air in body axes, unit; the angles come back about the chosen set's frame, radians.
@@ -459,7 +459,7 @@ public static partial class KsaAeroSweep
                 return true;
             }
         }
-        if (u.X < 0.0 && aero.BodyAero != null && SurfacesHave(TableSet.Tail))
+        if (u.X < 0.0 && aero.BodyAero != null && aero.BodyMoment != null && SurfacesHave(TableSet.Tail))
         {
             BodyAeroTable.Angles(BodyAeroFrame.TailFirst, u.X, u.Y, u.Z, out double a, out double b);
             double limit = BodyAngleMaxDeg * Math.PI / 180.0;
@@ -468,6 +468,19 @@ public static partial class KsaAeroSweep
                 set = TableSet.Tail;
                 alphaRad = a;
                 betaRad = b;
+                return true;
+            }
+        }
+        if (aero.BandBodyAero != null && aero.BandBodyMoment != null && SurfacesHave(TableSet.Band))
+        {
+            BodyAeroTable.SphereAngles(aero.BandBodyAero.Frame, u.X, u.Y, u.Z, out double lambda, out double mu);
+            double lamDeg = lambda * 180.0 / Math.PI, muDeg = mu * 180.0 / Math.PI;
+            if (lamDeg >= BandLambdaDeg[0] && lamDeg <= BandLambdaDeg[^1]
+                && muDeg >= BandMuDeg[0] && muDeg <= BandMuDeg[^1])
+            {
+                set = TableSet.Band;
+                alphaRad = lambda;
+                betaRad = mu;
                 return true;
             }
         }
