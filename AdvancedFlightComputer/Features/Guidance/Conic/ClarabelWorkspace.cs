@@ -20,8 +20,10 @@ namespace AdvancedFlightComputer.Guidance.Conic;
 ///   * iterative refinement OFF: Clarabel polishes each KKT solve far below what an SCvx subproblem asks
 ///     for. A NumericalError or InsufficientProgress with it off turns it back on for this workspace from
 ///     then on, rebuilds, and solves once more;
-///   * the tolerance is the subproblem's own epsAbs (SCvx asks 1e-4 in flight). The reduced ("almost")
-///     tolerances are held at least that loose, since Clarabel's defaults for them are tighter than 1e-4.
+///   * the primary gap and feasibility tolerances clamp the subproblem's epsAbs/epsRel at
+///     <see cref="MaxPrimaryTolerance"/> (5e-6). Clarabel's default reduced ("almost") tolerances
+///     (5e-5 gap, 1e-4 feasibility) stay unchanged so unrefined solves keep a 10x margin between
+///     primary convergence and reduced-accuracy acceptance.
 ///
 /// The solver is rebuilt when the pattern, cone list or tolerance changes; nothing else.
 ///
@@ -34,6 +36,17 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
 {
     /// <summary>Interior-point iteration ceiling: a guard against pathology, not a budget. See ClarabelSolver.DefaultMaxIterations.</summary>
     public const int IpmIterationCeiling = ClarabelSolver.DefaultMaxIterations;
+
+    /// <summary>
+    /// Upper bound on Clarabel's primary gap and feasibility tolerances. SCvx callers pass 1e-4 or 1e-3
+    /// for first-order ADMM speed, but an interior-point method reaches 5e-6 at virtually identical
+    /// iteration count while staying 10x tighter than Clarabel's default reduced tolerances (5e-5 / 1e-4).
+    /// </summary>
+    public const double MaxPrimaryTolerance = 5e-6;
+
+    /// <summary>Primary tolerance applied to Clarabel for a requested (epsAbs, epsRel) pair.</summary>
+    public static double EffectiveTolerance(double epsAbs, double epsRel) =>
+        Math.Min(Math.Max(epsAbs, epsRel), MaxPrimaryTolerance);
 
     /// <summary>Iterative refinement on every new solver. Off is Maxi's setting; on is Clarabel's default.</summary>
     public static bool IterativeRefinementDefault = false;
@@ -125,8 +138,9 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
         int coneSum = zeroDim + posDim + socDims.Sum();
         if (coneSum != m) throw new ArgumentException($"cone dims sum to {coneSum}, expected m={m}");
 
-        // One tolerance for gap and feasibility, as ClarabelSolver uses; SCS's abs/rel pair maps onto its loosest.
-        double eps = Math.Max(epsAbs, epsRel);
+        // Clamp primary gap and feasibility tolerances at MaxPrimaryTolerance so loose ADMM settings
+        // do not stop an unrefined interior-point solve early; ReducedTol* stays at Clarabel's defaults.
+        double eps = EffectiveTolerance(epsAbs, epsRel);
         int cap = EffectiveIterationCap(maxIterations);
         bool hasP = P is { NonZeros: > 0 };
 
@@ -321,9 +335,7 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
             s.TolGapAbs = eps;
             s.TolGapRel = eps;
             s.TolFeas = eps;
-            s.ReducedTolGapAbs = Math.Max(s.ReducedTolGapAbs, eps);
-            s.ReducedTolGapRel = Math.Max(s.ReducedTolGapRel, eps);
-            s.ReducedTolFeas = Math.Max(s.ReducedTolFeas, eps);
+            // Keep Clarabel's default ReducedTol* (5e-5 gap, 1e-4 feasibility) for AlmostSolved fallback.
             s.PresolveEnable = false;
             s.InputSparseDropzeros = false;
             s.IterativeRefinementEnable = _iterativeRefinement;

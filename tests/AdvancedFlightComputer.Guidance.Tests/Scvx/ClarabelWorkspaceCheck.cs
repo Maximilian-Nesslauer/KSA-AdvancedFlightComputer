@@ -20,6 +20,7 @@ internal static class ClarabelWorkspaceCheck
             CheckFreshRebuildDoesNotDoubleRebuildOnMaxIterations();
             CheckEffectiveIterationCapStaysBoundToLastSolve();
             CheckDeterministicDispose();
+            CheckToleranceCapAndPresolveDisabled();
             CheckSolveMsSamplesRingBuffer();
             Console.WriteLine("PASS clarabel-workspace");
             return 0;
@@ -176,9 +177,52 @@ internal static class ClarabelWorkspaceCheck
         sub3.Dispose();
     }
 
+    private static void CheckToleranceCapAndPresolveDisabled()
+    {
+        ClarabelWorkspace.IterativeRefinementDefault = false;
+        ClarabelWorkspace.Persistent = true;
+        ClarabelWorkspace.ResetTimers();
+
+        Require(ClarabelWorkspace.EffectiveTolerance(1e-3, 1e-3) == ClarabelWorkspace.MaxPrimaryTolerance,
+                "loose 1e-3 request must clamp to MaxPrimaryTolerance");
+        Require(ClarabelWorkspace.EffectiveTolerance(1e-4, 1e-4) == ClarabelWorkspace.MaxPrimaryTolerance,
+                "loose 1e-4 request must clamp to MaxPrimaryTolerance");
+        Require(ClarabelWorkspace.EffectiveTolerance(1e-8, 1e-8) == 1e-8,
+                "tighter request must not be loosened");
+
+        using var ws = new ClarabelWorkspace();
+        var (A, P, b, c) = BuildTinyQp(1.0, 1.0);
+
+        ScsStatus st1 = ws.Solve(A, b, c, P, zeroDim: 0, posDim: 2, socDims: [], warmStart: false,
+                                 maxIterations: 100, epsAbs: 1e-3, epsRel: 1e-3);
+        Require(st1 == ScsStatus.Solved && ws.LastRebuilt, "initial loose solve must build and solve");
+        Require(Math.Abs(ws.X[0] - 1.0) < 1e-5 && Math.Abs(ws.X[1] - 1.0) < 1e-5,
+                $"capped tolerance must solve accurately (got {ws.X[0]:G8}, {ws.X[1]:G8})");
+
+        // Changing eps from 1e-3 to 1e-4 maps to the same capped tolerance, so the persistent solver
+        // must update in place (which also verifies PresolveEnable=false and InputSparseDropzeros=false).
+        A.BeginRefill();
+        A.Add(0, 0, 2.0);
+        A.Add(1, 1, 2.0);
+        A.EndRefill();
+        double[] b2 = [4.0, 4.0];
+        ScsStatus st2 = ws.Solve(A, b2, c, P, zeroDim: 0, posDim: 2, socDims: [], warmStart: false,
+                                 maxIterations: 100, epsAbs: 1e-4, epsRel: 1e-4);
+        Require(st2 == ScsStatus.Solved && !ws.LastRebuilt,
+                "switching between capped tolerances must reuse the persistent solver in place");
+        Require(Math.Abs(ws.X[0] - 1.0) < 1e-5 && Math.Abs(ws.X[1] - 1.0) < 1e-5,
+                $"in-place update must remain accurate (got {ws.X[0]:G8}, {ws.X[1]:G8})");
+
+        // Tightening below MaxPrimaryTolerance must trigger a rebuild with the tighter setting.
+        ScsStatus st3 = ws.Solve(A, b2, c, P, zeroDim: 0, posDim: 2, socDims: [], warmStart: false,
+                                 maxIterations: 100, epsAbs: 1e-8, epsRel: 1e-8);
+        Require(st3 == ScsStatus.Solved && ws.LastRebuilt,
+                "tightening tolerance below MaxPrimaryTolerance must rebuild the native solver");
+    }
+
     private static void CheckSolveMsSamplesRingBuffer()
     {
-        const int solves = 1200;
+        const int solves = 2500;
         var (A, P, b, c) = BuildTinyQp(1.0, 1.0);
 
         ScsWorkspace.ResetTimers();
@@ -188,6 +232,8 @@ internal static class ClarabelWorkspaceCheck
         Require(ScsWorkspace.TotalCalls == solves, $"SCS TotalCalls expected {solves}, got {ScsWorkspace.TotalCalls}");
         Require(ScsWorkspace.SolveMsSamples.Count == 1024, $"SCS SolveMsSamples expected 1024, got {ScsWorkspace.SolveMsSamples.Count}");
         Require(ScsWorkspace.SolveMsPercentile(0.5) >= 0.0, "SCS median percentile must be non-negative");
+        Require(ScsWorkspace.SolveMsPercentile(0.95) >= ScsWorkspace.SolveMsPercentile(0.5),
+                "SCS p95 must be at least p50");
 
         ClarabelWorkspace.Persistent = true;
         ClarabelWorkspace.ResetTimers();
@@ -197,6 +243,8 @@ internal static class ClarabelWorkspaceCheck
         Require(ClarabelWorkspace.TotalCalls == solves, $"Clarabel TotalCalls expected {solves}, got {ClarabelWorkspace.TotalCalls}");
         Require(ClarabelWorkspace.SolveMsSamples.Count == 1024, $"Clarabel SolveMsSamples expected 1024, got {ClarabelWorkspace.SolveMsSamples.Count}");
         Require(ClarabelWorkspace.SolveMsPercentile(0.5) >= 0.0, "Clarabel median percentile must be non-negative");
+        Require(ClarabelWorkspace.SolveMsPercentile(0.95) >= ClarabelWorkspace.SolveMsPercentile(0.5),
+                "Clarabel p95 must be at least p50");
     }
 
     private static void Require(bool condition, string message)
