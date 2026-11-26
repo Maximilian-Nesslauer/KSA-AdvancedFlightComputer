@@ -69,20 +69,11 @@ public sealed class BellyflopPlanner
         }
         Shoot(model, cfg, x0, u, sigma, x);
 
-        // The angle limits at each node: the configured limit, widened at the start to an attitude flown beyond it and closing at the rate. Pitch has its own limit each way: nose up as far as the entry flies, nose down only a little.
+        // Node angle envelopes are recomputed each SCvx iteration from the trust-region lower bound on sigma so a shrinking flight time stays primal feasible against the rate constraints.
         var limA = new double[n];
         var limADown = new double[n];
         var limB = new double[n];
         var limY = new double[n];
-        for (int k = 0; k < n; k++)
-        {
-            double t = sigma * k / (n - 1);
-            limY[k] = Math.Max(yawMax, Math.Abs(psiNow) - yawRate * t);
-            double share = t > cfg.MarginAfterS ? Math.Clamp(cfg.LimitMargin, 0.1, 1.0) : 1.0;
-            limA[k] = Math.Max(pitchUp, alphaNow - rate * t);
-            limADown[k] = Math.Max(angleMax * share, -alphaNow - rate * t);
-            limB[k] = Math.Max(bankMax * share, Math.Abs(betaNow) - rate * t);
-        }
 
         var lin = new Linearisation(n);
         double eta = cold ? 2.0 : 1.0;
@@ -95,6 +86,17 @@ public sealed class BellyflopPlanner
             double defect = MaxScaledDefect(lin.Defect, n);
             if (iter > 0 && defect <= 0.25 * cfg.GateDefect && lastStep < 0.02 && Miss(x, n) <= 0.25 * cfg.GateMissM)
                 break;
+            double sigLo = Math.Max(cfg.SigmaMin, sigma - eta * SS);
+            for (int k = 0; k < n; k++)
+            {
+                double tLo = sigLo * k / (n - 1);
+                double tRef = sigma * k / (n - 1);
+                limY[k] = Math.Max(yawMax, Math.Abs(psiNow) - yawRate * tLo);
+                double share = tRef > cfg.MarginAfterS ? Math.Clamp(cfg.LimitMargin, 0.1, 1.0) : 1.0;
+                limA[k] = Math.Max(pitchUp * share, alphaNow - rate * tLo);
+                limADown[k] = Math.Max(angleMax * share, -alphaNow - rate * tLo);
+                limB[k] = Math.Max(bankMax * share, Math.Abs(betaNow) - rate * tLo);
+            }
             // This iteration's yaw prices (from the reference's pitch) and cone nodes (from its altitude): the same for the reference, the subproblem and the candidate, so the ratio compares like with like.
             double[] yawW = YawPrices(cfg, u, n);
             bool[] cone = ConeNodes(cfg, x, n);
