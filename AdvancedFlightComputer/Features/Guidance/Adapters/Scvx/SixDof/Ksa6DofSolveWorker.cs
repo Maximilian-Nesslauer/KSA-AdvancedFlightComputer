@@ -186,25 +186,34 @@ public sealed class Ksa6DofSolveWorker : IDisposable
                     error = $"solve threw: {e.Message} ({e.GetType().Name} at {where})";
                 }
 
-                Ksa6DofGuidance orphan = null;
-                bool exitLoop;
+                bool abandoned;
                 lock (_gate)
                 {
-                    _solveMs = sw.Elapsed.TotalMilliseconds;
-                    _completed++;
+                    abandoned = !_running;
                     // Dispose abandons both the worker and its guidance. No result from that owner can be collected after a later engagement.
-                    if (_running)
+                    if (!abandoned)
+                    {
+                        _solveMs = sw.Elapsed.TotalMilliseconds;
+                        _completed++;
                         _result = new Ksa6DofSolveResult(request.Job, request.Guidance,
                             ok, error, faulted, produced);
-                    else
-                        orphan = produced;
-                    _request = null;
-                    _busy = false;
-                    exitLoop = !_running;
+                        _request = null;
+                        _busy = false;
+                    }
                 }
-                if (orphan is IDisposable disposable)
-                    try { disposable.Dispose(); } catch { }
-                if (exitLoop) return;
+                if (abandoned)
+                {
+                    if (produced is IDisposable disposable)
+                        try { disposable.Dispose(); } catch { }
+                    lock (_gate)
+                    {
+                        _solveMs = sw.Elapsed.TotalMilliseconds;
+                        _completed++;
+                        _request = null;
+                        _busy = false;
+                    }
+                    return;
+                }
             }
         }
         finally

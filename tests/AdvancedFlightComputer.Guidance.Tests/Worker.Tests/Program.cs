@@ -274,7 +274,7 @@ public sealed class Ksa6DofGuidance : IDisposable
 {
     public Func<double[], double, int, bool> Solve = (_, _, _) => false;
     public string Error = "";
-    public bool Disposed;
+    public volatile bool Disposed;
     public bool Update(double[] x, double now, int iterations) => Solve(x, now, iterations);
     public bool StepCold(double[] x, double now) => Solve(x, now, 1);
     public bool Track(double[] x, double now, int iterations) => Solve(x, now, iterations);
