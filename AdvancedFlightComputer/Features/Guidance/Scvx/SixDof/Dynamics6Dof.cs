@@ -54,6 +54,8 @@ public static class Dynamics6Dof
     /// <summary>Vehicle and environment constants. Defaults mirror 6dof.py.</summary>
     public sealed class Params
     {
+        /// <summary>Shallow copy for cross-thread snapshots; caller clones BodyAero separately when non-null.</summary>
+        public Params ShallowClone() => (Params)MemberwiseClone();
         public double Gx = 0.0, Gy = 0.0, Gz = -9.81;   // gravity, inertial
         public double G0 = 9.81;
         public double Isp = 330.0;

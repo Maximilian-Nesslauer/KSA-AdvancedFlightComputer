@@ -24,12 +24,34 @@ internal static class SixDofFinCheck
     internal static int Run(bool verbose)
     {
         Console.WriteLine("CONTROL SURFACES IN TOUCHDOWN GUIDANCE'S PLAN");
-        bool ok = Slopes(4) & Slopes(3);
+        bool ok = Slopes(4) & Slopes(3) & StopSlopes();
         ok &= Landing(4, verbose);
         ok &= Landing(3, verbose);
         Console.WriteLine();
         Console.WriteLine(ok ? "PASS - the fins in the touchdown plan" : "FAIL - see above");
         return ok ? 0 : 1;
+    }
+
+    private static bool StopSlopes()
+    {
+        BodyAero6Dof.FinTable fin = Fins(4)[0];
+        var mach = new AdvancedFlightComputer.Guidance.Numerics.Dual(0.5);
+        var zero = new AdvancedFlightComputer.Guidance.Numerics.Dual(0.0);
+        double dLo = fin.DeflectionDeg[0], dHi = fin.DeflectionDeg[^1];
+
+        BodyAero6Dof.FinCoefficients(fin, true, new(dLo, 1.0), mach, zero, zero, out var lo0, out _, out var lo2);
+        BodyAero6Dof.FinCoefficients(fin, true, new(dLo + 0.1, 1.0), mach, zero, zero, out var inLo0, out _, out var inLo2);
+        BodyAero6Dof.FinCoefficients(fin, true, new(dHi, 1.0), mach, zero, zero, out var hi0, out _, out var hi2);
+        BodyAero6Dof.FinCoefficients(fin, true, new(dHi - 0.1, 1.0), mach, zero, zero, out var inHi0, out _, out var inHi2);
+
+        BodyAero6Dof.FinCoefficients(fin, true, new(dLo - 1e-9, 1.0), mach, zero, zero, out var overLo0, out _, out var overLo2);
+        BodyAero6Dof.FinCoefficients(fin, true, new(dHi + 1e-9, 1.0), mach, zero, zero, out var overHi0, out _, out var overHi2);
+
+        double errLo = Math.Max(Math.Max(Math.Abs(lo0.D - inLo0.D), Math.Abs(lo2.D - inLo2.D)), Math.Abs(overLo2.D - inLo2.D));
+        double errHi = Math.Max(Math.Max(Math.Abs(hi0.D - inHi0.D), Math.Abs(hi2.D - inHi2.D)), Math.Abs(overHi2.D - inHi2.D));
+        bool ok = Math.Abs(inLo2.D) > 1e-6 && Math.Abs(inHi2.D) > 1e-6 && errLo < 1e-12 && errHi < 1e-12;
+        Console.WriteLine($"  {(ok ? "PASS" : "FAIL")} fin stop slopes at {dLo:0}/{dHi:0} deg (incl. 1e-9 overshoot): err {errLo:E1}/{errHi:E1}");
+        return ok;
     }
 
     // ------------------------------------------------------------------- the model
