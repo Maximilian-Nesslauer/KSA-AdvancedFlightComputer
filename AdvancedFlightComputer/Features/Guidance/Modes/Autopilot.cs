@@ -1746,8 +1746,12 @@ public static partial class GuidanceWindow
     internal static void StopForManualIntervention(Vehicle vehicle)
     {
         VehicleAutopilotState state = VehicleAutopilotState.For(vehicle);
-        if (!state.ControlAcquired && !state.DeorbitNodeClaimed && !IsStockDeorbitPhase(state.LandingPhase))
+        if (!HoldsReleasableState(state))
+        {
+            if (VehicleControlOwnership.Holds(vehicle, ControlClaimant.Guidance))
+                VehicleControlOwnership.Release(vehicle, ControlClaimant.Guidance);
             return;
+        }
         _s = state;
         _s.TakeoverStop = true;
         _s.TakeoverReason = "GUIDANCE STOPPED: AFC MANUAL INTERVENTION.";

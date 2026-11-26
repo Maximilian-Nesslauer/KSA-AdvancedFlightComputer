@@ -44,6 +44,17 @@ internal static class ScreenLog
         }
     }
 
+    /// <summary>Restores stock on-screen console log fading when the mod unloads.</summary>
+    internal static void RestoreOnUnload()
+    {
+        if (!_hiding)
+            return;
+        object? console = ConsoleField?.GetValue(null);
+        if (console != null)
+            Enable?.Invoke(console, null);
+        _hiding = false;
+    }
+
     private static readonly FieldInfo? ConsoleField =
         typeof(Program).GetField("ConsoleWindow", BindingFlags.Public | BindingFlags.Static);
 

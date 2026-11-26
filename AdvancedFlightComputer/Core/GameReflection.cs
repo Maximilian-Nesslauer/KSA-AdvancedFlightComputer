@@ -162,6 +162,28 @@ internal static class GameReflection
         AccessTools.Method(typeof(Program), nameof(Program.SwapSystem),
             new[] { typeof(SystemTemplate) });
 
+    // Optional HandFlying PILOT gauge button patches; checked independently so a game UI rename cannot disable Guidance.
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly MethodInfo? Vehicle_ToggleEnum =
+        AccessTools.Method(typeof(Vehicle), nameof(Vehicle.ToggleEnum),
+            new[] { typeof(Enum) });
+
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly MethodInfo? GaugeButtonFlightComputer_IsDisabled =
+        AccessTools.Method(typeof(GaugeButtonFlightComputer), nameof(GaugeButtonFlightComputer.IsDisabled),
+            Type.EmptyTypes);
+
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly MethodInfo? GaugeButtonFlightComputer_PackData =
+        AccessTools.Method(typeof(GaugeButtonFlightComputer), nameof(GaugeButtonFlightComputer.PackData),
+            Type.EmptyTypes);
+
+    // Optional VAB belly-flop balance overlay; checked independently so an editor UI rename cannot disable Guidance.
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly MethodInfo? VehicleEditor_OnDrawUi =
+        AccessTools.Method(typeof(VehicleEditor), nameof(VehicleEditor.OnDrawUi),
+            new[] { typeof(IGameViewport) });
+
     #endregion
 
     #region Save, tick and vehicle lifetime

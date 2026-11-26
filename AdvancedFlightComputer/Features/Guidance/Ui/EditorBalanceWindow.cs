@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
+using Brutal.Logging;
 using HarmonyLib;
 using KSA;
 using KSA.Aero;
@@ -17,7 +18,6 @@ namespace AdvancedFlightComputer.Features.Guidance;
 ///
 /// Flaps are at rest here: what they can add is in the flight log's "schedule with the flaps". Recomputed when the mesh or the mass changes, at most every half second.
 /// </summary>
-[HarmonyPatch(typeof(VehicleEditor), nameof(VehicleEditor.OnDrawUi), new[] { typeof(IGameViewport) })]
 internal static class EditorBalanceWindow
 {
     private const string WindowId = "afc-editor-balance";
@@ -40,7 +40,37 @@ internal static class EditorBalanceWindow
     private static readonly SysVector3[] Sides = { new(0, 0, -1), new(0, 0, 1), new(0, -1, 0), new(0, 1, 0) };
     private static readonly string[] SideNames = { "-Z", "+Z (craft belly)", "-Y", "+Y" };
 
-    static void Postfix(VehicleEditor __instance)
+    internal static void ApplyPatches(Harmony harmony)
+    {
+        if (GameReflection.VehicleEditor_OnDrawUi is not { } onDrawUi)
+        {
+            DefaultCategory.Log.Warning("[AFC] VehicleEditor.OnDrawUi was not found; the editor balance window is disabled while Guidance continues.");
+            return;
+        }
+        try
+        {
+            harmony.Patch(onDrawUi, postfix: new HarmonyMethod(typeof(EditorBalanceWindow), nameof(Postfix)));
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Warning($"[AFC] Could not patch VehicleEditor.OnDrawUi; the editor balance window is disabled: {ex}");
+        }
+    }
+
+    internal static void Reset()
+    {
+        _open = true;
+        _editor = null;
+        _computedFor = null;
+        _computedMass = double.NaN;
+        _computedAt = double.NegativeInfinity;
+        _computedSide = -1;
+        _computedMach = -1;
+        _rows.Clear();
+        _note = "";
+    }
+
+    private static void Postfix(VehicleEditor __instance)
     {
         try
         {

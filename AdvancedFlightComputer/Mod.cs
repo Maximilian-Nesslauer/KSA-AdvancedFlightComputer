@@ -263,6 +263,8 @@ public sealed class Mod
         MultiPassRegistry.Reset();
         AutoStageFeature.Disable();
         AutoStageFeature.RemoveGaugeEnum();
+        HandFlying.RemoveGaugeEnum();
+        ScreenLog.RestoreOnUnload();
         AutoRemoveFeature.Disable();
         ModSettingsPage.Reset();
         SaveLoadObserver.Reset();
