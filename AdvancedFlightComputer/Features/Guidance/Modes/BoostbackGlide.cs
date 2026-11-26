@@ -191,6 +191,17 @@ public static partial class GuidanceWindow
             UpdateGlidePid(vehicle, orbit, parent, heading, up, left, speed, now);
         }
 
+        // Above the atmosphere while still climbing, hold the descending-entry orientation so engines stay downward and meet retrograde smoothly at apogee.
+        double qLive = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * speed * speed;
+        double vUp = double3.Dot(vAir, rHat);
+        if (Ui.Logic.GuidanceModeGuards.ShouldHoldVacuumClimbAttitude(qLive, vUp)
+            && Ui.Logic.GuidanceModeGuards.VacuumClimbHoldDirection(vAir.X, vAir.Y, vAir.Z, rHat.X, rHat.Y, rHat.Z, out double wx, out double wy, out double wz))
+        {
+            _s.GlideTrimUpDeg = _s.GlideTrimLeftDeg = 0.0;
+            _s.GlideFlownAoaDeg = 0.0;
+            return new double3(wx, wy, wz);
+        }
+
         // THE ATTITUDE TRIM, every step: the tilt actually flown, measured off the body nose axis, against the tilt asked for, and the difference wound into the command. See GlideTrackGain.
         // The body axis and not the thrust axis, because the angle of attack is an aerodynamic quantity and the surrogate is sampled in body axes. If an engine burns, the flight computer points the trimmed thrust axis instead, and this trim winds the trim angle out of the body tilt.
         const double RadToDeg = 180.0 / Math.PI;

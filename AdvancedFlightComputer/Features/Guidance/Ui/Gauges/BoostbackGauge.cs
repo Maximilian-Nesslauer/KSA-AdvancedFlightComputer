@@ -391,14 +391,26 @@ public static partial class GuidanceWindow
             return;
         }
         int bellySide = AeroBellySideFor(vehicle);
-        // A belly-flopper's table without the sphere, or on another side, is stale for it.
-        bool wrongKind = bellySide >= 0 && (_s.Aero?.SphereBodyAero == null || _s.Aero.BellySide != bellySide);
-        if (!force && (SimNow() < _s.AeroRetryAt || (!wrongKind && !_s.AeroStale(LiveBoxExtents(vehicle), KsaAeroSweep.LiveMeshHash(vehicle), parent))))
+        bool hasAir = HasPhysicalAtmosphere(parent);
+        // A belly-flopper's table without the sphere, or on another side, is stale where the body has an atmosphere.
+        bool wrongKind = hasAir && bellySide >= 0 && (_s.Aero?.SphereBodyAero == null || _s.Aero.BellySide != bellySide);
+        bool isStale = _s.AeroStale(LiveBoxExtents(vehicle), KsaAeroSweep.LiveMeshHash(vehicle), parent);
+        bool hasError = _s.AeroError.Length > 0;
+        bool meshActivelyRebuilding = _s.AeroError == KsaAeroSweep.RebuildingError && KsaAeroSweep.MeshRebuilding(vehicle);
+        if (!Ui.Logic.GuidanceModeGuards.ShouldStartAeroSweep(force, SimNow(), _s.AeroRetryAt, hasError, meshActivelyRebuilding, wrongKind, isStale))
             return;
-        if (KsaAeroSweep.TryStart(vehicle, parent, SimNow(), out KsaAeroSweep.Job job, out string startError, bellyFirst: bellySide >= 0, bellySide: bellySide, fresh: force))
+        if (KsaAeroSweep.TryStart(vehicle, parent, SimNow(), out KsaAeroSweep.Job job, out string startError, bellyFirst: hasAir && bellySide >= 0, bellySide: hasAir ? bellySide : -1, fresh: force))
+        {
             _s.AeroJob = job;
+            if (_s.AeroError != KsaAeroSweep.RebuildingError)
+                _s.AeroError = "";
+        }
         else
+        {
             _s.AeroError = startError;
+            if (startError != KsaAeroSweep.RebuildingError)
+                _s.AeroRetryAt = SimNow() + AeroRetryS;
+        }
     }
 
     /// <summary>
