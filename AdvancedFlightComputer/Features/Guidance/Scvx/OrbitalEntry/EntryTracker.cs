@@ -74,6 +74,17 @@ public sealed class EntryTracker
         _dragF = _hdotF = double.NaN;
     }
 
+    /// <summary>Slew the flown bank toward zero at the configured roll rate and clear tracker state once wings are level.</summary>
+    public double SlewToLevel(double dt)
+    {
+        double step = _cfg.RollRateDegS * Math.Max(dt, 0.0);
+        if (Math.Abs(_bank) <= step)
+            Reset();
+        else
+            _bank -= Math.Sign(_bank) * step;
+        return _bank;
+    }
+
     public Output Update(in Input inp)
     {
         var cfg = _cfg;
@@ -93,7 +104,7 @@ public sealed class EntryTracker
         {
             Slew(0.0, inp.Dt);
             return new Output(Phase.PreEntry, _bank, 0, 0, 0, 0, 0, db, _side, false, false, false, false,
-                cfg.EngageInAtmosphere ? "PRE-ENTRY: LIFT-UP UNTIL THE AIR" : $"PRE-ENTRY: LIFT-UP UNTIL DRAG {cfg.StartDrag:F2} m/s²");
+                cfg.EngageInAtmosphere ? "PRE-ENTRY: LIFT-UP UNTIL THE AIR" : $"PRE-ENTRY: LIFT-UP UNTIL DRAG {cfg.StartDrag:F2} m/s^2");
         }
 
         // In the air but short of the plan's start: the bank the coast to it was predicted with, on the side towards the site. The plan's first reference is for a state not reached yet, and tracking it would ask the near-vacuum for drag it does not have (2026-11-21: 112 deg overbank for 20 minutes at 190 to 105 km).
@@ -103,7 +114,7 @@ public sealed class EntryTracker
             double coastBank = _side * cfg.PreStartBankDeg;
             Slew(coastBank, inp.Dt);
             return new Output(Phase.PreEntry, _bank, coastBank, 0, 0, 0, cfg.PreStartBankDeg, db, _side, false, false, false, false,
-                $"COASTING TO THE AIR AT {cfg.PreStartBankDeg:F0}° BANK UNTIL THE PLAN TAKES HOLD");
+                $"COASTING TO THE AIR AT {cfg.PreStartBankDeg:F0} deg BANK UNTIL THE PLAN TAKES HOLD");
         }
 
         var p = inp.Plan.At(inp.E);
@@ -156,13 +167,13 @@ public sealed class EntryTracker
         string status;
         if (_reversing) status = $"ROLL REVERSAL TO THE {(_side > 0 ? "RIGHT" : "LEFT")}";
         else if (liftUp) status = "AT LIFT-UP: THE TRACKER WANTS MORE LIFT THAN THE CRAFT HAS";
-        else if (liftDown) status = $"AT {cfg.OverbankDeg:F0}° BANK: THE TRACKER WANTS MORE LIFT DOWN THAN IT MAY USE";
+        else if (liftDown) status = $"AT {cfg.OverbankDeg:F0} deg BANK: THE TRACKER WANTS MORE LIFT DOWN THAN IT MAY USE";
         else
         {
             double err = inp.DragMs2 - p.DragMs2;
             string trend = Math.Abs(err) < 0.05 * Math.Max(p.DragMs2, 1) ? "ON PROFILE"
                          : err > 0 ? "DRAG HIGH: CLIMBING BACK" : "DRAG LOW: SINKING TO PROFILE";
-            status = $"TRACKING DRAG · {trend}";
+            status = $"TRACKING DRAG - {trend}";
         }
 
         return new Output(Phase.Tracking, _bank, target, uCmd, p.DragMs2, p.HdotMs, p.BankRefDeg, db, _side,

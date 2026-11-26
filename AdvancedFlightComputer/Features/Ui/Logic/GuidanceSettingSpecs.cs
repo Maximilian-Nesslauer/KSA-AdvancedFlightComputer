@@ -294,7 +294,7 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec OrbitalEntryTrackRollRateDegS = new("OrbitalEntryTrackRollRateDegS", "TRACKING ROLL RATE", "deg/s", E, 5.0, 0.5, 90.0, "%.1f",
         "The roll rate the tracker slews the bank at while it tracks the drag; reversals use ROLL RATE.");
     public static readonly SettingSpec OrbitalEntryHandoverAltKm = new("OrbitalEntryHandoverAltKm", "HAND-OVER ALTITUDE", "km", P, 38.0, 1.0, 200.0, "%.1f",
-        "Where orbital entry guidance ends, with HAND-OVER MACH: BELLYFLOP takes over there, or with it off the craft holds its entry attitude.");
+        "Where orbital entry guidance ends, with HAND-OVER MACH: FLIP LANDING hands over to bellyflop, RETRO BURN hands over to the 3-DOF glide, and craft without usable engines arm parachutes or hold entry attitude.");
     public static readonly SettingSpec OrbitalEntryHandoverMach = new("OrbitalEntryHandoverMach", "HAND-OVER MACH", "", P, 5.0, 0.2, 20.0, "%.2f",
         "Airspeed over the sea-level speed of sound at the hand-over, as the aero tables measure Mach: where orbital entry guidance's plan ends. BELLYFLOP takes over at its first plan that reaches the site, from BELLYFLOP FROM MACH on, and the entry holds its attitude here until one comes.");
     public static readonly SettingSpec OrbitalEntryBellyflopArmMach = new("OrbitalEntryBellyflopArmMach", "BELLYFLOP FROM MACH", "", P, 10.0, 0.5, 20.0, "%.1f",
@@ -316,7 +316,7 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec OrbitalEntryStartDragMs2 = new("OrbitalEntryStartDragMs2", "START DRAG", "m/s^2", E, 0.02, 0.01, 20.0, "%.2f",
         "Drag at which the tracker takes hold, latched once reached. Above the air the craft holds its entry attitude lift-up.");
     public static readonly SettingSpec OrbitalEntryAoaDeg = new("OrbitalEntryAoaDeg", "ENTRY AoA", "deg", E, 55.0, 0.0, 180.0, "%.0f",
-        "Angle of attack from nose-first: the trim angle nearest this where a Mach row has several, and the angle flown where it has none.");
+        "Angle of attack from nose-first: flown fixed throughout while TRIM AoA is off (default); with TRIM AoA on, the preferred angle when a Mach row has several trim zeros.");
     public static readonly SettingSpec OrbitalEntryAoaMinDeg = new("OrbitalEntryAoaMinDeg", "TRIM AoA MIN", "deg", E, 40.0, 0.0, 180.0, "%.0f",
         "Lowest pitch-trim angle of attack the schedule accepts.");
     public static readonly SettingSpec OrbitalEntryAoaMaxDeg = new("OrbitalEntryAoaMaxDeg", "TRIM AoA MAX", "deg", E, 70.0, 0.0, 180.0, "%.0f",
@@ -338,7 +338,7 @@ internal static class GuidanceSettingSpecs
         "Natural frequency of the drag and sink-rate loop that holds the plan's drag: higher pulls the drag onto the plan's faster, at the cost of more bank activity.");
     public static readonly SettingSpec OrbitalEntryMeasureSmoothS = new("OrbitalEntryMeasureSmoothS", "DRAG FILTER", "s", T, 4.0, 0.0, 30.0, "%.1f",
         "The time the tracker smooths the measured drag and sink rate over before it feeds back on them: longer passes less of the drag's flutter to the bank, but too long with a stiff DRAG TRACKING makes the loop swing.");
-    public static readonly SettingSpec OrbitalEntryGainDragFloor = new("OrbitalEntryGainDragFloor", "GAIN DRAG FLOOR", "m/s²", T, 10.0, 0.1, 50.0, "%.1f",
+    public static readonly SettingSpec OrbitalEntryGainDragFloor = new("OrbitalEntryGainDragFloor", "GAIN DRAG FLOOR", "m/s^2", T, 10.0, 0.1, 50.0, "%.1f",
         "The least drag the tracking gains are worked out at. Below it, in thin air where the bank buys little, the loop slows in proportion to the drag instead of banging the bank about; the re-plans take up the rest.");
     public static readonly SettingSpec OrbitalEntryReversalBandDeg = new("OrbitalEntryReversalBandDeg", "REVERSAL BAND", "deg", E, 5.0, 0.5, 45.0, "%.1f",
         "The heading error to the site, the angle between the ground track and the way to the site, at which the bank reverses. It narrows below 2 km/s, to half at 1 km/s, so the craft lines up on the site at the end. Wider means fewer reversals.");
@@ -351,7 +351,7 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec OrbitalEntryAimFraction = new("OrbitalEntryAimFraction", "AIM IN CORRIDOR", "", E, 0.5, 0.0, 1.0, "%.2f",
         "Where the deorbit burn aims the site in the corridor at the start of the air: 0 the short end (most drag), 1 the long end (the glide), 0.5 the middle, the most margin both ways.");
     public static readonly SettingSpec OrbitalEntryAimMaxCrossKm = new("OrbitalEntryAimMaxCrossKm", "AIM MAX CROSSRANGE", "km", E, 200.0, 1.0, 5000.0, "%.0f",
-        "The farthest the site may sit off a pass's ground track for the aimed burn to take that pass. A burn cannot turn the orbit plane.");
+        "The farthest the site may sit off a pass's ground track for the aimed burn to take that pass. Within 25 % extra delta-v, a Lambert burn can still trim crossrange to the entry point.");
     public static readonly SettingSpec OrbitalEntryAimHorizonH = new("OrbitalEntryAimHorizonH", "AIM HORIZON", "h", E, 24.0, 0.1, 240.0, "%.1f",
         "How far ahead the aimed entry burn is searched for.");
     public static readonly BoolSpec OrbitalEntryAimDeorbit = new("OrbitalEntryAimDeorbit", "AIM AT SITE", P, true,

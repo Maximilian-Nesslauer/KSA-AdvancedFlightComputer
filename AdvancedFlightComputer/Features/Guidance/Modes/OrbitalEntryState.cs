@@ -101,6 +101,7 @@ public sealed class OrbitalEntryState
     public KsaAeroSweep.Job AimJob;
     public KsaAeroSweep.Result AimAero;
     public EntryTrim AimTrim;
+    public string AimTrimKey = "";
     public EntryModel AimModel;
     public Ksa3DofWorker AimWorker;
     public volatile EntryPlanner.Result AimCheck;

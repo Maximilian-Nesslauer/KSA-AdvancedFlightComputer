@@ -303,7 +303,7 @@ internal static class EntryGuidance
     }
 
     public const string CommitHint =
-        "Flies the glide with the engine off and lights it at the planned ignition. With TOUCHDOWN FOR BURN END on, TOUCHDOWN flies the last seconds of the burn once its standby plan is ready. "
+        "Flies the glide with the engine off and lights it at the planned ignition. TOUCHDOWN flies the last seconds of the burn once its standby plan is ready. "
         + "A lit engine goes off at start. Without air it gets no plan and holds the engine off.";
 
     public const string NoAirText =

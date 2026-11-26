@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.RcsTranslation;
+using Brutal.ImGuiApi;
 using Brutal.Logging;
 using Brutal.Numerics;
 using HarmonyLib;
@@ -142,13 +143,26 @@ internal static class HandFlying
             return;
         }
 
-        // MANUAL INTERVENTION OVERRIDES: a running AFC programme stops (its engine left as it is), an RCS burn is asked to cancel and flies nothing more meanwhile, and the stock flight computer goes to MANUAL, out of any burn or docking frame.
-        if (s.ControlAcquired)
+        // MANUAL INTERVENTION OVERRIDES: a running AFC programme stops (including a stock deorbit claim, with its engine left as it is), an RCS burn is asked to cancel and flies nothing more meanwhile, any stock Auto burn is handed back to MANUAL (keeping a burning engine lit), and the stock flight computer goes to MANUAL, out of any burn or docking frame.
+        if (s.ControlAcquired || s.DeorbitNodeClaimed || GuidanceWindow.IsStockDeorbitActive(s))
             GuidanceWindow.StopForManualIntervention(vehicle);
         if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution exec) && exec.IsActive)
         {
             RcsExecutor.RequestCancel(exec, "AFC MANUAL INTERVENTION");
             return;
+        }
+        if (fc.BurnMode == FlightComputerBurnMode.Auto)
+        {
+            bool burning = fc.Burn?.StartedAt.HasValue == true && KsaEnginePerf.LiveEngineThrust(vehicle) > 0.0;
+            float burnThrottle = fc.Burn?.Throttle ?? fc.PlannedBurnThrottle;
+            StockBurnMode.HoldManual(vehicle);
+            if (burning)
+            {
+                ref ManualControlInputs manual = ref Inputs(vehicle);
+                manual.EngineOn = true;
+                if (float.IsFinite(burnThrottle) && burnThrottle > 0.0f)
+                    manual.EngineThrottle = Math.Clamp(burnThrottle, vehicle.GetMinThrottle(), 1.0f);
+            }
         }
         if (fc.AttitudeMode != FlightComputerAttitudeMode.Manual)
             fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
@@ -168,11 +182,15 @@ internal static class HandFlying
             slot.RateModel = default;
         }
 
-        // THE KEYS, in stock's control frame, then hidden from stock for this step.
-        ref ManualControlInputs inputs = ref Inputs(vehicle);
-        ThrusterMapFlags keys = inputs.ThrusterCommandFlags & RotationKeys;
-        slot.Hidden = keys;
-        inputs.ThrusterCommandFlags &= ~RotationKeys;
+        // THE KEYS, in stock's control frame, then hidden from stock for this step. When stock Vehicle.PrepareWorker is about to clear held player input (inactive control, ImGui keyboard capture, or warp above 30x), ignore held rotation keys and do not save them for AfterPrepare so stock's clear takes effect.
+        ThrusterMapFlags keys = ThrusterMapFlags.None;
+        if (!StockClearsHeldInput())
+        {
+            ref ManualControlInputs inputs = ref Inputs(vehicle);
+            keys = inputs.ThrusterCommandFlags & RotationKeys;
+            slot.Hidden = keys;
+            inputs.ThrusterCommandFlags &= ~RotationKeys;
+        }
         static double Axis(ThrusterMapFlags k, ThrusterMapFlags plus, ThrusterMapFlags minus)
             => ((k & plus) != 0 ? 1.0 : 0.0) - ((k & minus) != 0 ? 1.0 : 0.0);
         var ctrl = new double3(Axis(keys, ThrusterMapFlags.RollRight, ThrusterMapFlags.RollLeft),
@@ -257,12 +275,18 @@ internal static class HandFlying
         }
     }
 
-    /// <summary>Vehicle.PrepareWorker's postfix: the rotation keys hidden for the step are put back, so a key held stays held. Main thread.</summary>
+    private static bool StockClearsHeldInput()
+        => !Program.IsControlledVehicleActive
+           || ImGui.GetIO().WantCaptureKeyboard
+           || Universe.GetSimulationSpeed() > 30.0;
+
+    /// <summary>Vehicle.PrepareWorker's postfix: the rotation keys hidden for the step are put back, so a key held stays held, unless stock cleared held input this step. Main thread.</summary>
     internal static void AfterPrepare(Vehicle vehicle)
     {
         if (Inputs == null || vehicle == null || !Slots.TryGetValue(vehicle, out Slot slot) || slot.Hidden == ThrusterMapFlags.None)
             return;
-        Inputs(vehicle).ThrusterCommandFlags |= slot.Hidden;
+        if (!StockClearsHeldInput())
+            Inputs(vehicle).ThrusterCommandFlags |= slot.Hidden;
         slot.Hidden = ThrusterMapFlags.None;
     }
 

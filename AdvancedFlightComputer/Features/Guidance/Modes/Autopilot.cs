@@ -1737,13 +1737,16 @@ public static partial class GuidanceWindow
         _s.ForcedBurnTarget = null;
     }
 
+    internal static bool IsStockDeorbitActive(VehicleAutopilotState state)
+        => state != null && IsStockDeorbitPhase(state.LandingPhase);
+
     /// <summary>
     /// AFC MANUAL INTERVENTION (HandFlying) takes the craft: whatever AFC programme flies it stops as a takeover stops it, with its engine left as it is, and says why. Main thread, from the guidance step.
     /// </summary>
     internal static void StopForManualIntervention(Vehicle vehicle)
     {
         VehicleAutopilotState state = VehicleAutopilotState.For(vehicle);
-        if (!state.ControlAcquired)
+        if (!state.ControlAcquired && !state.DeorbitNodeClaimed && !IsStockDeorbitPhase(state.LandingPhase))
             return;
         _s = state;
         _s.TakeoverStop = true;

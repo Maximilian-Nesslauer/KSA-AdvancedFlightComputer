@@ -34,6 +34,7 @@ public static partial class KsaAeroSweep
     private sealed class CacheEntry
     {
         public ulong Hash;
+        public ulong SurfaceHash;
         public string Body = "";
         public string Booster = "";
         public bool Nose, Trim;
@@ -92,28 +93,30 @@ public static partial class KsaAeroSweep
     }
 
     /// <summary>The newest sweep of this geometry that holds every table asked for, if there is one: <paramref name="job"/> hands it over (see the class summary). Main thread.</summary>
-    private static bool TryCached(Vehicle vehicle, IParentBody parent, ulong hash, string booster, bool nose, bool trim, int side, double3 comNow, out Job job)
+    private static bool TryCached(Vehicle vehicle, IParentBody parent, ulong hash, string booster, bool nose, bool trim, int side, double3 comNow, double massNow, out Job job)
     {
         job = null;
         if (hash == 0)
             return false;
         CachePrune();
         string body = BodyKey(parent);
+        ulong surfaceHash = SurfaceFingerprint(vehicle, booster);
         CacheEntry hit = null;
         for (int i = Cache.Count - 1; i >= 0 && hit == null; i--)
         {
             CacheEntry e = Cache[i];
-            if (e.Hash == hash && e.Body == body && e.Booster == booster && Covers(e, nose, trim, side))
+            if (e.Hash == hash && e.SurfaceHash == surfaceHash && e.Body == body && e.Booster == booster && Covers(e, nose, trim, side))
                 hit = e;
         }
         if (hit == null)
-            return TryStored(vehicle, parent, hash, booster, side, comNow, out job);
+            return TryStored(vehicle, parent, hash, surfaceHash, booster, side, comNow, massNow, out job);
 
         bool sameCraft = hit.Owner.TryGetTarget(out Vehicle owner) && ReferenceEquals(owner, vehicle);
         if (!hit.Job.Finished)
         {
-            // Still sweeping: the same craft waits on the same sweep. A reloaded one waits for all of it, surfaces too, and takes a view.
-            if (sameCraft)
+            // Still sweeping: the same craft waits on the same sweep when its CoM has not shifted past tolerance.
+            bool comOk = hit.Job.Peek is not { } partial || Distance(partial.BodyMomentComAsmb, comNow) <= CacheComToleranceM;
+            if (sameCraft && comOk)
             {
                 job = hit.Job;
                 return true;
@@ -131,7 +134,7 @@ public static partial class KsaAeroSweep
         }
 
         // A view: re-linked when the craft is not the one swept, moved when its centre of mass is not where the sweep saw it.
-        Dictionary<string, (Part Part, string Name)> parts = sameCraft || booster.Length > 0 ? null : SurfacePartsByKey(vehicle);
+        Dictionary<string, List<(Part Part, string Name)>> parts = sameCraft || booster.Length > 0 ? null : SurfacePartsByKey(vehicle);
         Job source = hit.Job;
         SweepProgress progress = TrackCached(vehicle?.Id ?? "", CacheTablesText(hit) + (sameCraft ? " (CACHED, NEW CoM)" : " (CACHED, RELOADED CRAFT)"), 0);
         progress.Enter(SweepProgress.Stage.Body);
@@ -141,7 +144,7 @@ public static partial class KsaAeroSweep
             Result src = source.Peek;
             if (src == null)
                 return (null, "the cached sweep failed");
-            Result view = ViewOf(src, parts, comNow, parent);
+            Result view = ViewOf(src, parts, comNow, parent, massNow);
             int swept = src.Surfaces?.Length ?? 0, kept = view.Surfaces?.Length ?? 0;
             progress.Handed(swept, kept);
             if (kept < swept)
@@ -151,7 +154,7 @@ public static partial class KsaAeroSweep
         // The view is this craft's from now on: the next ask, with the centre of mass where it is, takes it as it is.
         Cache.Add(new CacheEntry
         {
-            Hash = hit.Hash, Body = hit.Body, Booster = hit.Booster, Nose = hit.Nose, Trim = hit.Trim, Side = hit.Side,
+            Hash = hit.Hash, SurfaceHash = hit.SurfaceHash, Body = hit.Body, Booster = hit.Booster, Nose = hit.Nose, Trim = hit.Trim, Side = hit.Side,
             Job = job, Owner = new WeakReference<Vehicle>(vehicle), Craft = vehicle?.Id ?? "",
         });
         CachePrune();
@@ -161,16 +164,16 @@ public static partial class KsaAeroSweep
     /// <summary>
     /// A saved sweep of this geometry (KsaAeroSweepStore), when the cache has none: read on its own thread, re-linked to the craft's parts and moved to its centre of mass, and kept in the cache from then on. A whole-craft file holds every table, so only its belly side must match, and the file name says it. A file that cannot be read is deleted, so the next ask sweeps. Main thread.
     /// </summary>
-    private static bool TryStored(Vehicle vehicle, IParentBody parent, ulong hash, string booster, int side, double3 comNow, out Job job)
+    private static bool TryStored(Vehicle vehicle, IParentBody parent, ulong hash, ulong surfaceHash, string booster, int side, double3 comNow, double massNow, out Job job)
     {
         job = null;
         string path = StorePathFor(vehicle, parent, hash, booster, booster.Length > 0 ? -1 : side);
         if (path == null || !System.IO.File.Exists(path))
             return false;
-        Dictionary<string, (Part Part, string Name)> parts = booster.Length > 0 ? null : SurfacePartsByKey(vehicle);
+        Dictionary<string, List<(Part Part, string Name)>> parts = booster.Length > 0 ? null : SurfacePartsByKey(vehicle);
         var entry = new CacheEntry
         {
-            Hash = hash, Body = BodyKey(parent), Booster = booster,
+            Hash = hash, SurfaceHash = surfaceHash, Body = BodyKey(parent), Booster = booster,
             Nose = booster.Length == 0, Trim = booster.Length == 0, Side = booster.Length > 0 ? -1 : side,
             Owner = new WeakReference<Vehicle>(vehicle), Craft = vehicle?.Id ?? "",
         };
@@ -184,7 +187,7 @@ public static partial class KsaAeroSweep
                 try { System.IO.File.Delete(path); } catch (Exception) { }
                 return (null, "saved aero tables: " + why);
             }
-            Result view = ViewOf(src, parts, comNow, parent);
+            Result view = ViewOf(src, parts, comNow, parent, massNow);
             int swept = src.Surfaces?.Length ?? 0, kept = view.Surfaces?.Length ?? 0;
             progress.Handed(swept, kept);
             if (kept < swept)
@@ -198,15 +201,16 @@ public static partial class KsaAeroSweep
     }
 
     /// <summary>A new sweep of a geometry the cache has: what the newest one swept is swept again with what is asked for, so the new result covers both. A different belly side replaces the old one. Main thread.</summary>
-    private static void CacheUnion(ulong hash, IParentBody parent, string booster, ref bool nose, ref bool trim, ref int side)
+    private static void CacheUnion(Vehicle vehicle, ulong hash, IParentBody parent, string booster, ref bool nose, ref bool trim, ref int side)
     {
         if (hash == 0)
             return;
         string body = BodyKey(parent);
+        ulong surfaceHash = SurfaceFingerprint(vehicle, booster);
         for (int i = Cache.Count - 1; i >= 0; i--)
         {
             CacheEntry e = Cache[i];
-            if (e.Hash != hash || e.Body != body || e.Booster != booster || (e.Job.Finished && e.Job.Peek == null))
+            if (e.Hash != hash || e.SurfaceHash != surfaceHash || e.Body != body || e.Booster != booster || (e.Job.Finished && e.Job.Peek == null))
                 continue;
             nose |= e.Nose;
             trim |= e.Trim;
@@ -223,22 +227,27 @@ public static partial class KsaAeroSweep
             return;
         Cache.Add(new CacheEntry
         {
-            Hash = hash, Body = BodyKey(parent), Booster = booster, Nose = nose, Trim = trim, Side = side,
+            Hash = hash, SurfaceHash = SurfaceFingerprint(vehicle, booster), Body = BodyKey(parent), Booster = booster, Nose = nose, Trim = trim, Side = side,
             Job = job, Owner = new WeakReference<Vehicle>(vehicle), Craft = vehicle?.Id ?? "",
         });
         CachePrune();
     }
 
-    /// <summary>The craft's control surfaces by PartKey, with their names now. Main thread.</summary>
-    private static Dictionary<string, (Part Part, string Name)> SurfacePartsByKey(Vehicle vehicle)
+    /// <summary>The craft's control surfaces grouped by PartKey, preserving order so co-located identical parts do not overwrite one another. Main thread.</summary>
+    private static Dictionary<string, List<(Part Part, string Name)>> SurfacePartsByKey(Vehicle vehicle)
     {
-        var map = new Dictionary<string, (Part, string)>();
+        var map = new Dictionary<string, List<(Part, string)>>();
         if (vehicle == null || !ControlSurfaces.Any)
             return map;
         var surfaces = new List<ControlSurface>();
         ControlSurfaces.Collect(vehicle, surfaces);
         foreach (ControlSurface s in surfaces)
-            map[PartKey(s.Part)] = (s.Part, s.Name);
+        {
+            string key = PartKey(s.Part);
+            if (!map.TryGetValue(key, out var list))
+                map[key] = list = new List<(Part, string)>(1);
+            list.Add((s.Part, s.Name));
+        }
         return map;
     }
 
@@ -252,11 +261,13 @@ public static partial class KsaAeroSweep
     /// node by node, for every body-axis force and moment pair: the body, nose, belly, sphere and band tables and each
     /// surface's per-deflection changes. Pure: any thread.
     /// </summary>
-    internal static Result ViewOf(Result src, Dictionary<string, (Part Part, string Name)> parts, double3 comNow, IParentBody parent)
+    internal static Result ViewOf(Result src, Dictionary<string, List<(Part Part, string Name)>> parts, double3 comNow, IParentBody parent, double massNow = double.NaN)
     {
         Result v = src.ShallowCopy();
         if (parent != null)
             v.Parent = parent;
+        if (massNow > 0.0 && double.IsFinite(massNow))
+            v.Mass = massNow;
         double3 d = src.BodyMomentComAsmb - comNow;
         bool move = d.Length() > 1e-6;
         double length = src.ReferenceLength;
@@ -279,13 +290,20 @@ public static partial class KsaAeroSweep
 
         SurfaceTable[] tables = System.Threading.Volatile.Read(ref src.Surfaces) ?? [];
         var kept = new List<SurfaceTable>(tables.Length);
+        Dictionary<string, int> usedCounts = parts != null ? new Dictionary<string, int>(parts.Count) : null;
         foreach (SurfaceTable t in tables)
         {
             SurfaceTable c = t;
             if (parts != null)
             {
-                if (!parts.TryGetValue(t.PartKey ?? "", out (Part Part, string Name) now))
+                string key = t.PartKey ?? "";
+                if (!parts.TryGetValue(key, out List<(Part Part, string Name)> matches))
                     continue;
+                int used = usedCounts.GetValueOrDefault(key);
+                if (used >= matches.Count)
+                    continue;
+                usedCounts[key] = used + 1;
+                (Part Part, string Name) now = matches[used];
                 c = t.ShallowCopy();
                 c.Part = now.Part;
                 c.Name = now.Name;

@@ -205,7 +205,7 @@ public sealed class EntryPlanner
             ShootConstantBank(dyn, cfg, e, x0, lambda, u, x);
             return x[n - 1, IS] - sT;
         }
-        double lo = cosMax, hi = cosMin;     // more lift flies further, leaving less range to go
+        double lo = Math.Min(cosMax, cosMin), hi = Math.Max(cosMax, cosMin);     // more lift flies further, leaving less range to go
         double fLo = FinalRange(lo), fHi = FinalRange(hi);
         double best;
         if (fHi > 0) best = hi;              // short even fully lifted
@@ -261,7 +261,8 @@ public sealed class EntryPlanner
         for (int k = 0; k < e.Length; k++)
         {
             double ld = dyn.LiftToDrag(e[k], x[k, IR]);
-            u[k] = Math.Clamp(u[k], ld * cosMax, ld * cosMin);
+            double a = ld * cosMax, b = ld * cosMin;
+            u[k] = Math.Clamp(u[k], Math.Min(a, b), Math.Max(a, b));
         }
     }
 
@@ -714,8 +715,10 @@ public sealed class EntryPlanner
         for (int k = 0; k < n; k++)
         {
             double ld = dyn.LiftToDrag(e[k], xr[k, IR]);
-            Le(ld * cosMin, (iU + k, 1.0));
-            Le(-ld * cosMax, (iU + k, -1.0));
+            double uLo = Math.Min(ld * cosMax, ld * cosMin);
+            double uHi = Math.Max(ld * cosMax, ld * cosMin);
+            Le(uHi, (iU + k, 1.0));
+            Le(-uLo, (iU + k, -1.0));
         }
         for (int k = 0; k < nI; k++)
         {
@@ -724,7 +727,7 @@ public sealed class EntryPlanner
             double dM = Math.Max(dyn.Drag(eM, rM), EntryDynamics.DragFloor);
             double vM = Math.Max(EntryDynamics.Speed(eM, rM), 1e-4);
             double dt = (e[k + 1] - e[k]) / (dM * vM);
-            double du = Math.Max(dyn.LiftToDrag(eM, rM) * rollRate * dt, 1e-4);
+            double du = Math.Max(Math.Abs(dyn.LiftToDrag(eM, rM)) * rollRate * dt, 1e-4);
             Le(du, (iU + k + 1, 1.0), (iU + k, -1.0));
             Le(du, (iU + k + 1, -1.0), (iU + k, 1.0));
         }

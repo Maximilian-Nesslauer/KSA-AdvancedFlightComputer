@@ -23,6 +23,9 @@ public static partial class GuidanceWindow
 {
     private const int AimMaxTries = 3;
 
+    private static string AimTrimKeyNow()
+        => FormattableString.Invariant($"{_s.OrbitalEntryTrimAoa}|{_s.OrbitalEntryAoaDeg:R}|{_s.OrbitalEntryAoaMinDeg:R}|{_s.OrbitalEntryAoaMaxDeg:R}|{_s.OrbitalEntryBellyAxis}|{_s.BellySideWanted()}");
+
     /// <summary>
     /// DEORBIT ONLY's burn for an orbital entry, aimed at the site. True when the burn is planned (DeorbitPlan set, as PlanEntryBurn sets it); false while it measures, searches or checks, with the request dropped so the next step comes back here, or when it refuses.
     /// </summary>
@@ -31,14 +34,24 @@ public static partial class GuidanceWindow
         var st = _s.OrbitalEntry;
         double now = SimNow();
         EntryConfig cfg = OrbitalEntryConfig();
+        if (EntryRetro)
+            cfg.TerminalRangeM = Math.Max(_s.OrbitalEntryRetroAimShortKm, 0.0) * 1000.0;
+        else if (EntryFlips)
+            cfg.TerminalRangeM = st.Bellyflop.TerminalRangeM > 0.0 ? st.Bellyflop.TerminalRangeM : BellyflopAimShortM();
 
         // ---- 1. measure ----
-        if (st.AimAero == null || st.AimAero.MeshHash != KsaAeroSweep.LiveMeshHash(vehicle))
+        int wantedSide = EntryBellySideWanted();
+        string trimKey = AimTrimKeyNow();
+        bool aeroStale = st.AimAero == null || st.AimAero.MeshHash != KsaAeroSweep.LiveMeshHash(vehicle)
+                         || (wantedSide >= 0 && st.AimAero.BellySide != wantedSide);
+        if (aeroStale)
         {
             if (st.AimJob == null)
             {
                 st.AimAero = null;
-                if (!KsaAeroSweep.TryStart(vehicle, parent, now, out KsaAeroSweep.Job job, out string error, bellyFirst: true, bellySide: EntryBellySideWanted()))
+                st.AimTrim = null;
+                st.AimTrimKey = "";
+                if (!KsaAeroSweep.TryStart(vehicle, parent, now, out KsaAeroSweep.Job job, out string error, bellyFirst: true, bellySide: wantedSide))
                 {
                     RefuseDeorbit(vehicle, "AIMED ENTRY: AERO SWEEP FAILED: " + error.ToUpperInvariant() + ".");
                     return false;
@@ -55,6 +68,18 @@ public static partial class GuidanceWindow
             }
             st.AimAero = aero;
             st.AimTrim = trim;
+            st.AimTrimKey = trimKey;
+            st.AimStage = OrbitalEntryState.AimSteps.None;
+        }
+        else if (st.AimTrim == null || st.AimTrimKey != trimKey)
+        {
+            if (!TryBuildEntryTrim(st.AimAero, out EntryTrim trim, out _, out string why))
+            {
+                RefuseDeorbit(vehicle, "AIMED ENTRY: NO BELLY-FIRST MODEL (" + (why.Length > 0 ? why.ToUpperInvariant() : "NO TRIM") + ").");
+                return false;
+            }
+            st.AimTrim = trim;
+            st.AimTrimKey = trimKey;
             st.AimStage = OrbitalEntryState.AimSteps.None;
         }
         if (st.AimStage is OrbitalEntryState.AimSteps.None or OrbitalEntryState.AimSteps.Ready)
@@ -89,8 +114,24 @@ public static partial class GuidanceWindow
         // ---- 4. check ----
         if (st.AimStage == OrbitalEntryState.AimSteps.Check)
         {
+            string workerError = st.AimWorker?.TakeError(st) ?? "";
+            if (workerError.Length > 0)
+            {
+                GuidanceLog.Info(vehicle, "Aimed entry check failed on worker: " + workerError);
+                RefuseDeorbit(vehicle, "AIMED ENTRY: PLANNER FAILED.");
+                ClearAim(st);
+                return false;
+            }
             if (Interlocked.Exchange(ref st.AimCheck, null) is not { } check)
+            {
+                if (st.AimWorker == null || !st.AimWorker.Busy)
+                {
+                    RefuseDeorbit(vehicle, "AIMED ENTRY: PLANNER ENDED WITHOUT A RESULT.");
+                    ClearAim(st);
+                    return false;
+                }
                 return AimWaits(FormattableString.Invariant($"AIMED ENTRY: CHECKING THE PLAN FROM {st.AimStartRangeM / 1000:F0} KM OUT."));
+            }
             EntryPlan p = check.Plan;
             st.AimTries++;
             string result = p == null ? "no plan: " + check.Why : FormattableString.Invariant(
@@ -296,6 +337,8 @@ public static partial class GuidanceWindow
         double coastS = coast.Value.SecondsAhead;
         // Flown from the predicted start of the air itself, as the plans' own corridor is (EntryPlanner.ReachBand).
         (double shortM, double longM) = EntryPlanner.Corridor(model, cfg, coast.Value.E, coast.Value.X);
+        shortM += cfg.TerminalRangeM;
+        longM += cfg.TerminalRangeM;
         double fraction = Math.Clamp(_s.OrbitalEntryAimFraction, 0.0, 1.0);
         double target = shortM + fraction * (longM - shortM) + st.AimShiftM;
         st.AimShortM = shortM;

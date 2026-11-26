@@ -18,11 +18,13 @@ using AdvancedFlightComputer.Guidance.Numerics.Flight;
 /// session or a later one (2026-11-25, the user: "such a faff to have to wait for it to reload every time" - two
 /// minutes for a Starship's body and four flaps).
 ///
-/// WHERE: Documents\My Games\Kitten Space Agency\afc-aero-tables, one gzipped JSON file per craft, geometry, body and
-/// belly side. THE NAME is the key (<see cref="StorePathFor"/>): the craft, the aero mesh hash (KSAero takes it with
-/// every surface at rest), a fingerprint of the live aero mesh's panelling (<see cref="MeshFingerprint"/>: a change of
-/// KSAero's fineness meshes the same shapes differently), the body and the belly side. A whole-craft sweep holds every
-/// table (TryStart), so the name says all a request needs.
+/// WHERE: under KSA.Constants.DocumentsFolderPath\afc-aero-tables (per-instance under StarMap/Borea when
+/// -InstancePath or STARMAP_INSTANCE_PATH is active, otherwise Documents\My Games\Kitten Space Agency\afc-aero-tables),
+/// one gzipped JSON file per craft, geometry, surface provider/limits, body and belly side. THE NAME is the key
+/// (<see cref="StorePathFor"/>): the craft, the aero mesh hash (KSAero takes it with every surface at rest), a
+/// fingerprint of the live aero mesh's panelling (<see cref="MeshFingerprint"/>), a fingerprint of the active control
+/// surface providers and deflection limits (<see cref="SurfaceFingerprint"/>), the body and the belly side. A
+/// whole-craft sweep holds every table (TryStart), so the name says all a request needs.
 ///
 /// WHAT: every table and figure of <see cref="Result"/> but the atmosphere, which is sampled again from the body
 /// (BuildAtmosphere, as the sweep does), and the surfaces' parts, which are found again by PartKey on the craft as it
@@ -57,18 +59,49 @@ public static partial class KsaAeroSweep
         return h;
     }
 
+    /// <summary>Fingerprint of the active control surface providers and each surface's deflection range and rate. Changes when a provider is added/removed or a flap's limits change. Main thread.</summary>
+    internal static ulong SurfaceFingerprint(Vehicle vehicle, string booster)
+    {
+        ulong h = 1469598103934665603UL;
+        void Mix(ulong v) { h ^= v; h *= 1099511628211UL; }
+        void MixStr(string s)
+        {
+            if (string.IsNullOrEmpty(s)) { Mix(0); return; }
+            foreach (char c in s) Mix(c);
+            Mix(0xFFUL);
+        }
+        if (vehicle == null || booster.Length > 0 || !AdvancedFlightComputer.Features.AeroControl.ControlSurfaces.Any)
+        {
+            Mix(0xA5A5UL);
+            return h;
+        }
+        var surfaces = new System.Collections.Generic.List<AdvancedFlightComputer.Features.AeroControl.ControlSurface>();
+        AdvancedFlightComputer.Features.AeroControl.ControlSurfaces.Collect(vehicle, surfaces);
+        Mix((ulong)surfaces.Count);
+        foreach (var s in surfaces)
+        {
+            MixStr(s.Provider?.Name);
+            MixStr(PartKey(s.Part));
+            Mix((ulong)Math.Round(s.MinDeg * 100.0));
+            Mix((ulong)Math.Round(s.MaxDeg * 100.0));
+            Mix((ulong)Math.Round(s.RateDegS * 100.0));
+        }
+        return h;
+    }
+
     /// <summary>The file a craft's sweep is kept in, or null where it cannot be (no mesh, no hash). Main thread.</summary>
     private static string StorePathFor(Vehicle vehicle, IParentBody parent, ulong hash, string booster, int side)
     {
         ulong fingerprint = MeshFingerprint(vehicle);
         if (hash == 0 || fingerprint == 0)
             return null;
+        ulong surfaceHash = SurfaceFingerprint(vehicle, booster);
         string craft = booster.Length > 0 ? booster : vehicle?.Id ?? "craft";
         var safe = new StringBuilder();
         foreach (char c in craft)
             safe.Append(char.IsLetterOrDigit(c) || c == '-' ? c : '_');
         string body = BodyKey(parent);
-        return Path.Combine(StoreDirectory, $"{safe}_{hash:x16}_{fingerprint:x16}_{body}_s{side}.aero.gz");
+        return Path.Combine(StoreDirectory, $"{safe}_{hash:x16}_{fingerprint:x16}_{surfaceHash:x16}_{body}_s{side}.aero.gz");
     }
 
     // ---- the stored form ----
@@ -162,11 +195,19 @@ public static partial class KsaAeroSweep
             }).ToArray();
 
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            string temp = path + ".tmp";
-            using (var file = File.Create(temp))
-            using (var zip = new GZipStream(file, CompressionLevel.Optimal))
-                JsonSerializer.Serialize(zip, s, StoreJson);
-            File.Move(temp, path, overwrite: true);
+            string temp = $"{path}.{Guid.NewGuid():N}.tmp";
+            try
+            {
+                using (var file = File.Create(temp))
+                using (var zip = new GZipStream(file, CompressionLevel.Optimal))
+                    JsonSerializer.Serialize(zip, s, StoreJson);
+                File.Move(temp, path, overwrite: true);
+            }
+            catch
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch (Exception) { }
+                throw;
+            }
             log?.Invoke($"[AFC] Aero tables of '{craft}' saved: {Path.GetFileName(path)}, {surfaces.Length} control surfaces, {new FileInfo(path).Length / 1024} KB.");
         }
         catch (Exception ex)

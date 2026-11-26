@@ -75,6 +75,7 @@ public static partial class GuidanceWindow
             StopGuidance(vehicle, StopTarget.Landing);
         ClaimVehicle(GuidanceMode.OrbitalEntry, vehicle);
         _s.Engage = true;
+        _s.OrbitalEntryBellyflop = LandEngineOnCraft(vehicle);
         st.Reset();
         st.AeroJob = job;
         st.Tracker = new EntryTracker(OrbitalEntryConfig());
@@ -110,6 +111,8 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void StepEntryHandOver(Vehicle vehicle, OrbitalEntryState st, double mach, double alt)
     {
+        if (_s.OrbitalEntryBellyflop && !LandEngineOnCraft(vehicle))
+            _s.OrbitalEntryBellyflop = false;
         if (EntryRetro)
         {
             if (st.RetroAsked)
@@ -219,7 +222,12 @@ public static partial class GuidanceWindow
                 $"Orbital entry: belly axis {st.BellyAxisName}, {st.Trim.TrimmedRows}/{st.Trim.Mach.Length} Mach rows trimmed, alpha {st.Trim.AlphaAt(20):F0} deg at Mach 20, {st.Trim.AlphaAt(5):F0} at Mach 5, L/D {st.Trim.LiftToDragAt(20):F2} / {st.Trim.LiftToDragAt(5):F2}."));
             var rows = new System.Text.StringBuilder();
             for (int i = 0; i < st.Trim.Mach.Length; i++)
-                rows.Append(FormattableString.Invariant($" M{st.Trim.Mach[i]:0.#}: {st.Trim.AlphaDeg[i]:F0}{(st.Trim.Trimmed[i] ? "" : "*")} Cd {st.Trim.Cd[i]:F2} L/D {st.Trim.LiftToDrag[i]:F2}{(st.Trim.Trimmed[i] ? "" : FormattableString.Invariant($" Cm {st.Trim.ResidualCm[i]:F4}"))};"));
+            {
+                string residualText = !st.Trim.Trimmed[i] && st.Trim.ResidualCm is { } resCm && i < resCm.Length
+                    ? FormattableString.Invariant($" Cm {resCm[i]:F4}")
+                    : "";
+                rows.Append(FormattableString.Invariant($" M{st.Trim.Mach[i]:0.#}: {st.Trim.AlphaDeg[i]:F0}{(st.Trim.Trimmed[i] ? "" : "*")} Cd {st.Trim.Cd[i]:F2} L/D {st.Trim.LiftToDrag[i]:F2}{residualText};"));
+            }
             GuidanceLog.Info(vehicle, "Orbital entry schedule (alpha deg from nose-first; * no trim, least moment instead, with the Cm left):" + rows);
         }
 
@@ -401,11 +409,8 @@ public static partial class GuidanceWindow
         }
         else if (st.Phase == OrbitalEntryPhase.Holding)
         {
-            // Wings level, still at the trim angle: the hand-over keeps the entry attitude.
-            double step = cfg.RollRateDegS * dt;
-            double b = st.Tracker.BankDeg;
-            bankDeg = Math.Abs(b) <= step ? 0.0 : b - Math.Sign(b) * step;
-            st.Tracker.Reset();
+            // Wings level, still at the trim angle: the hand-over keeps the entry attitude and slews bank smoothly to zero.
+            bankDeg = st.Tracker.SlewToLevel(dt);
             string next = st.ChutesArmed ? "PARACHUTES ARMED: THEY OPEN AT THEIR DEPLOY ALTITUDE."
                 : st.RetroAsked ? "HOLDING ENTRY ATTITUDE UNTIL RETRO BURN TAKES THE CRAFT."
                 : "HOLDING ENTRY ATTITUDE.";
