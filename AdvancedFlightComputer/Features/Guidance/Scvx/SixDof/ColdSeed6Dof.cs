@@ -60,7 +60,12 @@ public static class ColdSeed6Dof
 
             // The mass the thrust of the interval before this node burned.
             if (k > 0)
-                mass = Math.Max(mass - dt * (dyn.MassFlowOffset + dyn.Alpha * previousThrust), massFloor);
+            {
+                double flow = dyn.Engine != null
+                    ? dyn.Engine.MassFlow(dyn.Engine.ThrottleFor(previousThrust, dyn.EngineRefPressurePa))
+                    : dyn.MassFlowOffset + dyn.Alpha * previousThrust;
+                mass = Math.Max(mass - dt * flow, massFloor);
+            }
             xSeed[o + Dynamics6Dof.IM] = mass;
             double force = Math.Clamp(thrust * mass, cfg.Tmin, cfg.Tmax);
             uSeed[k * NU + Dynamics6Dof.IT] = force;
@@ -211,7 +216,13 @@ public static class ColdSeed6Dof
             bool burn = k >= coastIntervals;
             // The mass the thrust of the interval before this node burned.
             if (k > coastIntervals)
-                mass = Math.Max(mass - (sigma / (burnNodes - 1)) * (dyn.MassFlowOffset + dyn.Alpha * uSeed[(k - 1) * NU + Dynamics6Dof.IT]), massFloor);
+            {
+                double prevT = uSeed[(k - 1) * NU + Dynamics6Dof.IT];
+                double flow = dyn.Engine != null
+                    ? dyn.Engine.MassFlow(dyn.Engine.ThrottleFor(prevT, dyn.EngineRefPressurePa))
+                    : dyn.MassFlowOffset + dyn.Alpha * prevT;
+                mass = Math.Max(mass - (sigma / (burnNodes - 1)) * flow, massFloor);
+            }
             xSeed[o + Dynamics6Dof.IM] = mass;
             // The start's correction runs from the measured difference to none at ignition; with no coast to run over, over the burn.
             double span0 = coastSigma > 1e-6 ? coastSigma : sigma;

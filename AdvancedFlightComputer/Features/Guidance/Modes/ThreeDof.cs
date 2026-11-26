@@ -468,7 +468,9 @@ public static partial class GuidanceWindow
             double q = 0.5 * rho * speed * speed;
 
             KsaAeroSweep.Result aero = _s.Aero;
-            double mach = aero?.Atmosphere?.Mach(speed) ?? double.NaN;
+            double liveA = vehicle.PhysicsEnvironment.SpeedOfSound;
+            double altAsl = vehicle.Orbit.StateVectors.PositionCci.Length() - parent.MeanRadius;
+            double mach = liveA > 1.0 ? speed / liveA : aero?.Atmosphere?.Mach(speed, altAsl) ?? double.NaN;
             double alphaFlown = AngleBetween(flown, retro);
             double cm = aero?.Moment != null && double.IsFinite(mach) ? aero.MomentAt(Math.Clamp(mach, aero.Moment.MachMin, aero.Moment.MachMax), alphaFlown) : double.NaN;
             double moment = aero != null ? q * aero.ReferenceArea * aero.ReferenceLength * cm : double.NaN;
@@ -580,7 +582,7 @@ public static partial class GuidanceWindow
                 double3 vCci = frame.VecToCci(v);
                 double3 airBody = vCci.Transform(doubleQuat.Inverse(KsaFrameBridge.BodyToCci(vehicle)));
                 float3 comNow = vehicle.CenterOfMassAsmbF;
-                if (!KsaAeroSweep.PredictBodyMoment(aero, airBody, rho, new double3(comNow.X, comNow.Y, comNow.Z), out predMoment))
+                if (!KsaAeroSweep.PredictBodyMoment(aero, airBody, rho, new double3(comNow.X, comNow.Y, comNow.Z), out predMoment, altAsl))
                     predMoment = new double3(double.NaN, double.NaN, double.NaN);
             }
             float3 rcs = fc.RcsTorqueAuthority;

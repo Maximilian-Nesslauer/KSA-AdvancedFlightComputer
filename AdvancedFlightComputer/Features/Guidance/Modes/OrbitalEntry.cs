@@ -272,7 +272,8 @@ public static partial class GuidanceWindow
         rangeRad = downRad;
 
         var atm = st.Aero.Atmosphere;
-        double mach = atm.Mach(vMag);
+        double liveA = vehicle.PhysicsEnvironment.SpeedOfSound;
+        double mach = liveA > 1.0 ? vMag / liveA : atm.Mach(vMag, alt);
         st.SpeedMs = vMag; st.AltitudeM = alt; st.RangeM = rangeRad * R0; st.CrossrangeM = crossRad * R0; st.GreatCircleM = greatCircleRad * R0;
         st.HdotMs = vMag * Math.Sin(gamma); st.Mach = mach;
 
@@ -701,7 +702,7 @@ public static partial class GuidanceWindow
             BodyRadius = parent.MeanRadius,
             Mu = parent.Mu,
             Density = h => atm.Density(h),
-            SpeedOfSound = _ => atm.SpeedOfSound,
+            SpeedOfSound = h => atm.SpeedOfSoundAt(h),
             AtmosphereTop = atm.TopAltitude,
             DragCoefficient = trim.CdAt,
             LiftToDrag = trim.LiftToDragAt,

@@ -660,7 +660,7 @@ public static partial class GuidanceWindow
         GaugeRowText(D, "ALTITUDE", Fmt.Height(alt));
         GaugeRowText(D, "RHO", FormattableString.Invariant($"{rho:F4} kg/m^3"));
         GaugeRowText(D, "AIRSPEED", FormattableString.Invariant($"{speed,8:F1} m/s"));
-        GaugeRowText(D, "MACH", FormattableString.Invariant($"{atm.Mach(speed),8:F2}"));
+        GaugeRowText(D, "MACH", FormattableString.Invariant($"{atm.Mach(speed, alt),8:F2}"));
         GaugeRowText(D, "Q", FormattableString.Invariant($"{q / 1000.0,8:F2} kPa"));
 
         if (TryLiveAlpha(vehicle, orbit, parent, out double alphaDeg))
@@ -669,7 +669,7 @@ public static partial class GuidanceWindow
             KsaAeroSweep.Result a = _s.Aero;
             if (a?.Table != null)
             {
-                double cd = a.Table.Cd(atm.Mach(speed), alphaDeg * Math.PI / 180.0);
+                double cd = a.Table.Cd(atm.Mach(speed, alt), alphaDeg * Math.PI / 180.0);
                 // The whole chain, end to end: what the surrogate says this vehicle is feeling right now. Comparable against the game by eye.
                 GaugeRowText(D, "DRAG (MODEL)", FormattableString.Invariant($"{cd * a.ReferenceArea * q / 1000.0,8:F1} kN"));
             }

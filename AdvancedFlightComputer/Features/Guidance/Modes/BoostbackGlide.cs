@@ -231,13 +231,14 @@ public static partial class GuidanceWindow
         {
             _s.GlideLogTime = now;
             KsaAeroSweep.Result logAero = _s.Aero;
-            double logMach = logAero?.Atmosphere?.Mach(speed) ?? double.NaN;
-            double tableMach = logAero?.Table != null ? GlideTableMach(logAero, speed) : double.NaN;
+            double logAlt = r.Length() - parent.MeanRadius;
+            double logMach = logAero?.Atmosphere?.Mach(speed, logAlt) ?? double.NaN;
+            double tableMach = logAero?.Table != null ? GlideTableMach(logAero, speed, logAlt) : double.NaN;
             GuidanceLog.Info(vehicle, string.Format(System.Globalization.CultureInfo.InvariantCulture,
                 "glide: alt {0:F1} km, q {1:F2} kPa, M {2:F2}, tgo {3:F0} s, miss {4:F0} m long / {5:F0} m left; "
                 + "tilt up/left asked {6:F1}/{7:F1}, flown {8:F1}/{9:F1}, trim {10:F1}/{11:F1} deg; lift sign {12}, "
                 + "table Cd(a0) {13:F3} CL(a{14:F0}) {15:F3}; {16}",
-                (r.Length() - parent.MeanRadius) / 1000.0, _s.GlideQ / 1000.0, logMach, _s.GlideTgo,
+                logAlt / 1000.0, _s.GlideQ / 1000.0, logMach, _s.GlideTgo,
                 _s.GlideMissDownM, _s.GlideMissCrossM,
                 _s.GlideTiltUpDeg, _s.GlideTiltLeftDeg, flownUp, flownLeft, _s.GlideTrimUpDeg, _s.GlideTrimLeftDeg,
                 _s.GlideLiftSign,
@@ -270,7 +271,8 @@ public static partial class GuidanceWindow
         }
         double maxAoa = Math.Clamp(_s.GlideMaxAoaDeg, 0.0, 60.0);
         double maxAoaRad = maxAoa * Math.PI / 180.0;
-        double mach = GlideTableMach(aero, speed);
+        double alt = orbit.StateVectors.PositionCci.Length() - parent.MeanRadius;
+        double mach = GlideTableMach(aero, speed, alt);
         double clMaxAoa = aero.LiftAt(mach, maxAoaRad);
         double cdMaxAoa = aero.Table.Cd(mach, maxAoaRad);
         _s.GlideLiftSign = cdMaxAoa > 0.0 && Math.Abs(clMaxAoa / cdMaxAoa) >= GlideMinLiftToDrag ? Math.Sign(clMaxAoa) : 0;
@@ -372,7 +374,7 @@ public static partial class GuidanceWindow
 
         // HELD AT A FIXED ROLL, THE BODY-AXIS TABLE SAYS WHICH TILT GIVES THAT PUSH: the force across the airflow at the planned glide's tilt, plus the correction, solved for the engine end's tilt up and left. Pitch moves the lift up, yaw moves it sideways, and whatever the airframe pushes on its own - strakes, fins, at no angle at all - is in the planned glide's force already, so the prediction and the steering agree about it.
         if (sys.BodyAero != null
-            && GlideTiltOnBodyTable(in sys, aero, liftUpCci, liftLeftCci, speed, q, mass, aUp, aLeft, maxAoa,
+            && GlideTiltOnBodyTable(in sys, aero, liftUpCci, liftLeftCci, speed, alt, q, mass, aUp, aLeft, maxAoa,
                                     out double tiltUp, out double tiltLeft, out bool bodySaturated))
         {
             _s.GlideAccelCmd = Math.Sqrt(aUp * aUp + aLeft * aLeft);
@@ -415,13 +417,13 @@ public static partial class GuidanceWindow
     ///  The planned glide is DragCoastSystem's: tilted by its Alpha towards "up" on the side the lift table says lifts up, so at no miss this flies what the prediction assumed.
     /// </summary>
     private static bool GlideTiltOnBodyTable(in DragCoastSystem sys, KsaAeroSweep.Result aero, double3 up, double3 left,
-                                             double speed, double q, double mass, double aUp, double aLeft, double maxAoaDeg,
+                                             double speed, double altitude, double q, double mass, double aUp, double aLeft, double maxAoaDeg,
                                              out double tiltUp, out double tiltLeft, out bool saturated)
     {
         tiltUp = tiltLeft = 0.0;
         saturated = false;
         double3 vHat = double3.Cross(left, up);
-        double mach = aero.Atmosphere?.Mach(speed) ?? 0.0;
+        double mach = aero.Atmosphere?.Mach(speed, altitude) ?? 0.0;
         double scale = q * aero.ReferenceArea / mass;
         BodyAeroTable table = sys.BodyAero;
         double wx = sys.RollRefX, wy = sys.RollRefY, wz = sys.RollRefZ;
@@ -547,9 +549,9 @@ public static partial class GuidanceWindow
     /// <summary>
     /// The Mach number to read the measured tables at: the flight's own, held inside the range that was measured. Past the last breakpoint the fit extrapolates along its end slope, which on a lift curve can run all the way through zero and flip the sign the glide steers by; coefficients level off at high Mach, so the last measured value is the honest stand-in.
     /// </summary>
-    private static double GlideTableMach(KsaAeroSweep.Result aero, double speed)
+    private static double GlideTableMach(KsaAeroSweep.Result aero, double speed, double altitude)
     {
-        double mach = aero.Atmosphere?.Mach(speed) ?? 0.0;
+        double mach = aero.Atmosphere?.Mach(speed, altitude) ?? 0.0;
         return Math.Clamp(mach, aero.Table.MachMin, aero.Table.MachMax);
     }
 

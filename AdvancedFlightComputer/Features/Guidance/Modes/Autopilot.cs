@@ -2208,8 +2208,9 @@ public static partial class GuidanceWindow
         double3 vAir = vehicle.Orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), r);
         doubleQuat target = SteerBody2Cci(dir, ReturnRollRefCci(vehicle, parent));
         double3 airBody = vAir.Transform(doubleQuat.Inverse(target));
+        double alt = r.Length() - parent.MeanRadius;
         if (!AttitudeController.TryLeastRollMoment(_s.Aero, airBody, vehicle.PhysicsEnvironment.AtmosphericDensity, _s.MomentLimiterPerPa,
-                                                   out double delta, out double nowNm, out double bestNm))
+                                                   out double delta, out double nowNm, out double bestNm, alt))
             return;
         _s.GlideRollMomentNm = nowNm;
         _s.GlideRollBestNm = bestNm;

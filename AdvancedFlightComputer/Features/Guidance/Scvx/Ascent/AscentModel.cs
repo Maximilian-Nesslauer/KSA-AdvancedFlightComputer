@@ -90,7 +90,7 @@ public sealed class KsaAscentAtmosphere : AscentAtmosphere
     public AeroTable? Table => _table;
 
     public override Dual Density(Dual altitude) => _atmosphere.Density(altitude);
-    public override Dual SpeedOfSound(Dual altitude) => new(_atmosphere.SpeedOfSound);
+    public override Dual SpeedOfSound(Dual altitude) => _atmosphere.SpeedOfSoundAt(altitude);
     public override Dual Pressure(Dual altitude) => _atmosphere.Pressure(altitude);
 
     public override Dual DragCoefficient(Dual mach)

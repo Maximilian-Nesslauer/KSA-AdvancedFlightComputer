@@ -133,12 +133,13 @@ public struct DragCoastSystem : IOdeSystem
         Dual speed2 = ax * ax + ay * ay + az * az + 1e-18;
         Dual speed = Dual.Sqrt(speed2);
 
-        Dual rho = Atmosphere.Density(rlen - MeanRadius);
+        Dual alt = rlen - MeanRadius;
+        Dual rho = Atmosphere.Density(alt);
         // Above the atmosphere Density returns a hard zero with a zero derivative, so this short-circuits to no drag AND no drag sensitivity - which is correct, not merely convenient: there is no air there to be sensitive to.
         if (rho.V == 0.0)
             return;
 
-        Dual mach = speed / Atmosphere.SpeedOfSound;
+        Dual mach = Atmosphere.Mach(speed, alt);
         // Climbing nose first (ClimbNoseFirst): alpha 180 and no lift until the coast turns down.
         bool noseFirst = ClimbNoseFirst && (rx.V * vx.V + ry.V * vy.V + rz.V * vz.V) > 0.0;
         double alpha = noseFirst ? Math.PI : Alpha;

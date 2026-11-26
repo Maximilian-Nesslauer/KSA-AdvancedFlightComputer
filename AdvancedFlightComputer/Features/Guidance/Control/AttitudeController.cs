@@ -469,7 +469,9 @@ internal static class AttitudeController
         BodyAeroTable forceTable = aero.BodyForceFor(set), momentTable = aero.BodyMomentFor(set);
         if (forceTable == null || momentTable == null)
             return false;
-        double mach = Math.Clamp(aero.Atmosphere.Mach(speed), forceTable.MachMin, forceTable.MachMax);
+        double liveA = vehicle.PhysicsEnvironment.SpeedOfSound;
+        double localMach = liveA > 1.0 ? speed / liveA : aero.Atmosphere.Mach(speed);
+        double mach = Math.Clamp(localMach, forceTable.MachMin, forceTable.MachMax);
         forceTable.Coefficients(mach, alpha, beta, out double cx, out double cy, out double cz);
         momentTable.Coefficients(mach, alpha, beta, out double cl, out double cm, out double cn);
         double qs = q * aero.ReferenceArea;
@@ -542,7 +544,10 @@ internal static class AttitudeController
         double speed = airBody.Length();
         double q = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * speed * speed;
         double qEff = q / (1.0 + (double.IsFinite(momentLimiterPerPa) && momentLimiterPerPa > 0.0 ? momentLimiterPerPa * q : 0.0));
-        double mach = aero?.Atmosphere != null && speed > 0.0 ? aero.Atmosphere.Mach(speed) : double.NaN;
+        double liveA = vehicle.PhysicsEnvironment.SpeedOfSound;
+        double mach = speed > 0.0
+            ? (liveA > 1.0 ? speed / liveA : aero?.Atmosphere != null ? aero.Atmosphere.Mach(speed) : double.NaN)
+            : double.NaN;
         double3 airDir = speed > 1.0 ? airBody / speed : default;
         // Under FinMeasureMinQPa the surfaces give nothing (KsaAeroTorqueControl's own floor), so in thin air or none there is nothing to measure.
         bool finAir = surfaces && q > FinMeasureMinQPa;
@@ -715,7 +720,7 @@ internal static class AttitudeController
     /// The roll to turn by, rad (right-handed about body +x, the engine-first axis), to reach the nearest roll at which the air's rolling moment about that axis is zero and restoring (a roll one way brings a moment the other), from the body moment table at the air the craft meets in its present axes, <paramref name="airVelocityBody"/> (m/s, body axes; rolling the body turns that air about +x). Where no roll trims, the one with the least moment. Also the moment there now and at the roll chosen, N m, with the game's moment limiter. The tables' centre of mass is used: a centre of mass off the axis adds a little the search ignores. False without a body moment table, below 50 Pa, or outside the tables.
     /// </summary>
     internal static bool TryLeastRollMoment(KsaAeroSweep.Result aero, double3 airVelocityBody, double rho, double momentLimiterPerPa,
-                                            out double deltaRad, out double momentNowNm, out double momentAtNm)
+                                            out double deltaRad, out double momentNowNm, out double momentAtNm, double altitude = 0.0)
     {
         deltaRad = 0.0;
         momentNowNm = momentAtNm = double.NaN;
@@ -728,7 +733,7 @@ internal static class AttitudeController
         double3 u = airVelocityBody / speed;
         if (!(-u.X > 0.0))
             return false;
-        double mach = aero.Atmosphere.Mach(speed);
+        double mach = aero.Atmosphere.Mach(speed, altitude);
         double limit = KsaAeroSweep.BodyAngleMaxDeg * Math.PI / 180.0;
         double divisor = 1.0 + (double.IsFinite(momentLimiterPerPa) && momentLimiterPerPa > 0.0 ? momentLimiterPerPa * q : 0.0);
         double scale = q * aero.ReferenceArea * aero.ReferenceLength / divisor;

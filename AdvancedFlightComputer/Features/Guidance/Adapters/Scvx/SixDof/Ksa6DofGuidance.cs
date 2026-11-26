@@ -1731,6 +1731,19 @@ public sealed class Ksa6DofGuidance : IDisposable
         double tdx = InCoast ? 0.0 : Lerp(plan.U, 0, k, f);
         double tdy = InCoast ? 0.0 : Lerp(plan.U, 1, k, f);
         double thrust = InCoast ? 0.0 : Lerp(plan.U, 2, k, f);
+        if (!InCoast && _dyn.Engine != null)
+        {
+            double altZ = x != null && x.Length >= NX
+                ? x[Dynamics6Dof.IR + 2]
+                : plan.X[k * NX + Dynamics6Dof.IR + 2] * (1.0 - f)
+                  + plan.X[Math.Min(k + 1, _n - 1) * NX + Dynamics6Dof.IR + 2] * f;
+            double altNow = _dyn.AeroAltitudeOffset + altZ;
+            double pAmb = _dyn.Aero?.Atmosphere != null ? _dyn.Aero.Atmosphere.Pressure(altNow)
+                        : _dyn.BodyAero?.Atmosphere != null ? _dyn.BodyAero.Atmosphere.Pressure(altNow)
+                        : _dyn.EngineRefPressurePa;
+            double uTh = _dyn.Engine.ThrottleFor(thrust, _dyn.EngineRefPressurePa);
+            thrust = Math.Max(_dyn.Engine.Thrust(uTh, pAmb), 0.0);
+        }
         double tauRoll = InCoast && _cfg.RollTorqueFollowsThrust ? 0.0 : Lerp(plan.U, 3, k, f);
 
         // tau = r_T x T_body with r_T = (0,0,-LArm), i.e. the engine below the centre of mass - the model's own gimbal-torque relation, verbatim.
