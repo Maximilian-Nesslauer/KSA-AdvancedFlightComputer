@@ -73,16 +73,27 @@ public static partial class GuidanceWindow
     internal static bool OrbitalEntryPictureFor(Vehicle vehicle, LandWay way) => OrbitalEntryWay(way);
 
     /// <summary>
-    /// The craft has an engine to land on, active or not: an entry hands it to bellyflop and touchdown. With none (a capsule), orbital entry holds its attitude after the hand-over and the pilot flies the rest.
+    /// The craft has a rocket engine with propellant available to land on, active or not: an entry hands it to bellyflop and touchdown. With none (a capsule or a craft whose engines are dry), orbital entry arms parachutes when present or holds its attitude after the hand-over.
     /// </summary>
     private static bool LandEngineOnCraft(Vehicle vehicle)
     {
         if (vehicle?.Parts?.States == null
             || !ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>.TryGetFrom(vehicle.Parts.States, out var engines))
             return false;
+        bool hasRocketStates = ModuleStateful<Rocket, RocketState, RocketGlobalState, EmptyStruct>.TryGetFrom(vehicle.Parts.States, out var rocketStates);
         foreach (var engine in engines.ModulesAndStates)
-            if (engine.Module.Rockets is { Length: > 0 })
+        {
+            if (engine.Module.Rockets is not { Length: > 0 } rockets)
+                continue;
+            if (engine.State.IsPropellantAvailable)
                 return true;
+            if (hasRocketStates)
+            {
+                for (int i = 0; i < rockets.Length; i++)
+                    if (rocketStates.States[rockets[i].StatesIdx].IsPropellantAvailable)
+                        return true;
+            }
+        }
         return false;
     }
 

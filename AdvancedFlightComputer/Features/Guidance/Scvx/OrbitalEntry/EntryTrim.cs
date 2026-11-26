@@ -99,7 +99,7 @@ public sealed class EntryTrim
             cdOut[i] = Math.Max(Row(alphaDeg, cd, i, na, fixedDeg), 1e-4);
             ldOut[i] = Row(alphaDeg, cl, i, na, fixedDeg) / cdOut[i];
         }
-        return new EntryTrim { Mach = (double[])machGrid.Clone(), AlphaDeg = aOut, Cd = cdOut, LiftToDrag = ldOut, Trimmed = new bool[nm] };
+        return new EntryTrim { Mach = (double[])machGrid.Clone(), AlphaDeg = aOut, Cd = cdOut, LiftToDrag = ldOut, Trimmed = new bool[nm], ResidualCm = new double[nm] };
     }
 
     static double Row(double[] alphaDeg, double[] table, int i, int na, double a)

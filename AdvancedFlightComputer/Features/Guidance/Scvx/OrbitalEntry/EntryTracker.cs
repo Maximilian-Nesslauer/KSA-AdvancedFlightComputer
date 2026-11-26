@@ -74,6 +74,17 @@ public sealed class EntryTracker
         _dragF = _hdotF = double.NaN;
     }
 
+    /// <summary>Slew the flown bank toward zero at the configured roll rate and clear tracker state once wings are level.</summary>
+    public double SlewToLevel(double dt)
+    {
+        double step = _cfg.RollRateDegS * Math.Max(dt, 0.0);
+        if (Math.Abs(_bank) <= step)
+            Reset();
+        else
+            _bank -= Math.Sign(_bank) * step;
+        return _bank;
+    }
+
     public Output Update(in Input inp)
     {
         var cfg = _cfg;

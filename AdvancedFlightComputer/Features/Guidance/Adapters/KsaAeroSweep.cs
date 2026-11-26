@@ -864,12 +864,12 @@ public static partial class KsaAeroSweep
         // The same craft swept before, this game session: its tables again, moved to the craft as it is now (KsaAeroSweepCache).
         ulong hash = LiveMeshHash(vehicle);
         double3 com = vehicle?.Props is { } props ? new double3(props.CenterOfMassAsmb.X, props.CenterOfMassAsmb.Y, props.CenterOfMassAsmb.Z) : default;
-        if (vehicle != null && !fresh && TryCached(vehicle, parent, hash, "", noseFirst, bellyFirst, bellySide, com, out job))
+        if (vehicle != null && !fresh && TryCached(vehicle, parent, hash, "", noseFirst, bellyFirst, bellySide, com, vehicle.TotalMass, out job))
             return true;
         if (!TryPrepareCraft(vehicle, parent, simTime, out Prepared prepared, out error))
             return false;
         // What was swept before on this geometry is swept again with it, so one result serves every mode.
-        CacheUnion(hash, parent, "", ref noseFirst, ref bellyFirst, ref bellySide);
+        CacheUnion(vehicle, hash, parent, "", ref noseFirst, ref bellyFirst, ref bellySide);
         prepared.NoseFirst = noseFirst;
         prepared.BellyFirst = bellyFirst;
         prepared.BellySide = bellySide;
@@ -889,7 +889,7 @@ public static partial class KsaAeroSweep
         // A booster is keyed by its own geometry's hash, and moved to its own centre of mass.
         string booster = "BOOSTER " + prepared.BoosterName;
         double3 com = new(prepared.Props.CenterOfMassAsmb.X, prepared.Props.CenterOfMassAsmb.Y, prepared.Props.CenterOfMassAsmb.Z);
-        if (TryCached(vehicle, parent, prepared.MeshHash, booster, false, false, -1, com, out job))
+        if (TryCached(vehicle, parent, prepared.MeshHash, booster, false, false, -1, com, prepared.Mass, out job))
             return true;
         prepared.StorePath = StorePathFor(vehicle, parent, prepared.MeshHash, booster, -1);
         job = Job.StartFor(prepared);

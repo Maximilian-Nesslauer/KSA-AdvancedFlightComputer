@@ -64,11 +64,12 @@ public sealed class EntryDynamics
         double v2 = v * v;
         double d = Math.Max(Drag(e, r), DragFloor);
         double cg = Math.Cos(g);
-        Model.RotationTerms(r, v, g, out _, out double vGammaRot);
-        dx[IR] = Math.Sin(g) / d;
-        // gamma' = gamma-dot / (D V); the body's rotation adds its V gamma-dot term over V.
-        dx[IG] = u / v2 + (v2 - 1.0 / r) * cg / (r * d * v2) + vGammaRot / (d * v2);
-        dx[IS] = -cg / (r * d);
+        Model.RotationTerms(r, v, g, out double vRot, out double vGammaRot);
+        // In the rotating frame de/dtau = V * (D - vRot), matching PredictStart's time-domain dynamics.
+        double dEff = Math.Max(d - vRot, DragFloor);
+        dx[IR] = Math.Sin(g) / dEff;
+        dx[IG] = (u * d + (v2 - 1.0 / r) * cg / r + vGammaRot) / (dEff * v2);
+        dx[IS] = -cg / (r * dEff);
     }
 
     /// <summary>
@@ -110,7 +111,8 @@ public sealed class EntryDynamics
     public double FloorRadius(double e, EntryConfig cfg)
     {
         double rGround = 1.0 + cfg.AltitudeFloor / R0;
-        double rTop = Math.Min(1.0 + Model.AtmosphereTop / R0, 1.0 / e * 0.999999);
+        double rAtmTop = 1.0 + Model.AtmosphereTop / R0;
+        double rTop = e > 1e-9 ? Math.Min(rAtmTop, 1.0 / e * 0.999999) : rAtmTop;
         if (rTop <= rGround) return rGround;
         if (Violation(e, rGround, cfg) < 1.0) return rGround;
         if (Violation(e, rTop, cfg) >= 1.0) return rTop;
@@ -151,11 +153,13 @@ public sealed class EntryDynamics
     public double EquilibriumGlideRadius(double e, double cosBank, EntryConfig cfg)
     {
         double rGround = 1.0 + cfg.AltitudeFloor / R0;
-        double rTop = Math.Min(1.0 + Model.AtmosphereTop / R0, 1.0 / e * 0.999999);
+        double rAtmTop = 1.0 + Model.AtmosphereTop / R0;
+        double rTop = e > 1e-9 ? Math.Min(rAtmTop, 1.0 / e * 0.999999) : rAtmTop;
         double Balance(double r)
         {
             double v = Speed(e, r);
-            double need = (1.0 / r) * (1.0 / r - v * v);
+            Model.RotationTerms(r, v, 0.0, out _, out double vGammaRot);
+            double need = (1.0 / r) * (1.0 / r - v * v) - vGammaRot;
             return LiftToDrag(e, r) * cosBank * Drag(e, r) - need;
         }
         if (Balance(rTop) >= 0) return rTop;
