@@ -314,6 +314,58 @@ internal static class KsaRcsTorqueControl
         return slot.Last;
     }
 
+    /// <summary>
+    /// Publishes pre-solved per-thruster duties from a joint Fin+RCS allocation directly without re-running the RCS LP.
+    /// </summary>
+    internal static Report CommandDuties(Vehicle vehicle, double3 torqueAsmb,
+                                         double3 ax, double3 ay, double3 az,
+                                         RcsTorqueAllocator? alloc, ThrusterController[] modules,
+                                         ReadOnlySpan<double> duties)
+    {
+        BurnPlan? plan = vehicle?.FlightComputer?.BurnPlan;
+        if (vehicle == null || plan == null)
+            return default;
+        using var _perf = new AdvancedFlightComputer.Core.PerfTracker.Scope("Rcs.CommandDuties");
+        Slot slot = ByBurnPlan.GetValue(plan, static _ => new Slot());
+        slot.Owner = vehicle;
+        if (alloc == null || modules.Length != alloc.Count || duties.Length < alloc.Count)
+        {
+            Publish(slot, null);
+            slot.Last = default;
+            return default;
+        }
+
+        double dx = double3.Dot(torqueAsmb, ax), dy = double3.Dot(torqueAsmb, ay), dz = double3.Dot(torqueAsmb, az);
+        int n = alloc.Count;
+        var duty = new double[n];
+        double tx = 0, ty = 0, tz = 0, fx = 0, fy = 0, fz = 0, flow = 0;
+        int firing = 0;
+        for (int i = 0; i < n; i++)
+        {
+            double d = double.IsFinite(duties[i]) ? Math.Clamp(duties[i], 0.0, 1.0) : 0.0;
+            if (d < RcsTorqueAllocator.DutyFloor || !(alloc.Flow[i] > 0.0))
+                d = 0.0;
+            duty[i] = d;
+            if (d <= 0.0)
+                continue;
+            firing++;
+            tx += alloc.Torque[3 * i] * d; ty += alloc.Torque[3 * i + 1] * d; tz += alloc.Torque[3 * i + 2] * d;
+            fx += alloc.Force[3 * i] * d; fy += alloc.Force[3 * i + 1] * d; fz += alloc.Force[3 * i + 2] * d;
+            flow += alloc.Flow[i] * d;
+        }
+        double sx = dx - tx, sy = dy - ty, sz = dz - tz;
+        double shortfall = Math.Sqrt(sx * sx + sy * sy + sz * sz);
+
+        Pulses? prev = slot.Cmd;
+        Dictionary<ThrusterController, int>? sharedIndex =
+            prev != null && SameModules(prev.Modules, modules) ? prev.Index : null;
+        Publish(slot, new Pulses(modules, duty, sharedIndex));
+        slot.Last = new Report(true, new double3(dx, dy, dz),
+            new double3(tx, ty, tz), new double3(fx, fy, fz),
+            flow, shortfall, firing, n);
+        return slot.Last;
+    }
+
     /// <summary>The share of an axis's strongest thruster a thruster must turn it by to be fired for it by JetMapDuties.</summary>
     private const double JetMapShare = 0.1;
 

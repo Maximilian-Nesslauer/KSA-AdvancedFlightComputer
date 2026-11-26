@@ -228,7 +228,7 @@ public sealed class VehicleAutopilotState
     /// <summary>The ascent's attitude controller gains (AttitudeController.Settings): natural frequency, rad/s, damping, and the rate error's filter, s. Stiffer than the glide's (Autopilot.FlyOwnAttitude says why).</summary>
     public double AscentAttitudeBandwidthRadS = 2.0;
     public double AscentAttitudeDamping = 1.0;
-    public double AscentRateFilterS = 0.05;
+    public double AscentRateFilterS = 0.0;
 
     /// <summary>The fastest the ascent's controller turns the roll onto its target, deg/s (AttitudeController.Settings.RollCaptureRateDegS): the roll program's heads-down roll, up to 180 deg, inside its 10 s. The glide's 5 deg/s took 23 s for 111 deg (harness, 2026-11-21).</summary>
     public double AscentRollRateDegS = 30.0;

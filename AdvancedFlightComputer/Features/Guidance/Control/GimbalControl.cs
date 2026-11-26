@@ -251,15 +251,26 @@ public static class KsaGimbalControl
         return thrust;
     }
 
-    // Main-thread scratch for PredictLsq, reused across steps to avoid per-step list and array allocations.
+    // Main-thread scratch for PredictLsq and PredictLsqReachable, reused across steps to avoid per-step allocations.
     private static GimbalController[] _predictGimbals = [];
+    private static GimbalControllerState[] _predictStates = [];
     private static double[] _predictThrusts = [];
     private static double[] _predictCommands = [];
+    private static readonly double[] _predictColTorque = new double[6];
+    private static readonly double[] _predictColForce = new double[6];
 
     /// <summary>
     /// What an Lsq command of <paramref name="torqueNm"/> (KSA body axes, N m) will give, as the worker's allocation will solve it (KsaTvcAllocator.Solve) on the lit gimbals with the thrust of the last step: the torque it delivers once the gimbals reach their commands, and the solve's diagnostics. Zero with no lit gimbal: unlike the worker, no nameplate thrust stands in, because a prediction for a caller sharing the torque with other actuators must not promise torque an unlit engine cannot give. Main thread, between the workers' steps.
     /// </summary>
     public static double3 PredictLsq(Vehicle vehicle, double3 torqueNm, out TvcAllocationResult result)
+        => PredictLsqReachable(vehicle, torqueNm, 0.0, out result);
+
+    /// <summary>
+    /// Predicts the torque delivered by an Lsq command after advancing each lit gimbal for <paramref name="stepS"/>
+    /// seconds under KSA's rate-capped second-order gimbal filter (GimbalAxis.UpdateState). When
+    /// <paramref name="stepS"/> is not positive, returns the steady-state achieved torque.
+    /// </summary>
+    public static double3 PredictLsqReachable(Vehicle vehicle, double3 torqueNm, double stepS, out TvcAllocationResult result)
     {
         result = default;
         if (vehicle?.Parts?.States == null
@@ -276,23 +287,96 @@ public static class KsaGimbalControl
             {
                 int next = Math.Max(4, _predictGimbals.Length * 2);
                 Array.Resize(ref _predictGimbals, next);
+                Array.Resize(ref _predictStates, next);
                 Array.Resize(ref _predictThrusts, next);
                 Array.Resize(ref _predictCommands, 2 * next);
             }
             _predictGimbals[count] = gimbal.Module;
+            _predictStates[count] = gimbal.State;
             _predictThrusts[count] = gimbal.State.TotalThrust;
             count++;
         }
         if (count == 0)
             return default;
+        float3 com = vehicle.CenterOfMassAsmbF;
         result = KsaTvcAllocator.Solve(
             _predictGimbals.AsSpan(0, count),
             _predictThrusts.AsSpan(0, count),
-            vehicle.CenterOfMassAsmbF,
+            com,
             torqueNm,
             _predictCommands);
+        if (!(stepS > 0.0) || !double.IsFinite(stepS))
+        {
+            Array.Clear(_predictGimbals, 0, count);
+            return result.AchievedTorque;
+        }
+        double3 reachable = EvaluateStepReachable(
+            _predictGimbals.AsSpan(0, count),
+            _predictStates.AsSpan(0, count),
+            _predictThrusts.AsSpan(0, count),
+            _predictCommands.AsSpan(0, 2 * count),
+            com,
+            stepS);
         Array.Clear(_predictGimbals, 0, count);
-        return result.AchievedTorque;
+        return reachable;
+    }
+
+    /// <summary>
+    /// Computes the body torque reachable in one step <paramref name="stepS"/> from each gimbal's current angle and rate
+    /// toward the solved normalized commands, using KSA.GimbalAxis.UpdateState directly.
+    /// </summary>
+    internal static double3 EvaluateStepReachable(
+        ReadOnlySpan<GimbalController> gimbals,
+        ReadOnlySpan<GimbalControllerState> states,
+        ReadOnlySpan<double> thrusts,
+        ReadOnlySpan<double> commands,
+        float3 comAsmb,
+        double stepS)
+    {
+        double3 total = default;
+        float dt = (float)stepS;
+        for (int i = 0; i < gimbals.Length; i++)
+        {
+            GimbalController gc = gimbals[i];
+            Gimbal g = gc.Gimbal;
+            if (g == null)
+                continue;
+            float maxY = g.AxisY.MaxAngle, maxZ = g.AxisZ.MaxAngle;
+            double cmdY = Math.Clamp(commands[2 * i], -1.0, 1.0);
+            double cmdZ = Math.Clamp(commands[2 * i + 1], -1.0, 1.0);
+            double uy, uz;
+            float wn = g.NaturalFrequency;
+            if (dt > 0f && wn > 0f && float.IsFinite(wn))
+            {
+                float ay = states[i].Angles.X, ry = states[i].AngleRates.X;
+                float az = states[i].Angles.Y, rz = states[i].AngleRates.Y;
+                g.AxisY.UpdateState(ref ay, ref ry, (float)(cmdY * maxY), wn, dt);
+                g.AxisZ.UpdateState(ref az, ref rz, (float)(cmdZ * maxZ), wn, dt);
+                if (g.ConstrainToCircle && maxY > 0f && maxZ > 0f)
+                {
+                    float ny = ay / maxY, nz = az / maxZ;
+                    float n2 = ny * ny + nz * nz;
+                    if (n2 > 1.000001f)
+                    {
+                        float inv = 1f / MathF.Sqrt(n2);
+                        ay = ny * inv * maxY;
+                        az = nz * inv * maxZ;
+                    }
+                }
+                uy = maxY > 0f ? ay / maxY : 0.0;
+                uz = maxZ > 0f ? az / maxZ : 0.0;
+            }
+            else
+            {
+                uy = maxY > 0f ? cmdY : 0.0;
+                uz = maxZ > 0f ? cmdZ : 0.0;
+            }
+            KsaTvcAllocator.FillColumns(gc, comAsmb, thrusts[i], _predictColTorque, _predictColForce, 0);
+            total.X += _predictColTorque[0] * uy + _predictColTorque[3] * uz;
+            total.Y += _predictColTorque[1] * uy + _predictColTorque[4] * uz;
+            total.Z += _predictColTorque[2] * uy + _predictColTorque[5] * uz;
+        }
+        return total;
     }
 
     // Physical allocation: solve for the deflections delivering the commanded N*m.

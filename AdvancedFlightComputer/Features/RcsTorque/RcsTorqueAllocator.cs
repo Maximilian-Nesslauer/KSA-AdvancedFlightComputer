@@ -22,7 +22,7 @@ internal sealed class RcsTorqueAllocator
     private const double ShortfallPriceFactor = 1.0e3;
 
     /// <summary>Duties under this are dropped: they would ask for a puff below any thruster's minimum pulse, and their torque is small.</summary>
-    private const double DutyFloor = 1.0e-4;
+    internal const double DutyFloor = 1.0e-4;
 
     public int Count { get; }
 

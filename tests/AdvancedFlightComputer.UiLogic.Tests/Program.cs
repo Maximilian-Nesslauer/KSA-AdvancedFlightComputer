@@ -65,6 +65,7 @@ internal static partial class Program
         AscentTerminalCutoffRules();
         UpfgGuidanceRules();
         So3AxisAngleRules();
+        AttitudeControllerRules();
         BurnTurnChecks();
         PrintfTexts();
         LandingSiteParseRules();

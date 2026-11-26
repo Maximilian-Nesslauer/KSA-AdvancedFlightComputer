@@ -39,6 +39,43 @@ public sealed class GuidanceTvcAllocatorTest : AfcTest
         ASaturatedGimbalLeavesTheRestToTheOthers(t);
         TheCoupledRollGoesWithTheLateralTorque(t);
         DiagonalSaturationStaysInsideCircularCone(t);
+        OneStepGimbalSlewResidualMatchesStockAxis(t);
+    }
+
+    // From rest, a 1-step gimbal prediction must reflect KSA.GimbalAxis.UpdateState's rate-capped lag and
+    // leave the transient slew deficit for downstream actuators, while converging to steady state once settled.
+    private static void OneStepGimbalSlewResidualMatchesStockAxis(TestContext t)
+    {
+        var com = new float3(0f, 0f, 0f);
+        GimbalController gc = Synthetic(floatQuat.Identity, new float3(-PivotArm, 0f, 0f), new float3(-NozzleOffset, 0f, 0f));
+        gc.Gimbal.NaturalFrequency = Gimbal.DEFAULT_NATURAL_FREQUENCY;
+        gc.Gimbal.ConstrainToCircle = true;
+
+        Columns(gc, com, Thrust, out double3[] torque, out _);
+        double3 fullDemand = torque[0]; // 100% axis-Y command
+        var cmds = new double[2];
+        TvcAllocationResult steady = KsaTvcAllocator.Solve([gc], [Thrust], com, fullDemand, cmds);
+
+        GimbalControllerState rest = GimbalControllerState.Zero;
+        rest.TotalThrust = Thrust;
+        double3 oneStep = KsaGimbalControl.EvaluateStepReachable([gc], [rest], [Thrust], cmds, com, 0.05);
+        double frac = double3.Dot(oneStep, fullDemand) / Math.Max(double3.Dot(fullDemand, fullDemand), 1.0);
+        t.Check("1-step reachable torque from rest is a bounded slew fraction of steady-state torque",
+            frac > 0.05 && frac < 0.25, $"fraction {frac:F4}");
+
+        // Pure-math model matches KSA.GimbalAxis.UpdateState directly.
+        AttitudeControlMath.StepGimbalNormalized(0f, 0f, 0f, 0f, cmds[0], cmds[1],
+            MaxAngle, MaxAngle, gc.Gimbal.NaturalFrequency, 0.05f, true, out double mathY, out double mathZ);
+        double3 mathTorque = torque[0] * mathY + torque[1] * mathZ;
+        double parityErr = (mathTorque - oneStep).Length() / Math.Max(oneStep.Length(), 1.0);
+        t.Check("pure-math gimbal slew matches KSA.GimbalAxis.UpdateState", parityErr < 1e-5, $"rel err {parityErr:E2}");
+
+        // Once settled at the commanded deflection, 1-step reachable torque matches steady-state torque.
+        GimbalControllerState settled = rest;
+        settled.Angles = new float2((float)(cmds[0] * MaxAngle), (float)(cmds[1] * MaxAngle));
+        double3 settledTorque = KsaGimbalControl.EvaluateStepReachable([gc], [settled], [Thrust], cmds, com, 0.05);
+        double settledErr = (settledTorque - steady.AchievedTorque).Length() / Math.Max(steady.AchievedTorque.Length(), 1.0);
+        t.Check("settled gimbal produces zero residual against steady-state torque", settledErr < 1e-5, $"rel err {settledErr:E2}");
     }
 
     // One main gimbal 1 m off the axis, and a gimbal with a hundredth of its thrust beside it that stands for the verniers. A sideways deflection of the main one turns the craft about Y and rolls it by 1/PivotArm of that. Asked for Y torque at zero roll, the small gimbal has to take the roll out and its stops end the allocation early; asked with that roll named as coupled, the main gimbal gives its full travel.

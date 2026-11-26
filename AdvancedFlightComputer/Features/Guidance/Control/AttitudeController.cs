@@ -19,13 +19,13 @@ using AdvancedFlightComputer.Guidance.Numerics.Flight;
 ///  - w_capture = (wn / 2 zeta) theta, capped at CaptureRateDegS: unsaturated it is the PD's kp theta; a large error (the glide's first step, 73 deg off in roll on 2026-11-20) is closed at a set rate rather than at the RCS's full thrust. The roll has its own cap where RollCaptureRateDegS is set: an ascent's roll program turns up to 180 deg while it climbs straight up, and at 5 deg/s it was still 62 deg off when the roll program gave up after 10 s, and only finished 13 s into the pitch-over (harness, 2026-11-21; the stock hold rolled at 17-34 deg/s).
 ///    That cap is also held to what the craft can stop in the roll left, sqrt(2 a theta) at half the roll acceleration its lit gimbals and RCS can give (RollAuthority), and the roll may have its own, softer gain (RollBandwidthRadS): at 30 deg/s with neither, the solids stack rolled through its target and never settled.
 ///  - theta's roll part is the true roll angle about the roll axis, to 180 deg either way (RollAngle): the heads-down roll from a pad facing the other way. The old error, half the sum of e_i x t_i, gave the sine of the angle, which fell back to nothing near 180 deg.
-///  - (w_target - w)_filtered: the rate error through a first-order lag of RateFilterS, 0.05 s. It went in at 0.2 s when the flown booster's rate error read 0.5 deg/s of wobble, about 10 kN m of demand jittering every step through its inertia, which the fins chased (2026-11-20); but it went in with the fin allocator that works from each fin's deflection and rate and prices a degree moved, the likelier fix, and KSA's body rates are the physics' own, without noise. 0.2 s lags the damping 18 deg at the glide's 1.6 rad/s (#291); 0.05 s, which the ascent already flew better on (Autopilot.FlyOwnAttitude), lags it 5 deg.
-///  - integral(theta): the error integrated while within IntegralWithinDeg, capped at IntegralMaxDegS, at ki = IntegralPerS: it learns what the feedforward from the tables misses (17 % of the air's moment on that flight), so the error settles inside the deadband instead of standing at a degree. It keeps acting in the deadband.
-///  - theta: the rotation that takes the body onto the target, its exact axis and angle (So3AxisAngle, #278); w and w_target the body's rate and the target's turning rate.
+///  - (w_target - w)_filtered: the rate error, unfiltered by default (RateFilterS = 0 s) because KSA's Vehicle.BodyRates are noiseless physics values; callers may set a positive RateFilterS to apply a first-order lag.
+///  - integral(theta): the error integrated per model axis while within IntegralWithinDeg, capped at IntegralMaxDegS, at ki = IntegralPerS, with conditional anti-windup freezing any axis whose downstream actuators fall short in the same direction as theta while still allowing unwinding when theta reverses sign.
+///  - theta: the rotation that takes the body onto the target, its exact axis and angle (So3AxisAngle); w and w_target the body's rate and the target's turning rate.
 ///  - M_air: the air's moment on the craft as it flies now, from the sweep's body moment table at the Mach, alpha and beta flown, moved to the present centre of mass and divided by the game's moment limiter (BodyAero6Dof.MomentLimiterPerPa). Cancelled before any error builds: the feedforward. None outside the table (20 deg off engine first).
 ///  - I: the inertia about the model's axes (Ksa6DofSetup.Inertia), and w x I w its gyroscopic part.
 ///
-/// THE GIMBALS, on a burn (Settings.UseGimbals: an ascent). The lit engines' allocation (KsaGimbalControl.SetLsq, the one touchdown guidance flies) is given the whole demand first; the torque it will give (KsaGimbalControl.PredictLsq) comes off what the surfaces and RCS are asked for, so they take only the roll and whatever the gimbals' travel cannot reach.
+/// THE GIMBALS, on a burn (Settings.UseGimbals: an ascent). The lit engines' allocation (KsaGimbalControl.SetLsq) receives the full demand, while the 1-step rate-limited torque reachable under KSA's GimbalAxis.UpdateState (KsaGimbalControl.PredictLsqReachable) comes off what the surfaces and RCS are asked for, handing transient gimbal slew deficits to fins and RCS.
 ///
 /// THE ROLL, held or free (Settings.RollFree). Free, as an ascent flies until its forced roll, no roll angle is held - only the roll rate damped - as the stock flight computer's decoupled roll held none.
 ///
@@ -44,7 +44,7 @@ using AdvancedFlightComputer.Guidance.Numerics.Flight;
 internal static class AttitudeController
 {
     internal readonly record struct Settings(double BandwidthRadS, double Damping, double DeadbandDeg, double RateDeadbandDegS,
-                                             double IntegralPerS = 0.1, double CaptureRateDegS = 5.0, double RateFilterS = 0.05,
+                                             double IntegralPerS = 0.1, double CaptureRateDegS = 5.0, double RateFilterS = 0.0,
                                              double IntegralWithinDeg = 3.0, double IntegralMaxDegS = 8.0,
                                              bool UseSurfaces = true, bool UseGimbals = false, bool RollFree = false,
                                              double RollCaptureRateDegS = double.NaN, double RollBandwidthRadS = double.NaN,
@@ -91,6 +91,9 @@ internal static class AttitudeController
         public readonly List<ControlSurface> Scratch = new();
         /// <summary>Last step the actuators fell short of the demand: the integral stands still.</summary>
         public bool Saturated;
+        /// <summary>Last step's demand and shortfall in model axes, N m, for per-axis conditional anti-windup.</summary>
+        public double3 LastDemandModel;
+        public double3 LastShortfallModel;
         /// <summary>PHASE-PLANE RCS: each model axis's phase-plane state, whether the RCS owns it (else the surfaces), the thrusters' shortest pulse, s, and the surfaces' spare torque each axis after trim, N m (SpareAccel).</summary>
         public readonly PhasePlaneRcs.State[] RcsState = new PhasePlaneRcs.State[3];
         public readonly bool[] RcsOwns = new bool[3];
@@ -138,29 +141,38 @@ internal static class AttitudeController
             theta -= double3.Dot(theta, mz) * mz;
         double3 w = vehicle.BodyRates;
         double3 rawRateError = targetRateCci.Transform(cci2Body) - w;
-        if (!slot.RateKnown || !(settings.RateFilterS > 0.0))
-            slot.RateErrorFiltered = rawRateError;
-        else if (dt > 0.0)
-            slot.RateErrorFiltered += dt / (settings.RateFilterS + dt) * (rawRateError - slot.RateErrorFiltered);
+        AttitudeControlMath.FilterRateError(
+            rawRateError.X, rawRateError.Y, rawRateError.Z,
+            slot.RateErrorFiltered.X, slot.RateErrorFiltered.Y, slot.RateErrorFiltered.Z,
+            slot.RateKnown, settings.RateFilterS, dt,
+            out double rfX, out double rfY, out double rfZ);
+        slot.RateErrorFiltered = new double3(rfX, rfY, rfZ);
         slot.RateKnown = true;
         double3 rateError = slot.RateErrorFiltered;
         double errorDeg = theta.Length() * 180.0 / Math.PI;
 
-        // Pointing and roll apart (model z, mz, is the roll axis): a craft that starts 90 deg off in roll must not have its pointing starved by it. On the harness booster (2026-11-20) one cap on the whole error vector let a 5 deg pointing error close at 0.3 deg/s while the roll took 18 s.
+        // Pointing and roll apart (model z, mz, is the roll axis) so a large roll error does not starve pointing capture.
         double3 thetaPoint = theta - double3.Dot(theta, mz) * mz;
         double3 thetaRoll = settings.RollFree ? default : RollAngle(targetBody2Cci, cci2Body, mz) * mz;
         double withinRad = settings.IntegralWithinDeg * Math.PI / 180.0;
 
-        // The integral, near the target only, each part on its own error, and capped; standing still while the actuators fell short last step (AuthorityCapture).
-        if (dt > 0.0 && !(settings.AuthorityCapture && slot.Saturated))
+        // Per-axis conditional anti-windup: freeze integration on any axis whose downstream actuators fell short
+        // in the same direction as the attitude error, while still allowing unwinding when the error reverses sign.
+        if (dt > 0.0)
         {
-            if (thetaPoint.Length() < withinRad)
-                slot.Integral += dt * thetaPoint;
-            if (thetaRoll.Length() < withinRad)
-                slot.Integral += dt * thetaRoll;
+            double3 intModel = Model(slot.Integral, mx, my, mz);
+            double3 pointModel = Model(thetaPoint, mx, my, mz);
+            double rollZ = double3.Dot(thetaRoll, mz);
             double cap = settings.IntegralMaxDegS * Math.PI / 180.0;
-            if (slot.Integral.Length() > cap)
-                slot.Integral *= cap / slot.Integral.Length();
+            AttitudeControlMath.UpdateIntegral(
+                intModel.X, intModel.Y, intModel.Z,
+                pointModel.X, pointModel.Y, rollZ,
+                settings.RollFree, withinRad, cap, dt,
+                slot.LastDemandModel.X, slot.LastDemandModel.Y, slot.LastDemandModel.Z,
+                slot.LastShortfallModel.X, slot.LastShortfallModel.Y, slot.LastShortfallModel.Z,
+                SaturatedShare,
+                out double nextIntX, out double nextIntY, out double nextIntZ);
+            slot.Integral = nextIntX * mx + nextIntY * my + nextIntZ * mz;
         }
         double rateErrorDegS = rateError.Length() * 180.0 / Math.PI;
 
@@ -268,12 +280,13 @@ internal static class AttitudeController
         double3 gyro = double3.Cross(w, Inertia(w, mx, my, mz, ixx, iyy, izz));
         double3 demand = feedback + integral + gyro - air;
 
-        // THE GIMBALS FIRST, where the settings use them (an ascent): the whole demand goes to the lit engines' allocation (KsaGimbalControl.SetLsq), and what it will give - pitch and yaw, and the roll the travel left allows - comes off what the rest are asked for. With no engine lit they give nothing and the rest take it all.
+        // Command the full demand to lit gimbals and pass the 1-step rate-limited slew residual to surfaces and RCS.
+        double stepS = dt > 0.0 ? dt : (vehicle.KinematicMeasurements.DeltaTime > 0.0 && vehicle.KinematicMeasurements.DeltaTime <= 0.2 ? vehicle.KinematicMeasurements.DeltaTime : 0.05);
         double3 remaining = demand, gimbalsBody = default;
         if (settings.UseGimbals)
         {
             using var _gimbals = new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.Gimbals");
-            gimbalsBody = KsaGimbalControl.PredictLsq(vehicle, demand, out _);
+            gimbalsBody = KsaGimbalControl.PredictLsqReachable(vehicle, demand, stepS, out _);
             KsaGimbalControl.SetLsq(vehicle, demand);
             slot.GimbalsOwned = true;
             remaining -= gimbalsBody;
@@ -296,8 +309,7 @@ internal static class AttitudeController
             }
             remaining = ask;
         }
-        // One programme for fins and RCS (the RCS as the fins' backup): the fins are commanded, the RCS fired for what they will give short. Fins off (Settings.UseSurfaces) are held at rest and the RCS takes it all.
-        // RCS off (Settings.UseRcs): the surfaces alone, no backup in their programme and no thrusters fired. The one measure of the thrusters is handed to the RCS's command below too, so it is not measured twice in a step.
+        // One programme for fins and RCS (the RCS as the fins' backup): the fins are commanded and the joint RCS duties are consumed directly when solved together.
         RcsTorqueAllocator rcsColumns = null;
         ThrusterController[] rcsModules = null;
         if (rcsNow && !phasePlane)
@@ -306,7 +318,7 @@ internal static class AttitudeController
         KsaAeroTorqueControl.Report surfaces = default;
         if (settings.UseSurfaces)
             surfaces = KsaAeroTorqueControl.Command(vehicle, aero, remaining, mx, my, mz, RcsPriority, momentLimiterPerPa,
-                                                    dt > 0.0 ? dt : 0.05, rcsColumns, settings.SurfaceSmoothS,
+                                                    stepS, rcsColumns, settings.SurfaceSmoothS,
                                                     slot.RcsKnown ? slot.RcsPlusNm : default, slot.RcsKnown ? slot.RcsMinusNm : default);
         else
             KsaAeroTorqueControl.Release(vehicle);
@@ -318,19 +330,22 @@ internal static class AttitudeController
         if (phasePlane)
         {
             rcsAsked = PhasePlaneTorque(slot, thetaPoint + thetaRoll, -rawRateError, mx, my, mz, ixx, iyy, izz, dt, holdS, settings, out rcsFiring);
-            // The coasting axes are only nudged by what the firing ones spill: they take it in their bands, as stock's jet selection lets them. Held to zero at a firing axis's price, a craft whose thrusters give +y only with x had its y pulse refused outright and drifted 12 deg (2026-11-22).
             for (int i = 0; i < 3; i++)
                 if ((rcsFiring & (1 << i)) == 0)
                     rcsPriority[i] = RcsSpillPriority;
         }
         KsaRcsTorqueControl.Report rcs = default;
         if (rcsNow && (!phasePlane || rcsFiring != 0))
-            rcs = rcsColumns != null
-                ? KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, rcsPriority, rcsColumns, rcsModules)
-                : KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, rcsPriority, jetMapFallback: phasePlane);
+        {
+            if (!phasePlane && rcsColumns != null && surfaces.BackupDuty != null && surfaces.BackupDuty.Length == rcsColumns.Count)
+                rcs = KsaRcsTorqueControl.CommandDuties(vehicle, rcsAsked, mx, my, mz, rcsColumns, rcsModules, surfaces.BackupDuty);
+            else
+                rcs = rcsColumns != null
+                    ? KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, rcsPriority, rcsColumns, rcsModules)
+                    : KsaRcsTorqueControl.Command(vehicle, rcsAsked, mx, my, mz, rcsPriority, jetMapFallback: phasePlane);
+        }
         else
             KsaRcsTorqueControl.Release(vehicle);
-        // THE RCS'S STEADY WORK TO THE SURFACES: on each axis it owns, what it gives is integrated into the surfaces' trim there, so a moment the tables miss ends up on the flaps and the RCS keeps only what changes. A Starship's RCS held a steady 80-117 kN m of pitch on pulses through its whole entry, 2 t of propellant by Mach 19 (2026-11-24). Held to the surfaces' reach either way, so it does not wind up past what they can give; the step's holdS is the time the RCS's torque was held.
         if (phasePlane && settings.UseSurfaces && dt > 0.0)
         {
             double k = Math.Min(Math.Max(dt, holdS) / RcsTrimShiftS, 1.0);
@@ -345,9 +360,17 @@ internal static class AttitudeController
         // Short of the demand by more than SaturatedShare of it: the actuators are at their limits. With the phase plane, only the surfaces' own axes count: the RCS's are held in a band, not to the demand.
         double3 givenBody = gimbalsBody + surfacesBody + rcs.GivenNm.X * mx + rcs.GivenNm.Y * my + rcs.GivenNm.Z * mz;
         if (phasePlane)
+        {
+            slot.LastDemandModel = Model(remaining, mx, my, mz);
+            slot.LastShortfallModel = slot.LastDemandModel - surfaces.GivenNm;
             slot.Saturated = remaining.Length() > 0.0 && (remaining - surfacesBody).Length() > SaturatedShare * remaining.Length();
+        }
         else
+        {
+            slot.LastDemandModel = Model(demand, mx, my, mz);
+            slot.LastShortfallModel = slot.LastDemandModel - Model(givenBody, mx, my, mz);
             slot.Saturated = demand.Length() > 0.0 && (demand - givenBody).Length() > SaturatedShare * demand.Length();
+        }
 
         slot.Last = new Report(errorDeg, rateErrorDegS, !slot.Feedback,
             Model(demand, mx, my, mz), Model(air, mx, my, mz), surfaces.GivenNm, Model(rcsAsked, mx, my, mz),
@@ -439,6 +462,8 @@ internal static class AttitudeController
             slot.RateKnown = false;
             slot.Integral = default;
             slot.Saturated = false;
+            slot.LastDemandModel = default;
+            slot.LastShortfallModel = default;
             slot.FinKnown = false;
             slot.RcsKnown = false;
         }
