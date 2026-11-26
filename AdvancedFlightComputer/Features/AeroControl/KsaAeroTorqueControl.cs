@@ -27,10 +27,12 @@ internal static class KsaAeroTorqueControl
     internal readonly record struct Report(
         int Surfaces, double3 GivenNm, double ShortfallNm, double3 ForceN,
         double Mach, double QPa, double AlphaDeg, double BetaDeg, bool InTable,
-        double[] CommandDeg = null, double[] NowDeg = null);
+        double[] CommandDeg = null, double[] NowDeg = null, double[] BackupDuty = null);
 
-    /// <summary>What the best RCS thruster's torque costs against the surfaces' shortfall, per N m (a shortfall costs one at priority 1, a degree of surface about a thousandth): the RCS is spent before any demand goes unmet, and only on what the surfaces cannot give.</summary>
+    /// <summary>Nominal RCS backup cost per N m relative to shortfall (priority 1) and fin deflection (1e-3).</summary>
     private const double BackupPricePerNm = 0.02;
+    private const double MinBackupPricePerNm = 0.004;
+    private const double BackupShortfallCapShare = 0.25;
 
     /// <summary>The share of the backup's pure-axis reach the fast part may count on in frequency-split allocation (Command's smoothS): the axes share thrusters, and the rest is kept for what the surfaces fall short of.</summary>
     private const double BackupFastShare = 0.5;
@@ -247,6 +249,7 @@ internal static class KsaAeroTorqueControl
         }
         bool smooth = smoothS > 0.0 && stepS > 0.0 && backup != null && backup.Count > 0;
         AeroTorqueAllocator.Result r;
+        double[] solvedBackupDuty = null;
         if (smooth)
         {
             // The slow part for the surfaces: a first-order lag of the demand (backward Euler of T df/dt = demand - f), started from what they give where they are.
@@ -280,15 +283,17 @@ internal static class KsaAeroTorqueControl
         else
         {
             slot.LaggedKnown = false;
-            int backupCount = FillBackupColumns(backup, slot);
+            int backupCount = FillBackupColumns(backup, priority, slot);
             ReadOnlySpan<double> backupTorque = backupCount > 0 ? slot.BackupTorque.AsSpan(0, 3 * backupCount) : default;
             ReadOnlySpan<double> backupCost = backupCount > 0 ? slot.BackupCost.AsSpan(0, backupCount) : default;
-            Span<double> backupUse = backupCount > 0 ? EnsureCapacity(ref slot.BackupUse, backupCount).AsSpan(0, backupCount) : default;
+            Span<double> backupUse = backupCount > 0 ? EnsureExact(ref slot.BackupUse, backupCount).AsSpan(0, backupCount) : default;
             if (backupCount > 0)
                 backupUse.Clear();
             using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Fins.Allocate"))
                 r = allocator.Allocate(dx, dy, dz, priority, deflection, now, reach,
                                        backupTorque, backupCost, backupUse);
+            if (r.Solved && backupCount > 0)
+                solvedBackupDuty = slot.BackupUse;
         }
         if (!r.Solved)
         {
@@ -305,30 +310,24 @@ internal static class KsaAeroTorqueControl
             ForceN = new double3(r.ForceX, r.ForceY, r.ForceZ),
             CommandDeg = deflection,
             NowDeg = now,
+            BackupDuty = solvedBackupDuty,
         };
         return slot.Last;
     }
 
-    /// <summary>The RCS thrusters as backup columns for the surfaces' programme: each one's torque at full duty, and its propellant priced so the best of them costs BackupPricePerNm a newton metre. Returns 0 without a usable backup.</summary>
-    private static int FillBackupColumns(RcsTorqueAllocator backup, Slot slot)
+    /// <summary>Builds RCS backup columns for the joint fin+RCS LP, bounded between fin cost and shortfall priority.</summary>
+    private static int FillBackupColumns(RcsTorqueAllocator backup, ReadOnlySpan<double> priority, Slot slot)
     {
         if (backup == null || backup.Count == 0)
             return 0;
         int m = backup.Count;
-        double best = double.PositiveInfinity;
-        for (int i = 0; i < m; i++)
-        {
-            double t = Math.Sqrt(backup.Torque[3 * i] * backup.Torque[3 * i] + backup.Torque[3 * i + 1] * backup.Torque[3 * i + 1]
-                                 + backup.Torque[3 * i + 2] * backup.Torque[3 * i + 2]);
-            double flow = backup.Flow[i];
-            if (flow > 0.0 && double.IsFinite(flow) && t > 0.0 && double.IsFinite(t))
-                best = Math.Min(best, flow / t);
-        }
-        if (!double.IsFinite(best))
+        double perKgS = AttitudeControlMath.BackupPricePerKgS(
+            backup.Torque, backup.Flow, priority,
+            BackupPricePerNm, MinBackupPricePerNm, BackupShortfallCapShare);
+        if (!double.IsFinite(perKgS))
             return 0;
         double[] torque = EnsureCapacity(ref slot.BackupTorque, 3 * m);
         double[] cost = EnsureCapacity(ref slot.BackupCost, m);
-        double perKgS = BackupPricePerNm / best;
         for (int i = 0; i < m; i++)
         {
             double flow = backup.Flow[i];

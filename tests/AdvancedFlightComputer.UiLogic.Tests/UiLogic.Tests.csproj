@@ -17,6 +17,10 @@
     <Compile Include="../../AdvancedFlightComputer/Features/Guidance/Upfg/UpfgGuidance.cs" LinkBase="Logic" />
     <Compile Include="../../AdvancedFlightComputer/Features/Guidance/Upfg/UpfgInsertionSearch.cs" LinkBase="Logic" />
     <Compile Include="../../AdvancedFlightComputer/Features/Guidance/Control/So3AxisAngle.cs" LinkBase="Logic" />
+    <Compile Include="../../AdvancedFlightComputer/Features/Guidance/Control/AttitudeControlMath.cs" LinkBase="Logic" />
+    <Compile Include="../../AdvancedFlightComputer/Features/RcsTranslation/RcsLpSolver.cs" LinkBase="Logic" />
+    <Compile Include="../../AdvancedFlightComputer/Features/RcsTorque/RcsTorqueAllocator.cs" LinkBase="Logic" />
+    <Compile Include="../../AdvancedFlightComputer/Features/AeroControl/AeroTorqueAllocator.cs" LinkBase="Logic" />
     <Compile Include="../../AdvancedFlightComputer/Features/LandingSites/LandingSiteFile.cs" LinkBase="Logic" />
   </ItemGroup>
 </Project>
