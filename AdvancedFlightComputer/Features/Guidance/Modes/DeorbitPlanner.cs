@@ -140,7 +140,7 @@ internal static class EntryDeorbitPlanner
                 : "NO EXHAUST VELOCITY FOR THE ENTRY BURN.";
             return null;
         }
-        if (!TryLowered(request, departureSeconds, out StateVectors state, out double3 velocity, out double3 dv, out Orbit lowered, out refusal))
+        if (!TryLowered(request, departureSeconds, out StateVectors state, out double3 velocity, out double3 dv, out Orbit? lowered, out refusal))
             return null;
         return Finish(request, departureSeconds, state, velocity, dv, lowered, measuredPreparation, out refusal);
     }
@@ -223,7 +223,7 @@ internal static class EntryDeorbitPlanner
     {
         arrivalSeconds = double.NaN;
         arrival = default;
-        if (!TryLowered(request, departureSeconds, out _, out _, out _, out Orbit lowered, out _))
+        if (!TryLowered(request, departureSeconds, out _, out _, out _, out Orbit? lowered, out _))
             return false;
         double hi = InterfaceTime(lowered, new UniverseTime(departureSeconds), request.Parent.GetAtmosphereRadius());
         if (!double.IsFinite(hi))
@@ -234,7 +234,7 @@ internal static class EntryDeorbitPlanner
     }
 
     private static bool TryLowered(DeorbitRequest request, double departureSeconds, out StateVectors state, out double3 velocity,
-                                   out double3 dv, out Orbit lowered, out string refusal)
+                                   out double3 dv, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Orbit? lowered, out string refusal)
     {
         double periapsis = request.Parent.MeanRadius + request.Settings.EntryPeriapsis!.Value;
         double entry = request.Parent.GetAtmosphereRadius();

@@ -38,7 +38,7 @@ public sealed class EntryModel
     /// <summary>Nose radius for the stagnation heating estimate, m.</summary>
     public double NoseRadius { get; init; } = 1.0;
 
-    /// <summary>Sutton–Graves constant, SI (W/m^2 with rho in kg/m^3, v in m/s, nose radius in m). 1.7415e-4 for Earth's air.</summary>
+    /// <summary>Sutton-Graves constant, SI (W/m^2 with rho in kg/m^3, v in m/s, nose radius in m). 1.7415e-4 for Earth's air.</summary>
     public double SuttonGraves { get; init; } = 1.7415e-4;
 
     public double DensityScale { get; init; } = 1.0;
@@ -79,7 +79,7 @@ public sealed class EntryModel
         return rho * speedMs * speedMs * ReferenceArea * cd / (2.0 * Mass);
     }
 
-    /// <summary>Stagnation-point heating rate, W/m^2 (Sutton–Graves).</summary>
+    /// <summary>Stagnation-point heating rate, W/m^2 (Sutton-Graves).</summary>
     public double HeatingRate(double altitudeM, double speedMs)
         => SuttonGraves * Math.Sqrt(Rho(altitudeM) / NoseRadius) * speedMs * speedMs * speedMs;
 

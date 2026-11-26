@@ -181,7 +181,7 @@ public static partial class GuidanceWindow
             }
 
             // ---- commit ----
-            DeorbitPlan? plan = st.AimVelocity is { } aimed
+            DeorbitPlan plan = st.AimVelocity is { } aimed
                 ? EntryDeorbitPlanner.PlanAtVelocity(request, st.AimDeparture, aimed, out string why, _s.DeorbitEntryMeasuredPreparation)
                 : EntryDeorbitPlanner.PlanAt(request, st.AimDeparture, out why, _s.DeorbitEntryMeasuredPreparation);
             if (plan is not { } entry)

@@ -45,7 +45,7 @@ public static partial class GuidanceWindow
         var st = _s.OrbitalEntry;
         st.StopPending = false;
         st.EngagePending = true;
-        _entryTrajClosed = false;
+        st.TrajWindowClosed = false;
     }
 
     // A request that has not engaged is only cancelled. A live entry ends as its own stop does (StopOrbitalEntry): its attitude let go, the engine as it is.

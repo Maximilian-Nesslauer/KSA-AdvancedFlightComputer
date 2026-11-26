@@ -371,7 +371,7 @@ public sealed class GuidanceLandingStagingTest : AfcTest
             state.DeorbitOnly = true;
             state.LandingEngineWaitStart = 100;
             state.LandingEngineWaitProgressTime = 102;
-            state.LandingEngineWaitNextSequence = Empty<Sequence>();
+            state.LandingEngineWaitNextSequence = EmptySequence();
             typeof(GuidanceWindow).GetField("_s", PrivateStatic)!.SetValue(null, state);
             Method("ExecuteLanding").Invoke(null, [craft]);
             t.Check("ExecuteLanding enters deorbit planning and clears every wait field",
@@ -573,7 +573,7 @@ public sealed class GuidanceLandingStagingTest : AfcTest
             tree.States = new ModuleStateList();
             Vehicle.Parts = tree;
             tree.SequenceList = Empty<SequenceList>();
-            var sequences = Enumerable.Range(0, sequenceCount).Select(_ => Empty<Sequence>()).ToList();
+            var sequences = Enumerable.Range(0, sequenceCount).Select(_ => EmptySequence(tree)).ToList();
             typeof(SequenceList).GetField("_sequences", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .SetValue(tree.SequenceList, sequences);
 
@@ -624,6 +624,20 @@ public sealed class GuidanceLandingStagingTest : AfcTest
         var value = (T)RuntimeHelpers.GetUninitializedObject(typeof(T));
         GC.SuppressFinalize(value);
         return value;
+    }
+
+    // KSA 5949 Sequence.Parts lazily recaches via _partsCache.Clear(), and LandingEngineWait skips sequences
+    // whose Parts span is empty, so synthetic sequences need an initialized cache holding a placeholder part.
+    private static Sequence EmptySequence(PartTree? tree = null)
+    {
+        Sequence seq = Empty<Sequence>();
+        Part placeholder = Empty<Part>();
+        placeholder.Modules = new ModuleList();
+        const BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
+        typeof(Sequence).GetField("_partTree", PrivateInstance)!.SetValue(seq, tree);
+        typeof(Sequence).GetField("_partsCache", PrivateInstance)!.SetValue(seq, new List<Part> { placeholder });
+        typeof(Sequence).GetField("_partsCached", PrivateInstance)!.SetValue(seq, true);
+        return seq;
     }
 }
 

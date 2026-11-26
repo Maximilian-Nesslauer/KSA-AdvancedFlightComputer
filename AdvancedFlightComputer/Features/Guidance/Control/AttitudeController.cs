@@ -666,11 +666,12 @@ internal static class AttitudeController
             return double.NaN;
         double3 u = airBody / airBody.Length();
         double best = double.PositiveInfinity;
-        double[] comp = { double3.Dot(u, mx), double3.Dot(u, my), double3.Dot(u, mz) };
-        double[] acc = { spare.X, spare.Y, spare.Z };
-        for (int i = 0; i < 3; i++)
-            if (Math.Abs(comp[i]) > 1e-3 && double.IsFinite(acc[i]))
-                best = Math.Min(best, acc[i] / Math.Abs(comp[i]));
+        double cx = Math.Abs(double3.Dot(u, mx));
+        if (cx > 1e-3 && double.IsFinite(spare.X)) best = Math.Min(best, spare.X / cx);
+        double cy = Math.Abs(double3.Dot(u, my));
+        if (cy > 1e-3 && double.IsFinite(spare.Y)) best = Math.Min(best, spare.Y / cy);
+        double cz = Math.Abs(double3.Dot(u, mz));
+        if (cz > 1e-3 && double.IsFinite(spare.Z)) best = Math.Min(best, spare.Z / cz);
         return double.IsFinite(best) ? best : double.NaN;
     }
 
