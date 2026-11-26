@@ -155,6 +155,7 @@ public sealed class EntryDynamics
         double rGround = 1.0 + cfg.AltitudeFloor / R0;
         double rAtmTop = 1.0 + Model.AtmosphereTop / R0;
         double rTop = e > 1e-9 ? Math.Min(rAtmTop, 1.0 / e * 0.999999) : rAtmTop;
+        if (rTop <= rGround) return rGround;
         double Balance(double r)
         {
             double v = Speed(e, r);

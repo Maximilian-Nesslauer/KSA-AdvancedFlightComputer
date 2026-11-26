@@ -440,11 +440,12 @@ public sealed class EntryPlanner
     ///  THE FLOOR IT CAN HOLD (HeldFloor): each path limit's own floor where the glide at full lift lies below it; a limit the craft cannot hold at an energy - its floor above even that glide, as a heating limit under the craft's least peak - does not bound it there, since every flight breaks it.
     /// WHY (2026-11-25): the quadrature this replaces put a 450 t Starship at L/D 0.29 already on the floor and already on the glide at the start of the air, and took the heating floor it cannot hold as its most drag: a 50 km corridor, 2034-2086 km, that a converged plan from 1983 km and the aim's check from 2192 km both flew outside.
     /// </summary>
-    static void ReachBand(EntryDynamics dyn, EntryConfig cfg, double[] e, double[,] x, double cosMin, double cosMax, out double[] sShort, out double[] sLong)
+    static void ReachBand(EntryDynamics dyn, EntryConfig cfg, double[] e, double[,] x, double cosMin, double cosMax,
+                          out double[] sShort, out double[] sLong, bool firstOnly = false)
     {
         int n = e.Length;
-        sShort = new double[n];
-        sLong = new double[n];
+        sShort = new double[firstOnly ? 1 : n];
+        sLong = new double[firstOnly ? 1 : n];
         double[] floor = HeldFloor(dyn, cfg, e, cosMin);
         // Range along the floor from each node to the end.
         var alongFloor = new double[n];
@@ -457,7 +458,8 @@ public sealed class EntryPlanner
         }
         Span<double> xa = stackalloc double[NX];
         Span<double> xb = stackalloc double[NX];
-        for (int k = 0; k < n - 1; k++)
+        int end = firstOnly ? Math.Min(1, n - 1) : n - 1;
+        for (int k = 0; k < end; k++)
         {
             // LONG: full lift up from here.
             for (int j = 0; j < NX; j++) xa[j] = x[k, j];
@@ -858,9 +860,9 @@ public sealed class EntryPlanner
                 return (0.0, 0.0);
             int nn = Math.Max(nodes, 8);
             double[] grid = Grid(e0, eEnd, x0[IR], cfg, model.BodyRadius, nn);
-            var start = new double[nn, NX];
+            var start = new double[1, NX];
             for (int j = 0; j < NX; j++) start[0, j] = x0[j];
-            ReachBand(d, cfg, grid, start, Math.Cos(cfg.BankMinDeg * Math.PI / 180.0), Math.Cos(cfg.BankMaxDeg * Math.PI / 180.0), out double[] sS, out double[] sL);
+            ReachBand(d, cfg, grid, start, Math.Cos(cfg.BankMinDeg * Math.PI / 180.0), Math.Cos(cfg.BankMaxDeg * Math.PI / 180.0), out double[] sS, out double[] sL, firstOnly: true);
             return (sS[0] * model.BodyRadius, sL[0] * model.BodyRadius);
         }
         var dyn = new EntryDynamics(model);
