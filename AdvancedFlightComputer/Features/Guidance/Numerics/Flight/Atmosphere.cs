@@ -7,7 +7,7 @@ namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 ///
 /// Altitude is geometric, above the MEAN radius, and is clamped to zero below it, as KSA's PhysicsEnvironment.RecomputePositionalValues does: a site below mean radius sees sea level air. The solvers must not reference the game, so the mod builds a <see cref="SampledAtmosphere"/> from the game's own pressure and density functions, and the offline checks use the analytic <see cref="ExponentialAtmosphere"/>.
 ///
-/// The drag surrogate is parameterised on Mach. <see cref="SpeedOfSound"/> is one reference value per atmosphere, the speed of sound at sea level, not a function of altitude, so that the Mach axis stays a fixed scaling of airspeed. The game computes the speed of sound from the local temperature, so above sea level the Mach number of a table lookup differs from the one the game flies at.
+/// The drag surrogate is parameterised on Mach. <see cref="SpeedOfSound"/> holds the sea-level speed of sound, while <see cref="SpeedOfSoundAt(double)"/> and <see cref="Mach(double, double)"/> evaluate the altitude-varying local speed of sound.
 /// </summary>
 public abstract class AtmosphereModel
 {
@@ -47,11 +47,33 @@ public abstract class AtmosphereModel
     /// <summary>Pressure as a <see cref="Dual"/>, with the same two kinks as <see cref="Density(Dual)"/>. The convex ascent reads it for the back pressure of the engines.</summary>
     public abstract Dual Pressure(Dual altitude);
 
-    /// <summary>Free-stream Mach number for a speed in m/s.</summary>
+    /// <summary>Local speed of sound at an altitude above mean radius, m/s. Defaults to <see cref="SpeedOfSound"/> for isothermal models.</summary>
+    public virtual double SpeedOfSoundAt(double altitude) => SpeedOfSound;
+
+    /// <summary>Local speed of sound as a <see cref="Dual"/>, m/s.</summary>
+    public virtual Dual SpeedOfSoundAt(Dual altitude) => new(SpeedOfSound);
+
+    /// <summary>Dynamic viscosity at an altitude above mean radius, Pa s. Zero when viscosity is not sampled.</summary>
+    public virtual double DynamicViscosityAt(double altitude) => 0.0;
+
+    /// <summary>Free-stream Mach number for a speed in m/s at sea-level sound speed.</summary>
     public double Mach(double speed) => speed / SpeedOfSound;
 
-    /// <summary>Free-stream Mach number, differentiably.</summary>
+    /// <summary>Free-stream Mach number at sea-level sound speed, differentiably.</summary>
     public Dual Mach(Dual speed) => speed / SpeedOfSound;
+
+    /// <summary>Free-stream Mach number at an altitude above mean radius.</summary>
+    public double Mach(double speed, double altitude) => speed / SpeedOfSoundAt(altitude);
+
+    /// <summary>Free-stream Mach number at an altitude above mean radius, differentiably.</summary>
+    public Dual Mach(Dual speed, Dual altitude) => speed / SpeedOfSoundAt(altitude);
+
+    /// <summary>Free-stream Reynolds number rho * V * L / mu at an altitude above mean radius, or 0 when dynamic viscosity is unavailable.</summary>
+    public double ReynoldsNumber(double speed, double altitude, double length)
+    {
+        double mu = DynamicViscosityAt(altitude);
+        return mu > 0.0 ? Density(altitude) * speed * length / mu : 0.0;
+    }
 
     /// <summary>Dynamic pressure, 1/2 rho V^2, at an altitude and speed. Convenience for readouts; the dynamics compose the pieces themselves.</summary>
     public double DynamicPressure(double altitude, double speed)

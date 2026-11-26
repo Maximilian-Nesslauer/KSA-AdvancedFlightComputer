@@ -446,6 +446,88 @@ internal static class AeroCheck
             Check("sampled: refuses altitudes that do not increase", refused);
         }
 
+        // ---- altitude-varying SpeedOfSound(h) and ReynoldsNumber(h) on 0..60 km ISA ----
+        {
+            const double R = 287.05287, Gamma = 1.4, G0 = 9.80665;
+            double[] layerH = [0.0, 11000.0, 20000.0, 32000.0, 47000.0, 51000.0, 60000.0];
+            double[] layerT = [288.15, 216.65, 216.65, 228.65, 270.65, 270.65, 245.45];
+            double[] layerP = new double[layerH.Length];
+            layerP[0] = 101325.0;
+            for (int k = 1; k < layerH.Length; k++)
+            {
+                double dh = layerH[k] - layerH[k - 1];
+                double lapse = (layerT[k] - layerT[k - 1]) / dh;
+                layerP[k] = Math.Abs(lapse) < 1e-12
+                    ? layerP[k - 1] * Math.Exp(-G0 * dh / (R * layerT[k - 1]))
+                    : layerP[k - 1] * Math.Pow(layerT[k] / layerT[k - 1], -G0 / (R * lapse));
+            }
+            void IsaAt(double h, out double rho, out double p, out double a, out double mu)
+            {
+                double hc = Math.Clamp(h, 0.0, layerH[^1]);
+                int idx = 0;
+                while (idx < layerH.Length - 2 && layerH[idx + 1] <= hc) idx++;
+                double dh = hc - layerH[idx];
+                double lapse = (layerT[idx + 1] - layerT[idx]) / (layerH[idx + 1] - layerH[idx]);
+                double T = layerT[idx] + lapse * dh;
+                p = Math.Abs(lapse) < 1e-12
+                    ? layerP[idx] * Math.Exp(-G0 * dh / (R * layerT[idx]))
+                    : layerP[idx] * Math.Pow(T / layerT[idx], -G0 / (R * lapse));
+                rho = p / (R * T);
+                a = Math.Sqrt(Gamma * R * T);
+                // Sutherland's viscosity law for air, Pa s.
+                mu = 1.458e-6 * Math.Pow(T, 1.5) / (T + 110.4);
+            }
+
+            var grid = new SortedSet<double>();
+            for (int i = 0; i <= 60; i++) grid.Add(i * 1000.0);
+            foreach (double lh in layerH) grid.Add(lh);
+            double[] altG = grid.ToArray();
+            var rhoG = new double[altG.Length];
+            var pG = new double[altG.Length];
+            var aG = new double[altG.Length];
+            var muG = new double[altG.Length];
+            for (int i = 0; i < altG.Length; i++)
+                IsaAt(altG[i], out rhoG[i], out pG[i], out aG[i], out muG[i]);
+
+            var atmFull = new SampledAtmosphere(altG, rhoG, pG, 60000.0, aG[0], aG, muG);
+            var atmAuto = new SampledAtmosphere(altG, rhoG, pG, 60000.0, aG[0]);
+
+            double maxMachErr = 0.0, maxAutoErr = 0.0, maxReErr = 0.0, maxAdErr = 0.0;
+            const double testSpeed = 600.0, testLen = 10.0;
+            for (double h = 250.0; h < 59750.0; h += 500.0)
+            {
+                IsaAt(h, out double rho, out _, out double aTrue, out double muTrue);
+                double mTrue = testSpeed / aTrue;
+                double reTrue = rho * testSpeed * testLen / muTrue;
+                maxMachErr = Math.Max(maxMachErr, Math.Abs(atmFull.Mach(testSpeed, h) - mTrue) / mTrue);
+                maxAutoErr = Math.Max(maxAutoErr, Math.Abs(atmAuto.Mach(testSpeed, h) - mTrue) / mTrue);
+                maxReErr = Math.Max(maxReErr, Math.Abs(atmFull.ReynoldsNumber(testSpeed, h, testLen) - reTrue) / reTrue);
+
+                // Avoid sample knots for smooth central finite differences; dh = 0.5 m avoids cancellation on O(1e-5/m) slopes.
+                bool nearKnot = Math.Abs(h - Math.Round(h / 1000.0) * 1000.0) < 10.0;
+                if (!nearKnot)
+                {
+                    const double dh = 0.5;
+                    Dual mDual = atmFull.Mach(new Dual(testSpeed, 0.0), new Dual(h, 1.0));
+                    double fd = (atmFull.Mach(testSpeed, h + dh) - atmFull.Mach(testSpeed, h - dh)) / (2.0 * dh);
+                    maxAdErr = Math.Max(maxAdErr, Math.Abs(mDual.D - fd) / Math.Max(Math.Abs(fd), 1e-6));
+                }
+            }
+            Check("sampled ISA: Mach(h) error < 0.1% across 0..60 km", maxMachErr < 1e-3,
+                  $"max rel {maxMachErr * 100.0:F4}%");
+            Check("sampled ISA: auto-derived Mach(h) error < 0.1%", maxAutoErr < 1e-3,
+                  $"max rel {maxAutoErr * 100.0:F4}%");
+            Check("sampled ISA: ReynoldsNumber(h) error < 0.5%", maxReErr < 5e-3,
+                  $"max rel {maxReErr * 100.0:F4}%");
+            Check("sampled ISA: Dual dMach/dh matches central FD", maxAdErr < 1e-9,
+                  $"max rel {maxAdErr:E2}");
+            Check("sampled ISA: SpeedOfSoundAt clamps at <= 0 and >= top",
+                  atmFull.SpeedOfSoundAt(-100.0) == aG[0]
+                  && atmFull.SpeedOfSoundAt(new Dual(-100.0, 1.0)).D == 0.0
+                  && atmFull.SpeedOfSoundAt(70000.0) == aG[^1]
+                  && atmFull.SpeedOfSoundAt(new Dual(70000.0, 1.0)).D == 0.0);
+        }
+
         Console.WriteLine();
         Console.WriteLine(fails == 0 ? "AERO: all checks passed" : $"AERO: {fails} check(s) FAILED");
         return fails == 0 ? 0 : 1;

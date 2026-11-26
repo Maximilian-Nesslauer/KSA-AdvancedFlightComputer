@@ -1,5 +1,6 @@
 using AdvancedFlightComputer.Guidance.Numerics;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 
 /// <summary>
@@ -24,6 +25,7 @@ internal static class ThreeDofModelCheck
         ok &= CheckCrossBiasEstimator();
         ok &= CheckBodyAero();
         ok &= CheckBodyAeroCoast();
+        ok &= CheckSixDofEngineParity();
         Console.WriteLine();
         Console.WriteLine(ok ? "PASS - the KSA point-mass model" : "FAIL");
         return ok ? 0 : 1;
@@ -589,5 +591,125 @@ internal static class ThreeDofModelCheck
         bool jacOk = worstJac < 1e-4;
         Console.WriteLine($"  AD against central differences in velocity: worst {worstJac:E1}  {(jacOk ? "ok" : "FAIL")}");
         return ok && jacOk;
+    }
+
+    private static bool CheckSixDofEngineParity()
+    {
+        Console.WriteLine();
+        Console.WriteLine("6-DOF engine back-pressure parity: shared EngineThrustTable across 0..5,000 m");
+        // Realistic nonlinear nozzle table matching a sea-level booster with back-pressure loss.
+        double[] pressures = [0.0, 25000.0, 50000.0, 75000.0, 101325.0, 110000.0];
+        double[] throttles = [0.10, 0.25, 0.50, 0.75, 1.00];
+        var thrustGrid = new double[pressures.Length * throttles.Length];
+        var flowGrid = new double[throttles.Length];
+        const double Fvac = 3_822_000.0, FlowMax = 1150.0, LossSl = 927_000.0;
+        for (int j = 0; j < throttles.Length; j++)
+            flowGrid[j] = FlowMax * throttles[j];
+        for (int i = 0; i < pressures.Length; i++)
+        {
+            double pFrac = pressures[i] / 101325.0;
+            for (int j = 0; j < throttles.Length; j++)
+            {
+                double u = throttles[j];
+                double loss = LossSl * Math.Pow(pFrac, 0.85) * (0.2 + 0.8 * u);
+                thrustGrid[i * throttles.Length + j] = Fvac * u - loss;
+            }
+        }
+        var table = new EngineThrustTable(pressures, throttles, thrustGrid, flowGrid);
+        var atm = ExponentialAtmosphere.Earth;
+        double refP = atm.SeaLevelPressure;
+
+        var model3 = new KsaPointMassModel
+        {
+            Atmosphere = atm,
+            Engine = table,
+            VacuumThrust = Fvac,
+        };
+        var dyn6 = new Dynamics6Dof.Params
+        {
+            Gx = 0.0, Gy = 0.0, Gz = -9.81,
+            Aero = model3,
+            AeroAltitudeOffset = 0.0,
+            Engine = table,
+            EngineRefPressurePa = refP,
+            ThrustMomentX = 0.15,
+            ThrustMomentY = -0.10,
+            ThrustMomentZ = 0.02,
+            Ixx = 2e6, Iyy = 2e6, Izz = 3e5,
+        };
+
+        double worstThrustRel = 0.0, worstFlowRel = 0.0, worstMassHelperRel = 0.0;
+        var x = new double[Dynamics6Dof.NX];
+        var u6 = new double[Dynamics6Dof.NUBase];
+        var f6 = new double[Dynamics6Dof.NX];
+        x[Dynamics6Dof.IQ] = 1.0;
+        x[Dynamics6Dof.IM] = 50_000.0;
+        foreach (double alt in new[] { 0.0, 500.0, 1500.0, 2000.0, 3500.0, 5000.0 })
+        {
+            x[Dynamics6Dof.IR + 2] = alt;
+            foreach (double uTh in new[] { 0.15, 0.35, 0.65, 1.00 })
+            {
+                double tRef = table.Thrust(uTh, refP);
+                u6[Dynamics6Dof.IT] = tRef;
+                Dynamics6Dof.Eval(x, u6, dyn6, f6);
+
+                double t3 = model3.ThrustLit(uTh, alt, out _, out _);
+                double t6 = (f6[Dynamics6Dof.IV + 2] - dyn6.Gz) * x[Dynamics6Dof.IM];
+                double m3 = table.MassFlow(uTh);
+                double m6 = -f6[Dynamics6Dof.IM];
+                double mHelper = Dynamics6Dof.MassFlow(dyn6, u6);
+
+                worstThrustRel = Math.Max(worstThrustRel, Math.Abs(t6 - t3) / Math.Max(Math.Abs(t3), 1.0));
+                worstFlowRel = Math.Max(worstFlowRel, Math.Abs(m6 - m3) / Math.Max(Math.Abs(m3), 1.0));
+                worstMassHelperRel = Math.Max(worstMassHelperRel, Math.Abs(mHelper - m3) / Math.Max(Math.Abs(m3), 1.0));
+            }
+        }
+
+        // Forward-mode AD Jacobian check for 6-DOF with shared EngineThrustTable at 2,000 m.
+        x[Dynamics6Dof.IR + 2] = 2000.0;
+        u6[Dynamics6Dof.IT] = table.Thrust(0.55, refP);
+        u6[Dynamics6Dof.ITDX] = 15_000.0;
+        u6[Dynamics6Dof.ITDY] = -12_000.0;
+        var f0 = new double[Dynamics6Dof.NX];
+        var A = new double[Dynamics6Dof.NX * Dynamics6Dof.NX];
+        var B = new double[Dynamics6Dof.NX * Dynamics6Dof.NUBase];
+        Dynamics6Dof.Jacobian(x, u6, dyn6, f0, A, B);
+
+        double worstAdErr = 0.0;
+        var fp = new double[Dynamics6Dof.NX];
+        var fm = new double[Dynamics6Dof.NX];
+        // Check d/d(rz) and d/d(T) where EngineThrustTable derivatives act.
+        {
+            double step = 1e-3;
+            double[] xp = (double[])x.Clone(), xm = (double[])x.Clone();
+            xp[Dynamics6Dof.IR + 2] += step;
+            xm[Dynamics6Dof.IR + 2] -= step;
+            Dynamics6Dof.Eval(xp, u6, dyn6, fp);
+            Dynamics6Dof.Eval(xm, u6, dyn6, fm);
+            for (int r = 0; r < Dynamics6Dof.NX; r++)
+            {
+                double fd = (fp[r] - fm[r]) / (2.0 * step);
+                double ad = A[r * Dynamics6Dof.NX + (Dynamics6Dof.IR + 2)];
+                worstAdErr = Math.Max(worstAdErr, Math.Abs(ad - fd) / Math.Max(Math.Abs(fd), 1e-4));
+            }
+        }
+        {
+            double step = 1.0;
+            double[] up = (double[])u6.Clone(), um = (double[])u6.Clone();
+            up[Dynamics6Dof.IT] += step;
+            um[Dynamics6Dof.IT] -= step;
+            Dynamics6Dof.Eval(x, up, dyn6, fp);
+            Dynamics6Dof.Eval(x, um, dyn6, fm);
+            for (int r = 0; r < Dynamics6Dof.NX; r++)
+            {
+                double fd = (fp[r] - fm[r]) / (2.0 * step);
+                double ad = B[r * Dynamics6Dof.NUBase + Dynamics6Dof.IT];
+                worstAdErr = Math.Max(worstAdErr, Math.Abs(ad - fd) / Math.Max(Math.Abs(fd), 1e-6));
+            }
+        }
+
+        bool parityOk = worstThrustRel < 1e-12 && worstFlowRel < 1e-12 && worstMassHelperRel < 1e-12 && worstAdErr < 1e-7;
+        Console.WriteLine($"  3-DOF vs 6-DOF thrust rel {worstThrustRel:E2}, flow rel {worstFlowRel:E2}, helper rel {worstMassHelperRel:E2}, Dual AD rel {worstAdErr:E2}  {(parityOk ? "ok" : "FAIL")}");
+        return parityOk;
     }
 }

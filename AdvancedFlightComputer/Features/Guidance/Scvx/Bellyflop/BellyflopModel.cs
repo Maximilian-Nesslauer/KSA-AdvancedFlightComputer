@@ -22,8 +22,10 @@ public sealed record BellyflopModel
     public double OmegaZ { get; init; }
     /// <summary>Air density against altitude above the site's datum (the body's mean radius), kg/m^3.</summary>
     public required Func<double, double> Density { get; init; }
-    /// <summary>The speed of sound Mach is reckoned against, m/s (the sweep's: sea level).</summary>
+    /// <summary>Reference sea-level speed of sound, m/s. Used when <see cref="SpeedOfSoundAt"/> is null.</summary>
     public required double SpeedOfSound { get; init; }
+    /// <summary>Optional altitude-varying local speed of sound against altitude above the site's datum, m/s.</summary>
+    public Func<double, double>? SpeedOfSoundAt { get; init; }
     public required double Mass { get; init; }
     public required double ReferenceArea { get; init; }
     public required BellyCoefficients Coefficients { get; init; }
@@ -44,7 +46,12 @@ public sealed record BellyflopModel
         return Math.Sqrt(px * px + py * py + pz * pz) - BodyRadius;
     }
 
-    public double Mach(ReadOnlySpan<double> x) => Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]) / SpeedOfSound;
+    public double Mach(ReadOnlySpan<double> x)
+    {
+        double alt = Altitude(x);
+        double a = SpeedOfSoundAt != null ? SpeedOfSoundAt(alt) : SpeedOfSound;
+        return Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]) / a;
+    }
 
     /// <summary>The state's rate of change under the controls.</summary>
     public void Derivative(ReadOnlySpan<double> x, double alpha, double beta, double psi, Span<double> xdot)
@@ -73,9 +80,11 @@ public sealed record BellyflopModel
         fx = fy = fz = 0;
         if (!Axes(x, alpha, beta, psi, out var n, out var s, out var b, out double speed))
             return false;
-        double rho = Density(Altitude(x)) * DensityScale;
+        double alt = Altitude(x);
+        double rho = Density(alt) * DensityScale;
         double q = 0.5 * rho * speed * speed;
-        Coefficients(speed / SpeedOfSound, alpha, beta, out double cn, out double cs, out double cb);
+        double a = SpeedOfSoundAt != null ? SpeedOfSoundAt(alt) : SpeedOfSound;
+        Coefficients(speed / a, alpha, beta, out double cn, out double cs, out double cb);
         double k = q * ReferenceArea * ForceScale;
         fx = k * (cn * n.X + cs * s.X + cb * b.X);
         fy = k * (cn * n.Y + cs * s.Y + cb * b.Y);

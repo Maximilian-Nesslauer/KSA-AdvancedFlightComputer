@@ -184,10 +184,11 @@ public sealed record KsaPointMassModel : IPointMassModel
         Dual pp = px * px + py * py + pz * pz;
         Dual pRound = pp / Dual.Sqrt(pp + AlphaRounding * AlphaRounding);
         Dual alpha = Dual.Atan2(pRound, -bv);
-        Dual mach = TableMach(Atmosphere.Mach(speed), Drag);
+        Dual machLocal = Atmosphere.Mach(speed, altitude);
+        Dual mach = TableMach(machLocal, Drag);
 
         if (BodyAero != null && (RollRefX != 0.0 || RollRefY != 0.0 || RollRefZ != 0.0)
-            && TryBodyAero(bx, by, bz, hx, hy, hz, qs, speed, out Dual bfx, out Dual bfy, out Dual bfz))
+            && TryBodyAero(bx, by, bz, hx, hy, hz, qs, machLocal, out Dual bfx, out Dual bfy, out Dual bfz))
         {
             fx += bfx;
             fy += bfy;
@@ -205,7 +206,7 @@ public sealed record KsaPointMassModel : IPointMassModel
 
         if (LiftSlope != null)
         {
-            Dual lift = LiftScale * qs * LiftSlope.Cd(TableMach(Atmosphere.Mach(speed), LiftSlope), alpha);
+            Dual lift = LiftScale * qs * LiftSlope.Cd(TableMach(machLocal, LiftSlope), alpha);
             fx -= lift * px;
             fy -= lift * py;
             fz -= lift * pz;
@@ -225,11 +226,11 @@ public sealed record KsaPointMassModel : IPointMassModel
     /// <summary>
     /// The body-axis table's force, N, for a body axis b and air direction h, with the roll held at RollRef: body x along b, y along w's part square to b, z = x x y; alpha and beta from h in those axes (BodyAeroTable); the force q S (C_x x + C_y y + C_z z), its part along the airflow times DragScale and the rest times LiftScale. False where the craft is not within BodyAeroMaxTiltRad of engine first, or the axes are degenerate (b along w, which a returning booster never flies).
     /// </summary>
-    private bool TryBodyAero(Dual bx, Dual by, Dual bz, Dual hx, Dual hy, Dual hz, Dual qs, Dual speed,
+    private bool TryBodyAero(Dual bx, Dual by, Dual bz, Dual hx, Dual hy, Dual hz, Dual qs, Dual mach,
                              out Dual fx, out Dual fy, out Dual fz)
     {
         fx = fy = fz = default;
-        if (!BodyAero!.WorldCoefficients(Atmosphere!.Mach(speed), bx, by, bz, hx, hy, hz, RollRefX, RollRefY, RollRefZ,
+        if (!BodyAero!.WorldCoefficients(mach, bx, by, bz, hx, hy, hz, RollRefX, RollRefY, RollRefZ,
                                          BodyAeroMaxTiltRad, out Dual cx, out Dual cy, out Dual cz))
             return false;
         Dual Fx = qs * cx;

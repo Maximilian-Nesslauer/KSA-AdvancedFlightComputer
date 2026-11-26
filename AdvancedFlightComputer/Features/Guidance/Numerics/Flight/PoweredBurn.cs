@@ -125,7 +125,8 @@ public struct PoweredBurnSystem : IOdeSystem
         Dual sp2 = ax * ax + ay * ay + az * az + 1e-18;
         Dual sp = Dual.Sqrt(sp2);
 
-        Dual rho = Atmosphere.Density(rlen - MeanRadius);
+        Dual alt = rlen - MeanRadius;
+        Dual rho = Atmosphere.Density(alt);
         if (rho.V == 0.0)
             return;
 
@@ -139,7 +140,7 @@ public struct PoweredBurnSystem : IOdeSystem
         Dual cross = Dual.Sqrt(cx * cx + cy * cy + cz * cz + 1e-18);
         Dual alpha = Dual.Atan2(cross, dot);
 
-        Dual mach = sp / Atmosphere.SpeedOfSound;
+        Dual mach = Atmosphere.Mach(sp, alt);
         Dual cd = Table.Cd(mach, alpha);
         Dual k = 0.5 * rho * sp * cd * ReferenceArea / m;
         dx[3] -= k * ax; dx[4] -= k * ay; dx[5] -= k * az;

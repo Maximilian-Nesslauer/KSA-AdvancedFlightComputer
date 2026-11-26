@@ -1642,19 +1642,23 @@ public static partial class KsaAeroSweep
         double[] alt = altitudes.ToArray();
         var density = new double[alt.Length];
         var pressure = new double[alt.Length];
+        var speedOfSoundSamples = new double[alt.Length];
+        var dynamicViscositySamples = new double[alt.Length];
         for (int i = 0; i < alt.Length; i++)
         {
             AtmosphericConditions air = physical.ComputeConditionsAtAltitude(alt[i]);
             density[i] = air.Density;
             pressure[i] = air.Pressure;
+            speedOfSoundSamples[i] = physical.Mixture.ComputeSpeedOfSound(air.Temperature);
+            dynamicViscositySamples[i] = physical.Mixture.ComputeDynamicViscosity(air.Temperature);
         }
 
-        // The game derives the speed of sound from the mixture and the local temperature (PhysicsEnvironment.RecomputePositionalValues). The Mach axis takes its sea level value as one fixed scale, see AtmosphereModel.
-        double speedOfSound = physical.Mixture.ComputeSpeedOfSound(physical.ComputeTemperatureAtAltitude(0.0));
+        double speedOfSound = speedOfSoundSamples[0];
 
         try
         {
-            res.Atmosphere = new SampledAtmosphere(alt, density, pressure, top, speedOfSound);
+            res.Atmosphere = new SampledAtmosphere(alt, density, pressure, top, speedOfSound,
+                speedOfSoundSamples, dynamicViscositySamples);
         }
         catch (ArgumentException ex)
         {
@@ -1843,7 +1847,7 @@ public static partial class KsaAeroSweep
     /// The body-axis aerodynamic moment the tables predict, N m about the centre of mass the craft has now (assembly axes, as the torque the game reports), for an air velocity in body axes and the air's density: the moment table at that Mach, alpha and beta, moved from the sweep's centre of mass by M_now = M_sweep + (r_sweep - r_now) x F, with F the force table's. False outside the tables' 30 deg cone round engine first, or without a moment table.
     ///  The assembly and body axes are taken as one rotation, as the probe that measured both does.
     /// </summary>
-    public static bool PredictBodyMoment(Result res, double3 airBody, double density, double3 comAsmbNow, out double3 moment)
+    public static bool PredictBodyMoment(Result res, double3 airBody, double density, double3 comAsmbNow, out double3 moment, double altitude = 0.0)
     {
         moment = default;
         if (res?.BodyMoment == null || res.BodyAero == null || res.Atmosphere == null)
@@ -1855,7 +1859,7 @@ public static partial class KsaAeroSweep
         if (!(-u.X > Math.Cos(30.0 * Math.PI / 180.0)))
             return false;
         double alpha = Math.Atan2(u.Z, -u.X), beta = Math.Atan2(u.Y, -u.X);
-        double mach = res.Atmosphere.Mach(speed);
+        double mach = res.Atmosphere.Mach(speed, altitude);
         double machF = Math.Clamp(mach, res.BodyAero.MachMin, res.BodyAero.MachMax);
         double machM = Math.Clamp(mach, res.BodyMoment.MachMin, res.BodyMoment.MachMax);
         double qs = 0.5 * density * speed * speed * res.ReferenceArea;

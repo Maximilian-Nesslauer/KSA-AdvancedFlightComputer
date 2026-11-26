@@ -39,6 +39,7 @@ internal static class KsaBellyflopSetup
             OmegaX = omega.X, OmegaY = omega.Y, OmegaZ = omega.Z,
             Density = h => atm.Density(h + terrain),
             SpeedOfSound = atm.SpeedOfSound,
+            SpeedOfSoundAt = h => atm.SpeedOfSoundAt(h + terrain),
             Mass = Math.Max(vehicle.TotalMass, 1.0),
             ReferenceArea = aero.ReferenceArea,
             Coefficients = Coefficients(table),

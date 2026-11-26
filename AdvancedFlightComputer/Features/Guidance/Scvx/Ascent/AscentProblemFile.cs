@@ -39,6 +39,8 @@ public static class AscentProblemFile
         public double[] Pressure { get; set; } = [];
         public double TopAltitude { get; set; }
         public double SpeedOfSound { get; set; }
+        public double[]? SpeedOfSoundSamples { get; set; }
+        public double[]? DynamicViscositySamples { get; set; }
     }
 
     private sealed class ProblemDto
@@ -168,6 +170,8 @@ public static class AscentProblemFile
                         Pressure = a.PressureSamples,
                         TopAltitude = a.TopAltitude,
                         SpeedOfSound = a.SpeedOfSound,
+                        SpeedOfSoundSamples = a.SpeedOfSoundSamples,
+                        DynamicViscositySamples = a.DynamicViscositySamples,
                     };
                     break;
                 default:
@@ -218,7 +222,8 @@ public static class AscentProblemFile
             ?? throw new InvalidDataException("not an ascent problem");
         AscentAtmosphere air = VacuumAscentAtmosphere.Instance;
         AtmosphereModel? atm = dto.SampledAtmosphere is { } sampled
-            ? new SampledAtmosphere(sampled.Altitude, sampled.Density, sampled.Pressure, sampled.TopAltitude, sampled.SpeedOfSound)
+            ? new SampledAtmosphere(sampled.Altitude, sampled.Density, sampled.Pressure, sampled.TopAltitude, sampled.SpeedOfSound,
+                sampled.SpeedOfSoundSamples, sampled.DynamicViscositySamples)
             : dto.Atmosphere is { Length: 4 } a ? new ExponentialAtmosphere(a[0], a[1], a[2], a[3]) : null;
         if (atm != null)
         {

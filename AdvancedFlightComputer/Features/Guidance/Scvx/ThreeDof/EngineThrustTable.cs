@@ -117,4 +117,14 @@ public sealed class EngineThrustTable
         }
         return u;
     }
+
+    /// <summary>Differentiable inverse of <see cref="Thrust(double, double)"/> at fixed pressure via the inverse function theorem.</summary>
+    public Dual ThrottleFor(Dual thrust, double pressure)
+    {
+        double u = ThrottleFor(thrust.V, pressure);
+        if (thrust.D == 0.0)
+            return new Dual(u, 0.0);
+        Thrust(u, pressure, out double dThrottle, out _);
+        return new Dual(u, dThrottle > 1e-12 ? thrust.D / dThrottle : 0.0);
+    }
 }

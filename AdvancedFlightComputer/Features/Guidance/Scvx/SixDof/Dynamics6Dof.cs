@@ -92,6 +92,15 @@ public static class Dynamics6Dof
         /// </summary>
         public double MassFlowOffset = 0.0;
 
+        /// <summary>
+        /// Altitude-varying engine back-pressure table shared with 3-DOF, or null to use the constant-pressure affine model.
+        /// When set, axial thrust control T is referenced at <see cref="EngineRefPressurePa"/>, inverted to throttle, and evaluated at local ambient pressure.
+        /// </summary>
+        public EngineThrustTable? Engine;
+
+        /// <summary>Reference ambient pressure for the axial thrust control T when <see cref="Engine"/> is set, Pa.</summary>
+        public double EngineRefPressurePa;
+
         /// <summary>The RCS torque the plan may use, or null for none, which leaves its three controls without effect (the subproblem pins them at zero).</summary>
         public RcsModel? Rcs;
 
@@ -160,12 +169,25 @@ public static class Dynamics6Dof
         if (p.EngineOff)
             tdx = tdy = T = default;
 
+        Dual tEff = T;
+        Dual mdot = p.EngineOff ? default : -(p.MassFlowOffset + p.Alpha * T);
+        if (!p.EngineOff && p.Engine != null)
+        {
+            Dual altEngine = p.AeroAltitudeOffset + x[IR + 2];
+            Dual pAmb = p.Aero?.Atmosphere != null ? p.Aero.Atmosphere.Pressure(altEngine)
+                      : p.BodyAero?.Atmosphere != null ? p.BodyAero.Atmosphere.Pressure(altEngine)
+                      : new Dual(p.EngineRefPressurePa);
+            Dual uTh = p.Engine.ThrottleFor(T, p.EngineRefPressurePa);
+            tEff = p.Engine.Thrust(uTh, pAmb);
+            mdot = -p.Engine.MassFlow(uTh);
+        }
+
         // rdot = v
         xdot[IR + 0] = vx;
         xdot[IR + 1] = vy;
         xdot[IR + 2] = vz;
 
-        // Body -> inertial rotation applied to T_body = [tdx, tdy, T].
+        // Body -> inertial rotation applied to T_body = [tdx, tdy, tEff].
         // Rows of R(q), expanded inline to avoid materialising the matrix.
         Dual r00 = 1.0 - 2.0 * (qy * qy + qz * qz);
         Dual r01 = 2.0 * (qx * qy - qw * qz);
@@ -178,7 +200,7 @@ public static class Dynamics6Dof
         Dual r22 = 1.0 - 2.0 * (qx * qx + qy * qy);
 
         // The RCS force joins the engine's in body axes, so the one rotation takes both to the site frame.
-        Dual bx = tdx, by = tdy, bz = T;
+        Dual bx = tdx, by = tdy, bz = tEff;
         Dual rcsTx = default, rcsTy = default, rcsTz = default;
         if (p.Rcs != null)
         {
@@ -215,10 +237,10 @@ public static class Dynamics6Dof
         xdot[IQ + 2] = 0.5 * (qw * wy - qx * wz + qz * wx);
         xdot[IQ + 3] = 0.5 * (qw * wz + qx * wy - qy * wx);
 
-        // wdot = I^-1 ( tau - w x (I w) ),  tau = [L*tdy, -L*tdx, tau_roll + e_x tdy - e_y tdx] + T * m_thrust, plus the air's
-        Dual taux = p.LArm * tdy + p.ThrustMomentX * T + aeroTx + rcsTx;
-        Dual tauy = -(p.LArm * tdx) + p.ThrustMomentY * T + aeroTy + rcsTy;
-        tauRoll += p.ThrustMomentZ * T + p.GimbalRollPerTdx * tdx + p.GimbalRollPerTdy * tdy + aeroTz + rcsTz;
+        // wdot = I^-1 ( tau - w x (I w) ),  tau = [L*tdy, -L*tdx, tau_roll + e_x tdy - e_y tdx] + tEff * m_thrust, plus the air's
+        Dual taux = p.LArm * tdy + p.ThrustMomentX * tEff + aeroTx + rcsTx;
+        Dual tauy = -(p.LArm * tdx) + p.ThrustMomentY * tEff + aeroTy + rcsTy;
+        tauRoll += p.ThrustMomentZ * tEff + p.GimbalRollPerTdx * tdx + p.GimbalRollPerTdy * tdy + aeroTz + rcsTz;
         Dual iwx = p.Ixx * wx, iwy = p.Iyy * wy, iwz = p.Izz * wz;
         Dual gyrox = wy * iwz - wz * iwy;
         Dual gyroy = wz * iwx - wx * iwz;
@@ -227,8 +249,7 @@ public static class Dynamics6Dof
         xdot[IW + 1] = (tauy - gyroy) / p.Iyy;
         xdot[IW + 2] = (tauRoll - gyroz) / p.Izz;
 
-        // mdot = -(mdot_0 + alpha * T)
-        xdot[IM] = p.EngineOff ? default : -(p.MassFlowOffset + p.Alpha * T);
+        xdot[IM] = mdot;
     }
 
     /// <summary>
@@ -358,9 +379,15 @@ public static class Dynamics6Dof
             RcsColumns(x, p, B);
     }
 
-    /// <summary>The propellant flow at one node's controls, kg/s, as F's mass row has it: the engine's line in its axial thrust.</summary>
+    /// <summary>The propellant flow at one node's controls, kg/s, matching F's mass row.</summary>
     public static double MassFlow(Params p, ReadOnlySpan<double> u)
-        => p.EngineOff ? 0.0 : p.MassFlowOffset + p.Alpha * u[IT];
+    {
+        if (p.EngineOff)
+            return 0.0;
+        if (p.Engine != null)
+            return p.Engine.MassFlow(p.Engine.ThrottleFor(u[IT], p.EngineRefPressurePa));
+        return p.MassFlowOffset + p.Alpha * u[IT];
+    }
 
     /// <summary>The RCS columns of B, row-major NX x NU: d(xdot)/d(u_rcs), exactly what F's RCS terms differentiate to.</summary>
     private static void RcsColumns(ReadOnlySpan<double> x, Params p, Span<double> B)

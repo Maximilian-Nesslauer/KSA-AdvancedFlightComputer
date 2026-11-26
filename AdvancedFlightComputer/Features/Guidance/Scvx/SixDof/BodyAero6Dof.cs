@@ -199,7 +199,7 @@ public sealed class BodyAero6Dof
         Dual wSpeed = SmoothStep((speed - FadeSpeedLowMs) / (FadeSpeedHighMs - FadeSpeedLowMs));
         weight = (wTilt + wBand + wBelly + wSphere) * wSpeed;
 
-        Dual mach = Atmosphere.Mach(speed);
+        Dual mach = Atmosphere.Mach(speed, altitude);
         Dual qs = 0.5 * Atmosphere.Density(altitude) * speed2 * ReferenceArea * wSpeed;
 
         // The coefficients, force and moment with the control surfaces', as a blend of the two tables by their shares.
