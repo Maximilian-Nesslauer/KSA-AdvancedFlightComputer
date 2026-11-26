@@ -66,6 +66,7 @@ internal static partial class Program
         UpfgGuidanceRules();
         So3AxisAngleRules();
         AttitudeControllerRules();
+        GuidanceModeGuardsRules();
         BurnTurnChecks();
         PrintfTexts();
         LandingSiteParseRules();

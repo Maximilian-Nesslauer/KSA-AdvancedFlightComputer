@@ -206,6 +206,7 @@ public static partial class GuidanceWindow
         _s.ThreeDofThrottle = _s.ThreeDofPlanThrottle = 0.0;
         _s.ThreeDofSixDofWaiting = false;
         _s.ThreeDofBurnSolveFault = false;
+        _s.ThreeDofEmergencyBrake = false;
         _s.ThreeDofTouchdownHandoff = default;
         _s.ThreeDofHandoffRefusal = "";
         _s.SixDofStandbyPredicted = false;
@@ -326,9 +327,34 @@ public static partial class GuidanceWindow
                 return;   // a handover claimed the craft on this step
             if (_s.ThreeDofPhase == ThreeDofPhase.Burn)
             {
+                if (_s.ThreeDofEmergencyBrake)
+                {
+                    StepThreeDofEmergencyBrake(vehicle, orbit, parent, frame, siteCci, x, dt);
+                    EntryLogRow(vehicle, parent, frame, x, att, now, onPlan: false);
+                    return;
+                }
                 // Lit with no plan for this step: hold the command and the throttle rather than steer on a law the burn does not use.
                 CommandThreeDof(frame, frame.VecToLocal(_s.ThreeDofPlanCommandCci.Length() > 0.5 ? _s.ThreeDofPlanCommandCci : _s.CommandDir), default, dt, smooth: false);
                 TrimThreeDof(vehicle, orbit, parent, dt, integrate: false);
+                EntryLogRow(vehicle, parent, frame, x, att, now, onPlan: false);
+                return;
+            }
+            // Emergency braking backstop: if entry guidance has no live plan and descends to its stopping altitude with propellant, light immediately instead of impacting unpowered.
+            double legsAltM = x[2] - _s.VehicleHeightM;
+            double pressure = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
+            double maxThrustN = KsaEnginePerf.ActiveThrustCapability(vehicle, pressure);
+            double gravityMs2 = parent.Mu / orbit.StateVectors.PositionCci.LengthSquared();
+            if (vehicle.IsAnyEnginePropellantAvailable()
+                && Ui.Logic.GuidanceModeGuards.ShouldTriggerEmergencyBrake(legsAltM, x[5], maxThrustN, vehicle.TotalMass, gravityMs2))
+            {
+                _s.ThreeDofStandby = false;
+                _s.ThreeDofPhase = ThreeDofPhase.Burn;
+                _s.ThreeDofEmergencyBrake = true;
+                GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                    $"Entry guidance emergency braking backstop at {legsAltM:F0} m, {-x[5]:F1} m/s sink: no live entry plan."));
+                _s.WarnEntry("NO ENTRY PLAN: EMERGENCY BRAKING.");
+                StepThreeDofEmergencyBrake(vehicle, orbit, parent, frame, siteCci, x, dt);
+                StepEntryTouchdownHandoff(vehicle, parent, siteCci, x14, now);
                 EntryLogRow(vehicle, parent, frame, x, att, now, onPlan: false);
                 return;
             }
@@ -788,6 +814,7 @@ public static partial class GuidanceWindow
             _s.ThreeDofPlan = plan;
             _s.ThreeDofKeptPlanUntil = double.NaN;
             _s.ThreeDofBurnSolveFault = false;
+            _s.ThreeDofEmergencyBrake = false;
             if (_s.ThreeDofTouchdownHandoff.Warning)
                 _s.ThreeDofTouchdownHandoff = default;
         }
@@ -1189,12 +1216,44 @@ public static partial class GuidanceWindow
         _s.ThreeDofGlideHandoff = FormattableString.Invariant($"HANDOVER IN THE GLIDE: TOUCHDOWN, {ignition - now:F1} s BEFORE ENTRY'S IGNITION, {plan.EndTime - now:F1} s FROM PAD, {x14[2]:F0} m") + (now >= turnAway ? ", ITS PLAN TURNING AWAY." : ".");
     }
 
+    /// <summary>
+    /// Commands retrograde braking on the vertical stopping curve when entry guidance reaches the ground with no live plan.
+    /// </summary>
+    private static void StepThreeDofEmergencyBrake(Vehicle vehicle, Orbit orbit, IParentBody parent,
+                                                   KsaFrameBridge.SiteFrame frame, double3 siteCci,
+                                                   double[] x, double dt)
+    {
+        double3 pos = orbit.StateVectors.PositionCci;
+        double3 upCci = double3.Normalize(pos);
+        double3 vAir = orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), pos);
+        double speed = vAir.Length();
+        double3 steerCci = speed > 5.0 ? -vAir / speed : upCci;
+        CommandThreeDof(frame, frame.VecToLocal(steerCci), default, dt, smooth: false);
+        TrimThreeDof(vehicle, orbit, parent, dt, integrate: false);
+
+        double legsAltM = x[2] - _s.VehicleHeightM;
+        double gravityMs2 = parent.Mu / pos.LengthSquared();
+        double verticalCos = double3.Dot(KsaFrameBridge.ThrustAxisCci(vehicle), upCci);
+        double minTwr = TerminalMinThrottleTwr(vehicle, orbit, parent.Mu);
+        double demandN = Ui.Logic.GuidanceModeGuards.ComputeEmergencyBrakeDemandN(
+            legsAltM, x[5], vehicle.TotalMass, gravityMs2, verticalCos, minTwr, SixDofHoverMaxMinTwr);
+        double pressure = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
+        double minThrustN = KsaEnginePerf.ThrustAtThrottle(vehicle, vehicle.GetMinThrottle(), pressure);
+        bool burn = demandN > 0.0 && (minTwr <= SixDofHoverMaxMinTwr || demandN >= minThrustN * 0.9);
+        double throttle = burn ? Math.Clamp(KsaEnginePerf.ThrottleForThrust(vehicle, demandN, pressure), vehicle.GetMinThrottle(), 1.0) : 0.0;
+        _s.ThreeDofEngineOn = throttle > 0.0;
+        _s.ThreeDofThrottle = throttle;
+        _s.ThreeDofPlanThrottle = throttle;
+    }
+
     private static void StepEntryTouchdownHandoff(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                                   double[] x, double now)
     {
         Plan3Dof plan = _s.ThreeDofGuidance?.Published ?? _s.ThreeDofPlan;
         double burnLeft = plan?.EndTime - now ?? double.NaN;
-        string reason = _s.ThreeDofBurnSolveFault ? "ENTRY SOLVE FAULT IN BURN" : null;
+        string reason = _s.ThreeDofBurnSolveFault ? "ENTRY SOLVE FAULT IN BURN"
+            : _s.ThreeDofEmergencyBrake ? "EMERGENCY BRAKING BACKSTOP"
+            : null;
         if (reason == null && !ThreeDofBusy && _s.ThreeDofGuidance is { } guidance)
         {
             if (guidance.Phase == Phase3Dof.Idle)

@@ -1658,6 +1658,7 @@ public sealed class VehicleAutopilotState
     /// <summary>Set once the burn is inside the hand-over time with 6-DOF not ready yet, so that is logged once.</summary>
     public bool ThreeDofSixDofWaiting;
     public bool ThreeDofBurnSolveFault;
+    public bool ThreeDofEmergencyBrake;
     public (string Status, bool Warning) ThreeDofTouchdownHandoff;
     public double SixDofEntryBlendStart = double.NaN;
     public double SixDofEntryBlendThrottle;

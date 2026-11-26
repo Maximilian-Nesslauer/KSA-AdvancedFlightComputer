@@ -1152,8 +1152,8 @@ public static partial class GuidanceWindow
     // A vertical speed below this is descending, for the stop-short check.
     private const double SixDofDescendingMs = 1.0;
 
-    // A plan lost below this height of the legs over the pad is lost near the ground: a craft that can hold its weight is handed to terminal hover.
-    private const double SixDofLostPlanGateM = 500;
+    // A plan lost below this height of the legs over the pad is lost near the ground: a craft that can hold its weight is handed to terminal hover. Above it FlyWithoutPlan tracks the stopping curve while the solver restarts.
+    private const double SixDofLostPlanGateM = 100;
 
     // A craft no higher than this over the plan end, with no contact, whose plan has run out, or which is no faster than SixDofArrivedMs vertically, has reached the end of its plan in the air.
     private const double SixDofArrivedM = 1.0;
@@ -1239,7 +1239,8 @@ public static partial class GuidanceWindow
         if (_s.SixDofSeenDescending && !contact && ManualInputs(vehicle).EngineOn)
         {
             double minTwr = TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu);
-            if (x[5] > SixDofClimbCutMs || (x[5] >= 0.0 && minTwr > SixDofHoverMaxMinTwr))
+            bool hasLivePlan = !lastPlanExpired && _s.SixDofLastPublishedPlan != null;
+            if (Ui.Logic.GuidanceModeGuards.ShouldCutSixDofOnClimb(x[5], minTwr, hasLivePlan, SixDofClimbCutMs, SixDofHoverMaxMinTwr))
             {
                 CutSixDofEngine(vehicle, parent, siteCci, now, x, minTwr);
                 return true;

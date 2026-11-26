@@ -252,10 +252,15 @@ public static partial class GuidanceWindow
             _s.HandoverPendingUntil = double.NegativeInfinity;
             return;
         }
-        // Clear any stale aero error when a valid table is already loaded so a transient setup error cannot latch boostback engagement off.
-        if (_s.Aero?.Table != null && _s.AeroError.Length > 0 && _s.AeroError != KsaAeroSweep.RebuildingError)
-            _s.AeroError = "";
+        string priorAeroError = _s.AeroError;
+        double priorRetryAt = _s.AeroRetryAt;
         ResampleBoostbackAero(vehicle, parent);
+        // Clear a prior transient error still waiting out its retry cooldown when a valid table is already loaded.
+        if (_s.AeroJob == null && _s.Aero?.Table != null && _s.AeroError.Length > 0
+            && _s.AeroError != KsaAeroSweep.RebuildingError
+            && _s.AeroError == priorAeroError && _s.AeroRetryAt == priorRetryAt
+            && SimNow() < _s.AeroRetryAt)
+            _s.AeroError = "";
         if (_s.AeroJob != null)
         {
             _s.WarnBoostback("MEASURING AERO. BOOSTBACK WAITS FOR IT.");
