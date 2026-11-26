@@ -343,6 +343,7 @@ public sealed class GuidanceFlopperEntryTest : AfcTest
         t.Info($"peak aero load {peakLoadG:F2} g ({peakLoadBellyflopG:F2} g under bellyflop), dynamic pressure {peakQ / 1000:F1} kPa; " +
                $"heating {peakHeat / 1000:F0} kW/m2 at most, at Mach {peakHeatMach:F1} and {peakHeatAlt / 1000:F1} km; {sim:F0} s flown, {wall.Elapsed.TotalSeconds:F0} s real");
         t.Check("orbital entry engages", !double.IsNaN(engagedAt), state.OrbitalEntry.Status);
+        t.Check("no guidance step exceptions during entry", state.FailedSteps == 0, $"failed steps: {state.FailedSteps}");
         // With a heating limit set, the flown peak must stay within 5 % of it (the game's density against the plan's, and the tracker's give).
         double heatLimit = state.OrbitalEntryHeatMaxKWm2;
         if (heatLimit > 0)

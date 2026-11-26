@@ -1,7 +1,7 @@
 namespace AdvancedFlightComputer.Guidance.Scvx.OrbitalEntry;
 
 /// <summary>
-/// The longitudinal entry equations with energy as the independent variable (Lu 2008, Eqs. 7–9, Earth rotation left out).
+/// The longitudinal entry equations with energy as the independent variable (Lu 2008, Eqs. 7-9, Earth rotation included).
 ///
 /// Normalised units: length by the body radius R0, speed by sqrt(mu/R0), acceleration by g0 = mu/R0^2.
 ///

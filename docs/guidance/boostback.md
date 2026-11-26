@@ -14,7 +14,7 @@ stateDiagram-v2
     Rotation --> Glide: miss <= 3 km or timeout / low tgo
     Boostback --> Glide: planTgo <= 0 or missDv < 5 m/s<br/>or dry / overrun
     Glide --> Rotation: apex recheck miss > 3 km
-    Glide --> [*]: ENTRY ON GLIDE -> 3-DOF Entry
+    Glide --> [*]: RETRO BURN (3-DOF Entry)
 ```
 
 ### Separation adoption (`Autopilot.cs`)
@@ -38,7 +38,7 @@ stateDiagram-v2
   - Cuts off to `Glide` when `planTgo <= 0`, `!BoostbackLocked && missDv < 5 m/s` (`BoostbackCutoffDvMs`), tanks run dry, or the backstop expires.
 - **`Glide` ("GLIDE"):** Engine off. While climbing after a small/skipped burn (`BoostbackClimbHold`), holds nose-first along airflow until apex, then runs a single apex recheck (restarting a boostback burn if `apexKm > 3.0 km`).
   - **Vacuum & dynamic-pressure continuity:** above the atmosphere (`q < 10 Pa`), holds planned orientation and updates `ImpactPredictor` / `_s.GlideTgo` *before* returning so `ThreeDofEngageTgoS` never freezes on `NaN`.
-  - **`ENTRY ON GLIDE` hand-over:** when `ThreeDofFromGlide` is enabled (default), engages [Entry (3-DOF)](scvx/entry.md) in standby pre-planning at `0.5 kPa` (`ThreeDofStandbyQkPa`) with active take-over at `1.0 kPa` (`ThreeDofEngageQkPa`), backed by a time-to-go backstop at `GlideTgo <= 45 s` (`ThreeDofEngageTgoS`).
+  - **`RETRO BURN` hand-over:** engages [Entry (3-DOF)](scvx/entry.md) in standby pre-planning at `0.5 kPa` (`ThreeDofStandbyQkPa`) with active take-over at `1.0 kPa` (`ThreeDofEngageQkPa`), backed by a time-to-go backstop at `GlideTgo <= 45 s` (`ThreeDofEngageTgoS`).
 
 ## Aerodynamic glide steering (`BoostbackGlide.cs`)
 

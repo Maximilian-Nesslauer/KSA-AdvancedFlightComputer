@@ -37,19 +37,18 @@ internal static class OrbitalEntryCheck
 
     public static int Run(bool verbose)
     {
-        int fails = TrimCheck() + FrameCheck() + LatchCheck() + RotationCheck();
+        int fails = TrimCheck() + FrameCheck() + LatchCheck() + RotationCheck() + EdgeCaseCheck();
         foreach (var v in Vehicles)
         {
             fails += CorridorCheck(v);
             fails += OpenLoop(v, verbose);
             fails += ClosedLoop(v, verbose);
         }
-        // The heating limits: every vehicle again at 700 and at the console's default, 440 kW/m^2 on a 1 m nose (the Space Shuttle's STS-2 reference heating, NASA TM-84580). None of them can loft to 440 from this entry; the floors are soft (EntryConfig.FloorShare), so each flies as near it as it can.
+        // Diagnostic soft-floor sweep (reported only, not gated): every vehicle again at 700 and 440 kW/m^2 on a 1 m nose.
         foreach (double limit in new[] { 700_000.0, 440_000.0 })
         {
             HeatLimit = limit;
-            Console.WriteLine($"  with a {HeatLimit / 1000:F0} kW/m^2 heating limit:");
-            // Reported, not judged: they measure what a limit does. Soft floors fly as near a limit a craft cannot meet as they can, and a capsule's range pays for it.
+            Console.WriteLine($"  diagnostic (not gated) with a {HeatLimit / 1000:F0} kW/m^2 heating limit:");
             foreach (var hv in Vehicles)
             {
                 OpenLoop(hv, verbose);
@@ -59,6 +58,96 @@ internal static class OrbitalEntryCheck
         HeatLimit = 0.0;
         Console.WriteLine(fails == 0 ? "PASS orbital-entry" : $"FAIL orbital-entry ({fails})");
         return fails == 0 ? 0 : 1;
+    }
+
+    /// <summary>Regression checks for fixed-AoA trim residuals, inverted bank bounds, negative high-Mach L/D, hyperbolic negative-energy floors, rotating-frame consistency, and smooth holding bank slew.</summary>
+    static int EdgeCaseCheck()
+    {
+        int f = 0;
+        // 1. EntryTrim.Fixed populates ResidualCm to Mach.Length.
+        double[] mach = [2, 10, 20];
+        double[] alpha = [0, 55, 90];
+        var cd = new double[mach.Length * alpha.Length];
+        var cl = new double[mach.Length * alpha.Length];
+        Array.Fill(cd, 1.0);
+        Array.Fill(cl, 0.35);
+        var fixedTrim = EntryTrim.Fixed(mach, alpha, cd, cl, 55.0);
+        bool fixedOk = fixedTrim.ResidualCm.Length == mach.Length && fixedTrim.AlphaDeg[0] == 55.0;
+        Console.WriteLine($"  {(fixedOk ? "ok  " : "FAIL")} fixed trim residuals: len {fixedTrim.ResidualCm.Length}/{mach.Length}");
+        if (!fixedOk) f++;
+
+        // 2. Inverted bank bounds and negative high-Mach L/D do not throw in EntryPlanner.Solve.
+        bool boundsOk = true;
+        try
+        {
+            var m = Model(Vehicles[1]);
+            var cfgInv = new EntryConfig { BankMinDeg = 80.0, BankMaxDeg = 10.0 };
+            var stInv = EntryPlanner.PredictStart(m, cfgInv, R0 + 121_000, 7_600, -1.3 * Math.PI / 180, 2_000_000 / R0);
+            if (stInv != null) _ = new EntryPlanner().Solve(m, cfgInv, stInv.Value.E, stInv.Value.X, null);
+
+            var mNeg = new EntryModel
+            {
+                BodyRadius = R0, Mu = Mu,
+                Density = h => Rho0 * Math.Exp(-h / Hs), SpeedOfSound = _ => A0, AtmosphereTop = Top,
+                DragCoefficient = _ => 1.15, LiftToDrag = ma => ma >= 18.0 ? -0.15 : 0.35,
+                Mass = 100_000, ReferenceArea = 420,
+            };
+            var cfgNom = new EntryConfig();
+            var stNeg = EntryPlanner.PredictStart(mNeg, cfgNom, R0 + 121_000, 7_600, -1.3 * Math.PI / 180, 2_000_000 / R0);
+            if (stNeg != null) _ = new EntryPlanner().Solve(mNeg, cfgNom, stNeg.Value.E, stNeg.Value.X, null);
+        }
+        catch (Exception ex)
+        {
+            boundsOk = false;
+            Console.WriteLine($"  FAIL planner bounds exception: {ex.GetType().Name}: {ex.Message}");
+        }
+        if (boundsOk) Console.WriteLine("  ok   planner bounds: inverted bank and negative high-Mach L/D handled without throwing");
+        else f++;
+
+        // 3. Hyperbolic negative-energy FloorRadius stays above ground floor and enforces limits.
+        var mHyp = Model(Vehicles[1]);
+        var dHyp = new EntryDynamics(mHyp);
+        var cfgHeat = new EntryConfig { HeatingRateMax = 440_000.0, DynamicPressureMax = 16_000.0, LoadFactorMax = 2.5 };
+        double rHyp = (R0 + 80_000.0) / R0, vHyp = 11_300.0 / mHyp.SpeedUnit;
+        double eHyp = EntryDynamics.Energy(rHyp, vHyp);
+        double floorR = dHyp.FloorRadius(eHyp, cfgHeat);
+        double floorH = dHyp.Altitude(floorR);
+        double viol = dHyp.Violation(eHyp, floorR, cfgHeat);
+        bool hypOk = eHyp < 0.0 && floorH > 50_000.0 && viol <= 1.01;
+        Console.WriteLine($"  {(hypOk ? "ok  " : "FAIL")} hyperbolic floor (e={eHyp:F4}): h={floorH / 1000:F1} km, violation={viol:F3}");
+        if (!hypOk) f++;
+
+        // 4. Rotating-frame EquilibriumGlideRadius gives zero gamma-dot.
+        var mRot = Model(Vehicles[1]).WithRotation(7.2921159e-5, 30.0 * Math.PI / 180.0, 0.0);
+        var dRot = new EntryDynamics(mRot);
+        double eRot = EntryDynamics.Energy((R0 + 80_000.0) / R0, 7_500.0 / mRot.SpeedUnit);
+        double cosB = Math.Cos(15.0 * Math.PI / 180.0);
+        double rEq = dRot.EquilibriumGlideRadius(eRot, cosB, new EntryConfig());
+        double vEq = EntryDynamics.Speed(eRot, rEq);
+        double dEq = dRot.Drag(eRot, rEq);
+        double uEq = dRot.LiftToDrag(eRot, rEq) * cosB;
+        mRot.RotationTerms(rEq, vEq, 0.0, out _, out double vgRotEq);
+        double gdotDegS = Math.Abs((uEq * dEq + (vEq * vEq - 1.0 / rEq) / rEq + vgRotEq) / vEq / mRot.TimeUnit * 180.0 / Math.PI);
+        bool rotOk = gdotDegS < 1e-4;
+        Console.WriteLine($"  {(rotOk ? "ok  " : "FAIL")} rotating equilibrium glide: h={dRot.Altitude(rEq) / 1000:F1} km, |gamma-dot|={gdotDegS:E2} deg/s");
+        if (!rotOk) f++;
+
+        // 5. EntryTracker.SlewToLevel slews bank smoothly across multiple ticks instead of dropping to zero.
+        var cfgTr = new EntryConfig { RollRateDegS = 5.0 };
+        var mTr = Model(Vehicles[1]);
+        var stTr = EntryPlanner.PredictStart(mTr, cfgTr, R0 + 121_000, 7_600, -1.3 * Math.PI / 180, 2_200_000 / R0)!.Value;
+        var pTr = new EntryPlanner().Solve(mTr, cfgTr, stTr.E, stTr.X, null).Plan!;
+        var tr = new EntryTracker(cfgTr);
+        for (int i = 0; i < 200; i++)
+            tr.Update(new EntryTracker.Input(0.1, pTr.E0 + 0.01, 5.0, -50.0, 0.35, Hs, 0.0, pTr.SpeedMs[0] / mTr.SpeedUnit, pTr, InAtmosphere: true));
+        double b0 = tr.BankDeg;
+        double b1 = tr.SlewToLevel(0.02);
+        double b2 = tr.SlewToLevel(0.02);
+        bool holdOk = Math.Abs(b0) > 10.0 && Math.Abs(Math.Abs(b0 - b1) - 0.1) < 1e-6 && Math.Abs(Math.Abs(b1 - b2) - 0.1) < 1e-6;
+        Console.WriteLine($"  {(holdOk ? "ok  " : "FAIL")} holding bank slew: {b0:F2} -> {b1:F2} -> {b2:F2} deg");
+        if (!holdOk) f++;
+
+        return f;
     }
 
     /// <summary>The trim schedule finds a restoring zero of C_m, prefers the one nearest the preferred angle, and where there is none takes the angle of least moment in the band (Mach 20 here: 30 deg, the band's edge).</summary>

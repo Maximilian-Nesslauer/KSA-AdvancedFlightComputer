@@ -80,7 +80,7 @@ public static partial class GuidanceWindow
         if (vehicle?.Parts?.States == null
             || !ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>.TryGetFrom(vehicle.Parts.States, out var engines))
             return false;
-        bool hasRocketStates = ModuleStateful<Rocket, RocketState, RocketGlobalState, EmptyStruct>.TryGetFrom(vehicle.Parts.States, out var rocketStates);
+        bool hasRocketStates = ModuleStateful<Rocket, RocketState, EmptyStruct, EmptyStruct>.TryGetFrom(vehicle.Parts.States, out var rocketStates);
         foreach (var engine in engines.ModulesAndStates)
         {
             if (engine.Module.Rockets is not { Length: > 0 } rockets)
@@ -90,7 +90,8 @@ public static partial class GuidanceWindow
             if (hasRocketStates)
             {
                 for (int i = 0; i < rockets.Length; i++)
-                    if (rocketStates.States[rockets[i].StatesIdx].IsPropellantAvailable)
+                    if ((uint)rockets[i].StatesIdx < (uint)rocketStates.States.Length
+                        && rocketStates.States[rockets[i].StatesIdx].IsPropellantAvailable)
                         return true;
             }
         }
