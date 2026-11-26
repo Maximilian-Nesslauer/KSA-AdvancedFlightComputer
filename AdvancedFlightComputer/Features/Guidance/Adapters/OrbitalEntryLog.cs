@@ -173,6 +173,8 @@ internal static class OrbitalEntryLog
         sb.Append(',');
     }
 
+    private static readonly char[] CsvSpecial = [',', '"', '\n'];
+
     private static string Csv(string s)
-        => s.IndexOfAny(new[] { ',', '"', '\n' }) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
+        => s.IndexOfAny(CsvSpecial) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
 }

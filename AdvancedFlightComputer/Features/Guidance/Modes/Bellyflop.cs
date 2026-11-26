@@ -92,17 +92,19 @@ public static partial class GuidanceWindow
     /// <summary>Time constant of bellyflop's force-scale low-pass, s, as the entry's.</summary>
     private const double BellyflopScaleSmoothS = 5.0;
 
+    /// <summary>Default bellyflop configuration cached to avoid per-step allocations when reading default gates.</summary>
+    private static readonly BellyflopConfig DefaultBellyflopConfig = new();
+
     /// <summary>
     /// Bellyflop's force scale from this step's measured aero force against its own model's at the angles flown, with scale 1: the air and the tables together, as the craft flies now. The entry's density scale cannot stand in once the craft is belly first, because it compares the drag with the entry's model at its own angle of attack (it read 1.9 in the first flight, doubling the force bellyflop planned with).
     /// </summary>
-    private static void MeasureBellyflopForceScale(OrbitalEntryState st, Vehicle vehicle, IParentBody parent, KsaFrameBridge.SiteFrame frame, double siteRadius,
+    private static void MeasureBellyflopForceScale(OrbitalEntryState st, BellyflopModel unit,
                                                    ReadOnlySpan<double> x, double alpha, double beta, double psi, double dt)
     {
         var bf = st.Bellyflop;
-        if (!st.AeroAccelKnown)
+        if (!st.AeroAccelKnown || unit == null)
             return;
-        BellyflopModel unit = KsaBellyflopSetup.Build(vehicle, parent, frame, siteRadius, st.Aero, bf.BearingLocal, 1.0, out _);
-        if (unit == null || !unit.AirForce(x, alpha, beta, psi, out double fx, out double fy, out double fz))
+        if (!unit.AirForce(x, alpha, beta, psi, out double fx, out double fy, out double fz))
             return;
         double modelAccel = Math.Sqrt(fx * fx + fy * fy + fz * fz) / unit.Mass;
         double measured = st.AeroAccelCci.Length();
@@ -146,7 +148,7 @@ public static partial class GuidanceWindow
         double3 bellyBody = KsaBellyflopSetup.BellyAxisBody(st.Aero.BellyBodyAero);
         var (aNow, bNow, pNow) = KsaBellyflopSetup.AnglesNow(vehicle, frame, model, bellyBody, x);
         bf.PitchDeg = aNow * 180.0 / Math.PI; bf.BankDeg = bNow * 180.0 / Math.PI; bf.YawDeg = pNow * 180.0 / Math.PI;
-        MeasureBellyflopForceScale(st, vehicle, parent, frame, siteRadius, x, aNow, bNow, pNow, dt);
+        MeasureBellyflopForceScale(st, model, x, aNow, bNow, pNow, dt);
         model = model with { ForceScale = BellyflopForceScale(st) };
 
         // ---- plans: take what the worker published, ask for the next ----
@@ -157,7 +159,7 @@ public static partial class GuidanceWindow
             string text = p == null ? "no plan: " + res.Why : FormattableString.Invariant(
                 $"{(p.Converged ? "converged" : "REFUSED " + res.Why)}, {p.Iterations} it, {p.SolveMs:F0} ms, lands {p.MissM:F0} m from the site after {p.Sigma:F0} s, defect {p.MaxDefect:F3}{(p.Cold ? ", cold" : "")}");
             // A plan whose dynamics closed seeds the next solve, also one refused only for its miss.
-            if (p != null && p.MaxDefect <= new BellyflopConfig().GateDefect)
+            if (p != null && p.MaxDefect <= DefaultBellyflopConfig.GateDefect)
                 bf.Warm = p;
             if (p != null && p.Converged)
             {

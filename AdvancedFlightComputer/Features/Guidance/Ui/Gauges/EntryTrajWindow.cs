@@ -20,29 +20,32 @@ using KSA;
 public static partial class GuidanceWindow
 {
     private const string EntryTrajId = "afc-entry-traj";
-    private static bool _entryTrajClosed;
+    private const int MaxTraceSegments = 300;
+    private static readonly string[] _entryReadouts = new string[11];
 
     private static void DrawEntryTrajWindow(Vehicle vehicle, IParentBody parent)
     {
         using var _perf = new AdvancedFlightComputer.Core.PerfTracker.Scope("Ui.EntryTraj");
         var st = _s.OrbitalEntry;
-        // Closed for this entry only: the next one, also one that DEORBIT ONLY starts by itself, opens it again.
+        // Closed for this craft's current entry only: the next one, also one that DEORBIT ONLY starts by itself, opens it again.
         if (!OrbitalEntryLive)
-            _entryTrajClosed = false;
-        if (!OrbitalEntryLive || _entryTrajClosed)
+            st.TrajWindowClosed = false;
+        if (!OrbitalEntryLive || st.TrajWindowClosed)
             return;
 
         ConsoleStyle.EnsureInitialized();
         float s = ImGuiHelper.InterfaceScale;
         bool open = true;
-        if (!ConsoleStyle.BeginWindow(EntryTrajId.AsSpan(), "ENTRY TRAJ".AsSpan(), "AFC".AsSpan(), ref open,
+        bool visible = ConsoleStyle.BeginWindow(EntryTrajId.AsSpan(), "ENTRY TRAJ".AsSpan(), "AFC".AsSpan(), ref open,
                 new float2(620f * s, 680f * s), ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse,
-                ImGuiCond.FirstUseEver, pinToMainViewport: false))
+                ImGuiCond.FirstUseEver, pinToMainViewport: false);
+        // Handle close even while collapsed (BeginWindow returns false when collapsed, after updating open).
+        if (!open)
+            st.TrajWindowClosed = true;
+        if (!visible)
             return;
         try
         {
-            if (!open)
-                _entryTrajClosed = true;
             ConsoleLayout layout = ConsoleStyle.CurrentLayout;
             float pad = 8f * s;
             // The body, inside the window: everything below is placed within it and nothing is drawn past its edges.
@@ -102,19 +105,28 @@ public static partial class GuidanceWindow
         => DrawTrajPlot(f.Dl, _s.OrbitalEntry, _s.OrbitalEntry.Plan, f.Min, f.Max, ImGuiHelper.InterfaceScale);
 
     /// <summary>POP OUT on the picture: the ENTRY TRAJ window again, after it was closed.</summary>
-    private static bool EntryTrajWindowShown => OrbitalEntryLive && !_entryTrajClosed;
+    private static bool EntryTrajWindowShown => OrbitalEntryLive && !_s.OrbitalEntry.TrajWindowClosed;
 
-    private static void ToggleEntryTrajWindow() => _entryTrajClosed = !_entryTrajClosed;
+    private static void ToggleEntryTrajWindow() => _s.OrbitalEntry.TrajWindowClosed = !_s.OrbitalEntry.TrajWindowClosed;
 
     /// <summary>The text cut to what fits in the width, with an ellipsis.</summary>
     private static string Fit(string text, float width)
     {
-        if (ImGui.CalcTextSize(text).X <= width)
+        if (string.IsNullOrEmpty(text) || text.Length <= 4 || ImGui.CalcTextSize(text).X <= width)
             return text;
-        int n = text.Length;
-        while (n > 4 && ImGui.CalcTextSize(text.AsSpan(0, n).ToString() + "...").X > width)
-            n--;
-        return text.Substring(0, n) + "...";
+        float budget = width - ImGui.CalcTextSize("...").X;
+        if (!(budget > 0f))
+            return string.Concat(text.AsSpan(0, 4), "...");
+        int lo = 4, hi = text.Length - 1;
+        while (lo < hi)
+        {
+            int mid = lo + ((hi - lo + 1) >> 1);
+            if (ImGui.CalcTextSize(text.AsSpan(0, mid)).X <= budget)
+                lo = mid;
+            else
+                hi = mid - 1;
+        }
+        return string.Concat(text.AsSpan(0, lo), "...");
     }
 
     // ---------------------------------------------------------------- a plot area
@@ -356,9 +368,19 @@ public static partial class GuidanceWindow
                 area.ClippedLine(dl, plan.S[k] * r0, plan.Mach[k], plan.S[k + 1] * r0, plan.Mach[k + 1], Palette.Plan.Solid, 2.5f * s);
         }
 
-        // The flown path, and a trailer every 30 s for the last 150 s.
-        for (int i = 1; i < tr.Count; i++)
-            area.ClippedLine(dl, tr[i - 1].RangeM, tr[i - 1].Mach, tr[i].RangeM, tr[i].Mach, Palette.Flown.Solid, 1.2f * s);
+        // The flown path (decimated when long to cap per-frame line segments), and a trailer every 30 s for the last 150 s.
+        if (tr.Count > 1)
+        {
+            int step = Math.Max(1, (tr.Count - 1 + MaxTraceSegments - 1) / MaxTraceSegments);
+            int prev = 0;
+            for (int i = step; i < tr.Count; i += step)
+            {
+                area.ClippedLine(dl, tr[prev].RangeM, tr[prev].Mach, tr[i].RangeM, tr[i].Mach, Palette.Flown.Solid, 1.2f * s);
+                prev = i;
+            }
+            if (prev < tr.Count - 1)
+                area.ClippedLine(dl, tr[prev].RangeM, tr[prev].Mach, tr[^1].RangeM, tr[^1].Mach, Palette.Flown.Solid, 1.2f * s);
+        }
         for (int n = 1; n <= 5; n++)
         {
             int i = tr.Count - 1 - 30 * n;
@@ -377,7 +399,7 @@ public static partial class GuidanceWindow
     private const float DragBoxWidthPerError = 1.0f;
 
     /// <summary>
-    /// The Shuttle's guidance box: a square at the bug's height, set off sideways by the drag error, so the bug sits in it when the drag is on its reference. Drag above the reference is the high-energy (short) side, left on this page, so the bug then sits left of the box; below it, right. The offset is the error as a share of the reference drag (floored at 1 m/s²), a tenth of the width per tenth of the drag, pegged at the frame.
+    /// The Shuttle's guidance box: a square at the bug's height, set off sideways by the drag error, so the bug sits in it when the drag is on its reference. Drag above the reference is the high-energy (short) side, left on this page, so the bug then sits left of the box; below it, right. The offset is the error as a share of the reference drag (floored at 1 m/s^2), a tenth of the width per tenth of the drag, pegged at the frame.
     /// </summary>
     private static void DragErrorBox(ImDrawListPtr dl, OrbitalEntryState st, float2 bug, float2 p0, float2 p1, float s)
     {
@@ -404,20 +426,18 @@ public static partial class GuidanceWindow
     private static string[] EntryReadouts(OrbitalEntryState st, EntryPlan plan)
     {
         var o = st.Last;
-        return new[]
-        {
-            FormattableString.Invariant($"DRAG {st.DragMs2:F1}  REF {o.DragRefMs2:F1}  ERR {st.DragErrorF:+0.0;-0.0} m/s²"),
-            FormattableString.Invariant($"HDOT {st.HdotMs:F0}  REF {o.HdotRefMs:F0} m/s"),
-            FormattableString.Invariant($"BANK {(o.BankDeg >= 0 ? "R" : "L")}{Math.Abs(o.BankDeg):F0}  PLAN {o.BankRefDeg:F0}°{(o.Overbanked ? "  OVERBANK" : "")}"),
-            FormattableString.Invariant($"AoA {st.AlphaFlownDeg:F0}° (ASKED {st.AlphaDeg:F0})  MACH {st.Mach:F1}"),
-            FormattableString.Invariant($"ALT {st.AltitudeM / 1000:F1} km  RANGE {st.RangeM / 1000:F0} km"),
-            FormattableString.Invariant($"CROSS {st.CrossrangeM / 1000:F1} km  HDG ERR {st.HeadingErrorDeg:+0.0;-0.0}°  BAND ±{o.DeadbandRad * 180.0 / Math.PI:F1}°"),
-            FormattableString.Invariant($"L/D {st.LiftToDrag:F2} (x{st.LiftToDragScale:F2})  AIR x{st.DensityScale:F2}"),
-            FormattableString.Invariant($"BELLY {st.BellyAxisName}  TRIM {(st.Trim != null ? st.Trim.TrimmedRows + "/" + st.Trim.Mach.Length : "-")}"),
-            FormattableString.Invariant($"PLANS {st.Solves} ({st.Refusals} REFUSED)  {st.LastSolveMs:F0} ms"),
-            plan != null ? FormattableString.Invariant($"MISS {plan.TerminalRangeErrorM / 1000:F1} km  DEFECT {plan.MaxDefect:F3}") : "NO PLAN YET",
-            FormattableString.Invariant($"REVERSALS {st.Reversals}  {st.Phase.ToString().ToUpperInvariant()}"),
-        };
+        _entryReadouts[0] = FormattableString.Invariant($"DRAG {st.DragMs2:F1}  REF {o.DragRefMs2:F1}  ERR {st.DragErrorF:+0.0;-0.0} m/s^2");
+        _entryReadouts[1] = FormattableString.Invariant($"HDOT {st.HdotMs:F0}  REF {o.HdotRefMs:F0} m/s");
+        _entryReadouts[2] = FormattableString.Invariant($"BANK {(o.BankDeg >= 0 ? "R" : "L")}{Math.Abs(o.BankDeg):F0}  PLAN {o.BankRefDeg:F0} deg{(o.Overbanked ? "  OVERBANK" : "")}");
+        _entryReadouts[3] = FormattableString.Invariant($"AoA {st.AlphaFlownDeg:F0} deg (ASKED {st.AlphaDeg:F0})  MACH {st.Mach:F1}");
+        _entryReadouts[4] = FormattableString.Invariant($"ALT {st.AltitudeM / 1000:F1} km  RANGE {st.RangeM / 1000:F0} km");
+        _entryReadouts[5] = FormattableString.Invariant($"CROSS {st.CrossrangeM / 1000:F1} km  HDG ERR {st.HeadingErrorDeg:+0.0;-0.0} deg  BAND +/-{o.DeadbandRad * 180.0 / Math.PI:F1} deg");
+        _entryReadouts[6] = FormattableString.Invariant($"L/D {st.LiftToDrag:F2} (x{st.LiftToDragScale:F2})  AIR x{st.DensityScale:F2}");
+        _entryReadouts[7] = FormattableString.Invariant($"BELLY {st.BellyAxisName}  TRIM {(st.Trim != null ? st.Trim.TrimmedRows + "/" + st.Trim.Mach.Length : "-")}");
+        _entryReadouts[8] = FormattableString.Invariant($"PLANS {st.Solves} ({st.Refusals} REFUSED)  {st.LastSolveMs:F0} ms");
+        _entryReadouts[9] = plan != null ? FormattableString.Invariant($"MISS {plan.TerminalRangeErrorM / 1000:F1} km  DEFECT {plan.MaxDefect:F3}") : "NO PLAN YET";
+        _entryReadouts[10] = FormattableString.Invariant($"REVERSALS {st.Reversals}  {st.Phase.ToString().ToUpperInvariant()}");
+        return _entryReadouts;
     }
 
     // ---------------------------------------------------------------- bits

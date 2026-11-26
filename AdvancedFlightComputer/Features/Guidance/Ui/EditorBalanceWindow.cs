@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using AdvancedFlightComputer.Core;
+using BepuUtilities.Memory;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using Brutal.Logging;
@@ -29,7 +30,8 @@ internal static class EditorBalanceWindow
     private static int _side = 1;      // 0 -Z, 1 +Z (the craft's belly), 2 -Y, 3 +Y
     private static int _machRow;
     private static Aerodynamics? _computedFor;
-    private static double _computedMass = double.NaN, _computedAt = double.NegativeInfinity;
+    private static AeroMesh? _computedMesh;
+    private static double _computedMass = double.NaN, _computedAt = double.NegativeInfinity, _lastMassCheckAt = double.NegativeInfinity;
     private static int _computedSide = -1, _computedMach = -1;
     private static readonly List<Row> _rows = new();
     private static double _lengthM, _noseX, _comX, _dryComX, _massKg, _dryMassKg;
@@ -62,8 +64,10 @@ internal static class EditorBalanceWindow
         _open = true;
         _editor = null;
         _computedFor = null;
+        _computedMesh = null;
         _computedMass = double.NaN;
         _computedAt = double.NegativeInfinity;
+        _lastMassCheckAt = double.NegativeInfinity;
         _computedSide = -1;
         _computedMach = -1;
         _rows.Clear();
@@ -79,6 +83,8 @@ internal static class EditorBalanceWindow
                 _editor = __instance;
                 _open = true;
                 _computedFor = null;
+                _computedMesh = null;
+                _lastMassCheckAt = double.NegativeInfinity;
             }
             if (_open)
                 Draw(__instance);
@@ -91,19 +97,20 @@ internal static class EditorBalanceWindow
 
     private static void Draw(VehicleEditor editor)
     {
-        PartTree? tree = editor.EditingSpace?.Parts;
-        Recompute(tree);
-
         float s = ImGuiHelper.InterfaceScale;
         ConsoleStyle.EnsureInitialized();
         bool open = true;
-        if (!ConsoleStyle.BeginWindow(WindowId.AsSpan(), "BELLY-FLOP BALANCE".AsSpan(), "AFC".AsSpan(), ref open,
-                new float2(470f * s, 330f * s), ImGuiWindowFlags.NoScrollbar, ImGuiCond.FirstUseEver, pinToMainViewport: false))
+        bool visible = ConsoleStyle.BeginWindow(WindowId.AsSpan(), "BELLY-FLOP BALANCE".AsSpan(), "AFC".AsSpan(), ref open,
+                new float2(470f * s, 330f * s), ImGuiWindowFlags.NoScrollbar, ImGuiCond.FirstUseEver, pinToMainViewport: false);
+        // Handle close even when collapsed, and skip Recompute while collapsed.
+        if (!open)
+            _open = false;
+        if (!visible)
             return;
         try
         {
-            if (!open)
-                _open = false;
+            PartTree? tree = editor.EditingSpace?.Parts;
+            Recompute(tree);
             ConsoleLayout layout = ConsoleStyle.CurrentLayout;
             float pad = 8f * s;
             ImGui.SetCursorScreenPos(new float2(layout.BodyPos.X + pad, layout.BodyPos.Y + pad));
@@ -155,20 +162,35 @@ internal static class EditorBalanceWindow
         Aerodynamics? aero = tree?.Aerodynamics;
         if (tree == null || tree.IsDisposed)
         {
+            _computedFor = null;
+            _computedMesh = null;
             _note = "No craft in the editor.";
             return;
         }
         if (aero == null || tree.IsRebuildingAerodynamics)
         {
+            _computedFor = null;
+            _computedMesh = null;
             _note = "Waiting for the aero mesh.";
             return;
         }
-        AeroSurfaceFlow? flow = aero.GetSurfaceFlow();
-        if (flow == null)
+        AeroMesh? mesh = aero.Mesh;
+        if (mesh == null || mesh.Surface.FaceCount == 0)
         {
+            _computedFor = null;
+            _computedMesh = null;
             _note = "The aero mesh has no surface flow.";
             return;
         }
+
+        // Throttle both rapid continuous edits and idle mass polling before scanning all substance stores.
+        bool selectionChanged = _side != _computedSide || _machRow != _computedMach;
+        bool meshChanged = !ReferenceEquals(aero, _computedFor) || !ReferenceEquals(mesh, _computedMesh);
+        if (!selectionChanged && now - _computedAt < 0.5)
+            return;
+        if (!selectionChanged && !meshChanged && now - _lastMassCheckAt < 0.5)
+            return;
+        _lastMassCheckAt = now;
 
         // The centre of mass as filled in the editor: the inert parts plus every store at its fill.
         OffsetMassProperties dry = tree.StaticMassPropsAsmb;
@@ -177,12 +199,11 @@ internal static class EditorBalanceWindow
         foreach (ISubstanceStore store in tree.SubstanceStores)
             full += store.ComputeMassPropertiesVehicleAsmb(moles);
         double mass = full.Props.Mass;
-        bool changed = !ReferenceEquals(aero, _computedFor) || Math.Abs(mass - _computedMass) > 1e-3 * Math.Max(mass, 1)
-                       || _side != _computedSide || _machRow != _computedMach;
-        // Only when something changed, and not more than twice a second while the craft is being edited.
-        if (!changed || now - _computedAt < 0.5)
+        bool massChanged = Math.Abs(mass - _computedMass) > 1e-3 * Math.Max(mass, 1);
+        if (!selectionChanged && !meshChanged && !massChanged)
             return;
         _computedFor = aero;
+        _computedMesh = mesh;
         _computedMass = mass;
         _computedSide = _side;
         _computedMach = _machRow;
@@ -199,6 +220,8 @@ internal static class EditorBalanceWindow
         double refArea = Math.PI / 4.0 * dy * dz, refLength = _lengthM;
         if (!(refArea > 0) || !(refLength > 0))
         {
+            _computedFor = null;
+            _computedMesh = null;
             _note = "The aero mesh has no size yet.";
             return;
         }
@@ -207,6 +230,8 @@ internal static class EditorBalanceWindow
         PhysicalAtmosphere? atmosphere = air?.GetPhysicalAtmosphere();
         if (atmosphere == null)
         {
+            _computedFor = null;
+            _computedMesh = null;
             _note = "No body with an atmosphere to take the air from.";
             return;
         }
@@ -222,32 +247,44 @@ internal static class EditorBalanceWindow
         SysVector3 x = SysVector3.UnitX;
         SysVector3 pitch = SysVector3.Cross(b, x);
         SysVector3 com = new((float)full.Offset.X, (float)full.Offset.Y, (float)full.Offset.Z);
-        _rows.Clear();
-        foreach (double alphaDeg in AnglesDeg)
+        // Use a private AeroSurfaceFlow backed by a short-lived pool so the editor's live flow state is never mutated.
+        var pool = new BufferPool();
+        try
         {
-            double alpha = alphaDeg * Math.PI / 180.0;
-            // The craft moves along u = cos(a) x + sin(a) b, so the air flows along -u.
-            SysVector3 u = (float)Math.Cos(alpha) * x + (float)Math.Sin(alpha) * b;
-            SysVector3 flowDir = -u;
-            flow.Update(flowDir);
-            SurfaceLoads loads = law.ComputeLoads(flow, in friction, flowDir, SysVector3.Zero, com);
-            SysVector3 f = loads.ForcePerDynamicPressure, m = loads.MomentPerDynamicPressure;
-            double mPitch = SysVector3.Dot(m, pitch);
-            double arm = SysVector3.Dot(SysVector3.Cross(x, f), pitch);
-            double cpFromCom = Math.Abs(arm) > 1e-9 ? mPitch / arm : double.NaN;
-            double dragS = -SysVector3.Dot(f, u);
-            SysVector3 liftDir = (float)Math.Sin(alpha) * x - (float)Math.Cos(alpha) * b;
-            double liftS = SysVector3.Dot(f, liftDir);
-            _rows.Add(new Row(alphaDeg, mPitch / (refArea * refLength), cpFromCom, dragS, dragS > 1e-9 ? liftS / dragS : 0.0));
+            var flow = new AeroSurfaceFlow(mesh.Surface, pool);
+            _rows.Clear();
+            foreach (double alphaDeg in AnglesDeg)
+            {
+                double alpha = alphaDeg * Math.PI / 180.0;
+                // The craft moves along u = cos(a) x + sin(a) b, so the air flows along -u.
+                SysVector3 u = (float)Math.Cos(alpha) * x + (float)Math.Sin(alpha) * b;
+                SysVector3 flowDir = -u;
+                flow.Update(flowDir);
+                SurfaceLoads loads = law.ComputeLoads(flow, in friction, flowDir, SysVector3.Zero, com);
+                SysVector3 f = loads.ForcePerDynamicPressure, m = loads.MomentPerDynamicPressure;
+                double mPitch = SysVector3.Dot(m, pitch);
+                double arm = SysVector3.Dot(SysVector3.Cross(x, f), pitch);
+                double cpFromCom = Math.Abs(arm) > 1e-9 ? mPitch / arm : double.NaN;
+                double dragS = -SysVector3.Dot(f, u);
+                SysVector3 liftDir = (float)Math.Sin(alpha) * x - (float)Math.Cos(alpha) * b;
+                double liftS = SysVector3.Dot(f, liftDir);
+                _rows.Add(new Row(alphaDeg, mPitch / (refArea * refLength), cpFromCom, dragS, dragS > 1e-9 ? liftS / dragS : 0.0));
+            }
+            _note = "";
         }
-        _note = "";
+        finally
+        {
+            pool.Clear();
+        }
     }
 
     /// <summary>The body to take the air's gas from: Earth if the system has it, else the first body with an atmosphere.</summary>
     private static IParentBody? AirBody()
     {
+        if (Universe.CurrentSystem?.All is not { } all)
+            return null;
         IParentBody? any = null;
-        foreach (Celestial c in Universe.CurrentSystem.All.OfType<Celestial>())
+        foreach (Celestial c in all.OfType<Celestial>())
         {
             if (c is not IParentBody body || body.GetPhysicalAtmosphere() == null)
                 continue;

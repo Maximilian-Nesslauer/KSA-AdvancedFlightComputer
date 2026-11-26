@@ -23,7 +23,7 @@ internal static class KsaAeroTorqueControl
     /// <summary>The air's dynamic pressure under which the surfaces count as giving nothing, Pa.</summary>
     private const double MinQPa = 50.0;
 
-    /// <summary>The flight condition the surfaces were read at, and the last command: surfaces commanded, the torque they give and how far short of the demand, the force with it (frame of the command), Mach, q, alpha and beta (deg), and whether that was inside the tables.</summary>
+    /// <summary>The flight condition the surfaces were read at, and the last command: surfaces commanded, the torque they give and how far short of the demand, the force with it (frame of the command), Mach, q, alpha and beta (deg), and whether that was inside the tables. <paramref name="CommandDeg"/> and <paramref name="NowDeg"/> are per-vehicle scratch arrays overwritten on the next <see cref="Command"/> call; clone them if kept across steps.</summary>
     internal readonly record struct Report(
         int Surfaces, double3 GivenNm, double ShortfallNm, double3 ForceN,
         double Mach, double QPa, double AlphaDeg, double BetaDeg, bool InTable,
@@ -38,6 +38,11 @@ internal static class KsaAeroTorqueControl
     private sealed class Slot
     {
         public readonly List<ControlSurface> Surfaces = new();
+        public readonly List<ControlSurface> LiveScratch = new();
+        public readonly List<(ControlSurface Surface, KsaAeroSweep.SurfaceTable Table)> RowsScratch = new();
+        public double[] TorqueScratch, ForceScratch;
+        public double[] CommandDeg, NowDeg, Reach;
+        public double[] BackupTorque, BackupCost, BackupUse;
         public Report Last;
         /// <summary>The smoothing's own state (Command's smoothS): the lagged torque the surfaces are asked for, N m in the command's frame, and whether it has been started.</summary>
         public double3 LaggedNm;
@@ -45,8 +50,23 @@ internal static class KsaAeroTorqueControl
     }
 
     private static readonly ConditionalWeakTable<Vehicle, Slot> Slots = new();
+    private static readonly List<ControlSurface> ScratchSurfaces = new();
 
     private static Slot SlotOf(Vehicle vehicle) => Slots.GetValue(vehicle, static _ => new Slot());
+
+    private static double[] EnsureExact(ref double[] buf, int length)
+    {
+        if (buf == null || buf.Length != length)
+            buf = new double[length];
+        return buf;
+    }
+
+    private static double[] EnsureCapacity(ref double[] buf, int length)
+    {
+        if (buf == null || buf.Length < length)
+            buf = new double[length];
+        return buf;
+    }
 
     /// <summary>
     /// The allocator for the vehicle's surfaces as the air is now, in the frame of the asmb unit vectors <paramref name="ax"/>, <paramref name="ay"/>, <paramref name="az"/>: one surface per entry of <paramref name="surfaces"/>, which this fills. Null, with the condition in <paramref name="condition"/>, when there is nothing to steer with: no surfaces, no tables for them, too little air, or a flight outside the tables.
@@ -75,14 +95,22 @@ internal static class KsaAeroTorqueControl
         if (!inTable || !(q > MinQPa))
             return null;
 
-        var live = new List<ControlSurface>();
-        ControlSurfaces.Collect(vehicle, live);
-        double divisor = 1.0 + (double.IsFinite(momentLimiterPerPa) && momentLimiterPerPa > 0.0 ? momentLimiterPerPa * q : 0.0);
-        float3 comNow = vehicle.CenterOfMassAsmbF;
-        double3 shift = aero.BodyMomentComAsmb - new double3(comNow.X, comNow.Y, comNow.Z);
-        AeroTorqueAllocator allocator = Build(aero, live, mach, q, alpha, beta, divisor, shift, ax, ay, az, surfaces, set);
-        condition = condition with { Surfaces = surfaces.Count };
-        return allocator;
+        Slot slot = SlotOf(vehicle);
+        slot.LiveScratch.Clear();
+        try
+        {
+            ControlSurfaces.Collect(vehicle, slot.LiveScratch);
+            double divisor = 1.0 + (double.IsFinite(momentLimiterPerPa) && momentLimiterPerPa > 0.0 ? momentLimiterPerPa * q : 0.0);
+            float3 comNow = vehicle.CenterOfMassAsmbF;
+            double3 shift = aero.BodyMomentComAsmb - new double3(comNow.X, comNow.Y, comNow.Z);
+            AeroTorqueAllocator allocator = BuildCore(aero, slot.LiveScratch, mach, q, alpha, beta, divisor, shift, ax, ay, az, surfaces, set, slot);
+            condition = condition with { Surfaces = surfaces.Count };
+            return allocator;
+        }
+        finally
+        {
+            slot.LiveScratch.Clear();
+        }
     }
 
     /// <summary>
@@ -91,12 +119,17 @@ internal static class KsaAeroTorqueControl
     internal static AeroTorqueAllocator Build(KsaAeroSweep.Result aero, IReadOnlyList<ControlSurface> live,
                                               double mach, double q, double alpha, double beta, double divisor, double3 comShift,
                                               double3 ax, double3 ay, double3 az, List<ControlSurface> surfaces, bool noseFirst = false)
-        => Build(aero, live, mach, q, alpha, beta, divisor, comShift, ax, ay, az, surfaces, noseFirst ? KsaAeroSweep.TableSet.Nose : KsaAeroSweep.TableSet.Tail);
+        => BuildCore(aero, live, mach, q, alpha, beta, divisor, comShift, ax, ay, az, surfaces, noseFirst ? KsaAeroSweep.TableSet.Nose : KsaAeroSweep.TableSet.Tail, null);
 
     /// <summary>The same from a table set's surface tables (KsaAeroSweep.TableSet), alpha and beta about that set's frame.</summary>
     internal static AeroTorqueAllocator Build(KsaAeroSweep.Result aero, IReadOnlyList<ControlSurface> live,
                                               double mach, double q, double alpha, double beta, double divisor, double3 comShift,
                                               double3 ax, double3 ay, double3 az, List<ControlSurface> surfaces, KsaAeroSweep.TableSet set)
+        => BuildCore(aero, live, mach, q, alpha, beta, divisor, comShift, ax, ay, az, surfaces, set, null);
+
+    private static AeroTorqueAllocator BuildCore(KsaAeroSweep.Result aero, IReadOnlyList<ControlSurface> live,
+                                                 double mach, double q, double alpha, double beta, double divisor, double3 comShift,
+                                                 double3 ax, double3 ay, double3 az, List<ControlSurface> surfaces, KsaAeroSweep.TableSet set, Slot slot)
     {
         surfaces.Clear();
         if (aero?.Surfaces == null || !(aero.ReferenceArea > 0.0) || !(aero.ReferenceLength > 0.0))
@@ -104,41 +137,50 @@ internal static class KsaAeroTorqueControl
         double qs = q * aero.ReferenceArea, qsl = qs * aero.ReferenceLength;
         double3 shift = comShift;
         divisor = divisor > 0.0 && double.IsFinite(divisor) ? divisor : 1.0;
-        var rows = new List<(ControlSurface Surface, KsaAeroSweep.SurfaceTable Table)>();
-        foreach (ControlSurface surface in live)
-            foreach (KsaAeroSweep.SurfaceTable table in aero.Surfaces)
-                if (ReferenceEquals(table.Part, surface.Part) && table.DeflectionDeg.Length > 1
-                    && table.ForceTables(set).Length == table.DeflectionDeg.Length)
-                {
-                    rows.Add((surface, table));
-                    break;
-                }
-        if (rows.Count == 0)
-            return null;
-
-        var allocator = new AeroTorqueAllocator(rows.Count);
-        for (int i = 0; i < rows.Count; i++)
+        var rows = slot != null ? slot.RowsScratch : new List<(ControlSurface Surface, KsaAeroSweep.SurfaceTable Table)>();
+        rows.Clear();
+        try
         {
-            KsaAeroSweep.SurfaceTable t = rows[i].Table;
-            int n = t.DeflectionDeg.Length;
-            var torque = new double[3 * n];
-            var force = new double[3 * n];
-            for (int k = 0; k < n; k++)
+            foreach (ControlSurface surface in live)
+                foreach (KsaAeroSweep.SurfaceTable table in aero.Surfaces)
+                    if (ReferenceEquals(table.Part, surface.Part) && table.DeflectionDeg.Length > 1
+                        && table.ForceTables(set).Length == table.DeflectionDeg.Length)
+                    {
+                        rows.Add((surface, table));
+                        break;
+                    }
+            if (rows.Count == 0)
+                return null;
+
+            var allocator = new AeroTorqueAllocator(rows.Count);
+            for (int i = 0; i < rows.Count; i++)
             {
-                AdvancedFlightComputer.Guidance.Numerics.Flight.BodyAeroTable ft = t.ForceTables(set)[k], mt = t.MomentTables(set)[k];
-                double mk = Math.Clamp(mach, ft.MachMin, ft.MachMax);
-                ft.Coefficients(mk, alpha, beta, out double cx, out double cy, out double cz);
-                mt.Coefficients(mk, alpha, beta, out double cl, out double cm, out double cn);
-                var f = new double3(qs * cx, qs * cy, qs * cz);
-                // About the present centre of mass, M_now = M_swept + (r_swept - r_now) x F, then the game's limiter on the whole of it.
-                double3 m = (new double3(qsl * cl, qsl * cm, qsl * cn) + double3.Cross(shift, f)) / divisor;
-                torque[3 * k] = double3.Dot(m, ax); torque[3 * k + 1] = double3.Dot(m, ay); torque[3 * k + 2] = double3.Dot(m, az);
-                force[3 * k] = double3.Dot(f, ax); force[3 * k + 1] = double3.Dot(f, ay); force[3 * k + 2] = double3.Dot(f, az);
+                KsaAeroSweep.SurfaceTable t = rows[i].Table;
+                int n = t.DeflectionDeg.Length;
+                int needed = 3 * n;
+                double[] torque = slot != null ? EnsureCapacity(ref slot.TorqueScratch, needed) : new double[needed];
+                double[] force = slot != null ? EnsureCapacity(ref slot.ForceScratch, needed) : new double[needed];
+                for (int k = 0; k < n; k++)
+                {
+                    AdvancedFlightComputer.Guidance.Numerics.Flight.BodyAeroTable ft = t.ForceTables(set)[k], mt = t.MomentTables(set)[k];
+                    double mk = Math.Clamp(mach, ft.MachMin, ft.MachMax);
+                    ft.Coefficients(mk, alpha, beta, out double cx, out double cy, out double cz);
+                    mt.Coefficients(mk, alpha, beta, out double cl, out double cm, out double cn);
+                    var f = new double3(qs * cx, qs * cy, qs * cz);
+                    // About the present centre of mass, M_now = M_swept + (r_swept - r_now) x F, then the game's limiter on the whole of it.
+                    double3 m = (new double3(qsl * cl, qsl * cm, qsl * cn) + double3.Cross(shift, f)) / divisor;
+                    torque[3 * k] = double3.Dot(m, ax); torque[3 * k + 1] = double3.Dot(m, ay); torque[3 * k + 2] = double3.Dot(m, az);
+                    force[3 * k] = double3.Dot(f, ax); force[3 * k + 1] = double3.Dot(f, ay); force[3 * k + 2] = double3.Dot(f, az);
+                }
+                allocator.SetSurface(i, t.DeflectionDeg, torque.AsSpan(0, needed), force.AsSpan(0, needed));
+                surfaces.Add(rows[i].Surface);
             }
-            allocator.SetSurface(i, t.DeflectionDeg, torque, force);
-            surfaces.Add(rows[i].Surface);
+            return allocator;
         }
-        return allocator;
+        finally
+        {
+            rows.Clear();
+        }
     }
 
     /// <summary>
@@ -148,15 +190,23 @@ internal static class KsaAeroTorqueControl
                                          double momentLimiterPerPa, Span<AeroTorqueAllocator.AxisAuthority> six)
     {
         six.Clear();
-        AeroTorqueAllocator allocator = Measure(vehicle, aero, ax, ay, az, momentLimiterPerPa, new List<ControlSurface>(), out _);
-        if (allocator == null)
-            return false;
-        for (int a = 0; a < 3; a++)
+        ScratchSurfaces.Clear();
+        try
         {
-            six[2 * a] = allocator.Characterise(a, 1);
-            six[2 * a + 1] = allocator.Characterise(a, -1);
+            AeroTorqueAllocator allocator = Measure(vehicle, aero, ax, ay, az, momentLimiterPerPa, ScratchSurfaces, out _);
+            if (allocator == null)
+                return false;
+            for (int a = 0; a < 3; a++)
+            {
+                six[2 * a] = allocator.Characterise(a, 1);
+                six[2 * a + 1] = allocator.Characterise(a, -1);
+            }
+            return true;
         }
-        return true;
+        finally
+        {
+            ScratchSurfaces.Clear();
+        }
     }
 
     /// <summary>
@@ -186,9 +236,10 @@ internal static class KsaAeroTorqueControl
         }
         double dx = double3.Dot(torqueAsmb, mx), dy = double3.Dot(torqueAsmb, my), dz = double3.Dot(torqueAsmb, mz);
         int count = allocator.Count;
-        var deflection = new double[count];
-        var now = new double[count];
-        var reach = new double[count];
+        double[] deflection = EnsureExact(ref slot.CommandDeg, count);
+        double[] now = EnsureExact(ref slot.NowDeg, count);
+        double[] reach = EnsureExact(ref slot.Reach, count);
+        Array.Clear(deflection);
         for (int i = 0; i < count; i++)
         {
             now[i] = slot.Surfaces[i].DeflectionDeg;
@@ -229,10 +280,15 @@ internal static class KsaAeroTorqueControl
         else
         {
             slot.LaggedKnown = false;
-            BackupColumns(backup, out double[] backupTorque, out double[] backupCost);
+            int backupCount = FillBackupColumns(backup, slot);
+            ReadOnlySpan<double> backupTorque = backupCount > 0 ? slot.BackupTorque.AsSpan(0, 3 * backupCount) : default;
+            ReadOnlySpan<double> backupCost = backupCount > 0 ? slot.BackupCost.AsSpan(0, backupCount) : default;
+            Span<double> backupUse = backupCount > 0 ? EnsureCapacity(ref slot.BackupUse, backupCount).AsSpan(0, backupCount) : default;
+            if (backupCount > 0)
+                backupUse.Clear();
             using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Fins.Allocate"))
                 r = allocator.Allocate(dx, dy, dz, priority, deflection, now, reach,
-                                       backupTorque, backupCost, new double[backupCost.Length]);
+                                       backupTorque, backupCost, backupUse);
         }
         if (!r.Solved)
         {
@@ -253,18 +309,12 @@ internal static class KsaAeroTorqueControl
         return slot.Last;
     }
 
-    /// <summary>The RCS thrusters as backup columns for the surfaces' programme: each one's torque at full duty, and its propellant priced so the best of them costs BackupPricePerNm a newton metre. Empty without a backup.</summary>
-    private static void BackupColumns(RcsTorqueAllocator backup, out double[] torque, out double[] cost)
+    /// <summary>The RCS thrusters as backup columns for the surfaces' programme: each one's torque at full duty, and its propellant priced so the best of them costs BackupPricePerNm a newton metre. Returns 0 without a usable backup.</summary>
+    private static int FillBackupColumns(RcsTorqueAllocator backup, Slot slot)
     {
         if (backup == null || backup.Count == 0)
-        {
-            torque = [];
-            cost = [];
-            return;
-        }
+            return 0;
         int m = backup.Count;
-        torque = new double[3 * m];
-        cost = new double[m];
         double best = double.PositiveInfinity;
         for (int i = 0; i < m; i++)
         {
@@ -275,11 +325,9 @@ internal static class KsaAeroTorqueControl
                 best = Math.Min(best, flow / t);
         }
         if (!double.IsFinite(best))
-        {
-            torque = [];
-            cost = [];
-            return;
-        }
+            return 0;
+        double[] torque = EnsureCapacity(ref slot.BackupTorque, 3 * m);
+        double[] cost = EnsureCapacity(ref slot.BackupCost, m);
         double perKgS = BackupPricePerNm / best;
         for (int i = 0; i < m; i++)
         {
@@ -289,6 +337,7 @@ internal static class KsaAeroTorqueControl
                 torque[3 * i + r] = usable ? backup.Torque[3 * i + r] : 0.0;
             cost[i] = usable ? flow * perKgS : double.NaN;
         }
+        return m;
     }
 
     /// <summary>Sends every surface on the vehicle home. Main thread.</summary>
@@ -300,15 +349,24 @@ internal static class KsaAeroTorqueControl
         {
             slot.Last = default;
             slot.Surfaces.Clear();
+            slot.LiveScratch.Clear();
+            slot.RowsScratch.Clear();
             // Sent home, the surfaces start the next smoothing from what they give where they are, not from a stale lagged torque.
             slot.LaggedKnown = false;
         }
         if (!ControlSurfaces.Any)
             return;
-        var surfaces = new List<ControlSurface>();
-        ControlSurfaces.Collect(vehicle, surfaces);
-        foreach (ControlSurface s in surfaces)
-            s.Command(0.0);
+        ScratchSurfaces.Clear();
+        try
+        {
+            ControlSurfaces.Collect(vehicle, ScratchSurfaces);
+            foreach (ControlSurface s in ScratchSurfaces)
+                s.Command(0.0);
+        }
+        finally
+        {
+            ScratchSurfaces.Clear();
+        }
     }
 
     /// <summary>The last command's report for this vehicle.</summary>
