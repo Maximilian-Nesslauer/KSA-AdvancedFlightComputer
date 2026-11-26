@@ -226,6 +226,10 @@ public sealed class Ksa6DofGuidance : IDisposable
         if (inputs.Ixx > 0.0) _dyn.Ixx = inputs.Ixx;
         if (_dyn.BodyAero != null && inputs.MomentLimiterPerPa >= 0.0 && double.IsFinite(inputs.MomentLimiterPerPa))
             _dyn.BodyAero.MomentLimiterPerPa = inputs.MomentLimiterPerPa;
+        if (_dyn.BodyAero != null && inputs.MomentLimiterStiffnessPerPa >= 0.0 && double.IsFinite(inputs.MomentLimiterStiffnessPerPa))
+            _dyn.BodyAero.MomentLimiterStiffnessPerPa = inputs.MomentLimiterStiffnessPerPa;
+        if (_dyn.BodyAero != null && inputs.MomentLimiterDampingPerPaMs >= 0.0 && double.IsFinite(inputs.MomentLimiterDampingPerPaMs))
+            _dyn.BodyAero.MomentLimiterDampingPerPaMs = inputs.MomentLimiterDampingPerPaMs;
         // The air moment's measured error (SixDof's moment-error integrator), as the force's is AccelBias.
         if (_dyn.BodyAero != null && double.IsFinite(inputs.MomentBiasPerPa.X) && double.IsFinite(inputs.MomentBiasPerPa.Y) && double.IsFinite(inputs.MomentBiasPerPa.Z))
         {

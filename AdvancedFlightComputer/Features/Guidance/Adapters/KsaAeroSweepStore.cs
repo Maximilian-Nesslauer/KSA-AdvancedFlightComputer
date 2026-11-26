@@ -34,7 +34,7 @@ using AdvancedFlightComputer.Guidance.Numerics.Flight;
 public static partial class KsaAeroSweep
 {
     /// <summary>The stored format and sweep version: a file of any other is not read.</summary>
-    private const int StoreVersion = 1;
+    private const int StoreVersion = 2;
 
     private static string StoreDirectory => Path.Combine(KSA.Constants.DocumentsFolderPath, "afc-aero-tables");
 
@@ -140,8 +140,9 @@ public static partial class KsaAeroSweep
         public ulong Hash;
         public double[] MachGrid, AlphaGridDeg, CdTable, LiftTable, MomentTable, ArmTable, CentreOfPressureM;
         public double ReferenceLength, ReferenceArea, BalanceWorstM, BalanceWorstMach, Mass, CdTailFirst, CdBroadside, CdNoseFirst,
-            PointingSensitivity, AttitudeSensitivity, RollSpread, MachSpread, LiftToDragMax, AtmosphereMirrorError, SampledAt, SweepMillis;
-        public double[] Com, Box, SampledExtents;
+            PointingSensitivity, AttitudeSensitivity, RollSpread, MachSpread, LiftToDragMax, AtmosphereMirrorError, SampledAt, SweepMillis,
+            MomentStiffnessBoundSub, MomentDampingBoundSub;
+        public double[] Com, Box, SampledExtents, RotDamp;
         public StoredTable Body, BodyM, Nose, NoseM, Belly, BellyM, Sphere, SphereM, Band, BandM;
         public int BellySide;
         public StoredBelly[] BellyRows;
@@ -194,7 +195,8 @@ public static partial class KsaAeroSweep
                 PointingSensitivity = r.PointingSensitivity, AttitudeSensitivity = r.AttitudeSensitivity, RollSpread = r.RollSpread,
                 MachSpread = r.MachSpread, LiftToDragMax = r.LiftToDragMax, AtmosphereMirrorError = r.AtmosphereMirrorError,
                 SampledAt = r.SampledAt, SweepMillis = r.SweepMillis,
-                Com = V3(r.BodyMomentComAsmb), Box = V3(r.BoxExtents), SampledExtents = V3(r.SampledExtents),
+                MomentStiffnessBoundSub = r.MomentStiffnessBoundSub, MomentDampingBoundSub = r.MomentDampingBoundSub,
+                Com = V3(r.BodyMomentComAsmb), Box = V3(r.BoxExtents), SampledExtents = V3(r.SampledExtents), RotDamp = V3(r.RotDampCoeff),
             };
             s.Body = Store(r.BodyAero); s.BodyM = Store(r.BodyMoment);
             s.Nose = Store(r.NoseBodyAero); s.NoseM = Store(r.NoseBodyMoment);
@@ -269,7 +271,8 @@ public static partial class KsaAeroSweep
                 Mass = s.Mass, CdTailFirst = s.CdTailFirst, CdBroadside = s.CdBroadside, CdNoseFirst = s.CdNoseFirst,
                 PointingSensitivity = s.PointingSensitivity, AttitudeSensitivity = s.AttitudeSensitivity, RollSpread = s.RollSpread,
                 MachSpread = s.MachSpread, LiftToDragMax = s.LiftToDragMax, SampledAt = s.SampledAt, SweepMillis = s.SweepMillis,
-                BodyMomentComAsmb = D3(s.Com), BoxExtents = D3(s.Box), SampledExtents = D3(s.SampledExtents),
+                MomentStiffnessBoundSub = s.MomentStiffnessBoundSub, MomentDampingBoundSub = s.MomentDampingBoundSub,
+                BodyMomentComAsmb = D3(s.Com), BoxExtents = D3(s.Box), SampledExtents = D3(s.SampledExtents), RotDampCoeff = D3(s.RotDamp),
                 BodyAero = Table(s.Body), BodyMoment = Table(s.BodyM), NoseBodyAero = Table(s.Nose), NoseBodyMoment = Table(s.NoseM),
                 BellyBodyAero = Table(s.Belly), BellyBodyMoment = Table(s.BellyM), SphereBodyAero = Table(s.Sphere), SphereBodyMoment = Table(s.SphereM),
                 BandBodyAero = Table(s.Band), BandBodyMoment = Table(s.BandM), BellySide = s.BellySide,

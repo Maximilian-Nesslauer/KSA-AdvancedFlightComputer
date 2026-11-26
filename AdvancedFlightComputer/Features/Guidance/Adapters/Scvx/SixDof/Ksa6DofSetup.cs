@@ -464,7 +464,8 @@ public static class Ksa6DofSetup
     /// </summary>
     internal const double PlanSurfaceShare = 0.75;   // the default; PLAN RCS AND FLAPS sets it (TryBuild's surfaceShare)
 
-    private static BodyAero6Dof BodyAeroFor(Vehicle vehicle, KsaAeroSweep.Result aero, double momentLimiterPerPa, bool fins = true)
+    private static BodyAero6Dof BodyAeroFor(Vehicle vehicle, KsaAeroSweep.Result aero, double momentLimiterPerPa,
+                                            double momentLimiterStiffnessPerPa, double momentLimiterDampingPerPaMs, bool fins = true)
     {
         if (aero?.BodyAero == null || aero.Atmosphere == null || !(aero.ReferenceArea > 0.0))
             return null;
@@ -488,8 +489,12 @@ public static class Ksa6DofSetup
             ReferenceLength = aero.ReferenceLength,
             ModelToTable = [mx.X, my.X, mz.X, mx.Y, my.Y, mz.Y, mx.Z, my.Z, mz.Z],
             ComShiftX = shift.X, ComShiftY = shift.Y, ComShiftZ = shift.Z,
-            // The game's moment limiter, as measured in flight (BodyAero6Dof.MomentLimiterPerPa).
+            RotDampX = double.IsFinite(aero.RotDampCoeff.X) && aero.RotDampCoeff.X > 0.0 ? aero.RotDampCoeff.X : 0.0,
+            RotDampY = double.IsFinite(aero.RotDampCoeff.Y) && aero.RotDampCoeff.Y > 0.0 ? aero.RotDampCoeff.Y : 0.0,
+            RotDampZ = double.IsFinite(aero.RotDampCoeff.Z) && aero.RotDampCoeff.Z > 0.0 ? aero.RotDampCoeff.Z : 0.0,
             MomentLimiterPerPa = double.IsFinite(momentLimiterPerPa) && momentLimiterPerPa > 0.0 ? momentLimiterPerPa : 0.0,
+            MomentLimiterStiffnessPerPa = double.IsFinite(momentLimiterStiffnessPerPa) && momentLimiterStiffnessPerPa > 0.0 ? momentLimiterStiffnessPerPa : 0.0,
+            MomentLimiterDampingPerPaMs = double.IsFinite(momentLimiterDampingPerPaMs) && momentLimiterDampingPerPaMs > 0.0 ? momentLimiterDampingPerPaMs : 0.0,
             // The control surfaces, one fin control each (Dynamics6Dof.IFIN on).
             Fins = fins ? FinsFor(vehicle, aero) : [],
         };
@@ -516,7 +521,8 @@ public static class Ksa6DofSetup
                                 KsaAeroSweep.Result aero = null, bool? keptRollFree = null, bool bodyAero = true,
                                 bool gimbalRateLimit = true, Dynamics6Dof.RcsModel rcs = null, double rcsWeight = 0.0,
                                 double rateMaxDegS = 0.0, int coastIntervals = 0, double[] scaleFrom = null,
-                                double momentLimiterPerPa = 0.0, double torqueMargin = 0.0, bool fins = true, double surfaceShare = PlanSurfaceShare)
+                                double momentLimiterPerPa = 0.0, double torqueMargin = 0.0, bool fins = true, double surfaceShare = PlanSurfaceShare,
+                                double momentLimiterStiffnessPerPa = 0.0, double momentLimiterDampingPerPaMs = 0.0)
     {
         cfg = null!;
         dyn = null!;
@@ -689,7 +695,9 @@ public static class Ksa6DofSetup
                 }
                 : null,
             // THE BODY-AXIS FORCE AND MOMENT for the plan's own attitude, where the sweep measured them: the gimbal then holds against the air's moment from the plan's start rather than finding it in flight (BodyAero6Dof). The tables above carry the share of the force these fade out of.
-            BodyAero = bodyAero && aero?.Table != null ? BodyAeroFor(vehicle, aero, momentLimiterPerPa, fins) : null,
+            BodyAero = bodyAero && aero?.Table != null
+                ? BodyAeroFor(vehicle, aero, momentLimiterPerPa, momentLimiterStiffnessPerPa, momentLimiterDampingPerPaMs, fins)
+                : null,
             AeroAltitudeOffset = siteAltAsl,
             LArm = arm,
             Ixx = ixx, Iyy = iyy, Izz = izz,

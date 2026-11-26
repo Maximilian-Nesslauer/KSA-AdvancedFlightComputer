@@ -543,7 +543,9 @@ public static partial class GuidanceWindow
                                    gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight, rateMaxDegS: _s.SixDofRateMaxDegS,
                                    coastIntervals: _s.SixDofCoastPending ? CoastIntervalsFor(nodes) : 0,
                                    scaleFrom: _s.SixDofCoastPending ? _s.SixDofCoastScaleState : null,
-                                   momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare))
+                                   momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
+                                   momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
+                                   momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -1824,7 +1826,8 @@ public static partial class GuidanceWindow
         // It changes as propellant drains, and a stale value is a SYSTEMATIC torque error that MPC structurally cannot correct - re-anchoring the state does not fix the model.
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
         UpdateMomentLimiter(vehicle, now);
-        _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz).WithMomentLimiter(_s.MomentLimiterPerPa)
+        _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz)
+            .WithMomentLimiterExact(_s.MomentLimiterPerPa, _s.MomentLimiterStiffnessPerPa, _s.MomentLimiterDampingPerPaMs)
             .WithMomentBias(UpdateMomentBias(vehicle, x, now));
         LogAeroCheck(vehicle, x, now, "flying");
 
@@ -1861,10 +1864,23 @@ public static partial class GuidanceWindow
     private const double MomentLimiterEveryS = 0.5;
 
     /// <summary>
-    /// Measures the game's moment limiter on the craft now (KsaAeroSweep.TryMomentLimiter) every MomentLimiterEveryS, smoothed, into the state the plans read it from (BodyAero6Dof.MomentLimiterPerPa). Keeps the last value where the air is too thin to read it. Main thread, as the aero probe.
+    /// Updates KSA's aerodynamic moment limiter from closed-form sweep bounds and live inverse inertia every step with zero lag.
+    /// Falls back to polled ComputeDerivatives sampling every MomentLimiterEveryS when closed-form bounds are unavailable.
     /// </summary>
     internal static void UpdateMomentLimiter(Vehicle vehicle, double now)
     {
+        if (KsaAeroSweep.TryComputeMomentLimiterClosedForm(vehicle, _s.Aero,
+                out double stiffPerPa, out double dampPerPaMs, out double perPaNow, out double divisorNow))
+        {
+            _s.MomentLimiterStiffnessPerPa = stiffPerPa;
+            _s.MomentLimiterDampingPerPaMs = dampPerPaMs;
+            _s.MomentLimiterPerPa = perPaNow;
+            _s.MomentLimiterDivisor = divisorNow;
+            _s.MomentLimiterAt = now;
+            return;
+        }
+        _s.MomentLimiterStiffnessPerPa = 0.0;
+        _s.MomentLimiterDampingPerPaMs = 0.0;
         if (now - _s.MomentLimiterAt < MomentLimiterEveryS)
             return;
         _s.MomentLimiterAt = now;
@@ -2239,7 +2255,9 @@ public static partial class GuidanceWindow
                                      gimbalRateLimit: _s.SixDofGimbalRateLimit, rcs: PlanRcs(vehicle), rcsWeight: _s.SixDofRcsWeight, rateMaxDegS: _s.SixDofRateMaxDegS,
                                      coastIntervals: _s.SixDofCoastPending ? CoastIntervalsFor(engageNodes) : 0,
                                      scaleFrom: _s.SixDofCoastPending ? _s.SixDofCoastScaleState : null,
-                                     momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare);
+                                     momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
+                                     momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
+                                     momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs);
     }
 
     /// <summary>

@@ -1078,8 +1078,8 @@ public sealed class VehicleAutopilotState
     /// <summary>The roll rate about the thrust axis at the last entry log row, rad/s, and when, for the roll monitor's acceleration (EntryLog.EntryRow.RollNetNm).</summary>
     internal double RollMonitorPrevRate = double.NaN, RollMonitorPrevT = double.NegativeInfinity;
 
-    /// <summary>The game's air moment limiter measured on this craft, per Pa (BodyAero6Dof.MomentLimiterPerPa), smoothed; 0 until measured. The divisor it gave at the last reading, and when that was.</summary>
-    internal double MomentLimiterPerPa, MomentLimiterDivisor = double.NaN, MomentLimiterAt = double.NegativeInfinity;
+    /// <summary>The game's air moment limiter on this craft: instantaneous per-Pa value, two-term closed-form coefficients, last divisor, and last sample time.</summary>
+    internal double MomentLimiterPerPa, MomentLimiterStiffnessPerPa, MomentLimiterDampingPerPaMs, MomentLimiterDivisor = double.NaN, MomentLimiterAt = double.NegativeInfinity;
     /// <summary>When the AERO CHECK was last logged (SixDof.LogAeroCheck).</summary>
     internal double AeroCheckAt = double.NegativeInfinity;
     /// <summary>The air moment's measured error per pascal, model body axes, N m/Pa, and when it was last updated (SixDof.UpdateMomentBias).</summary>

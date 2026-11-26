@@ -72,6 +72,14 @@ public sealed class GuidanceAeroSweepTest : AfcTest
             $"{aero.MeshHash:X} against {KsaAeroSweep.LiveMeshHash(vehicle):X}");
         t.Check("the sweep stays inside its time bound", aero.SweepMillis < MaxSweepMs,
             FormattableString.Invariant($"{aero.SweepMillis:F0} ms, bound {MaxSweepMs:F0} ms"));
+        t.Check("the sweep records positive moment limiter geometry bounds",
+            aero.MomentStiffnessBoundSub > 0.0 && aero.MomentDampingBoundSub > 0.0,
+            FormattableString.Invariant($"K_sub {aero.MomentStiffnessBoundSub:F1}, C_sub {aero.MomentDampingBoundSub:F1}"));
+        t.Check("the sweep measures non-zero rotational aerodynamic damping",
+            aero.RotDampCoeff.Y > 0.0 || aero.RotDampCoeff.Z > 0.0,
+            FormattableString.Invariant($"rotDamp ({aero.RotDampCoeff.X:F1}, {aero.RotDampCoeff.Y:F1}, {aero.RotDampCoeff.Z:F1}) m^4"));
+        t.Check("closed-form inverse inertia norm bound is positive",
+            KsaAeroSweep.InertiaInvNormBound(vehicle.Props) > 0.0);
         var state = new VehicleAutopilotState { Aero = aero };
         ulong hash = aero.MeshHash;
         t.Check("the current mesh keeps the table", !state.AeroStale(aero.SampledExtents, hash, home));

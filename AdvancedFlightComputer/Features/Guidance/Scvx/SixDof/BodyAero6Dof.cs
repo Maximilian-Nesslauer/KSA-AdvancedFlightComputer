@@ -145,12 +145,42 @@ public sealed class BodyAero6Dof
         c2 = l2 + w * (h2 - l2);
     }
 
-    /// <summary>The airspeed the tables fade in over, m/s: none below the low end, all above the high.</summary>
     /// <summary>
     /// THE GAME'S MOMENT LIMITER, per pascal of dynamic pressure: the moment is divided by 1 + MomentLimiterPerPa q. 0 for none.
-    ///  KSA's integrator does not apply the air's moment as the tables measure it. ComputeAerodynamicLoads divides it by 1 + invInertiaBound dt q (0.5 dt stiffnessBound + dampingBound / V), a semi-implicit guard worked for the physics substep dt (0.02 s at 1x) and the largest inverse inertia - on a booster the small roll inertia's, so it bites on every axis. The sweep reads the loads at dt 0, without it. On the 2026-11-20 booster at 6-7 kPa it divided the moment by 3.7 on all three axes: the plan saw 40 kN m of roll the RCS could not hold, the booster felt 11 (headless, entry log's roll balance). Set from flight, measured at the game's own substep (KsaAeroSweep.TryMomentLimiter); the speed term is folded into it at the speed it was measured at.
+    /// Fallback when two-term closed-form bounds (<see cref="MomentLimiterStiffnessPerPa"/>, <see cref="MomentLimiterDampingPerPaMs"/>) are unavailable.
     /// </summary>
     public double MomentLimiterPerPa { get; set; }
+
+    /// <summary>
+    /// Stiffness term of KSA's two-term moment limiter: 0.5 * ||I^-1||_inf * dt^2 * K_sub, 1/Pa.
+    /// When either stiffness or damping term is positive, the limiter uses 1 + q * (Stiff + Damp / v) inside Dual AD.
+    /// </summary>
+    public double MomentLimiterStiffnessPerPa { get; set; }
+
+    /// <summary>
+    /// Damping term of KSA's two-term moment limiter: ||I^-1||_inf * dt * C_sub, (m/s)/Pa.
+    /// </summary>
+    public double MomentLimiterDampingPerPaMs { get; set; }
+
+    /// <summary>Rotational aerodynamic damping coefficients (C_lp, C_mq, C_nr) in table body axes, m^4.</summary>
+    public double RotDampX { get; init; }
+    public double RotDampY { get; init; }
+    public double RotDampZ { get; init; }
+
+    /// <summary>
+    /// Computes KSA's two-term moment limiter coefficients from inverse inertia infinity norm, physics substep, and LocalInclinationLaw bounds.
+    /// </summary>
+    public static void ComputeMomentLimiterTerms(double invInertiaNorm, double dtS,
+                                                 double stiffnessBound, double dampingBound,
+                                                 out double stiffPerPa, out double dampPerPaMs)
+    {
+        stiffPerPa = 0.5 * invInertiaNorm * dtS * dtS * stiffnessBound;
+        dampPerPaMs = invInertiaNorm * dtS * dampingBound;
+    }
+
+    /// <summary>Evaluates KSA's two-term moment limiter divisor 1 + q * (stiffPerPa + dampPerPaMs / v).</summary>
+    public static double EvaluateMomentLimiterDivisor(double qPa, double speedMs, double stiffPerPa, double dampPerPaMs)
+        => speedMs > 1.0 && qPa > 0.0 ? 1.0 + qPa * (stiffPerPa + dampPerPaMs / speedMs) : 1.0;
 
     public double FadeSpeedLowMs { get; init; } = 5.0;
     public double FadeSpeedHighMs { get; init; } = 15.0;
@@ -165,7 +195,8 @@ public sealed class BodyAero6Dof
     public void Wrench(Dual altitude, Dual vx, Dual vy, Dual vz,
                        Dual r00, Dual r01, Dual r02, Dual r10, Dual r11, Dual r12, Dual r20, Dual r21, Dual r22,
                        out Dual fx, out Dual fy, out Dual fz, out Dual tx, out Dual ty, out Dual tz, out Dual weight,
-                       ReadOnlySpan<Dual> finDeg = default)
+                       ReadOnlySpan<Dual> finDeg = default,
+                       Dual wx = default, Dual wy = default, Dual wz = default)
     {
         fx = fy = fz = tx = ty = tz = weight = default;
         Dual speed2 = vx * vx + vy * vy + vz * vz;
@@ -250,8 +281,27 @@ public sealed class BodyAero6Dof
             My += qsl * fcm;
             Mz += qsl * fcn;
         }
-        // As the game's integrator applies it (MomentLimiterPerPa): the whole moment about the centre of mass, divided by one factor.
-        if (MomentLimiterPerPa > 0.0)
+        // Rotational aerodynamic damping in table body axes, added before the moment limiter as in KSA ComputeAerodynamicLoads.
+        if (RotDampX > 0.0 || RotDampY > 0.0 || RotDampZ > 0.0)
+        {
+            Dual twx = m[0] * wx + m[1] * wy + m[2] * wz;
+            Dual twy = m[3] * wx + m[4] * wy + m[5] * wz;
+            Dual twz = m[6] * wx + m[7] * wy + m[8] * wz;
+            Dual halfRhoV = 0.5 * Atmosphere.Density(altitude) * speed * weight;
+            Mx -= halfRhoV * RotDampX * twx;
+            My -= halfRhoV * RotDampY * twy;
+            Mz -= halfRhoV * RotDampZ * twz;
+        }
+        // Apply KSA's two-term moment limiter after static, fin, and rotational damping moments; fall back to scalar per-Pa limiter when bounds are absent.
+        if (MomentLimiterStiffnessPerPa > 0.0 || MomentLimiterDampingPerPaMs > 0.0)
+        {
+            Dual qDyn = 0.5 * Atmosphere.Density(altitude) * speed2;
+            Dual limiter = 1.0 + qDyn * (MomentLimiterStiffnessPerPa + MomentLimiterDampingPerPaMs / speed);
+            Mx /= limiter;
+            My /= limiter;
+            Mz /= limiter;
+        }
+        else if (MomentLimiterPerPa > 0.0)
         {
             Dual limiter = 1.0 + MomentLimiterPerPa * (0.5 * Atmosphere.Density(altitude) * speed2);
             Mx /= limiter;

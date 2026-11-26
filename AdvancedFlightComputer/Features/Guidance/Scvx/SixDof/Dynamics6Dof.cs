@@ -267,7 +267,8 @@ public static class Dynamics6Dof
         Dual weight = default;
         if (p.BodyAero != null)
             p.BodyAero.Wrench(altitude, vx, vy, vz, r00, r01, r02, r10, r11, r12, r20, r21, r22,
-                              out fx, out fy, out fz, out tx, out ty, out tz, out weight, finDeg);
+                              out fx, out fy, out fz, out tx, out ty, out tz, out weight, finDeg,
+                              x[IW + 0], x[IW + 1], x[IW + 2]);
         if (p.Aero == null || weight.V >= 1.0)
             return;
         p.Aero.AeroForce(altitude, vx, vy, vz, r02, r12, r22, out Dual ax, out Dual ay, out Dual az);
