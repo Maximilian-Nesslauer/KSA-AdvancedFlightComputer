@@ -32,6 +32,31 @@ public static class ContactDepth
         return double.IsFinite(worst) ? worst : double.NaN;
     }
 
+    /// <summary>
+    /// THE NARROWEST STANCE, m: how far the craft's support reaches from the thrust axis in the direction it reaches least - the minimum over directions of the support function of the colliders whose lowest point is within <paramref name="bandM"/> of the deepest (bottoms as ellipses). A tip goes over the nearest edge in its direction, so a stance that is wide one way and narrow another stands only on its narrow side when it leans that way.
+    ///  WHY (2026-11-27). The Starship's aft flaps reach about 3 m beyond its 4.5 m skirt, port and starboard only, with their trailing edges at the base. Taken as the widest reach, the stance was about 8 m all round: two touchdowns tilted 5-6 deg and sliding 2-3 m/s logged 39 and 50 % of what tips them, and both went over - on the skirt alone that was about four times.
+    /// </summary>
+    public static double NarrowestStanceM(ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> halfX, ReadOnlySpan<double> halfY,
+                                          ReadOnlySpan<double> depth, double bandM = 0.5)
+    {
+        int n = Math.Min(Math.Min(x.Length, y.Length), Math.Min(Math.Min(halfX.Length, halfY.Length), depth.Length));
+        if (n == 0)
+            return double.NaN;
+        double deepest = double.NegativeInfinity;
+        for (int i = 0; i < n; i++)
+            deepest = Math.Max(deepest, depth[i]);
+        double narrowest = double.PositiveInfinity;
+        for (int a = 0; a < 360; a++)
+        {
+            double c = Math.Cos(a * Math.PI / 180.0), s = Math.Sin(a * Math.PI / 180.0), reach = double.NegativeInfinity;
+            for (int i = 0; i < n; i++)
+                if (depth[i] >= deepest - bandM)
+                    reach = Math.Max(reach, x[i] * c + y[i] * s + Math.Sqrt(halfX[i] * c * (halfX[i] * c) + halfY[i] * s * (halfY[i] * s)));
+            narrowest = Math.Min(narrowest, reach);
+        }
+        return double.IsFinite(narrowest) && narrowest > 0.0 ? narrowest : double.NaN;
+    }
+
     /// <summary>How much deeper the lowest point sits at this attitude than upright, m: what the legs' height measured upright overstates the clearance by. Zero for no colliders; negative where tilting lifts the lowest point (one collider on the axis).</summary>
     public static double ExtraDepthM(ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> halfX, ReadOnlySpan<double> halfY,
                                      ReadOnlySpan<double> depth, double ux, double uy, double uz)

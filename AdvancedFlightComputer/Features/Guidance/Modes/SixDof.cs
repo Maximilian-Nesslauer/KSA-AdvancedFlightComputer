@@ -2144,21 +2144,9 @@ public static partial class GuidanceWindow
     /// <summary>
     /// Turns one plan command into the throttle and the gimbal torque, and logs the cycle.
     /// </summary>
-    /// <summary>The radius of what the craft stands on, m: the outermost reach from the thrust axis of the colliders whose lowest point is within half a metre of the deepest (VehicleAutopilotState.FootX...), a skirt's rim or the feet; NaN with none measured.</summary>
+    /// <summary>The radius of what the craft stands on, m, for the tip-over line: its NARROWEST reach from the thrust axis over all directions, among the colliders whose lowest point is within half a metre of the deepest (ContactDepth.NarrowestStanceM) - a skirt's rim, or the feet's inscribed circle; NaN with none measured. Not the widest: the Starship's aft flaps reach 3 m past its skirt port and starboard only.</summary>
     internal static double TipRadiusM(VehicleAutopilotState s)
-    {
-        double deepest = double.NegativeInfinity, radius = double.NaN;
-        foreach (double d in s.FootDepthM)
-            deepest = Math.Max(deepest, d);
-        for (int i = 0; i < s.FootDepthM.Length; i++)
-        {
-            if (s.FootDepthM[i] < deepest - 0.5)
-                continue;
-            double reach = Math.Sqrt(s.FootX[i] * s.FootX[i] + s.FootY[i] * s.FootY[i]) + Math.Max(s.FootHalfX[i], s.FootHalfY[i]);
-            radius = double.IsNaN(radius) ? reach : Math.Max(radius, reach);
-        }
-        return radius;
-    }
+        => Features.Ui.Logic.ContactDepth.NarrowestStanceM(s.FootX, s.FootY, s.FootHalfX, s.FootHalfY, s.FootDepthM);
 
     /// <summary>The touchdown's share of the energy that tips the craft over (TipOver.Share), worst case, for the log: "tip 63 % of what tips it", or empty with nothing measured.</summary>
     private static string TipText(Vehicle vehicle, double[] x)
@@ -2171,7 +2159,7 @@ public static partial class GuidanceWindow
         double rate = Math.Sqrt(x[10] * x[10] + x[11] * x[11]);
         double tilt = TiltFromUpDeg(vehicle, double3.Normalize(r)) * Math.PI / 180.0;
         double share = Features.Ui.Logic.TipOver.Share(vehicle.TotalMass, 0.5 * (ixx + iyy), radius, _s.VehicleHeightM, g, side, rate, tilt);
-        return double.IsNaN(radius) ? "" : FormattableString.Invariant($", tip {share * 100.0:F0} % of what tips it (line {Features.Ui.Logic.TipOver.AcceptShare * 100.0:F0} %)");
+        return double.IsNaN(radius) ? "" : FormattableString.Invariant($", tip {share * 100.0:F0} % of what tips it (line {Features.Ui.Logic.TipOver.AcceptShare * 100.0:F0} %; stance {radius:F1} m, centre of mass {_s.VehicleHeightM:F1} m up, inertia {0.5 * (ixx + iyy):E2} kg m^2, tilt {tilt * 180.0 / Math.PI:F1} deg, {rate * 180.0 / Math.PI:F1} deg/s)");
     }
 
     /// <summary>Hands touchdown guidance the gimbals' lag behind their last command, model body axes (KsaGimbalControl.Slot.LagTorqueNm), or null when the last pass did not measure it.</summary>

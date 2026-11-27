@@ -182,5 +182,14 @@ internal static partial class Program
         double exact5 = TipOver.Share(m, i, r, h, g, vLine5, 0.0, 5.0 * Math.PI / 180.0);
         Check("on the linear line at 5 deg tilt, the exact share is within 2 % of 80 %", Math.Abs(exact5 - 0.8) < 0.02, $"{exact5:P1} at {vLine5:F2} m/s");
         Check("a craft with nothing to stand on has no line", double.IsNaN(TipOver.LimitGain(m, i, 0.0, h, g)));
+
+        // The stance it tips over: a 4.5 m skirt with two aft flaps reaching 3 m past it port and starboard, their bottoms 0.2 m higher, stands on 4.5 m - the flaps do not help the way they do not reach.
+        double[] fx = [0.0, 0.0, 0.0], fy = [0.0, 6.0, -6.0], fhx = [4.5, 1.2, 1.2], fhy = [4.5, 1.5, 1.5], fd = [22.0, 21.8, 21.8];
+        double stance = ContactDepth.NarrowestStanceM(fx, fy, fhx, fhy, fd);
+        Check("a skirt with flaps port and starboard stands on its skirt", Math.Abs(stance - 4.5) < 0.01, $"{stance:F2} m");
+        // Four legs 5 m out with 0.3 m feet: the inscribed reach, between two feet (cos 45 deg of 5 m plus the foot), not 5.3 m.
+        double legs = ContactDepth.NarrowestStanceM([5, -5, 0, 0], [0, 0, 5, -5], [0.3, 0.3, 0.3, 0.3], [0.3, 0.3, 0.3, 0.3], [20, 20, 20, 20]);
+        Check("four legs stand on their narrowest side, between two feet", Math.Abs(legs - (5.0 * Math.Sqrt(0.5) + 0.3)) < 0.02, $"{legs:F2} m");
+        Check("nothing measured: no stance", double.IsNaN(ContactDepth.NarrowestStanceM([], [], [], [], [])));
     }
 }
