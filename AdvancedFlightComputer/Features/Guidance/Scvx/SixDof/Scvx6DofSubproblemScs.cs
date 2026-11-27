@@ -953,17 +953,20 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             _b[row++] = 0.0;
         }
 
-        // THE DESCENT FLOOR, from node 1 on: -v_z[k] >= min(DescentFloorMs, DescentFloorPerM (r_z[k] - target_z)) - f_k, f_k >= 0 (Scvx6DofConfig.DescentFloorMs), the branch of the min taken at the reference height. Both coefficients are always written, so the pattern does not change between fills.
+        // THE DESCENT FLOOR, from node 1 on: -v_z[k] >= min(DescentFloorMs, max(end sink, DescentFloorPerM (r_z[k] - target_z))) - f_k, f_k >= 0 (Scvx6DofConfig.DescentFloorAt), the branch taken at the reference height. Both coefficients are always written, so the pattern does not change between fills.
+        double endSink = Math.Max(-xf[Dynamics6Dof.IV + 2], 0.0);
         for (int k = 0; k < _nDf; k++)
         {
             int node = k + 1;
             double refHeight = xbar[node * NX + Dynamics6Dof.IR + 2] - xf[Dynamics6Dof.IR + 2];
-            bool taper = _cfg.DescentFloorPerM * refHeight < _cfg.DescentFloorMs;
-            // v_z + (taper ? PerM r_z : 0) - f <= (taper ? PerM target_z : -DescentFloorMs)
+            double tapered = _cfg.DescentFloorPerM * refHeight;
+            bool taper = tapered < _cfg.DescentFloorMs && tapered > endSink;
+            double flat = tapered >= _cfg.DescentFloorMs ? _cfg.DescentFloorMs : Math.Min(endSink, _cfg.DescentFloorMs);
+            // v_z + (taper ? PerM r_z : 0) - f <= (taper ? PerM target_z : -flat)
             AddA(row, IX(node, Dynamics6Dof.IV + 2), 1.0);
             AddA(row, IX(node, Dynamics6Dof.IR + 2), taper ? _cfg.DescentFloorPerM : 0.0);
             AddA(row, IDf(k), -1.0);
-            _b[row++] = taper ? _cfg.DescentFloorPerM * xf[Dynamics6Dof.IR + 2] : -_cfg.DescentFloorMs;
+            _b[row++] = taper ? _cfg.DescentFloorPerM * xf[Dynamics6Dof.IR + 2] : -flat;
             AddA(row, IDf(k), -1.0);
             _b[row++] = 0.0;
         }

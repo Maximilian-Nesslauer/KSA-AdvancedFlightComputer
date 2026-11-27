@@ -488,8 +488,12 @@ public sealed class Scvx6DofConfig
     /// </summary>
     public double TimeWeight { get; set; }
 
-    /// <summary>The descent floor at <paramref name="heightM"/> over the target, m/s down.</summary>
-    public double DescentFloorAt(double heightM) => Math.Min(DescentFloorMs, DescentFloorPerM * Math.Max(heightM, 0.0));
+    /// <summary>
+    /// The descent floor at <paramref name="heightM"/> over the target, m/s down: min(DescentFloorMs, max(<paramref name="endSinkMs"/>, DescentFloorPerM x height)) - never under the plan's own end sink, so a craft flying its plan always comes down faster than the cut supervisor's target (0.8 of that sink).
+    ///  WHY (2026-11-27 headless). Tapered to zero, the floor let a lunar lander sink at 0.14 m/s with its legs 0.41 m up; the supervisor read it as a stall below its 0.24 m/s, cut, and the drop broke the legs.
+    /// </summary>
+    public double DescentFloorAt(double heightM, double endSinkMs)
+        => Math.Min(DescentFloorMs, Math.Max(Math.Max(endSinkMs, 0.0), DescentFloorPerM * Math.Max(heightM, 0.0)));
 
     /// <summary>
     /// THE FIRST GIMBAL COMMAND'S ANCHOR, N, or null for none: (tdx, tdy, band) - node 0's lateral thrust may differ from (tdx, tdy) by at most band on each axis. Set by the flight for a warm re-solve to the command it is flying now, with band what the gimbal slews in two re-solve cycles (Ksa6DofGuidance.FirstGimbalAnchor), so a new plan carries on from where the gimbal is going rather than jumping. Settable between solves, as VirtualControlScale is.
