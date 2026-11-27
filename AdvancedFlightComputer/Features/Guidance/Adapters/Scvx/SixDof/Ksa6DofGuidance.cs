@@ -123,8 +123,13 @@ public sealed class Ksa6DofGuidance : IDisposable
 
     private double _lockedIgnition = double.NaN;
 
-    // The coast's upper bound as the setup built it, before NO LATER IGNITION lowered it (Scvx6DofConfig.CoastGrowthCapS).
+    // The coast's upper bound as the setup built it, before NO LATER IGNITION lowered it (Scvx6DofConfig.CoastGrowthCapS); the earliest ignition promised since the cap was armed, sim time; and whether it is (ArmIgnitionCap).
     private double _coastMaxBuilt = double.NaN;
+    private double _earliestIgnitionAt = double.NaN;
+    private bool _ignitionCapArmed;
+
+    /// <summary>Arms NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS) from now on: touchdown has the craft. Before, on the standby, the ignition follows the glide's changes freely.</summary>
+    public void ArmIgnitionCap() => _ignitionCapArmed = true;
 
     // The ignition the latest reference plans, sim time: where a cold or spread solve's coast is carried down from.
     private double _ignitionAt = double.NaN;
@@ -147,12 +152,20 @@ public sealed class Ksa6DofGuidance : IDisposable
         else if (known && coast < IgnitionLockS)
             _lockedIgnition = simNow + coast;
         _cfg.CoastSigmaFixed = EngineLit || double.IsFinite(_lockedIgnition) ? coast : null;
-        // NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS): the free coast at most what the plan left plus the cap; the setup's bound otherwise.
-        if (_cfg.CoastGrowthCapS >= 0.0 && known && _cfg.CoastSigmaFixed == null)
+        // NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS), once touchdown has the craft (ArmIgnitionCap): the ignition no later than the earliest any plan since has promised, plus the cap - an absolute anchor, as a bound relative to each plan's coast moved with every re-solve and never bound. The setup's bound otherwise.
+        if (double.IsNaN(_coastMaxBuilt))
+            _coastMaxBuilt = _cfg.CoastSigmaMax;
+        if (_cfg.CoastGrowthCapS >= 0.0 && _ignitionCapArmed && known && _cfg.CoastSigmaFixed == null)
         {
-            _coastMaxBuilt = double.IsNaN(_coastMaxBuilt) ? _cfg.CoastSigmaMax : _coastMaxBuilt;
-            _cfg.CoastSigmaMax = Math.Max(Math.Min(_coastMaxBuilt, coast + _cfg.CoastGrowthCapS), _cfg.CoastSigmaMin + 1e-3);
+            double at = simNow + coast;
+            if (!(at >= _earliestIgnitionAt))
+                _earliestIgnitionAt = at;
+            double cap = Math.Max(_earliestIgnitionAt + _cfg.CoastGrowthCapS - simNow, 0.0);
+            _cfg.CoastSigmaMax = Math.Max(Math.Min(_coastMaxBuilt, cap), _cfg.CoastSigmaMin + 1e-3);
+            coast = Math.Min(coast, _cfg.CoastSigmaMax);
         }
+        else
+            _cfg.CoastSigmaMax = _coastMaxBuilt;
         return coast;
     }
 
@@ -1317,6 +1330,8 @@ public sealed class Ksa6DofGuidance : IDisposable
         // The coast and its lock carry across; a plan rebuilt without a coast (once lit) takes the burn alone.
         EngineLit = prev.EngineLit;
         _lockedIgnition = prev._lockedIgnition;
+        _ignitionCapArmed = prev._ignitionCapArmed;
+        _earliestIgnitionAt = prev._earliestIgnitionAt;
         double intoBurn = Math.Max(elapsed - prev._planCoast, 0.0);
         double coast = _cfg.HasCoast ? CoastNow(simNow, prev._planCoast - elapsed) : 0.0;
         if (!FixedTime)

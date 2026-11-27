@@ -460,6 +460,7 @@ public static partial class GuidanceWindow
         Ksa6DofPlan plan = _s.Guidance.Published;
         _s.SixDofStandby = false;
         _s.Active = true;
+        _s.Guidance.ArmIgnitionCap();
         _s.RefusalRun = 0;
         _s.TouchdownArmed = false;
         _s.SixDofSeenDescending = _s.SixDofTookBurn;
