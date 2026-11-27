@@ -577,7 +577,8 @@ public static partial class GuidanceWindow
                                    scaleFrom: _s.SixDofCoastPending ? _s.SixDofCoastScaleState : null,
                                    momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
                                    momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
-                                   momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs))
+                                   momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs,
+                                   glideSlopeNearDeg: _s.SixDofGlideSlopeNearDeg))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -744,10 +745,8 @@ public static partial class GuidanceWindow
         // Signed distance outside the glideslope cone, same convention the solver enforces: positive means outside.
         double glideViol = 0.0;
         if (_s.SixDofGlideSlopeDeg > 0.0)
-        {
-            double cot = 1.0 / Math.Tan(Math.Clamp(_s.SixDofGlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
-            glideViol = Math.Sqrt(x[0] * x[0] + x[1] * x[1]) - cot * (x[2] - _s.SixDofTargetComAltM);
-        }
+            glideViol = Math.Sqrt(x[0] * x[0] + x[1] * x[1]) - Scvx6DofConfig.Radius(_s.SixDofGlideSlopeDeg, _s.SixDofGlideSlopeNearDeg,
+                Ksa6DofSetup.LastGlideNearHeightM, Ksa6DofSetup.LastGlideFarHeightM, x[2] - _s.SixDofTargetComAltM);
 
         double r22 = 1.0 - 2.0 * (x[7] * x[7] + x[8] * x[8]);
         TvcAllocationResult a = KsaGimbalControl.Diagnostics(vehicle)?.LastAllocation ?? default;
@@ -2288,7 +2287,8 @@ public static partial class GuidanceWindow
                                      scaleFrom: _s.SixDofCoastPending ? _s.SixDofCoastScaleState : null,
                                      momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
                                      momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
-                                     momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs);
+                                     momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs,
+                                     glideSlopeNearDeg: _s.SixDofGlideSlopeNearDeg);
     }
 
     /// <summary>

@@ -36,6 +36,34 @@ public static class Ksa6DofSetup
     /// </summary>
     public const double VirtualControlPositionScaleM = 5.0;
 
+    /// <summary>The progressive glideslope's near height, at least, m: a craft shorter than this still comes down its last 20 m nearly straight.</summary>
+    internal const double GlideFunnelMinNearM = 20.0;
+
+    /// <summary>The fallback pitch acceleration for the funnel's flip time when the gimbals give none, rad/s^2.</summary>
+    internal const double GlideFunnelFallbackAccel = 0.05;
+
+    /// <summary>The progressive glideslope's heights the last build worked out, m: near (steep below) and far (back to GLIDE SLOPE above). For the log and the drawings.</summary>
+    public static double LastGlideNearHeightM { get; private set; } = double.NaN;
+    public static double LastGlideFarHeightM { get; private set; } = double.NaN;
+
+    /// <summary>
+    /// THE PROGRESSIVE GLIDESLOPE'S HEIGHTS FROM THE CRAFT (Scvx6DofConfig.GlideSlopeNearDeg), not a craft's own tuning, so a booster and a Starship each get their own:
+    ///  - NEAR, below which the funnel is at its steep angle: the craft's length (its bounding box's longest side), at least GlideFunnelMinNearM - the last stretch, about a body length, comes down nearly straight;
+    ///  - FAR, above which it is back at GLIDE SLOPE: the near height plus the height the craft falls while it flips upright, half its speed now times the flip's time. The flip is a quarter turn, rest to rest, at the pitch acceleration the gimbals give at the minimum thrust: 2 sqrt((pi/2) / alpha). A Starship on one Raptor (0.9 MN at the floor, a 19 m arm, 11.8 deg of gimbal, 27e6 kg m^2) turns at 0.13 rad/s^2, flips in about 7 s and, at 50 m/s, gets a far height near 225 m; a booster on three engines flips in a few seconds.
+    /// </summary>
+    internal static void GlideFunnelHeights(Vehicle vehicle, double floorThrustN, double armM, double gimbalDeg, double pitchInertia, double speedMs,
+                                            out double nearM, out double farM)
+    {
+        float3 half = vehicle.BoundingBoxHalfExtentsAsmb;
+        double length = 2.0 * Math.Max(half.X, Math.Max(half.Y, half.Z));
+        nearM = Math.Max(GlideFunnelMinNearM, double.IsFinite(length) ? length : 0.0);
+        double accel = pitchInertia > 0.0 ? floorThrustN * armM * Math.Sin(gimbalDeg * Math.PI / 180.0) / pitchInertia : 0.0;
+        if (!(accel > 1e-4) || !double.IsFinite(accel))
+            accel = GlideFunnelFallbackAccel;
+        double flipS = 2.0 * Math.Sqrt(0.5 * Math.PI / accel);
+        farM = nearM + Math.Max(GlideFunnelMinNearM, 0.5 * Math.Max(speedMs, 0.0) * flipS);
+    }
+
     /// <summary>
     /// The roll acceleration at full thrust, rad/s^2, under which the gimbals count as giving no roll torque and the plan leaves the roll free (Scvx6DofConfig.TerminalRollFree). 0.002 rad/s^2 takes 40 s at full thrust to remove a roll rate of 0.08 rad/s, so a craft under it cannot stop the roll it enters with during a touchdown burn. One gimballed engine on the thrust line gives a thousandth of this or less, engines on a ring a hundred times more.
     /// </summary>
@@ -522,7 +550,8 @@ public static class Ksa6DofSetup
                                 bool gimbalRateLimit = true, Dynamics6Dof.RcsModel rcs = null, double rcsWeight = 0.0,
                                 double rateMaxDegS = 0.0, int coastIntervals = 0, double[] scaleFrom = null,
                                 double momentLimiterPerPa = 0.0, double torqueMargin = 0.0, bool fins = true, double surfaceShare = PlanSurfaceShare,
-                                double momentLimiterStiffnessPerPa = 0.0, double momentLimiterDampingPerPaMs = 0.0)
+                                double momentLimiterStiffnessPerPa = 0.0, double momentLimiterDampingPerPaMs = 0.0,
+                                double glideSlopeNearDeg = 0.0)
     {
         cfg = null!;
         dyn = null!;
@@ -743,6 +772,10 @@ public static class Ksa6DofSetup
         double omegaScale = Math.Max(tiltMaxDeg * Math.PI / 180.0 / Math.Max(sigma * 0.5, 1.0), 1e-3);
         double wW = Math.Max(rateDampShare, 0.0) / (nodes * 3.0 * omegaScale * omegaScale);
 
+        GlideFunnelHeights(vehicle, throttleFloor * thrust, arm, gimbalDeg, Math.Max(ixx, iyy), speed0, out double funnelNearM, out double funnelFarM);
+        LastGlideNearHeightM = funnelNearM;
+        LastGlideFarHeightM = funnelFarM;
+
         BodyAero6Dof.FinTable[] finTables = dyn.BodyAero?.Fins ?? [];
         cfg = new Scvx6DofConfig
         {
@@ -802,6 +835,10 @@ public static class Ksa6DofSetup
             // Restores the conditioning the regularisers previously provide, without the bias. Measured on the reference problem at low weights: 91650 ADMM iterations / 4907 ms at 0, versus 23675 / 1295 ms at 0.05 - 3.8x faster for a burn time within 1.2% and a merit within 0.03%. Do NOT raise this chasing more speed: at 0.2 it is 7x faster but shifts burn time 6% and worsens merit 1%, because SCvx stops at a tolerance rather than exactly at X = Xbar, so a large proximal term leaves a residual pull and starts acting as a second trust region.
             ProximalWeight = Math.Max(proximalWeight, 0.0),
             GlideSlopeDeg = glideSlopeDeg,
+            // The progressive glideslope's heights, from the craft (GlideFunnelHeights).
+            GlideSlopeNearDeg = glideSlopeDeg > 0.0 ? glideSlopeNearDeg : 0.0,
+            GlideSlopeNearHeightM = funnelNearM,
+            GlideSlopeFarHeightM = funnelFarM,
             VzMax = vzMaxMs,
             // Terminal position and speed are SOFT, heavily penalised. A hard terminal says "arrive exactly there, exactly at rest", and when that is not achievable the honest answer is a plan that misses rather than no plan at all - a descending booster cannot decline to land. The weights are high enough that both slacks sit at zero whenever the target is genuinely reachable, so this changes nothing on a normal descent.
             //  POSITION ABOVE SPEED. Both are normalised by the problem's scales (here ~250 m and ~100 m/s at a hand-over), so the weights alone do not say what trades for what. With speed at 1e5 and the miss at 1e3, 1 m/s cost as much as ~270 m of miss, and a squeezed plan stopped at rest 20-30 m over the pad - where a booster that cannot throttle below its weight floats and then climbs (2026-10-08, 17:42 and 17:53). At 1e5 and 1e4, 1 m of miss costs about as much as 4 m/s: a squeezed plan arrives a little fast rather than high, as Falcon 9 lands at ~2 m/s rather than stopping short.

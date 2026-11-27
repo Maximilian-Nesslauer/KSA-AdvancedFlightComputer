@@ -625,15 +625,23 @@ public sealed class Scvx6DofSolver : IDisposable
         double gs = 0.0, vz = 0.0, tmPos = 0.0, tmVel = 0.0;
         if (_cfg.GlideSlopeEnabled)
         {
-            double cot = _cfg.CotGlideSlope;
             double entry = Scvx6DofSubproblemScs.GlideSlopeEntryAllowance(_cfg, _x0, _xf);
             for (int node = 1; node < _n; node++)
             {
                 double dx = x[node * NX + Dynamics6Dof.IR] - _xf[Dynamics6Dof.IR];
                 double dy = x[node * NX + Dynamics6Dof.IR + 1] - _xf[Dynamics6Dof.IR + 1];
                 double height = x[node * NX + Dynamics6Dof.IR + 2] - _xf[Dynamics6Dof.IR + 2];
-                double over = Math.Sqrt(dx * dx + dy * dy) - (cot * height + Scvx6DofSubproblemScs.GlideSlopeAllowanceAt(entry, node, _n));
+                // The true funnel, where the subproblem has its tangent (Scvx6DofConfig.GlideSlopeRadiusAt): its narrowing beyond the plain cone at the funnel's price, up to the gap between the two, and past the plain cone at the glideslope's.
+                double offset = Math.Sqrt(dx * dx + dy * dy), allow = Scvx6DofSubproblemScs.GlideSlopeAllowanceAt(entry, node, _n);
+                double plain = _cfg.CotGlideSlope * height;
+                double over = offset - (plain + allow);
                 gs += _cfg.GlideSlopeWeight * Math.Max(0.0, over) / _xs[Dynamics6Dof.IR];
+                if (_cfg.GlideSlopeProgressive)
+                {
+                    double gap = Math.Max(plain - _cfg.GlideSlopeRadiusAt(height), 0.0);
+                    double inFunnel = Math.Clamp(offset - (_cfg.GlideSlopeRadiusAt(height) + allow), 0.0, gap);
+                    gs += _cfg.GlideFunnelWeight * inFunnel / Scvx6DofConfig.GlideFunnelPriceScaleM;
+                }
             }
         }
         if (_cfg.VzLimitEnabled)

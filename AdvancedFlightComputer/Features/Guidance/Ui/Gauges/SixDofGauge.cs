@@ -146,6 +146,7 @@ public static partial class GuidanceWindow
         GaugeRow(Specs.SixDofSurfaceShare, ref _s.SixDofSurfaceShare);
 
         GaugeRow(Specs.SixDofGlideSlopeDeg, ref _s.SixDofGlideSlopeDeg);
+        GaugeRow(Specs.SixDofGlideSlopeNearDeg, ref _s.SixDofGlideSlopeNearDeg);
 
         GaugeRowCheck(Specs.SixDofVzEnabled, ref _s.SixDofVzEnabled);
         using (new ImGuiDisabledScope(!_s.SixDofVzEnabled))

@@ -46,12 +46,14 @@ The commonest failure is simpler than the rest: the plan brings the craft to res
 
 - **Inputs:** the legs' height above the ground under the craft (`LegsHeightM`, a radio altitude) and the vertical speed. Nothing from the plan.
 - **Armed** once the craft has descended faster than 1 m/s with the engine lit, so a craft on the pad is never cut.
-- **Integrates**, while the legs are within CUT HEIGHT (2 m) of the ground, the target sink (CUT SINK, 0.5 m/s) less the actual sink: the height it has failed to descend. A slight stall builds slowly, a hover at 0.5 m/s, a climb faster; sinking faster pays it back, never below zero.
-- **Cuts** at CUT SHORTFALL (0.5 m, a 1 s hover), and holds the engine off every step after, whatever guidance asks; touchdown guidance flies the rest to contact with no relight left. A drop from 2 m lands at about 6.3 m/s.
+- **Integrates**, while the legs are within CUT WATCH HEIGHT (5 m) of the ground, the target sink (CUT SINK, 0.5 m/s) less the actual sink: the height it has failed to descend. A slight stall builds slowly, a hover at 0.5 m/s, a climb faster; sinking faster pays it back, never below zero.
+- **Cuts** with the legs within CUT HEIGHT (2 m) at CUT SHORTFALL (0.3 m there, less in proportion lower down, never under 0.1 m), only while the craft is still short of CUT SINK, and holds the engine off every step after, whatever guidance asks; touchdown guidance flies the rest to contact with no relight left. A drop from 2 m lands at about 6.3 m/s.
 - **Logged:** the first step of each shortfall and the cut, with height, vertical and sideways speed, tilt and the drop's landing speed. The cycle log now keeps writing after the plan's end, with the supervisor's height, shortfall and action.
 - **Settings** on TUNE > TOUCHDOWN > CUT SUPERVISOR.
 
 Later, a learned supervisor could be trained on the logged inputs; the integrator comes first because a handful of landings is no training set and its decisions can be read.
+
+**Also built: the progressive glideslope** (see the changelog), which shapes the approach so the last stretch comes down nearly straight, from the craft's length and flip time rather than per-craft tuning. Ending the plan at a gate above the pad, with the terminal law below flying the last metres, is the next step.
 
 The terminal law below is still to build.
 

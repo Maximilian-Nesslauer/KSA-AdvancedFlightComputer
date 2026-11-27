@@ -72,7 +72,9 @@ public static partial class GuidanceWindow
             for (int ring = 1; ring <= rings; ring++)
             {
                 double dz = (topZ - apexZ) * ring / rings;
-                double rad = cot * dz, z = apexZ + dz;
+                // The progressive glideslope's funnel where the planner has one (Scvx6DofConfig.Radius), the plain cone's cot x height where not.
+                double rad = AdvancedFlightComputer.Guidance.Scvx.SixDof.Scvx6DofConfig.Radius(_s.SixDofGlideSlopeDeg, _s.SixDofGlideSlopeNearDeg,
+                    Ksa6DofSetup.LastGlideNearHeightM, Ksa6DofSetup.LastGlideFarHeightM, dz), z = apexZ + dz;
                 double3 prev = default;
                 for (int j = 0; j <= seg; j++)
                 {

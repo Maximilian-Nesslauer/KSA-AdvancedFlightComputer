@@ -319,6 +319,72 @@ public sealed class Scvx6DofConfig
     /// <summary>cot of the glideslope half-angle: the cone's horizontal run per unit of height.</summary>
     public double CotGlideSlope => 1.0 / Math.Tan(Math.Clamp(GlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
 
+    /// <summary>
+    /// THE PROGRESSIVE GLIDESLOPE, deg above the horizon, or 0 for the plain cone: the glideslope steepens to this below <see cref="GlideSlopeNearHeightM"/> of height over the target, opening to <see cref="GlideSlopeDeg"/> by <see cref="GlideSlopeFarHeightM"/> - a funnel, so the last stretch comes down nearly straight over the pad and a divert is flown high up rather than in the last seconds.
+    ///  WHY (#335, 2026-11-27). The plan's cost is mostly fuel, which is flat across many shapes, so the plain 10 deg cone - 5.7 m of offset per metre of height, 113 m at 20 m - left the shape to wherever SCvx's local optimum fell: one Starship landing lit 109 m out and swept in at 20 m/s sideways through 50 m, another lit 561 m out. Real landings come down the last stretch nearly vertical.
+    ///  NOT CONVEX: a funnel that narrows towards the ground is a trumpet. The subproblem takes its tangent at each node's reference height (an affine bound on the offset, a second-order cone as before), and the merit prices the true funnel, as SCvx linearises every non-convex limit. Soft, with the glideslope's slack and price.
+    /// </summary>
+    public double GlideSlopeNearDeg { get; init; }
+
+    /// <summary>
+    /// The price of the progressive glideslope's narrowing beyond the plain cone, per position scale of offset, as <see cref="GlideSlopeWeight"/> prices the cone: low, so the funnel SHAPES a plan that can follow it and gives way for one that cannot, rather than enforcing a corridor. Past the plain cone the glideslope's own price applies.
+    ///  Offline (2026-11-27), at the cone's own price the funnel took a gimbal-limited booster that ends 8-15 m off the pad (--6dof-lift) from 40 plans kept to none; at 3-30 it kept 31-39. A gimbal-only booster (--6dof-rcs) kept 12-26 against 55 without it, landing about the same.
+    /// </summary>
+    public double GlideFunnelWeight { get; init; } = 10.0;
+
+    /// <summary>The length the funnel's price is per, m: fixed, as the terminal miss's is (TerminalMissScaleM), so a metre outside costs the same however far away the plan starts. On the position scale - the craft's distance at setup, about 240 m in the offline checks and 2 km for a Starship at standby - it would barely touch the Starship.</summary>
+    public const double GlideFunnelPriceScaleM = 250.0;
+
+    /// <summary>The height over the target below which the progressive glideslope holds <see cref="GlideSlopeNearDeg"/>, m.</summary>
+    public double GlideSlopeNearHeightM { get; init; }
+
+    /// <summary>The height over the target above which it is back at <see cref="GlideSlopeDeg"/>, m; between the two its run per metre changes linearly with height.</summary>
+    public double GlideSlopeFarHeightM { get; init; }
+
+    public bool GlideSlopeProgressive => IsProgressive(GlideSlopeDeg, GlideSlopeNearDeg, GlideSlopeNearHeightM, GlideSlopeFarHeightM);
+
+    /// <summary>The glideslope's horizontal run per metre of height at <paramref name="heightM"/> over the target: the near cot below the near height, the far one above the far height, linear between.</summary>
+    public double GlideSlopeRunPerMAt(double heightM) => RunPerM(GlideSlopeDeg, GlideSlopeNearDeg, GlideSlopeNearHeightM, GlideSlopeFarHeightM, heightM);
+
+    /// <summary>The largest horizontal offset from the target the glideslope allows at <paramref name="heightM"/> over it, m: the integral of <see cref="GlideSlopeRunPerMAt"/> from 0, so the plain cone's cot x height when not progressive. Negative below the target, as the cone's is.</summary>
+    public double GlideSlopeRadiusAt(double heightM) => Radius(GlideSlopeDeg, GlideSlopeNearDeg, GlideSlopeNearHeightM, GlideSlopeFarHeightM, heightM);
+
+    /// <summary>Whether a glideslope of <paramref name="farDeg"/> steepening to <paramref name="nearDeg"/> between <paramref name="farHeightM"/> and <paramref name="nearHeightM"/> is progressive at all.</summary>
+    public static bool IsProgressive(double farDeg, double nearDeg, double nearHeightM, double farHeightM)
+        => nearDeg > farDeg && farHeightM > nearHeightM && nearHeightM >= 0.0;
+
+    private static double Cot(double deg) => 1.0 / Math.Tan(Math.Clamp(deg, 1e-3, 89.999) * Math.PI / 180.0);
+
+    /// <summary>The run per metre of height of such a glideslope at <paramref name="heightM"/> (see <see cref="GlideSlopeRunPerMAt"/>), for the drawings and the log, which have no config.</summary>
+    public static double RunPerM(double farDeg, double nearDeg, double nearHeightM, double farHeightM, double heightM)
+    {
+        double far = Cot(farDeg);
+        if (!IsProgressive(farDeg, nearDeg, nearHeightM, farHeightM))
+            return far;
+        double near = Cot(nearDeg);
+        if (heightM <= nearHeightM)
+            return near;
+        if (heightM >= farHeightM)
+            return far;
+        return near + (far - near) * (heightM - nearHeightM) / (farHeightM - nearHeightM);
+    }
+
+    /// <summary>The radius of such a glideslope at <paramref name="heightM"/> (see <see cref="GlideSlopeRadiusAt"/>).</summary>
+    public static double Radius(double farDeg, double nearDeg, double nearHeightM, double farHeightM, double heightM)
+    {
+        double far = Cot(farDeg);
+        if (!IsProgressive(farDeg, nearDeg, nearHeightM, farHeightM))
+            return far * heightM;
+        double near = Cot(nearDeg);
+        if (heightM <= nearHeightM)
+            return near * heightM;
+        double band = Math.Min(heightM, farHeightM) - nearHeightM;
+        double radius = near * nearHeightM + band * (near + RunPerM(farDeg, nearDeg, nearHeightM, farHeightM, nearHeightM + band)) / 2.0;
+        if (heightM > farHeightM)
+            radius += far * (heightM - farHeightM);
+        return radius;
+    }
+
     public double Tmin => ThrottleFloor * Tmax;
     public double TanGimbal => Math.Tan(GimbalMaxDeg * Math.PI / 180.0);
     public double CosTilt => Math.Cos(TiltMaxDeg * Math.PI / 180.0);

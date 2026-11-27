@@ -928,7 +928,9 @@ public sealed class VehicleAutopilotState
     public double SixDofSigmaSeed = 20.0;
     // ZERO/ZERO: the plan ends with the legs on the pad and the craft at rest, so it lands the craft itself rather than stopping above the pad for something else to finish. The plan flies the CoM, which sits VehicleHeightM above the legs, and on a slope the first leg meets the ground SiteEarlyContactM before the height of the site centre.
     public double SixDofTargetComAltM => VehicleHeightM + SiteEarlyContactM;
-    public double SixDofGlideSlopeDeg = 10.0;   // 0 = off; degrees above horizontal
+    public double SixDofGlideSlopeDeg = 10.0;
+    /// <summary>The progressive glideslope's angle near the ground, deg above the horizon, or 0 for the plain cone (Scvx6DofConfig.GlideSlopeNearDeg): steep below about the craft's length over the target, opening to GLIDE SLOPE above the height it falls while it flips upright (Ksa6DofSetup.GlideFunnelHeights). 60: an offset of at most 0.58 m per metre of height near the ground.</summary>
+    public double SixDofGlideSlopeNearDeg = 60.0;   // 0 = off; degrees above horizontal
     public bool SixDofVzEnabled = true;
     public double SixDofVzMaxMs;
 

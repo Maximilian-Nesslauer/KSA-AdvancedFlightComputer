@@ -39,12 +39,12 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
     private readonly double _dtau;
     private readonly double[] _xs, _us;
 
-    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _oAc, _oRr, _iSigC, _nVars;
+    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _oAc, _oRr, _iSigC, _oGf, _nVars;
 
     // The coast before ignition (Scvx6DofConfig.CoastIntervals): its interval count, and each phase's share of normalised time per interval.
     private readonly int _nCoast;
     private readonly double _dtauC, _dtauB;
-    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nAc, _nRr;
+    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nAc, _nRr, _nGf;
     private readonly int _nEq, _lDim, _nCone;   // _nCone = total rows = nEq + lDim + sum(soc)
     private readonly int[] _socDims;
 
@@ -86,6 +86,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
 
     /// <summary>Slack index for path node <paramref name="k"/>, which is TRAJECTORY node k+1.</summary>
     public int IGs(int k) => _oGs + k;
+    public int IGf(int k) => _oGf + k;
     public int IVz(int k) => _oVz + k;
 
     public Scvx6DofSubproblemScs(Scvx6DofConfig cfg)
@@ -129,6 +130,10 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         // The coast's duration, LAST of all (Scvx6DofConfig.CoastIntervals); -1 without a coast.
         _iSigC = _nCoast > 0 ? _oRr + _nRr : -1;
         _nVars = _oRr + _nRr + (_nCoast > 0 ? 1 : 0);
+        // THE PROGRESSIVE GLIDESLOPE'S OWN SLACK, one per glideslope node, after everything else so every earlier block keeps its offset (Scvx6DofConfig.GlideFunnelWeight): the funnel's narrowing beyond the plain cone is relaxed by this cheap slack, at most the gap between the two, and only past that by the glideslope's own.
+        _nGf = cfg.GlideSlopeProgressive ? _nGs : 0;
+        _oGf = _nVars;
+        _nVars += _nGf;
 
         // With the terminal roll free, three terminal rows go (qw, qz, wz) and the last node gets a tangent-plane row.
         _nEq = NX + (NX - 1) + (_n - 1) * NX + (_n - 2) - (cfg.TerminalRollFree ? 2 : 0);
@@ -142,7 +147,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         // + two rows per node for each fin's range, and two per interval for its rate, after the RCS's.
         _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm + 2 * _nAc + _nSlew
                 + 2 * _n * Dynamics6Dof.NRCS + 2 * _n * _cfg.FinCount + 2 * (_n - 1) * _cfg.FinCount
-                + _nPin + _nRr + (_nCoast > 0 ? 4 : 0);
+                + _nPin + _nRr + (_nCoast > 0 ? 4 : 0) + 2 * _nGf;
         _socDims = new int[_n + _nGs + _n + _nRr];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
@@ -169,6 +174,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         _colScale[_iSig] = cfg.SigmaScale;
         // Slacks carry the units of what they relax, so they take the same scale as the quantity being violated: metres of horizontal miss, m/s of climb.
         for (int k = 0; k < _nGs; k++) _colScale[IGs(k)] = _xs[Dynamics6Dof.IR];
+        for (int k = 0; k < _nGf; k++) _colScale[IGf(k)] = _xs[Dynamics6Dof.IR];
         for (int k = 0; k < _nVz; k++) _colScale[IVz(k)] = _xs[Dynamics6Dof.IV];
         for (int i = 0; i < _nTmPos; i++) _colScale[_oTm + i] = _xs[Dynamics6Dof.IR];
         for (int i = 0; i < _nTmVel; i++) _colScale[_oTm + _nTmPos + i] = _xs[Dynamics6Dof.IV];
@@ -348,7 +354,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
     internal double RateSlackCost => SlackCost(_oRr, _nRr);
 
     /// <summary>The glideslope, climb-rate and terminal-miss slacks' cost in the last solution, as the objective pays it.</summary>
-    internal double PathSlackCost => SlackCost(_oGs, _nGs) + SlackCost(_oVz, _nVz) + SlackCost(_oTm, _nTm);
+    internal double PathSlackCost => SlackCost(_oGs, _nGs) + SlackCost(_oGf, _nGf) + SlackCost(_oVz, _nVz) + SlackCost(_oTm, _nTm);
 
     private double SlackCost(int offset, int count)
     {
@@ -364,7 +370,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         double entryX = x0[Dynamics6Dof.IR] - xf[Dynamics6Dof.IR];
         double entryY = x0[Dynamics6Dof.IR + 1] - xf[Dynamics6Dof.IR + 1];
         double entryHeight = x0[Dynamics6Dof.IR + 2] - xf[Dynamics6Dof.IR + 2];
-        return Math.Max(0.0, Math.Sqrt(entryX * entryX + entryY * entryY) - cfg.CotGlideSlope * entryHeight);
+        return Math.Max(0.0, Math.Sqrt(entryX * entryX + entryY * entryY) - cfg.GlideSlopeRadiusAt(entryHeight));
     }
 
     /// <summary>The glideslope's widening at trajectory node <paramref name="node"/> of <paramref name="n"/>, m: entry_0 ((1-s)^2 + s (1-s)^4), s the node's fraction of the horizon.</summary>
@@ -450,6 +456,8 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         // 1. Penalising the RAW slack instead puts a coefficient of weight * XScale = 1e6 next to terms of order 1e-2, and SCS does not merely solve that slowly: it returns "unbounded", because a cost that lopsided makes the dual infeasible to working precision. Dividing by the same scale the column already carries keeps the two in step even if that scale changes.
         for (int k = 0; k < _nGs; k++)
             _c[IGs(k)] += _cfg.GlideSlopeWeight * _colScale[IGs(k)] / _xs[Dynamics6Dof.IR];
+        for (int k = 0; k < _nGf; k++)
+            _c[IGf(k)] += _cfg.GlideFunnelWeight * _colScale[IGf(k)] / Scvx6DofConfig.GlideFunnelPriceScaleM;
         for (int k = 0; k < _nVz; k++)
             _c[IVz(k)] += _cfg.VzWeight * _colScale[IVz(k)] / _xs[Dynamics6Dof.IV];
         for (int i = 0; i < _nTmPos; i++)
@@ -784,6 +792,17 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
                     _b[row++] = 0.0;
                 }
 
+        // THE FUNNEL'S SLACK: 0 <= f_k <= the gap between the plain cone and the funnel at the node's reference height, max(cot h_ref - R(h_ref), 0). A constant per iteration, so the row stays linear and never infeasible, even for a node below the target.
+        for (int k = 0; k < _nGf; k++)
+        {
+            int node = k + 1;
+            double hRef = xbar[node * NX + Dynamics6Dof.IR + 2] - xf[Dynamics6Dof.IR + 2];
+            AddA(row, IGf(k), -1.0);
+            _b[row++] = 0.0;
+            AddA(row, IGf(k), 1.0);
+            _b[row++] = Math.Max(_cfg.CotGlideSlope * hRef - _cfg.GlideSlopeRadiusAt(hRef), 0.0);
+        }
+
         // In TorqueDemand the same cone bounds the pitch and yaw torque as the mixer can give it together: ||(tau_x, tau_y)|| <= DemandTorquePerN T + the largest disc inside the RCS's box. The gimbals' share is a disc (they tilt one nozzle), so the box rows alone would promise up to 1.4 times the gimbals' torque at its corners.
         for (int k = 0; k < _n; k++)
         {
@@ -822,17 +841,21 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         // Excluded at node 0 for the same reason as the climb rate, and slackened by g_k for a sharper one: alone, either constraint is survivable, but a vehicle that is both outside the cone and too low can only get back inside by CLIMBING - which the climb-rate row forbids.
         // Hard versions of the two together can trap the vehicle in a region with no feasible exit at all.
         // Soft versions cannot, and the L1 penalty keeps the slack at exactly zero whenever the corridor is actually reachable.
-        double cot = _cfg.CotGlideSlope;
+        // THE PROGRESSIVE GLIDESLOPE (Scvx6DofConfig.GlideSlopeNearDeg) at each node is its tangent at the reference's height h_ref there: radius R(h_ref) + R'(h_ref) (h - h_ref), an affine bound like the plain cone's cot x h, which it is when the glideslope is not progressive.
         // ENTRY ALLOWANCE. A vehicle handed over outside the cone starts entry_0 metres outside it, measured from x0 on every solve.
         // entry_k = entry_0 * ((1-s)^2 + s*(1-s)^4) with s the node's fraction of the horizon: the full violation at the entry, zero at the target, and a quartic term that only widens the early nodes, so the corridor closes on the target without asking the first interval to jump inside.
         double entryAllowance = GlideSlopeEntryAllowance(_cfg, x0, xf);
         for (int k = 0; k < _nGs; k++)
         {
             int node = k + 1;
-            AddA(row, IX(node, Dynamics6Dof.IR + 2), -cot);
+            double hRef = xbar[node * NX + Dynamics6Dof.IR + 2] - xf[Dynamics6Dof.IR + 2];
+            double run = _cfg.GlideSlopeRunPerMAt(hRef);
+            AddA(row, IX(node, Dynamics6Dof.IR + 2), -run);
             AddA(row, IGs(k), -1.0);
+            if (_nGf > 0)
+                AddA(row, IGf(k), -1.0);
             double allowance = GlideSlopeAllowanceAt(entryAllowance, node, _n);
-            _b[row++] = -cot * xf[Dynamics6Dof.IR + 2] + allowance;
+            _b[row++] = -run * xf[Dynamics6Dof.IR + 2] + (_cfg.GlideSlopeRadiusAt(hRef) - run * hRef) + allowance;
 
             AddA(row, IX(node, Dynamics6Dof.IR + 0), -1.0);
             _b[row++] = -xf[Dynamics6Dof.IR + 0];
@@ -1022,6 +1045,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
 
     private string NameOf(int col)
     {
+        if (col >= _oGf && _nGf > 0) return $"glide funnel slack {col - _oGf}";
         if (col >= _oVz && _nVz > 0) return $"vz slack {col - _oVz}";
         if (col >= _oGs && _nGs > 0) return $"glideslope slack {col - _oGs}";
         if (col == _iSig) return "sigma";
