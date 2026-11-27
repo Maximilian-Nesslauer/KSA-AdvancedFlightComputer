@@ -1037,8 +1037,11 @@ public sealed class VehicleAutopilotState
     /// <summary>Price on touchdown guidance's RCS torque, Scvx6DofConfig.RcsWeight: how much the plan leans on the gimbals, which cost no propellant, before the thrusters.</summary>
     public double SixDofRcsWeight = 0.1;
 
-    /// <summary>Touchdown guidance's turn-rate limit, deg/s, roll included, or 0 for none (Scvx6DofConfig.RateMaxRadS).</summary>
-    public double SixDofRateMaxDegS = 15.0;
+    /// <summary>
+    /// Touchdown guidance's turn-rate limit, deg/s, roll included, or 0 for none (Scvx6DofConfig.RateMaxRadS).
+    ///  40 (was 15, 2026-11-20, set against a booster's plan thrashing on its RCS): 15 paced a Starship's 90 deg powered flip at 12-13 deg/s for 7.5 s, its thrust tilted 40-90 deg the while, and the craft went from 17.5 to 39 m/s sideways and was planned 250 m past the site (2026-11-27, 10:06). Its gimbal alone gives about 8 deg/s^2 at the landing burn's throttle and 20 at full, so a flip is limited by the gimbal near 40 deg/s rather than by this.
+    /// </summary>
+    public double SixDofRateMaxDegS = 40.0;
 
     /// <summary>Touchdown guidance's plan holds its lateral thrust to the gimbal's slew rate (Scvx6DofConfig.GimbalSlewPerS). On; off flies the plan as before 2026-11-18, free to jump between nodes.</summary>
     public bool SixDofGimbalRateLimit = true;

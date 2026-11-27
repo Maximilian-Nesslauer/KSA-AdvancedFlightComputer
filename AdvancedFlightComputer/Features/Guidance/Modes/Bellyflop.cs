@@ -311,7 +311,7 @@ public static partial class GuidanceWindow
     /// </summary>
     private const double BellyflopHandoverPlanAgeS = 2.5;
 
-    /// <summary>The flip's share of touchdown's burn-time seed, s: 90 deg at about 15 deg/s.</summary>
+    /// <summary>The flip's share of touchdown's burn-time seed, s: 90 deg at the gimbal's few deg/s^2 at the landing burn's throttle, rest to rest (a Starship's 8 deg/s^2 takes 6.7 s). Only a seed; the plan chooses its own.</summary>
     private const double BellyflopFlipSeedS = 6.0;
 
     /// <summary>
