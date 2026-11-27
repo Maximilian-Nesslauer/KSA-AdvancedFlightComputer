@@ -232,10 +232,12 @@ internal static class GuidanceSettingSpecs
         "Watches touchdown from outside the plan and cuts the engine when the craft stops coming down with its legs within CUT HEIGHT of the ground. The engine then stays off to contact.");
     public static readonly SettingSpec CutSupervisorSinkMs = new("CutSupervisorSinkMs", "CUT SINK", "m/s", T, 0.5, 0.05, 5.0, "%.2f",
         "The sink the supervisor expects near the ground. Slower, a hover or a climb builds the shortfall.");
-    public static readonly SettingSpec CutSupervisorShortfallM = new("CutSupervisorShortfallM", "CUT SHORTFALL", "m", T, 0.5, 0.05, 5.0, "%.2f",
-        "The height not descended at CUT SINK that cuts the engine: 0.5 m is a 1 s hover.");
+    public static readonly SettingSpec CutSupervisorShortfallM = new("CutSupervisorShortfallM", "CUT SHORTFALL", "m", T, 0.3, 0.05, 5.0, "%.2f",
+        "The height not descended at CUT SINK that cuts the engine with the legs at CUT HEIGHT, while the craft is still short of CUT SINK: 0.3 m is a 0.6 s hover there. Lower down it takes less, in proportion, never under 0.1 m.");
     public static readonly SettingSpec CutSupervisorMaxHeightM = new("CutSupervisorMaxHeightM", "CUT HEIGHT", "m", T, 2.0, 0.0, 10.0, "%.1f",
         "The highest the legs may be above the ground for a cut. From 2 m the drop lands at about 6.3 m/s.");
+    public static readonly SettingSpec CutSupervisorWatchHeightM = new("CutSupervisorWatchHeightM", "CUT WATCH HEIGHT", "m", T, 5.0, 0.0, 50.0, "%.1f",
+        "The height of the legs below which the supervisor counts the shortfall. Above CUT HEIGHT, so a stall just over it is cut as soon as the craft sinks into CUT HEIGHT.");
 
     public static readonly BoolSpec SixDofTrack = new("SixDofTrack", "TRACK PLAN THRUST", T, true,
         "Corrects the plan thrust by feedback between re-solves. Off flies it open loop, with the torques from the plan either way.");
@@ -473,7 +475,7 @@ internal static class GuidanceSettingSpecs
         SixDofNodes, SixDofTiltDeg, SixDofThrottleFloor, SixDofSigmaSeed, SixDofSigmaSamples, SixDofGlideSlopeDeg,
         SixDofVzMaxMs, SixDofNodeDtTarget, SixDofColdIntervalS, SixDofReplanSec, SixDofRateDampShare,
         SixDofControlSmooth, SixDofProximal, SixDofTrackKp, SixDofTrackKd, LandingPlanFloorMargin, SixDofSurfaceShare,
-        CutSupervisorSinkMs, CutSupervisorShortfallM, CutSupervisorMaxHeightM,
+        CutSupervisorSinkMs, CutSupervisorShortfallM, CutSupervisorMaxHeightM, CutSupervisorWatchHeightM,
     };
     public static readonly BoolSpec[] TuningSixDofBools =
     {
@@ -485,7 +487,7 @@ internal static class GuidanceSettingSpecs
     public static readonly BoolSpec[] TuningSixDofLimitBools = { SixDofFloorAuto, SixDofVzEnabled };
     public static readonly SettingSpec[] TuningSixDofTracking = { SixDofTrackKp, SixDofTrackKd, SixDofReplanSec };
     public static readonly BoolSpec[] TuningSixDofTrackingBools = { SixDofTrack, SixDofBiasEnabled };
-    public static readonly SettingSpec[] TuningSixDofCut = { CutSupervisorSinkMs, CutSupervisorShortfallM, CutSupervisorMaxHeightM };
+    public static readonly SettingSpec[] TuningSixDofCut = { CutSupervisorSinkMs, CutSupervisorShortfallM, CutSupervisorMaxHeightM, CutSupervisorWatchHeightM };
     public static readonly BoolSpec[] TuningSixDofCutBools = { CutSupervisorOn };
     public static readonly SettingSpec[] TuningSixDofSolver =
     {
@@ -526,7 +528,7 @@ internal static class GuidanceSettingSpecs
         SixDofNodes, SixDofTiltDeg, SixDofThrottleFloor, SixDofSigmaSeed,
         SixDofSigmaSamples, SixDofGlideSlopeDeg, SixDofVzMaxMs, SixDofNodeDtTarget, SixDofColdIntervalS,
         SixDofReplanSec, SixDofRateDampShare, SixDofControlSmooth, SixDofProximal, SixDofTrackKp, SixDofTrackKd,
-        CutSupervisorSinkMs, CutSupervisorShortfallM, CutSupervisorMaxHeightM,
+        CutSupervisorSinkMs, CutSupervisorShortfallM, CutSupervisorMaxHeightM, CutSupervisorWatchHeightM,
         ThreeDofStandbyQkPa, ThreeDofEngageQkPa, ThreeDofEngageTgoS, ThreeDofSixDofTimeS, ThreeDofSmoothTau, ThreeDofTurnAccelDegS2, ThreeDofGlideCeiling,
         ThreeDofBurnCeiling, ThreeDofTrackKp, ThreeDofTrackKd, ThreeDofTrackTiltDeg, ThreeDofRcsDeadbandDeg,
         TermTouchdownRate, TermConstAltM, TermQuadK, TermMaxDescRate, TermMaxTiltDeg, TermNudgeStep,

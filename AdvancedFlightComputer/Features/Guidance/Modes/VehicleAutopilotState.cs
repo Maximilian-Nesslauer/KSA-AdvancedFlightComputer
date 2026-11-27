@@ -1049,10 +1049,12 @@ public sealed class VehicleAutopilotState
     public bool CutSupervisorOn = true;
     /// <summary>The sink the supervisor expects near the ground, m/s: slower, a hover or a climb builds the shortfall.</summary>
     public double CutSupervisorSinkMs = 0.5;
-    /// <summary>The shortfall the supervisor cuts at, m: the height not descended at CUT SINK.</summary>
-    public double CutSupervisorShortfallM = 0.5;
+    /// <summary>The shortfall the supervisor cuts at with the legs at CUT HEIGHT, m (the height not descended at CUT SINK); less in proportion lower down, never under 0.1 m.</summary>
+    public double CutSupervisorShortfallM = 0.3;
     /// <summary>The highest the legs may be above the ground under the craft for a cut, m. From 2 m a free fall lands at about 6.3 m/s (the user's choice, 2026-11-27).</summary>
     public double CutSupervisorMaxHeightM = 2.0;
+    /// <summary>The height of the legs above the ground below which the supervisor counts the shortfall, m: above CUT HEIGHT, so a stall just over it is owed by the time the craft sinks into it (2026-11-27, 10:50: a hover 2.4-2.6 m up counted nothing).</summary>
+    public double CutSupervisorWatchHeightM = 5.0;
     /// <summary>The supervisor's memory (armed, cut, shortfall) and its last step's time, s; cleared whenever touchdown guidance is not flying.</summary>
     public CutSupervisorState CutSup;
     public double CutSupLastT = double.NaN;

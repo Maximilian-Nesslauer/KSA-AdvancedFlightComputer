@@ -7,9 +7,9 @@ public enum CutSupervisorAction
 {
     /// <summary>Not armed: no landing descent seen yet, the engine is off, or the craft is down.</summary>
     Idle,
-    /// <summary>Armed, outside the cut window or keeping up its sink: nothing to do.</summary>
+    /// <summary>Armed, above the watch window or keeping up its sink: nothing to do.</summary>
     Watching,
-    /// <summary>In the window and short of its sink: the shortfall is building.</summary>
+    /// <summary>In the watch window and short of its sink: the shortfall is building.</summary>
     Building,
     /// <summary>Cut this step: the engine goes off.</summary>
     Cut,
@@ -17,8 +17,23 @@ public enum CutSupervisorAction
     HoldOff,
 }
 
-/// <summary>The cut supervisor's settings: the sink it expects near the ground, the shortfall it cuts at, the highest legs it cuts from, and the descent that arms it.</summary>
-public readonly record struct CutSupervisorSettings(double TargetSinkMs, double ShortfallCutM, double MaxCutHeightM, double ArmSinkMs = 1.0);
+/// <summary>
+/// The cut supervisor's settings: the sink it expects near the ground, the shortfall that cuts at the cut height (less below it), the highest legs it cuts from, the height it starts counting at, and the descent that arms it.
+/// </summary>
+public readonly record struct CutSupervisorSettings(double TargetSinkMs, double ShortfallCutM, double MaxCutHeightM, double WatchHeightM, double ArmSinkMs = 1.0)
+{
+    /// <summary>The smallest shortfall that cuts, m, however low the legs.</summary>
+    public const double MinShortfallM = 0.1;
+
+    /// <summary>The shortfall that cuts with the legs <paramref name="legsHeightM"/> above the ground: <see cref="ShortfallCutM"/> at the cut height, in proportion below it, never under <see cref="MinShortfallM"/>.</summary>
+    public double ShortfallToCutM(double legsHeightM)
+        => MaxCutHeightM > 0.0
+            ? Math.Max(MinShortfallM, ShortfallCutM * Math.Clamp(legsHeightM, 0.0, MaxCutHeightM) / MaxCutHeightM)
+            : MinShortfallM;
+
+    /// <summary>The most the shortfall may hold, m: twice the cut height's threshold, so a long stall above the cut height does not stay owed once the craft is coming down again.</summary>
+    public double ShortfallCapM => 2.0 * Math.Max(ShortfallCutM, MinShortfallM);
+}
 
 /// <summary>The cut supervisor's memory between steps, one per craft.</summary>
 public struct CutSupervisorState
@@ -27,13 +42,14 @@ public struct CutSupervisorState
     public bool Armed;
     /// <summary>Has cut; latched until the craft is released.</summary>
     public bool Cut;
-    /// <summary>The height not descended, m: the integral of the target sink less the actual sink, inside the cut window, never below zero.</summary>
+    /// <summary>The height not descended, m: the integral of the target sink less the actual sink inside the watch window, never below zero, capped at the settings' ShortfallCapM.</summary>
     public double ShortfallM;
 }
 
 /// <summary>
-/// THE CUT SUPERVISOR (#335): a watchdog beside touchdown guidance, not part of it, that cuts the engine when a landing has stopped coming down just above the ground - the failure of every one-engine Starship landing on 2026-11-27, whose plans brought it to rest 0.5-2 m up and then drifted, cut and relit, or toppled.
-///  It reads only the legs' height above the ground under the craft (a radio altitude) and the vertical speed. Armed once the craft has descended faster than <see cref="CutSupervisorSettings.ArmSinkMs"/> with the engine lit, it integrates, while the legs are within <see cref="CutSupervisorSettings.MaxCutHeightM"/> of the ground, the target sink less the actual sink: the height it has failed to descend. A slight stall builds it slowly, a hover at a steady rate, a climb fast, and sinking faster than the target takes it back down, never below zero. At <see cref="CutSupervisorSettings.ShortfallCutM"/> it cuts, and the engine stays off from then on: a free fall from the window's top, 2 m, ends at about 6.3 m/s, which the user chose over a craft left hovering.
+/// THE CUT SUPERVISOR (#335): a watchdog beside touchdown guidance, not part of it, that cuts the engine when a landing has stopped coming down just above the ground - the failure of every one-engine Starship landing on 2026-11-27, whose plans brought it to rest 0.5-2.6 m up and then drifted, cut and relit, or toppled.
+///  It reads only the legs' height above the ground under the craft (a radio altitude) and the vertical speed. Armed once the craft has descended faster than <see cref="CutSupervisorSettings.ArmSinkMs"/> with the engine lit, it integrates, while the legs are within <see cref="CutSupervisorSettings.WatchHeightM"/> of the ground, the target sink less the actual sink: the height it has failed to descend. A slight stall builds it slowly, a hover at a steady rate, a climb fast, and sinking faster than the target pays it back, never below zero.
+///  It cuts once the legs are within <see cref="CutSupervisorSettings.MaxCutHeightM"/> and the shortfall reaches <see cref="CutSupervisorSettings.ShortfallToCutM"/>: the full <see cref="CutSupervisorSettings.ShortfallCutM"/> at the cut height, less in proportion lower down, so a stall at 0.5 m is cut in a quarter of the time of one at 2 m - and only while the craft is still short of its sink at that moment. WATCHING ABOVE THE CUT HEIGHT (2026-11-27, 10:50: a 3.5 s hover with the legs 2.4-2.6 m up, just over a 2 m window, counted nothing): a stall up there builds its shortfall, and is cut as soon as it sinks into the cut height. The engine stays off from then on. A free fall from 2 m ends at about 6.3 m/s, which the user chose over a craft left hovering.
 ///  Pure: no game types, so UiLogic tests it.
 /// </summary>
 public static class CutSupervisor
@@ -58,8 +74,9 @@ public static class CutSupervisor
                 return CutSupervisorAction.Idle;
         }
 
-        // Outside the window - too high, or no height - nothing builds and nothing carries over.
-        if (!double.IsFinite(legsHeightM) || legsHeightM > settings.MaxCutHeightM)
+        // Above the watch window - or no height - nothing builds and nothing carries over.
+        double watch = Math.Max(settings.WatchHeightM, settings.MaxCutHeightM);
+        if (!double.IsFinite(legsHeightM) || legsHeightM > watch)
         {
             state.ShortfallM = 0.0;
             return CutSupervisorAction.Watching;
@@ -67,8 +84,9 @@ public static class CutSupervisor
 
         double step = Math.Clamp(dt, 0.0, 0.25);
         double sink = -verticalSpeedMs;
-        state.ShortfallM = Math.Max(state.ShortfallM + (settings.TargetSinkMs - sink) * step, 0.0);
-        if (state.ShortfallM >= settings.ShortfallCutM)
+        state.ShortfallM = Math.Clamp(state.ShortfallM + (settings.TargetSinkMs - sink) * step, 0.0, settings.ShortfallCapM);
+        // STALLED NOW as well as owed: a stall the craft has come out of - sinking at least the target again - is paid back, not cut. Replayed on 2026-11-27 10:50, a 3.5 s hover 2.5 m up that guidance then brought down at 0.9 m/s to a soft landing would otherwise have been cut 2 m up.
+        if (legsHeightM <= settings.MaxCutHeightM && sink < settings.TargetSinkMs && state.ShortfallM >= settings.ShortfallToCutM(legsHeightM))
         {
             state.Cut = true;
             return CutSupervisorAction.Cut;

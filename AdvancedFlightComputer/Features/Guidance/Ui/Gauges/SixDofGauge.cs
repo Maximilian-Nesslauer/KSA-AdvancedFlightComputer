@@ -160,6 +160,7 @@ public static partial class GuidanceWindow
             GaugeRow(Specs.CutSupervisorSinkMs, ref _s.CutSupervisorSinkMs);
             GaugeRow(Specs.CutSupervisorShortfallM, ref _s.CutSupervisorShortfallM);
             GaugeRow(Specs.CutSupervisorMaxHeightM, ref _s.CutSupervisorMaxHeightM);
+            GaugeRow(Specs.CutSupervisorWatchHeightM, ref _s.CutSupervisorWatchHeightM);
         }
     }
 
