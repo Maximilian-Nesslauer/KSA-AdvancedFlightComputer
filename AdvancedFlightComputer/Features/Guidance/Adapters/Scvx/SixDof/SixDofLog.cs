@@ -111,6 +111,7 @@ internal static class SixDofLog
                 "allocRoll", "gimCmdY", "gimCmdZ", "gimAngY", "gimAngZ", "gimRateY", "gimRateZ", "gimMaxDeg", "gimSlewPerS", "gimThrustN", "gimCount",
                 "rcsX", "rcsY", "rcsZ", "rcsGivenX", "rcsGivenY", "rcsGivenZ", "rcsShortNm", "rcsForceN", "rcsFlowKgS", "rcsFiring", "rcsReached",
                 "attErrDeg", "rateErrDegS", "fbWantX", "fbWantY", "fbWantZ", "fbGimX", "fbGimY", "fbGimZ", "fbRcsX", "fbRcsY", "fbRcsZ", "fbShortNm",
+                "toContact", "legsM", "cutShortM", "cutAction",
                 "error"));
 
             _plan.AppendLine("cycle,t,node,x,y,z,vx,vy,vz,thrustN,tiltDeg,qw,qx,qy,qz,wx,wy,wz,mass,tdx,tdy,tauRoll,solveTime,sigma,rcsX,rcsY,rcsZ,coast,coastIntervals,kind");
@@ -248,6 +249,9 @@ internal static class SixDofLog
             F(sb, r.FbWantX); F(sb, r.FbWantY); F(sb, r.FbWantZ);
             F(sb, r.FbGimX); F(sb, r.FbGimY); F(sb, r.FbGimZ);
             F(sb, r.FbRcsX); F(sb, r.FbRcsY); F(sb, r.FbRcsZ); F(sb, r.FbShortNm);
+            sb.Append(r.ToContact ? 1 : 0).Append(',');
+            F(sb, r.LegsM); F(sb, r.CutShortM);
+            sb.Append(Csv(r.CutAction)).Append(',');
             sb.Append(Csv(r.Error));
             sb.AppendLine();
 
@@ -413,6 +417,11 @@ internal static class SixDofLog
 
         /// <summary>The attitude feedback (AttitudeFeedback6Dof): attitude and rate error against the plan, deg and deg/s; the torque the law wanted, what the gimbals and the RCS took of it, and what did not fit, N m, model body axes. The tau and rcs columns include what was taken.</summary>
         public double AttErrDeg, RateErrDegS, FbWantX, FbWantY, FbWantZ, FbGimX, FbGimY, FbGimZ, FbRcsX, FbRcsY, FbRcsZ, FbShortNm;
+
+        /// <summary>Flying to contact after the plan (1) or on it (0); the legs' height above the ground under the craft, m; and the cut supervisor's shortfall, m, and last action (#335).</summary>
+        public bool ToContact;
+        public double LegsM, CutShortM;
+        public string CutAction;
         public string Error;
     }
 }

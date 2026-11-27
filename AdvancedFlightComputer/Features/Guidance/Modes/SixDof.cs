@@ -813,6 +813,7 @@ public static partial class GuidanceWindow
             FbWantX = fb.Wanted.X, FbWantY = fb.Wanted.Y, FbWantZ = fb.Wanted.Z,
             FbGimX = fb.Gimbal.X, FbGimY = fb.Gimbal.Y, FbGimZ = fb.Gimbal.Z,
             FbRcsX = fb.Rcs.X, FbRcsY = fb.Rcs.Y, FbRcsZ = fb.Rcs.Z, FbShortNm = fb.ShortNm,
+            ToContact = _s.SixDofToContact, LegsM = LegsHeightM(vehicle, _s), CutShortM = _s.CutSup.ShortfallM, CutAction = _s.CutSupAction.ToString(),
             Error = _s.Error,
         };
         SixDofLog.Cycle(_s, row);
@@ -1360,7 +1361,8 @@ public static partial class GuidanceWindow
             manual.EngineOn = false;
             manual.EngineThrottle = 0f;
             _s.LastThrottle = 0.0;
-            string what = FormattableString.Invariant($"TOUCHDOWN AFTER PLAN END, {-x[5]:F1} m/s, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m FROM TARGET");
+            string what = FormattableString.Invariant($"TOUCHDOWN AFTER PLAN END, {-x[5]:F1} m/s down, {Math.Sqrt(x[3] * x[3] + x[4] * x[4]):F1} m/s sideways, ")
+                        + FormattableString.Invariant($"tilt {TiltFromUpDeg(vehicle, double3.Normalize(vehicle.Orbit.StateVectors.PositionCci)):F1} deg, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m FROM TARGET");
             SixDofLog.Event(_s, now, what);
             GuidanceLog.Info(vehicle, "Touchdown guidance: " + what + ".");
             ReportLogStop(SixDofLog.Stop(_s));

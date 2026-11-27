@@ -124,6 +124,7 @@ public static partial class GuidanceWindow
     {
         DrawTuningGroup("LIMITS", "SixDofLimits", true, Specs.TuningSixDofLimits, Specs.TuningSixDofLimitBools, Draw6DofLimitRows, PageText.TouchdownLimitsTip);
         DrawTuningGroup("TRACKING", "SixDofTracking", true, Specs.TuningSixDofTracking, Specs.TuningSixDofTrackingBools, Draw6DofTrackingRows, PageText.TouchdownTrackingTip);
+        DrawTuningGroup("CUT SUPERVISOR", "SixDofCut", true, Specs.TuningSixDofCut, Specs.TuningSixDofCutBools, Draw6DofCutRows, PageText.TouchdownCutTip);
         DrawTuningGroup("SOLVER", "SixDofSolver", false, Specs.TuningSixDofSolver, Specs.TuningSixDofSolverBools, Draw6DofSolverRows, PageText.TouchdownSolverTip);
     }
 
@@ -149,6 +150,17 @@ public static partial class GuidanceWindow
         GaugeRowCheck(Specs.SixDofVzEnabled, ref _s.SixDofVzEnabled);
         using (new ImGuiDisabledScope(!_s.SixDofVzEnabled))
             GaugeRow(Specs.SixDofVzMaxMs, ref _s.SixDofVzMaxMs);
+    }
+
+    private static void Draw6DofCutRows()
+    {
+        GaugeRowCheck(Specs.CutSupervisorOn, ref _s.CutSupervisorOn);
+        using (new ImGuiDisabledScope(!_s.CutSupervisorOn))
+        {
+            GaugeRow(Specs.CutSupervisorSinkMs, ref _s.CutSupervisorSinkMs);
+            GaugeRow(Specs.CutSupervisorShortfallM, ref _s.CutSupervisorShortfallM);
+            GaugeRow(Specs.CutSupervisorMaxHeightM, ref _s.CutSupervisorMaxHeightM);
+        }
     }
 
     private static void Draw6DofTrackingRows()

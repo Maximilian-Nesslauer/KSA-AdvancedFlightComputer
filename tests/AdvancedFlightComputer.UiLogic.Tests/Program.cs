@@ -67,6 +67,7 @@ internal static partial class Program
         So3AxisAngleRules();
         AttitudeControllerRules();
         GuidanceModeGuardsRules();
+        CutSupervisorRules();
         BurnTurnChecks();
         PrintfTexts();
         LandingSiteParseRules();
@@ -3723,7 +3724,7 @@ internal static partial class Program
         Check("one name for a tilt limit", GuidanceSettingSpecs.SixDofTiltDeg.Label == GuidanceSettingSpecs.TermMaxTiltDeg.Label && GuidanceSettingSpecs.GfoldPointingDeg.Label == GuidanceSettingSpecs.TermMaxTiltDeg.Label);
 
         var grouped = new List<string>();
-        foreach (SettingSpec[] group in new[] { GuidanceSettingSpecs.TuningSixDofLimits, GuidanceSettingSpecs.TuningSixDofTracking, GuidanceSettingSpecs.TuningSixDofSolver })
+        foreach (SettingSpec[] group in new[] { GuidanceSettingSpecs.TuningSixDofLimits, GuidanceSettingSpecs.TuningSixDofTracking, GuidanceSettingSpecs.TuningSixDofSolver, GuidanceSettingSpecs.TuningSixDofCut })
             foreach (SettingSpec s in group)
                 grouped.Add(s.Key);
         var whole = new List<string>();
@@ -3733,7 +3734,7 @@ internal static partial class Program
         whole.Sort(StringComparer.Ordinal);
         Check("the groups hold every touchdown value once", grouped.SequenceEqual(whole), string.Join(",", grouped));
         var groupedBools = new List<string>();
-        foreach (BoolSpec[] group in new[] { GuidanceSettingSpecs.TuningSixDofLimitBools, GuidanceSettingSpecs.TuningSixDofTrackingBools, GuidanceSettingSpecs.TuningSixDofSolverBools })
+        foreach (BoolSpec[] group in new[] { GuidanceSettingSpecs.TuningSixDofLimitBools, GuidanceSettingSpecs.TuningSixDofTrackingBools, GuidanceSettingSpecs.TuningSixDofSolverBools, GuidanceSettingSpecs.TuningSixDofCutBools })
             foreach (BoolSpec s in group)
                 groupedBools.Add(s.Key);
         var wholeBools = new List<string>();

@@ -1043,6 +1043,22 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double SixDofRateMaxDegS = 40.0;
 
+    /// <summary>
+    /// THE CUT SUPERVISOR (#335, CutSupervisor in Ui/Logic, StepCutSupervisor): a watchdog beside touchdown guidance that cuts the engine when the landing has stopped coming down with the legs within CUT HEIGHT of the ground. It integrates the shortfall below CUT SINK and cuts at CUT SHORTFALL; the engine then stays off to contact. On by default.
+    /// </summary>
+    public bool CutSupervisorOn = true;
+    /// <summary>The sink the supervisor expects near the ground, m/s: slower, a hover or a climb builds the shortfall.</summary>
+    public double CutSupervisorSinkMs = 0.5;
+    /// <summary>The shortfall the supervisor cuts at, m: the height not descended at CUT SINK.</summary>
+    public double CutSupervisorShortfallM = 0.5;
+    /// <summary>The highest the legs may be above the ground under the craft for a cut, m. From 2 m a free fall lands at about 6.3 m/s (the user's choice, 2026-11-27).</summary>
+    public double CutSupervisorMaxHeightM = 2.0;
+    /// <summary>The supervisor's memory (armed, cut, shortfall) and its last step's time, s; cleared whenever touchdown guidance is not flying.</summary>
+    public CutSupervisorState CutSup;
+    public double CutSupLastT = double.NaN;
+    /// <summary>What the supervisor did on its last step, for the cycle log.</summary>
+    public CutSupervisorAction CutSupAction;
+
     /// <summary>Touchdown guidance's plan holds its lateral thrust to the gimbal's slew rate (Scvx6DofConfig.GimbalSlewPerS). On; off flies the plan as before 2026-11-18, free to jump between nodes.</summary>
     public bool SixDofGimbalRateLimit = true;
 

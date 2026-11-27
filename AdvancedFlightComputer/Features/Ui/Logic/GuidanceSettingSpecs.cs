@@ -228,6 +228,15 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec SixDofTrackKd = new("SixDofTrackKd", "TRACK KD", "1/s", T, 0.8, 0.0, 100.0, "%.3f",
         "Velocity gain of the thrust feedback between re-solves.");
 
+    public static readonly BoolSpec CutSupervisorOn = new("CutSupervisorOn", "CUT SUPERVISOR", T, true,
+        "Watches touchdown from outside the plan and cuts the engine when the craft stops coming down with its legs within CUT HEIGHT of the ground. The engine then stays off to contact.");
+    public static readonly SettingSpec CutSupervisorSinkMs = new("CutSupervisorSinkMs", "CUT SINK", "m/s", T, 0.5, 0.05, 5.0, "%.2f",
+        "The sink the supervisor expects near the ground. Slower, a hover or a climb builds the shortfall.");
+    public static readonly SettingSpec CutSupervisorShortfallM = new("CutSupervisorShortfallM", "CUT SHORTFALL", "m", T, 0.5, 0.05, 5.0, "%.2f",
+        "The height not descended at CUT SINK that cuts the engine: 0.5 m is a 1 s hover.");
+    public static readonly SettingSpec CutSupervisorMaxHeightM = new("CutSupervisorMaxHeightM", "CUT HEIGHT", "m", T, 2.0, 0.0, 10.0, "%.1f",
+        "The highest the legs may be above the ground for a cut. From 2 m the drop lands at about 6.3 m/s.");
+
     public static readonly BoolSpec SixDofTrack = new("SixDofTrack", "TRACK PLAN THRUST", T, true,
         "Corrects the plan thrust by feedback between re-solves. Off flies it open loop, with the torques from the plan either way.");
     public static readonly BoolSpec SixDofFloorAuto = new("SixDofFloorAuto", "THROTTLE FLOOR FROM CRAFT", T, true,
@@ -464,17 +473,20 @@ internal static class GuidanceSettingSpecs
         SixDofNodes, SixDofTiltDeg, SixDofThrottleFloor, SixDofSigmaSeed, SixDofSigmaSamples, SixDofGlideSlopeDeg,
         SixDofVzMaxMs, SixDofNodeDtTarget, SixDofColdIntervalS, SixDofReplanSec, SixDofRateDampShare,
         SixDofControlSmooth, SixDofProximal, SixDofTrackKp, SixDofTrackKd, LandingPlanFloorMargin, SixDofSurfaceShare,
+        CutSupervisorSinkMs, CutSupervisorShortfallM, CutSupervisorMaxHeightM,
     };
     public static readonly BoolSpec[] TuningSixDofBools =
     {
         SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates, SixDofThreaded,
-        SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ScvxClarabel,
+        SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ScvxClarabel, CutSupervisorOn,
     };
     public static readonly SettingSpec[] TuningSixDofLimits =
         { SixDofTiltDeg, SixDofThrottleFloor, SixDofGlideSlopeDeg, SixDofVzMaxMs, LandingPlanFloorMargin, SixDofSurfaceShare };
     public static readonly BoolSpec[] TuningSixDofLimitBools = { SixDofFloorAuto, SixDofVzEnabled };
     public static readonly SettingSpec[] TuningSixDofTracking = { SixDofTrackKp, SixDofTrackKd, SixDofReplanSec };
     public static readonly BoolSpec[] TuningSixDofTrackingBools = { SixDofTrack, SixDofBiasEnabled };
+    public static readonly SettingSpec[] TuningSixDofCut = { CutSupervisorSinkMs, CutSupervisorShortfallM, CutSupervisorMaxHeightM };
+    public static readonly BoolSpec[] TuningSixDofCutBools = { CutSupervisorOn };
     public static readonly SettingSpec[] TuningSixDofSolver =
     {
         SixDofNodes, SixDofNodeDtTarget, SixDofSigmaSeed, SixDofSigmaSamples, SixDofColdIntervalS, SixDofRateDampShare,
@@ -514,6 +526,7 @@ internal static class GuidanceSettingSpecs
         SixDofNodes, SixDofTiltDeg, SixDofThrottleFloor, SixDofSigmaSeed,
         SixDofSigmaSamples, SixDofGlideSlopeDeg, SixDofVzMaxMs, SixDofNodeDtTarget, SixDofColdIntervalS,
         SixDofReplanSec, SixDofRateDampShare, SixDofControlSmooth, SixDofProximal, SixDofTrackKp, SixDofTrackKd,
+        CutSupervisorSinkMs, CutSupervisorShortfallM, CutSupervisorMaxHeightM,
         ThreeDofStandbyQkPa, ThreeDofEngageQkPa, ThreeDofEngageTgoS, ThreeDofSixDofTimeS, ThreeDofSmoothTau, ThreeDofTurnAccelDegS2, ThreeDofGlideCeiling,
         ThreeDofBurnCeiling, ThreeDofTrackKp, ThreeDofTrackKd, ThreeDofTrackTiltDeg, ThreeDofRcsDeadbandDeg,
         TermTouchdownRate, TermConstAltM, TermQuadK, TermMaxDescRate, TermMaxTiltDeg, TermNudgeStep,
@@ -529,7 +542,7 @@ internal static class GuidanceSettingSpecs
         GLimitEnabled, AutoLaunch, MatchTargetArgPe, ArgPeFixed, OptimiseInsertion, InsertBeforeApoapsis,
         FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, AscentOwnAttitude, AscentAeroControl, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
         VehicleHeightAuto, LegsAutoDeploy, ParkIdleEngines, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
-        SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ScvxClarabel, ThreeDofNewAttitude,
+        SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ScvxClarabel, CutSupervisorOn, ThreeDofNewAttitude,
         OrbitalEntryTrimAoa, OrbitalEntryEngageInAir, OrbitalEntryAimDeorbit, OrbitalEntryOwnAttitude, OrbitalEntryUseRcs, LandFlip, EntryFlip,
     };
 

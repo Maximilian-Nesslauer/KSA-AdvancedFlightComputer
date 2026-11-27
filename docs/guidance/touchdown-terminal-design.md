@@ -1,6 +1,6 @@
 # Touchdown: one terminal phase (design)
 
-Status: design, 2026-11-27. Nothing built yet. Replaces the post-plan rules in `Modes/SixDof.cs` and, in a second step, the separate end-of-landing laws in `TerminalHover.cs` and `TerminalBurn.cs`.
+Status: design, 2026-11-27. The cut supervisor is built (#335); the terminal law is not. Replaces the post-plan rules in `Modes/SixDof.cs` and, in a second step, the separate end-of-landing laws in `TerminalHover.cs` and `TerminalBurn.cs`.
 
 ## Why
 
@@ -39,6 +39,21 @@ Elsewhere the same job is done again: terminal hover (`TerminalHover.cs`, a sink
 5. **No sideways control after the plan.** Stock holds the craft upright; any sideways speed at the plan end reaches the ground.
 6. **No record of the end.** The cycle log stops at the plan end; the after-plan contact line has no sideways speed, tilt or rates.
 7. **Order-dependent.** Overlapping conditions checked in a fixed order decide which law flies, on small differences in vertical speed.
+
+## Built first: the cut supervisor (#335)
+
+The commonest failure is simpler than the rest: the plan brings the craft to rest a little above the ground (10:21: 1.9 m, then 0.5 m) and nothing lets it down. A plain cut would have landed it. So the first change is a **cut supervisor**, a watchdog beside touchdown guidance rather than part of it (`CutSupervisor` in `Ui/Logic`, stepped by `GuidanceWindow.StepCutSupervisor` after the modes):
+
+- **Inputs:** the legs' height above the ground under the craft (`LegsHeightM`, a radio altitude) and the vertical speed. Nothing from the plan.
+- **Armed** once the craft has descended faster than 1 m/s with the engine lit, so a craft on the pad is never cut.
+- **Integrates**, while the legs are within CUT HEIGHT (2 m) of the ground, the target sink (CUT SINK, 0.5 m/s) less the actual sink: the height it has failed to descend. A slight stall builds slowly, a hover at 0.5 m/s, a climb faster; sinking faster pays it back, never below zero.
+- **Cuts** at CUT SHORTFALL (0.5 m, a 1 s hover), and holds the engine off every step after, whatever guidance asks; touchdown guidance flies the rest to contact with no relight left. A drop from 2 m lands at about 6.3 m/s.
+- **Logged:** the first step of each shortfall and the cut, with height, vertical and sideways speed, tilt and the drop's landing speed. The cycle log now keeps writing after the plan's end, with the supervisor's height, shortfall and action.
+- **Settings** on TUNE > TOUCHDOWN > CUT SUPERVISOR.
+
+Later, a learned supervisor could be trained on the logged inputs; the integrator comes first because a handful of landings is no training set and its decisions can be read.
+
+The terminal law below is still to build.
 
 ## The design
 
