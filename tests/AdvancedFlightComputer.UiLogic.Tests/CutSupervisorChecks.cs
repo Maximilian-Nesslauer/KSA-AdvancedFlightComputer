@@ -50,10 +50,13 @@ internal static partial class Program
         var sl = Fly(cfg, ref slide, 0.49, 3.0, h => -(0.2 + 0.2 * (0.49 - h) / 0.16));
         Check("the 14:28 slow sink at 0.49 m is cut within 0.4 s", sl.cutAtS > 0.0 && sl.cutAtS < 0.4, $"cut after {sl.cutAtS:F2} s");
 
-        // 14:27: the plan ended with the legs 0.47 m up and the craft sliding: cut at once, at the plan's end, whatever the shortfall.
+        // A plan that ends with the legs within PlanEndCutHeightM: cut at once, at the plan's end, whatever the shortfall.
         var ended = new CutSupervisorState { Armed = true };
-        Check("a plan that ends inside the cut height is cut at once",
-            CutSupervisor.Step(ref ended, in cfg, 0.47, -0.2, dt, true, false, planEnded: true) == CutSupervisorAction.Cut && ended.CutAtPlanEnd);
+        Check("a plan that ends within the plan-end cut height is cut at once",
+            CutSupervisor.Step(ref ended, in cfg, 0.25, -0.2, dt, true, false, planEnded: true) == CutSupervisorAction.Cut && ended.CutAtPlanEnd);
+        var ended047 = new CutSupervisorState { Armed = true };
+        Check("a plan that ends 0.47 m up flies to contact under power (a drop from there broke a lander's legs)",
+            CutSupervisor.Step(ref ended047, in cfg, 0.47, -0.2, dt, true, false, planEnded: true) != CutSupervisorAction.Cut);
         var endedHigh = new CutSupervisorState { Armed = true };
         Check("a plan that ends above the cut height is not cut for it",
             CutSupervisor.Step(ref endedHigh, in cfg, 3.0, -0.2, dt, true, false, planEnded: true) != CutSupervisorAction.Cut);
