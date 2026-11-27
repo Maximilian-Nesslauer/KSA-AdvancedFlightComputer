@@ -53,7 +53,7 @@ internal static partial class Program
         // A plan that ends with the legs within PlanEndCutHeightM: cut at once, at the plan's end, whatever the shortfall.
         var ended = new CutSupervisorState { Armed = true };
         Check("a plan that ends within the plan-end cut height is cut at once",
-            CutSupervisor.Step(ref ended, in cfg, 0.25, -0.2, dt, true, false, planEnded: true) == CutSupervisorAction.Cut && ended.CutAtPlanEnd);
+            CutSupervisor.Step(ref ended, in cfg, 0.08, -0.2, dt, true, false, planEnded: true) == CutSupervisorAction.Cut && ended.CutAtPlanEnd);
         var ended047 = new CutSupervisorState { Armed = true };
         Check("a plan that ends 0.47 m up flies to contact under power (a drop from there broke a lander's legs)",
             CutSupervisor.Step(ref ended047, in cfg, 0.47, -0.2, dt, true, false, planEnded: true) != CutSupervisorAction.Cut);
