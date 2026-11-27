@@ -181,6 +181,12 @@ public sealed class Scvx6DofConfig
     public double CoastGrowthCapS { get; set; } = -1.0;
 
     /// <summary>
+    /// NO LATER TOUCHDOWN, s, or negative for none: once touchdown has the craft (Ksa6DofGuidance.ArmIgnitionCap), a re-solve's burn ends no later than the earliest end a published plan - or the plan in hand at the hand-over - has promised, plus this (Ksa6DofGuidance.KeepEndNoLater). A re-solve can land sooner but not later: the burn time's own shrinking horizon, as NO LATER IGNITION is the coast's.
+    ///  WHY (2026-11-27 in-game Moon landing, 20:49). The burn time is free on every re-solve, and the lander's plans stretched their end from 4.6 s to go at 8.5 m over the legs to 9 s at 2.6 m and still 7.8 s at 1.2 m, creeping at 0-0.1 m/s rather than taking out the last 0.7 m of miss with a lean; the cut supervisor read it as the stall it was, cut at 1.2 m, and the lander fell to the ground at 1.8 m/s.
+    /// </summary>
+    public double EndGrowthCapS { get; set; } = -1.0;
+
+    /// <summary>
     /// THE IGNITION LOCK: the coast's duration pinned to this, s, or null to leave it free. A fuel-optimal plan always lights as late as it can, so a free ignition time slides later on every re-solve; locked a second or so out, the craft commits to it. After ignition the coast is pinned at zero: its nodes sit at the start, the problem keeps its shape, and the warm start carries on.
     /// </summary>
     public double? CoastSigmaFixed { get; set; }
