@@ -840,7 +840,7 @@ public static partial class GuidanceWindow
     ///   - a dt window, since the first cycle after engage has no previous sample and
     ///     a paused or warped frame produces a meaningless one.
     /// </summary>
-    private static void UpdateAccelBias(double[] x, double now, double thrustDelivered)
+    private static void UpdateAccelBias(double[] x, double now, double thrustDelivered, double3? thrustDirModel = null)
     {
         if (_s.Guidance == null)
             return;
@@ -870,6 +870,13 @@ public static partial class GuidanceWindow
         double zx = 2.0 * (qx * qz + qw * qy);
         double zy = 2.0 * (qy * qz - qw * qx);
         double zz = 1.0 - 2.0 * (qx * qx + qy * qy);
+        // ALONG WHERE THE GIMBALS POINT THE THRUST, model body axes (KsaGimbalControl.Slot.ThrustDirAsmb), rotated into the site frame: the plan models the gimbal's sideways thrust (tdx, tdy), so the estimate must not learn it as a missing force. Along the body axis it did, and on the 2026-11-27 Starship landings 1.6-2.0 m/s^2 of the gimbal's own push to stand the ship up went into every late plan's gravity, 2 s late - phantom sideways braking the plans relied on. AFC_X_BIAS_AXIAL=1 takes the body axis again, for comparison.
+        if (thrustDirModel is double3 d && !BiasAxialOnly)
+        {
+            zx = (1.0 - 2.0 * (qy * qy + qz * qz)) * d.X + 2.0 * (qx * qy - qw * qz) * d.Y + 2.0 * (qx * qz + qw * qy) * d.Z;
+            zy = 2.0 * (qx * qy + qw * qz) * d.X + (1.0 - 2.0 * (qx * qx + qz * qz)) * d.Y + 2.0 * (qy * qz - qw * qx) * d.Z;
+            zz = 2.0 * (qx * qz - qw * qy) * d.X + 2.0 * (qy * qz + qw * qx) * d.Y + (1.0 - 2.0 * (qx * qx + qy * qy)) * d.Z;
+        }
         double m = Math.Max(x[13], 1.0);
         double3 g0 = _s.Guidance.BaseGravity;
 
@@ -1828,7 +1835,7 @@ public static partial class GuidanceWindow
             ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle,
                   KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]))
             : 0.0;
-        UpdateAccelBias(x, now, thrustDelivered);
+        UpdateAccelBias(x, now, thrustDelivered, ThrustDirModel(vehicle));
 
         // NODE SCHEDULE: drop node count at fixed altitude GATES.
         //
@@ -2163,6 +2170,22 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>Hands touchdown guidance the gimbals' lag behind their last command, model body axes (KsaGimbalControl.Slot.LagTorqueNm), or null when the last pass did not measure it.</summary>
+    /// <summary>AFC_X_BIAS_AXIAL=1: the acceleration estimate takes the thrust along the body axis, as it did before 2026-11-27, for comparison flights.</summary>
+    private static readonly bool BiasAxialOnly = Environment.GetEnvironmentVariable("AFC_X_BIAS_AXIAL") == "1";
+
+    /// <summary>Where the lit gimbals point the thrust, a unit vector in model body axes (KsaGimbalControl.Slot.ThrustDirAsmb), or null when the last pass did not measure it.</summary>
+    private static double3? ThrustDirModel(Vehicle vehicle)
+    {
+        KsaGimbalControl.Slot slot = KsaGimbalControl.Diagnostics(vehicle);
+        if (slot == null || !slot.ThrustDirKnown)
+            return null;
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        double3 d = slot.ThrustDirAsmb;
+        var model = new double3(double3.Dot(d, mx), double3.Dot(d, my), double3.Dot(d, mz));
+        // Within 20 deg of the thrust axis (the gimbals' travel), else not believed: a stale or mis-framed reading must not turn the estimate's thrust.
+        return model.Z > Math.Cos(20.0 * Math.PI / 180.0) ? model : null;
+    }
+
     private static void NoteGimbalLag(Vehicle vehicle)
     {
         KsaGimbalControl.Slot slot = KsaGimbalControl.Diagnostics(vehicle);

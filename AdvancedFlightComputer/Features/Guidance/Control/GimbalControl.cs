@@ -73,6 +73,10 @@ public static class KsaGimbalControl
         public double3 LagTorqueNm;
         public bool LagKnown;
 
+        /// <summary>THE LIT GIMBALS' THRUST DIRECTION where they are on the last Lsq pass, a unit vector in the VEHICLE assembly frame (each gimbal's direction at its measured angles, weighted by its thrust), and whether it was measured. Touchdown guidance's acceleration estimate takes the thrust along it (SixDof.UpdateAccelBias): taken along the body axis, the gimbal's own sideways thrust - which the plan already models - was learnt again as a missing force and added to every plan's gravity, 2 s late (2026-11-27).</summary>
+        public double3 ThrustDirAsmb;
+        public bool ThrustDirKnown;
+
         /// <summary>The vehicle the demand is for. The worker reads Vehicle.IsControllable through it, which Vehicle.UpdateControl writes on the main thread while no worker runs.</summary>
         internal volatile Vehicle Owner;
 
@@ -437,7 +441,7 @@ public static class KsaGimbalControl
 
         // Where the gimbals are against where they are told (Slot.LagTorqueNm), from the angles the game's state had before this pass.
         {
-            double3 lag = default;
+            double3 lag = default, dir = default;
             bool known = false;
             for (int i = 0; i < n; i++)
             {
@@ -450,10 +454,14 @@ public static class KsaGimbalControl
                 double az = g.AxisZ.MaxAngle > 0.0 ? was.Angles.Y / g.AxisZ.MaxAngle : 0.0;
                 lag += KsaTvcAllocator.Torque(gc, com, st.Thrusts[i], ay, az)
                        - KsaTvcAllocator.Torque(gc, com, st.Thrusts[i], st.Commands[2 * i], st.Commands[2 * i + 1]);
+                dir += KsaTvcAllocator.ThrustDirection(gc, ay, az) * st.Thrusts[i];
                 known = true;
             }
             st.LagTorqueNm = lag;
             st.LagKnown = known;
+            double dirLength = dir.Length();
+            st.ThrustDirKnown = known && dirLength > 0.0;
+            st.ThrustDirAsmb = st.ThrustDirKnown ? dir / dirLength : default;
         }
 
         // The log's gimbal: the one with the most thrust through it.
