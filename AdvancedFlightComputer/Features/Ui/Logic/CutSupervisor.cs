@@ -22,6 +22,12 @@ public enum CutSupervisorAction
 /// </summary>
 public readonly record struct CutSupervisorSettings(double TargetSinkMs, double ShortfallCutM, double MaxCutHeightM, double WatchHeightM, double ArmSinkMs = 1.0)
 {
+    /// <summary>
+    /// The highest legs a plan's end cuts the engine at, m (<see cref="CutSupervisor.Step"/>'s planEnded). Higher, the craft flies the rest to contact under power at the touchdown sink and the shortfall rule still watches it.
+    ///  WHY (2026-11-27 headless). A lunar lander whose plan ended 0.5-0.8 m above where its legs met the ground was cut there and the drop broke three of its legs (14 parts to 11): it then toppled to 46-73 deg after a 0.2-0.9 deg contact, in 5 of 23 landings. Every one cut 0.42 m up or lower kept its legs and stood.
+    /// </summary>
+    public const double PlanEndCutHeightM = 0.3;
+
     /// <summary>The smallest shortfall that cuts, m, however low the legs. 0.05 since 2026-11-27: at 0.1 a Starship sinking 0.2-0.4 m/s with its legs 0.45 m up (14:28) took half a second to cut while it slid sideways at 3 m/s.</summary>
     public const double MinShortfallM = 0.05;
 
@@ -86,8 +92,8 @@ public static class CutSupervisor
             return CutSupervisorAction.Watching;
         }
 
-        // AT THE PLAN'S END, inside the cut height: down, as far as the plan knows.
-        if (planEnded && legsHeightM <= settings.MaxCutHeightM)
+        // AT THE PLAN'S END, within PlanEndCutHeightM (and the cut height): down, as far as the plan knows.
+        if (planEnded && legsHeightM <= Math.Min(settings.MaxCutHeightM, CutSupervisorSettings.PlanEndCutHeightM))
         {
             state.Cut = true;
             state.CutAtPlanEnd = true;

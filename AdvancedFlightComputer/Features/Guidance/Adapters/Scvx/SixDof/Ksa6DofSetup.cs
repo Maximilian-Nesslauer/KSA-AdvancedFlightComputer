@@ -863,8 +863,10 @@ public static class Ksa6DofSetup
             TerminalSideSpeedFactor = 0.25,
             // THE TIP-OVER LINE (2026-11-27, the user's): at most 80 % of the energy that tips the craft over its edge, the flight's numbers set each re-solve (Ksa6DofInputs.WithTipGeometry). A degree past the line costs 20000, fifty metres of miss.
             TipLimit = true,
-            // THE LAST SECONDS FOR SMOOTHNESS (LAST SECONDS SMOOTH, VehicleAutopilotState.SixDofLastSecondsSmooth): over the last 3 s, ramped in, at 1 two degrees of tilt held a second cost 400 - a metre of miss - and 4 deg/s of pitch-yaw rate the same. Off by default: offline it cost the low-authority boosters 3-29 m of miss, even at 0.1.
+            // THE LAST SECONDS FOR SMOOTHNESS (LAST SECONDS SMOOTH, VehicleAutopilotState.SixDofLastSecondsSmooth): over the last 3 s, ramped in, at 1 two degrees of tilt held a second cost 400 - a metre of miss - and 4 deg/s of pitch-yaw rate the same. 0.3 by default since 2026-11-27 (the setting's default): headless the booster then stood upright at contact; offline it had cost the low-authority boosters 3-29 m of miss, which those flights did not show.
             TerminalPhaseS = lastSecondsSmooth > 0.0 ? 3.0 : 0.0,
+            // NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS), 0.2 s: after a low bellyflop hand-over the re-solves pushed the Starship's ignition 2.8 s past what the plan had promised, and the late burn could not take out the divert (12 m/s sideways at contact). Headless 2026-11-27: Starship 8 of 8 standing with it, 1 of 4 without.
+            CoastGrowthCapS = 0.2,
             TerminalPhaseTiltWeight = 100.0 * Math.Max(lastSecondsSmooth, 0.0),
             TerminalPhaseRateWeight = 25.0 * Math.Max(lastSecondsSmooth, 0.0),
             // Priced per fixed metre and m/s - the ~250 m and ~100 m/s scales of the hand-over these weights were tuned at - so a metre of miss costs the same however far away the plan starts (Scvx6DofConfig.TerminalMissScaleM).

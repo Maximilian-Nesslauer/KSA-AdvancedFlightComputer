@@ -175,10 +175,16 @@ public sealed class Scvx6DofConfig
     public double CoastSigmaMax { get; set; } = 30.0;
 
     /// <summary>
-    /// NO LATER IGNITION, s, or negative for none: a warm re-solve's coast may be at most the coast left on the plan it starts from plus this, so a re-solve can light the engine earlier but never more than this later (Ksa6DofGuidance.CoastNow). A shrinking horizon on the ignition.
+    /// NO LATER IGNITION, s, or negative for none: once touchdown has the craft (Ksa6DofGuidance.ArmIgnitionCap), the ignition no later than the earliest a published plan - or the plan in hand at the hand-over - has promised, plus this (Ksa6DofGuidance.CoastNow): a re-solve can light the engine earlier but not later. A shrinking horizon on the ignition. 0.2 s by default (Ksa6DofSetup).
     ///  WHY (2026-11-27 campaign). The coast stays free until the ignition locks, and each re-solve of a Starship's approach pushed the ignition a little later - the 17:29 landing planned to light 4.9 s after the hand-over and lit 7.7 s after, the plan's touchdown sliding 7 s later over the coast - so the burn began lower and faster and ended on its limits. The literature's receding-horizon fix: keep the time-to-go the plan promised.
     /// </summary>
     public double CoastGrowthCapS { get; set; } = -1.0;
+
+    /// <summary>
+    /// NO LATER TOUCHDOWN, s, or negative for none: once touchdown has the craft (Ksa6DofGuidance.ArmIgnitionCap), a re-solve's burn ends no later than the earliest end a published plan - or the plan in hand at the hand-over - has promised, plus this (Ksa6DofGuidance.KeepEndNoLater). A re-solve can land sooner but not later: the burn time's own shrinking horizon, as NO LATER IGNITION is the coast's.
+    ///  WHY (2026-11-27 in-game Moon landing, 20:49). The burn time is free on every re-solve, and the lander's plans stretched their end from 4.6 s to go at 8.5 m over the legs to 9 s at 2.6 m and still 7.8 s at 1.2 m, creeping at 0-0.1 m/s rather than taking out the last 0.7 m of miss with a lean; the cut supervisor read it as the stall it was, cut at 1.2 m, and the lander fell to the ground at 1.8 m/s.
+    /// </summary>
+    public double EndGrowthCapS { get; set; } = -1.0;
 
     /// <summary>
     /// THE IGNITION LOCK: the coast's duration pinned to this, s, or null to leave it free. A fuel-optimal plan always lights as late as it can, so a free ignition time slides later on every re-solve; locked a second or so out, the craft commits to it. After ignition the coast is pinned at zero: its nodes sit at the start, the problem keeps its shape, and the warm start carries on.

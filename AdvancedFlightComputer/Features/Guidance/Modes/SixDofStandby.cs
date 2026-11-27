@@ -463,9 +463,10 @@ public static partial class GuidanceWindow
         Ksa6DofPlan plan = _s.Guidance.Published;
         _s.SixDofStandby = false;
         _s.Active = true;
-        _s.Guidance.ArmIgnitionCap();
+        _s.Guidance.ArmIgnitionCap(plan != null && plan.HasCoast ? plan.IgnitionTime : double.NaN, plan != null ? plan.SolveTime + plan.Duration : double.NaN);
         // The standby's sideways bias stays behind: the flying mode steers through stock TVC, whose gimbal angles the estimate cannot see (no Lsq pass, KsaGimbalControl.Slot.ThrustDirKnown), so their sideways thrust was learnt as a missing force; touchdown learns its own from here, through the gimbals it measures.
-        _s.Bias = new Brutal.Numerics.double3(0.0, 0.0, _s.Bias.Z);
+        if (!KeepStandbyBias && KsaGimbalControl.Diagnostics(vehicle) is { ThrustDirKnown: true })
+            _s.Bias = new Brutal.Numerics.double3(0.0, 0.0, _s.Bias.Z);
         _s.RefusalRun = 0;
         _s.TouchdownArmed = false;
         _s.SixDofSeenDescending = _s.SixDofTookBurn;

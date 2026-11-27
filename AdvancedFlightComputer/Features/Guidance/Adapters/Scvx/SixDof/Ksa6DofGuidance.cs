@@ -127,9 +127,38 @@ public sealed class Ksa6DofGuidance : IDisposable
     private double _coastMaxBuilt = double.NaN;
     private double _earliestIgnitionAt = double.NaN;
     private bool _ignitionCapArmed;
+    // NO LATER TOUCHDOWN (Scvx6DofConfig.EndGrowthCapS): the earliest end a published plan has promised since the cap was armed, sim time, and the burn time's upper bound as the setup built it.
+    private double _earliestEndAt = double.NaN;
+    private double _sigmaMaxBuilt = double.NaN;
 
-    /// <summary>Arms NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS) from now on: touchdown has the craft. Before, on the standby, the ignition follows the glide's changes freely.</summary>
-    public void ArmIgnitionCap() => _ignitionCapArmed = true;
+    /// <summary>
+    /// NO LATER TOUCHDOWN (Scvx6DofConfig.EndGrowthCapS): the burn time's upper bound so the plan ends no later than its anchor plus the cap, from <paramref name="simNow"/> with <paramref name="coast"/> s still to coast; the setup's bound while it is off or unarmed. Called where a warm re-solve or a rebuild sets its free burn time, after KeepSigmaMinUnder.
+    /// </summary>
+    private void KeepEndNoLater(double simNow, double coast)
+    {
+        if (double.IsNaN(_sigmaMaxBuilt))
+            _sigmaMaxBuilt = _cfg.SigmaMax;
+        if (_cfg.EndGrowthCapS >= 0.0 && _ignitionCapArmed && double.IsFinite(_earliestEndAt) && double.IsFinite(simNow))
+        {
+            double most = _earliestEndAt + _cfg.EndGrowthCapS - simNow - Math.Max(coast, 0.0);
+            _cfg.SigmaMax = Math.Max(Math.Min(_sigmaMaxBuilt, most), _cfg.SigmaMin + 1e-3);
+        }
+        else
+            _cfg.SigmaMax = _sigmaMaxBuilt;
+    }
+
+    /// <summary>Arms NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS) from now on: touchdown has the craft. Before, on the standby, the ignition follows the glide's changes freely. <paramref name="promisedIgnitionAt"/> is the ignition of the plan in hand, sim time, the first anchor (NaN for none).</summary>
+    public void ArmIgnitionCap(double promisedIgnitionAt = double.NaN, double promisedEndAt = double.NaN)
+    {
+        _ignitionCapArmed = true;
+        if (!EngineLit && double.IsFinite(promisedIgnitionAt) && !(promisedIgnitionAt >= _earliestIgnitionAt))
+            _earliestIgnitionAt = promisedIgnitionAt;
+        if (double.IsFinite(promisedEndAt) && !(promisedEndAt >= _earliestEndAt))
+            _earliestEndAt = promisedEndAt;
+    }
+
+    /// <summary>NO LATER IGNITION is armed (ArmIgnitionCap).</summary>
+    public bool IgnitionCapArmed => _ignitionCapArmed;
 
     // The ignition the latest reference plans, sim time: where a cold or spread solve's coast is carried down from.
     private double _ignitionAt = double.NaN;
@@ -1330,11 +1359,15 @@ public sealed class Ksa6DofGuidance : IDisposable
         _lockedIgnition = prev._lockedIgnition;
         _ignitionCapArmed = prev._ignitionCapArmed;
         _earliestIgnitionAt = prev._earliestIgnitionAt;
+        _earliestEndAt = prev._earliestEndAt;
         double intoBurn = Math.Max(elapsed - prev._planCoast, 0.0);
         double coast = _cfg.HasCoast ? CoastNow(simNow, prev._planCoast - elapsed) : 0.0;
         if (!FixedTime)
+        {
             KeepSigmaMinUnder(prev._planSigma - intoBurn);
-        double sigma = Math.Max(_cfg.SigmaMin, prev._planSigma - intoBurn);
+            KeepEndNoLater(simNow, coast);
+        }
+        double sigma = Math.Min(Math.Max(_cfg.SigmaMin, prev._planSigma - intoBurn), _cfg.SigmaMax);
         // A rebuild without a coast reads the old plan from its burn on.
         double from = _cfg.HasCoast ? elapsed : Math.Max(elapsed, prev._planCoast);
         ResamplePlan(prev._planX, prev._planU, prev._n, prev._cfg.CoastIntervals, prev._planSigma, prev._planCoast, from,
@@ -1511,7 +1544,8 @@ public sealed class Ksa6DofGuidance : IDisposable
         else
         {
             KeepSigmaMinUnder(burnLeft);
-            sigma = Math.Max(_cfg.SigmaMin, burnLeft);
+            KeepEndNoLater(simNow, coast);
+            sigma = Math.Min(Math.Max(_cfg.SigmaMin, burnLeft), _cfg.SigmaMax);
         }
 
         BuildShiftedSeed(x0, simNow, sigma, out double[] xs, out double[] us, out _, coast, fromWork);
@@ -1819,6 +1853,9 @@ public sealed class Ksa6DofGuidance : IDisposable
             if (_ignitionCapArmed && !EngineLit && !(_ignitionAt >= _earliestIgnitionAt))
                 _earliestIgnitionAt = _ignitionAt;
         }
+        // NO LATER TOUCHDOWN's anchor: the earliest end a published plan has promised since the cap was armed (KeepEndNoLater).
+        if (_ignitionCapArmed && !(simNow + _planCoast + _planSigma >= _earliestEndAt))
+            _earliestEndAt = simNow + _planCoast + _planSigma;
         // LAST, after every array is fully built. The reference assignment is what makes the new plan visible to the sim thread, so nothing may still be half-written when it happens.
         _published = new Ksa6DofPlan(_planX, _planU, _planSigma, simNow, _n, _planCoast, _cfg.CoastIntervals);
         Error = "";

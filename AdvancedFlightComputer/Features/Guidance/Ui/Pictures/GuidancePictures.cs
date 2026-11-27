@@ -897,10 +897,13 @@ public static partial class GuidanceWindow
             return;
         }
 
-        CraftSituation where = Ui.Console.ConsoleFrame.ReadFacts(vehicle).Where;
+        SituationFacts facts = Ui.Console.ConsoleFrame.ReadFacts(vehicle);
+        CraftSituation where = facts.Where;
         switch (way)
         {
+            // Where there is no air, ENTRY/BRAKING is the braking burn of the deorbit's landing machine: while that flies its picture is the deorbit's approach, the same one DEORBIT draws.
             case LandWay.FromOrbit:
+            case LandWay.Entry when !facts.HasAir && DescentLive:
                 DrawDeorbitPicture(vehicle, orbit, parent, height, where);
                 break;
             case LandWay.Hover:

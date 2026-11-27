@@ -1836,6 +1836,9 @@ public static partial class GuidanceWindow
                   KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]))
             : 0.0;
         UpdateAccelBias(x, now, thrustDelivered, ThrustDirModel(vehicle, thrustDelivered));
+        // NO LATER IGNITION holds for as long as touchdown has the craft, whatever guidance it flies now: a rebuild without a plan (RebuildUnplannedColdAt) or a direct engage starts a fresh guidance unarmed (2026-11-27 review).
+        if (_s.Active && _s.Guidance != null && !_s.Guidance.IgnitionCapArmed)
+            _s.Guidance.ArmIgnitionCap();
 
         // NODE SCHEDULE: drop node count at fixed altitude GATES.
         //
@@ -2172,6 +2175,12 @@ public static partial class GuidanceWindow
     /// <summary>AFC_X_BIAS_AXIAL=1: the acceleration estimate takes the thrust along the body axis, as it did before 2026-11-27, for comparison flights.</summary>
     private static readonly bool BiasAxialOnly = Environment.GetEnvironmentVariable("AFC_X_BIAS_AXIAL") == "1";
 
+    /// <summary>AFC_X_BIAS_RAWDIR=1: the estimate takes the gimbals' measured direction whole (e3701e9), for comparison flights.</summary>
+    private static readonly bool BiasRawDirection = Environment.GetEnvironmentVariable("AFC_X_BIAS_RAWDIR") == "1";
+
+    /// <summary>AFC_X_KEEP_STANDBY_BIAS=1: touchdown keeps the standby's sideways bias at promotion (before fda30fb), for comparison flights.</summary>
+    internal static readonly bool KeepStandbyBias = Environment.GetEnvironmentVariable("AFC_X_KEEP_STANDBY_BIAS") == "1";
+
     /// <summary>
     /// Where the thrust points, model body axes, as far as the plan models it: the thrust axis plus the lit gimbals' deflection (KsaGimbalControl.Slot.ThrustDirAsmb less ThrustRestDirAsmb), that deflection scaled by the gimbals' share of <paramref name="thrustDelivered"/> - engines without a gimbal push along their own axis whatever the gimbals do. A cluster's cant at rest is left to the estimate, which learns it as before. Null when the last pass did not measure it.
     /// </summary>
@@ -2181,8 +2190,21 @@ public static partial class GuidanceWindow
         if (slot == null || !slot.ThrustDirKnown || !(thrustDelivered > 0.0))
             return null;
         KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        // AFC_X_BIAS_RAWDIR=1: the measured direction whole, as e3701e9 took it (no rest subtracted, no thrust share), for comparison flights.
+        if (BiasRawDirection)
+        {
+            double3 d = slot.ThrustDirAsmb;
+            var raw = new double3(double3.Dot(d, mx), double3.Dot(d, my), double3.Dot(d, mz));
+            return raw.Z > Math.Cos(20.0 * Math.PI / 180.0) ? raw : null;
+        }
         double3 deflect = slot.ThrustDirAsmb - slot.ThrustRestDirAsmb;
-        double share = Math.Clamp(KsaGimbalControl.LitGimbalThrust(vehicle) / thrustDelivered, 0.0, 1.0);
+        // The gimbals' share of the thrust from rated thrusts, theirs against every active engine's: the live gimbal thrust against the delivered estimate lags through a throttle change, and on the 2026-11-27 booster that cut the deflection the estimate took and left part of the phantom force in (1 of 4 landed, against 4 of 4 with the whole deflection).
+        // Active engines only: VacuumThrust totals every engine on the craft, and a Starship landing on one engine of six read a share of a sixth (2026-11-27 review).
+        double allRated = KsaEnginePerf.ActiveVacuumThrust(vehicle);
+        double share = allRated > 0.0 ? Math.Clamp(slot.GimbalRatedThrustN / allRated, 0.0, 1.0) : 1.0;
+        // Above 0.85 it is all gimbals: the gimbals' rated thrust and the engines' vacuum thrust need not be read at the same pressure, and a craft with fixed engines beside the gimballed ones sits well under this.
+        if (share > 0.85)
+            share = 1.0;
         var model = new double3(share * double3.Dot(deflect, mx), share * double3.Dot(deflect, my), 1.0 + share * double3.Dot(deflect, mz));
         // A deflection within 20 deg (the gimbals' travel), else not believed: a stale or mis-framed reading must not turn the estimate's thrust.
         double length = model.Length();

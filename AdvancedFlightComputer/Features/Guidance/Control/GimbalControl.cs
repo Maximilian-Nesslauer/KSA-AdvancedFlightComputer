@@ -80,6 +80,9 @@ public static class KsaGimbalControl
         /// <summary>The same gimbals' thrust direction with every gimbal at rest, a unit vector in the VEHICLE assembly frame: the estimate takes only the deflection, ThrustDirAsmb less this, so a cluster's own cant (which the plan does not model, and the estimate should go on learning) is not taken away from it.</summary>
         public double3 ThrustRestDirAsmb;
 
+        /// <summary>The rated thrust of the lit gimbals on that pass, N (GimbalController.Data.MaximumThrust): with the rated thrust of every active engine, the gimbals' share of the thrust, which does not lag the way the live thrust does.</summary>
+        public double GimbalRatedThrustN;
+
         /// <summary>The vehicle the demand is for. The worker reads Vehicle.IsControllable through it, which Vehicle.UpdateControl writes on the main thread while no worker runs.</summary>
         internal volatile Vehicle Owner;
 
@@ -446,6 +449,7 @@ public static class KsaGimbalControl
         // Where the gimbals are against where they are told (Slot.LagTorqueNm), from the angles the game's state had before this pass.
         {
             double3 lag = default, dir = default, rest = default;
+            double rated = 0.0;
             bool known = false;
             for (int i = 0; i < n; i++)
             {
@@ -460,6 +464,7 @@ public static class KsaGimbalControl
                        - KsaTvcAllocator.Torque(gc, com, st.Thrusts[i], st.Commands[2 * i], st.Commands[2 * i + 1]);
                 dir += KsaTvcAllocator.ThrustDirection(gc, ay, az) * st.Thrusts[i];
                 rest += KsaTvcAllocator.ThrustDirection(gc, 0.0, 0.0) * st.Thrusts[i];
+                rated += gc.Data.MaximumThrust;
                 known = true;
             }
             st.LagTorqueNm = lag;
@@ -469,6 +474,7 @@ public static class KsaGimbalControl
             st.ThrustDirKnown = known && anyLit && dirLength > 0.0 && restLength > 0.0;
             st.ThrustDirAsmb = st.ThrustDirKnown ? dir / dirLength : default;
             st.ThrustRestDirAsmb = st.ThrustDirKnown ? rest / restLength : default;
+            st.GimbalRatedThrustN = st.ThrustDirKnown ? rated : 0.0;
         }
 
         // The log's gimbal: the one with the most thrust through it.

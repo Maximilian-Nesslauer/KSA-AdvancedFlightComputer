@@ -516,7 +516,7 @@ public sealed class Scvx6DofSolver : IDisposable
         //  offline the ratio test then accepted steps that raised the whole merit (444 of 1134 on the roll-free landing) on a predicted reduction that was often negative.
         //  NOT THE TRUE VIOLATIONS. SCS meets those rows only to its tolerance: a terminal slack priced 0.11 sat beside a true miss of 0.7 m priced 293, and with that in the actual merit the ratio test refused most steps and the trust region shrank on nearly every one.
         double convexSlack = _sub.AccelerationSlackCost + _sub.RateSlackCost + _sub.PathSlackCost;
-        double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * VirtualControlSumSquares(wv) + convexSlack;
+        double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * VirtualControlSumSquares(wv) + convexSlack + PhaseCost(x);
         (double jTrue, double defectNorm) = TrueCost(x, u, sigma, coastSigma,
                                                      out int defectChannel, out int defectNode);
         jTrue += convexSlack - SoftLimitCost(x, u);
@@ -617,7 +617,28 @@ public sealed class Scvx6DofSolver : IDisposable
             fk1.CopyTo(fk);
         }
 
-        return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq + SoftLimitCost(x, u), worst);
+        return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq + SoftLimitCost(x, u) + PhaseCost(x), worst);
+    }
+
+    /// <summary>
+    /// The last seconds' tilt and rate (Scvx6DofConfig.TerminalPhaseS), as the subproblem prices them: a cost on the state, like the fuel, so in the true cost, the linear cost and every reference alike.
+    ///  WHY (2026-11-27 review). It sat in the soft limits' price, which a solved step swaps for the subproblem's slacks: a seed's reference carried it and a step's costs did not, so on the first step after every re-seed the ratio test was off by the whole price (hundreds, against fuel of order one), and once LAST SECONDS SMOOTH became 0.3 by default that was every plan.
+    /// </summary>
+    private double PhaseCost(double[] x)
+    {
+        if (!(_cfg.TerminalPhaseS > 0.0))
+            return 0.0;
+        double cost = 0.0;
+        for (int k = 0; k < _n; k++)
+        {
+            double share = _cfg.TerminalPhaseShare(k, _n, _nCoast, _sigBar, _sigCBar);
+            if (!(share > 0.0))
+                continue;
+            double qx = x[k * NX + Dynamics6Dof.IQ + 1] / Scvx6DofConfig.PhaseTiltScaleQuat, qy = x[k * NX + Dynamics6Dof.IQ + 2] / Scvx6DofConfig.PhaseTiltScaleQuat;
+            double wx = x[k * NX + Dynamics6Dof.IW] / Scvx6DofConfig.PhaseRateScaleRadS, wy = x[k * NX + Dynamics6Dof.IW + 1] / Scvx6DofConfig.PhaseRateScaleRadS;
+            cost += share * (_cfg.TerminalPhaseTiltWeight * (qx * qx + qy * qy) + _cfg.TerminalPhaseRateWeight * (wx * wx + wy * wy));
+        }
+        return cost;
     }
 
     /// <summary>
@@ -688,17 +709,6 @@ public sealed class Scvx6DofSolver : IDisposable
             double over = (mEnd * _cfg.TipHeightM * v + _cfg.TipInertiaKgM2 * w) / tipK + 2.0 * q - tipAlpha;
             tmVel += _cfg.TipWeight * Math.Max(0.0, over) / (Math.PI / 180.0);
         }
-        // The last seconds' tilt and rate (Scvx6DofConfig.TerminalPhaseS), as the subproblem prices them.
-        if (_cfg.TerminalPhaseS > 0.0)
-            for (int k = 0; k < _n; k++)
-            {
-                double share = _cfg.TerminalPhaseShare(k, _n, _nCoast, _sigBar, _sigCBar);
-                if (!(share > 0.0))
-                    continue;
-                double qx = x[k * NX + Dynamics6Dof.IQ + 1] / Scvx6DofConfig.PhaseTiltScaleQuat, qy = x[k * NX + Dynamics6Dof.IQ + 2] / Scvx6DofConfig.PhaseTiltScaleQuat;
-                double wx = x[k * NX + Dynamics6Dof.IW] / Scvx6DofConfig.PhaseRateScaleRadS, wy = x[k * NX + Dynamics6Dof.IW + 1] / Scvx6DofConfig.PhaseRateScaleRadS;
-                tmVel += share * (_cfg.TerminalPhaseTiltWeight * (qx * qx + qy * qy) + _cfg.TerminalPhaseRateWeight * (wx * wx + wy * wy));
-            }
         // The end's tilt and pitch and yaw rate, when soft (Scvx6DofConfig.TerminalAttitudeWeight).
         for (int a = 0; a < 2; a++)
         {
