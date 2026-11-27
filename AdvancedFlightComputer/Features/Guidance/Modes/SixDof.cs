@@ -881,7 +881,7 @@ public static partial class GuidanceWindow
         double3 g0 = _s.Guidance.BaseGravity;
 
         double3 aero = _s.Guidance.ModelAeroAccel(x);
-        // THE RCS'S OWN FORCE, model body axes (KsaRcsTorqueControl.Report.ForceN), rotated into the site frame: the plan models it (Dynamics6Dof's RCS force per N m), so, like the gimbals' sideways thrust, the estimate must not learn it as a missing force (2026-11-27 review). AFC_X_BIAS_NO_RCS=1 leaves it out, for comparison.
+        // THE RCS FORCE THE PLAN MODELS, model body axes (RcsForceModel), rotated into the site frame: the plan carries it (Dynamics6Dof's RCS force per N m), so, like the gimbals' sideways thrust, the estimate must not learn it as a missing force (2026-11-27 review). AFC_X_BIAS_NO_RCS=1 leaves it out, for comparison.
         double3 f = BiasNoRcs ? default : rcsForceModel;
         double fx = (1.0 - 2.0 * (qy * qy + qz * qz)) * f.X + 2.0 * (qx * qy - qw * qz) * f.Y + 2.0 * (qx * qz + qw * qy) * f.Z;
         double fy = 2.0 * (qx * qy + qw * qz) * f.X + (1.0 - 2.0 * (qx * qx + qz * qz)) * f.Y + 2.0 * (qy * qz - qw * qx) * f.Z;
@@ -2183,11 +2183,16 @@ public static partial class GuidanceWindow
     /// <summary>AFC_X_BIAS_NO_RCS=1: the acceleration estimate leaves the RCS's force out (before 2026-11-27 evening), for comparison flights.</summary>
     private static readonly bool BiasNoRcs = Environment.GetEnvironmentVariable("AFC_X_BIAS_NO_RCS") == "1";
 
-    /// <summary>The force AFC's RCS gave on its last command, model body axes (KsaRcsTorqueControl.Report.ForceN, commanded in those axes), or zero when it did not fly the RCS.</summary>
+    /// <summary>
+    /// The RCS force the PLAN models, model body axes (Ksa6DofGuidance.PlanRcsForceModel: ForcePerNm times the plan's own RCS torque), while AFC's RCS flies; zero otherwise. Not the force of the whole command: the attitude feedback's part and the allocator's departure from ForcePerNm are not in the plan's model, so the estimate must go on learning them (2026-11-27 evening review; the delivered force had been taken out whole).
+    /// </summary>
     private static double3 RcsForceModel(Vehicle vehicle)
     {
         KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Last(vehicle);
-        return rcs.Active && double.IsFinite(rcs.ForceN.X) && double.IsFinite(rcs.ForceN.Y) && double.IsFinite(rcs.ForceN.Z) ? rcs.ForceN : default;
+        if (!rcs.Active || _s.Guidance == null)
+            return default;
+        double3 f = _s.Guidance.PlanRcsForceModel;
+        return double.IsFinite(f.X) && double.IsFinite(f.Y) && double.IsFinite(f.Z) ? f : default;
     }
 
     /// <summary>AFC_X_BIAS_RAWDIR=1: the estimate takes the gimbals' measured direction whole (e3701e9), for comparison flights.</summary>

@@ -469,7 +469,7 @@ public sealed class Scvx6DofConfig
     public bool SinkFunnelEnabled => SinkPerM > 0.0;
 
     /// <summary>
-    /// THE DESCENT FLOOR, m/s, or 0 for none: the plan's speed DOWN at each node from node 1 is at least min(this, <see cref="DescentFloorPerM"/> x its height over the target) - the last metres are flown descending, never hovering, as Apollo's P66 and MSL's constant-descent segment fly them. Soft, its slack at <see cref="DescentFloorWeight"/> per <see cref="SideSpeedPriceScaleMs"/> per node. Linear in the state, with the branch of the min taken at the reference (re-linearised every iteration).
+    /// THE DESCENT FLOOR, m/s, or 0 for none: the plan's speed DOWN at each node from node 1 is at least min(this, max(the plan's end sink, <see cref="DescentFloorPerM"/> x its height over the target)) (<see cref="DescentFloorAt"/>) - 0.5 by default (Ksa6DofSetup) - the last metres are flown descending, never hovering, as Apollo's P66 and MSL's constant-descent segment fly them. Soft, its slack at <see cref="DescentFloorWeight"/> per <see cref="SideSpeedPriceScaleMs"/> per node. Linear in the state, with the branch of the min taken at the reference (re-linearised every iteration).
     ///  WHY (2026-11-27, the in-game lunar landing at 20:49). Nothing in the plan said not to hover near the ground, and a hover cost only a little fuel: a lander that drifted 0.3 m off its plan re-planned a 3 s hover at 5.4 m to move the 0.3-0.5 m back at 1-4 deg (leaning in the last 3 s is priced by LAST SECONDS SMOOTH), its end jumping from 5.1 to 8.2 s away; the cut supervisor read the stall and cut it 1.2 m up.
     /// </summary>
     public double DescentFloorMs { get; set; }

@@ -62,7 +62,7 @@ public struct CutSupervisorState
 /// </summary>
 public static class CutSupervisor
 {
-    /// <param name="planEnded">Touchdown guidance has reached the end of its plan without contact and flies the rest to contact. Within the cut height that is a cut at once: the plan said the craft was down. On 2026-11-27 (14:27) a Starship reached its plan's end with the legs 0.47 m up, sliding at 4.6 m/s, and the shortfall took another 0.2 s to build.</param>
+    /// <param name="planEnded">Touchdown guidance has reached the end of its plan without contact and flies the rest to contact. Within CutSupervisorSettings.PlanEndCutHeightM (0.1 m) that is a cut at once: the plan said the craft was down; higher, the craft flies to contact under power, because the drop broke a lunar lander's legs. (On 2026-11-27 at 14:27 a Starship reached its plan's end with the legs 0.47 m up, sliding at 4.6 m/s, and the shortfall took another 0.2 s to build.)</param>
     public static CutSupervisorAction Step(ref CutSupervisorState state, in CutSupervisorSettings settings,
                                            double legsHeightM, double verticalSpeedMs, double dt, bool engineLit, bool contact,
                                            bool planEnded = false)

@@ -867,7 +867,7 @@ public static class Ksa6DofSetup
             TerminalPhaseS = lastSecondsSmooth > 0.0 ? 3.0 : 0.0,
             // NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS), 0.2 s: after a low bellyflop hand-over the re-solves pushed the Starship's ignition 2.8 s past what the plan had promised, and the late burn could not take out the divert (12 m/s sideways at contact). Headless 2026-11-27: Starship 8 of 8 standing with it, 1 of 4 without.
             CoastGrowthCapS = 0.2,
-            // THE DESCENT FLOOR (Scvx6DofConfig.DescentFloorMs), 0.5 m/s tapering to the plan's end sink: the last metres flown descending, never hovering. Headless 2026-11-27: the lunar lander 11 of 11 with every leg (it hovered at 1-5 m to take out a 0.4 m miss and the stall cut dropped it, 6 of 8 without), the booster 8 of 8 and the Starship 4 of 4 unchanged.
+            // THE DESCENT FLOOR (Scvx6DofConfig.DescentFloorMs), 0.5 m/s tapering to the plan's end sink: the last metres flown descending, never hovering. Headless 2026-11-27: the lunar lander 13 of 13 with every leg (it hovered at 1-5 m to take out a 0.4 m miss and the stall cut dropped it, 6 of 8 without), the booster 8 of 8 and the Starship 4 of 4 unchanged.
             DescentFloorMs = 0.5,
             TerminalPhaseTiltWeight = 100.0 * Math.Max(lastSecondsSmooth, 0.0),
             TerminalPhaseRateWeight = 25.0 * Math.Max(lastSecondsSmooth, 0.0),

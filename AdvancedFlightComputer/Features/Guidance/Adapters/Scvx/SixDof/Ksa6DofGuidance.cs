@@ -1875,6 +1875,9 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <summary>The plan's RCS torque at the last <see cref="Command"/>, N m, model body axes. Zero for a plan without RCS.</summary>
     public double3 RcsTorqueModel { get; private set; }
 
+    /// <summary>The force the plan's own RCS control gives in the plan's model at the last Command, N, model body axes (ForcePerNm times the plan's RCS torque, before the attitude feedback's): the RCS force the plan models, which the acceleration estimate must not learn again.</summary>
+    public double3 PlanRcsForceModel { get; private set; }
+
     /// <summary>The fins' deflections the plan flies now, degrees, one per fin in the plan's order (Ksa6DofSetup.FinsFor), led by the gimbals' lead: a fin travels at its rate, as a nozzle does. Empty for a plan without fins.</summary>
     public double[] FinDeflectionDeg { get; private set; } = [];
 
@@ -1994,7 +1997,15 @@ public sealed class Ksa6DofGuidance : IDisposable
         {
             int r = Dynamics6Dof.IRCS;
             RcsTorqueModel = new double3(Lerp(plan.U, r, k, f), Lerp(plan.U, r + 1, k, f), Lerp(plan.U, r + 2, k, f));
+            // The force the plan's own RCS control gives in its model (Dynamics6Dof's ForcePerNm), before the feedback adds its part: what the acceleration estimate takes out (SixDof.RcsForceModel).
+            double3 rcsTau = RcsTorqueModel;
+            double[] fpn = _dyn.Rcs.ForcePerNm;
+            PlanRcsForceModel = new double3(fpn[0] * rcsTau.X + fpn[3] * rcsTau.Y + fpn[6] * rcsTau.Z,
+                                            fpn[1] * rcsTau.X + fpn[4] * rcsTau.Y + fpn[7] * rcsTau.Z,
+                                            fpn[2] * rcsTau.X + fpn[5] * rcsTau.Y + fpn[8] * rcsTau.Z);
         }
+        else
+            PlanRcsForceModel = default;
 
         // AXIAL THRUST IN NEWTONS, not a throttle fraction.
         //  This previously return thrust / _cfg.Tmax, and that was the systematic error behind the descend-until-it-loops behaviour. Tmax is fixed when the plan is built, so the moment the vehicle's real capability differs from it - a different ambient pressure, an engine out, propellant starvation - every commanded thrust is wrong by exactly that ratio. It is invisible to the MPC too: re-solving corrects the STATE, but the error is in the actuator mapping, so each new plan is executed just as wrongly as the last.
