@@ -83,6 +83,13 @@ internal static class PathShaping
             cfg.TerminalPhaseRateWeight = Arg("--phase-w", 1.0) * perM * 25.0 / 400.0;
             cfg.TerminalSideSpeedFactor = 0.05;
         }
+        // --vc-att: attitude and body-rate virtual control priced on flight's tight scales (Ksa6DofSetup.VirtualControlAttitudeScale, VirtualControlRateScaleRadS), not on 1 and 1 rad/s.
+        if (Environment.GetCommandLineArgs().Contains("--vc-att") && cfg.VirtualControlScale is { Length: >= 13 } vcs)
+        {
+            for (int i = 6; i < 10; i++) vcs[i] = Arg("--vc-q", 0.005);
+            for (int i = 10; i < 13; i++) vcs[i] = Arg("--vc-w", 0.01);
+            cfg.VirtualControlScale = vcs;
+        }
         // --tip: the tip-over line, on a craft standing --tip-r (3 m) out with its centre of mass --tip-h (13 m, the checks' target) up and --tip-i (1e6 kg m^2) of inertia.
         if (Environment.GetCommandLineArgs().Contains("--tip"))
         {

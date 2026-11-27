@@ -36,6 +36,12 @@ public static class Ksa6DofSetup
     /// </summary>
     public const double VirtualControlPositionScaleM = 5.0;
 
+    /// <summary>
+    /// The scales the ATTITUDE's and the BODY RATES' virtual control are priced on once a plan is refined: a quaternion component of 0.005 (about 0.57 deg) and 0.01 rad/s (about 0.57 deg/s) an interval, where they were XScale's 1 and 1 rad/s.
+    ///  WHY (2026-11-27). On scales of 1, faking ten degrees of turn across a late landing plan cost one or two units against 20000 for ending that tilted honestly (Scvx6DofConfig.TerminalAttitudeWeight). So the plans kept ending upright and still to the hundredth - 0.00 deg from a node 0 10.6 deg over and 0.27 s out (16:35) - while their attitudes ran 7-11 deg off their own rates, and the craft, following physics, pitched hard in the last second and touched down 5.6-8 deg over. Priced here a degree of faked turn costs tens of times the degree of honest end tilt, so a plan that cannot come upright says so, and the flight is not chased after an attitude nothing makes. A morning's try at this (2026-11-27) made things worse: the end was hard then, so a plan that could not cheat could only be refused.
+    /// </summary>
+    public const double VirtualControlAttitudeScale = 0.005, VirtualControlRateScaleRadS = 0.01;
+
     /// <summary>The progressive glideslope's first height, at least, m: a craft shorter than this still comes down its last 20 m in the narrowest part.</summary>
     internal const double GlideFunnelMinNearM = 20.0;
 
@@ -824,8 +830,8 @@ public static class Ksa6DofSetup
             [
                 VirtualControlPositionScaleM, VirtualControlPositionScaleM, VirtualControlPositionScaleM,
                 VirtualControlVelocityScaleMs, VirtualControlVelocityScaleMs, VirtualControlVelocityScaleMs,
-                0, 0, 0, 0,
-                0, 0, 0,
+                VirtualControlAttitudeScale, VirtualControlAttitudeScale, VirtualControlAttitudeScale, VirtualControlAttitudeScale,
+                VirtualControlRateScaleRadS, VirtualControlRateScaleRadS, VirtualControlRateScaleRadS,
                 0,
             ],
 
