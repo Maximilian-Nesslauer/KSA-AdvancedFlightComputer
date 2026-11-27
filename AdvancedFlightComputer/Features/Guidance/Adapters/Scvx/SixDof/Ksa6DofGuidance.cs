@@ -157,10 +157,8 @@ public sealed class Ksa6DofGuidance : IDisposable
             _coastMaxBuilt = _cfg.CoastSigmaMax;
         if (_cfg.CoastGrowthCapS >= 0.0 && _ignitionCapArmed && known && _cfg.CoastSigmaFixed == null)
         {
-            double at = simNow + coast;
-            if (!(at >= _earliestIgnitionAt))
-                _earliestIgnitionAt = at;
-            double cap = Math.Max(_earliestIgnitionAt + _cfg.CoastGrowthCapS - simNow, 0.0);
+            // The anchor moves only with a published plan (the end of a successful finish), never with an iterate of a cold or spread solve; none yet, no cap.
+            double cap = double.IsFinite(_earliestIgnitionAt) ? Math.Max(_earliestIgnitionAt + _cfg.CoastGrowthCapS - simNow, 0.0) : _coastMaxBuilt;
             _cfg.CoastSigmaMax = Math.Max(Math.Min(_coastMaxBuilt, cap), _cfg.CoastSigmaMin + 1e-3);
             coast = Math.Min(coast, _cfg.CoastSigmaMax);
         }
@@ -1815,7 +1813,12 @@ public sealed class Ksa6DofGuidance : IDisposable
         _planCoast = _solver.CoastSigma;
         _solveTime = simNow;
         if (_cfg.HasCoast)
+        {
             _ignitionAt = simNow + _planCoast;
+            // NO LATER IGNITION's anchor: the earliest ignition a published plan has promised since the cap was armed (CoastNow). A lit engine's plan has no coast to promise.
+            if (_ignitionCapArmed && !EngineLit && !(_ignitionAt >= _earliestIgnitionAt))
+                _earliestIgnitionAt = _ignitionAt;
+        }
         // LAST, after every array is fully built. The reference assignment is what makes the new plan visible to the sim thread, so nothing may still be half-written when it happens.
         _published = new Ksa6DofPlan(_planX, _planU, _planSigma, simNow, _n, _planCoast, _cfg.CoastIntervals);
         Error = "";

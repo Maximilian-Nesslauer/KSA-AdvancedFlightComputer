@@ -1835,7 +1835,7 @@ public static partial class GuidanceWindow
             ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle,
                   KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]))
             : 0.0;
-        UpdateAccelBias(x, now, thrustDelivered, ThrustDirModel(vehicle));
+        UpdateAccelBias(x, now, thrustDelivered, ThrustDirModel(vehicle, thrustDelivered));
 
         // NODE SCHEDULE: drop node count at fixed altitude GATES.
         //
@@ -2169,23 +2169,27 @@ public static partial class GuidanceWindow
         return double.IsNaN(radius) ? "" : FormattableString.Invariant($", tip {share * 100.0:F0} % of what tips it (line {Features.Ui.Logic.TipOver.AcceptShare * 100.0:F0} %; stance {radius:F1} m, centre of mass {_s.VehicleHeightM:F1} m up, inertia {0.5 * (ixx + iyy):E2} kg m^2, tilt {tilt * 180.0 / Math.PI:F1} deg, {rate * 180.0 / Math.PI:F1} deg/s)");
     }
 
-    /// <summary>Hands touchdown guidance the gimbals' lag behind their last command, model body axes (KsaGimbalControl.Slot.LagTorqueNm), or null when the last pass did not measure it.</summary>
     /// <summary>AFC_X_BIAS_AXIAL=1: the acceleration estimate takes the thrust along the body axis, as it did before 2026-11-27, for comparison flights.</summary>
     private static readonly bool BiasAxialOnly = Environment.GetEnvironmentVariable("AFC_X_BIAS_AXIAL") == "1";
 
-    /// <summary>Where the lit gimbals point the thrust, a unit vector in model body axes (KsaGimbalControl.Slot.ThrustDirAsmb), or null when the last pass did not measure it.</summary>
-    private static double3? ThrustDirModel(Vehicle vehicle)
+    /// <summary>
+    /// Where the thrust points, model body axes, as far as the plan models it: the thrust axis plus the lit gimbals' deflection (KsaGimbalControl.Slot.ThrustDirAsmb less ThrustRestDirAsmb), that deflection scaled by the gimbals' share of <paramref name="thrustDelivered"/> - engines without a gimbal push along their own axis whatever the gimbals do. A cluster's cant at rest is left to the estimate, which learns it as before. Null when the last pass did not measure it.
+    /// </summary>
+    private static double3? ThrustDirModel(Vehicle vehicle, double thrustDelivered)
     {
         KsaGimbalControl.Slot slot = KsaGimbalControl.Diagnostics(vehicle);
-        if (slot == null || !slot.ThrustDirKnown)
+        if (slot == null || !slot.ThrustDirKnown || !(thrustDelivered > 0.0))
             return null;
         KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
-        double3 d = slot.ThrustDirAsmb;
-        var model = new double3(double3.Dot(d, mx), double3.Dot(d, my), double3.Dot(d, mz));
-        // Within 20 deg of the thrust axis (the gimbals' travel), else not believed: a stale or mis-framed reading must not turn the estimate's thrust.
-        return model.Z > Math.Cos(20.0 * Math.PI / 180.0) ? model : null;
+        double3 deflect = slot.ThrustDirAsmb - slot.ThrustRestDirAsmb;
+        double share = Math.Clamp(KsaGimbalControl.LitGimbalThrust(vehicle) / thrustDelivered, 0.0, 1.0);
+        var model = new double3(share * double3.Dot(deflect, mx), share * double3.Dot(deflect, my), 1.0 + share * double3.Dot(deflect, mz));
+        // A deflection within 20 deg (the gimbals' travel), else not believed: a stale or mis-framed reading must not turn the estimate's thrust.
+        double length = model.Length();
+        return length > 0.0 && model.Z / length > Math.Cos(20.0 * Math.PI / 180.0) ? model / length : null;
     }
 
+    /// <summary>Hands touchdown guidance the gimbals' lag behind their last command, model body axes (KsaGimbalControl.Slot.LagTorqueNm), or null when the last pass did not measure it.</summary>
     private static void NoteGimbalLag(Vehicle vehicle)
     {
         KsaGimbalControl.Slot slot = KsaGimbalControl.Diagnostics(vehicle);

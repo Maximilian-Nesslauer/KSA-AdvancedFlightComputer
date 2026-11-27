@@ -382,7 +382,10 @@ public static partial class GuidanceWindow
         // Off the engines' curve, as Step6DofCore reads it: throttle x full thrust overstates low throttle by tens of kN.
         // Not on a predicted state (SixDofStandbyPredicted): its velocity is a forecast that stands still, and differencing it would read as an acceleration the model lacks.
         if (!_s.SixDofStandbyPredicted)
-            UpdateAccelBias(x, now, _s.LastThrottle > 0.0 ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle, ambientPa) : 0.0);
+        {
+            double standbyThrust = _s.LastThrottle > 0.0 ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle, ambientPa) : 0.0;
+            UpdateAccelBias(x, now, standbyThrust, ThrustDirModel(vehicle, standbyThrust));
+        }
 
         // The node ladder too, so the guidance handed over is already at the count 6-DOF would fly. Only off a fresh plan: a rebuild reseeds from the published plan, on the worker (BeginRebuild).
         if (_s.SixDofNodeGates && age <= SixDofStandbyMaxPlanAgeS && !_s.SixDofCoastPending)
@@ -461,6 +464,8 @@ public static partial class GuidanceWindow
         _s.SixDofStandby = false;
         _s.Active = true;
         _s.Guidance.ArmIgnitionCap();
+        // The standby's sideways bias stays behind: the flying mode steers through stock TVC, whose gimbal angles the estimate cannot see (no Lsq pass, KsaGimbalControl.Slot.ThrustDirKnown), so their sideways thrust was learnt as a missing force; touchdown learns its own from here, through the gimbals it measures.
+        _s.Bias = new Brutal.Numerics.double3(0.0, 0.0, _s.Bias.Z);
         _s.RefusalRun = 0;
         _s.TouchdownArmed = false;
         _s.SixDofSeenDescending = _s.SixDofTookBurn;

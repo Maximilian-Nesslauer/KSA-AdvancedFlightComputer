@@ -77,6 +77,9 @@ public static class KsaGimbalControl
         public double3 ThrustDirAsmb;
         public bool ThrustDirKnown;
 
+        /// <summary>The same gimbals' thrust direction with every gimbal at rest, a unit vector in the VEHICLE assembly frame: the estimate takes only the deflection, ThrustDirAsmb less this, so a cluster's own cant (which the plan does not model, and the estimate should go on learning) is not taken away from it.</summary>
+        public double3 ThrustRestDirAsmb;
+
         /// <summary>The vehicle the demand is for. The worker reads Vehicle.IsControllable through it, which Vehicle.UpdateControl writes on the main thread while no worker runs.</summary>
         internal volatile Vehicle Owner;
 
@@ -174,6 +177,7 @@ public static class KsaGimbalControl
         GimbalOverrideMode mode = cmd.Mode;
         // Measured again by an Lsq pass; nothing else does.
         st.LagKnown = false;
+        st.ThrustDirKnown = false;
         if (mode == GimbalOverrideMode.Off)
             return;
 
@@ -441,7 +445,7 @@ public static class KsaGimbalControl
 
         // Where the gimbals are against where they are told (Slot.LagTorqueNm), from the angles the game's state had before this pass.
         {
-            double3 lag = default, dir = default;
+            double3 lag = default, dir = default, rest = default;
             bool known = false;
             for (int i = 0; i < n; i++)
             {
@@ -455,13 +459,16 @@ public static class KsaGimbalControl
                 lag += KsaTvcAllocator.Torque(gc, com, st.Thrusts[i], ay, az)
                        - KsaTvcAllocator.Torque(gc, com, st.Thrusts[i], st.Commands[2 * i], st.Commands[2 * i + 1]);
                 dir += KsaTvcAllocator.ThrustDirection(gc, ay, az) * st.Thrusts[i];
+                rest += KsaTvcAllocator.ThrustDirection(gc, 0.0, 0.0) * st.Thrusts[i];
                 known = true;
             }
             st.LagTorqueNm = lag;
             st.LagKnown = known;
-            double dirLength = dir.Length();
-            st.ThrustDirKnown = known && dirLength > 0.0;
+            // Only with a gimbal lit: unlit, the thrusts are the preview's, and an unlit gimbal's angle pushes nothing.
+            double dirLength = dir.Length(), restLength = rest.Length();
+            st.ThrustDirKnown = known && anyLit && dirLength > 0.0 && restLength > 0.0;
             st.ThrustDirAsmb = st.ThrustDirKnown ? dir / dirLength : default;
+            st.ThrustRestDirAsmb = st.ThrustDirKnown ? rest / restLength : default;
         }
 
         // The log's gimbal: the one with the most thrust through it.
