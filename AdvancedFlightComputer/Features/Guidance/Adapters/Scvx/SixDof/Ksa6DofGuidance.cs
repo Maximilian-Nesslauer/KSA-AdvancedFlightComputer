@@ -128,8 +128,16 @@ public sealed class Ksa6DofGuidance : IDisposable
     private double _earliestIgnitionAt = double.NaN;
     private bool _ignitionCapArmed;
 
-    /// <summary>Arms NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS) from now on: touchdown has the craft. Before, on the standby, the ignition follows the glide's changes freely.</summary>
-    public void ArmIgnitionCap() => _ignitionCapArmed = true;
+    /// <summary>Arms NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS) from now on: touchdown has the craft. Before, on the standby, the ignition follows the glide's changes freely. <paramref name="promisedIgnitionAt"/> is the ignition of the plan in hand, sim time, the first anchor (NaN for none).</summary>
+    public void ArmIgnitionCap(double promisedIgnitionAt = double.NaN)
+    {
+        _ignitionCapArmed = true;
+        if (!EngineLit && double.IsFinite(promisedIgnitionAt) && !(promisedIgnitionAt >= _earliestIgnitionAt))
+            _earliestIgnitionAt = promisedIgnitionAt;
+    }
+
+    /// <summary>NO LATER IGNITION is armed (ArmIgnitionCap).</summary>
+    public bool IgnitionCapArmed => _ignitionCapArmed;
 
     // The ignition the latest reference plans, sim time: where a cold or spread solve's coast is carried down from.
     private double _ignitionAt = double.NaN;

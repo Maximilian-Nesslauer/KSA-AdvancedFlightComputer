@@ -1836,6 +1836,9 @@ public static partial class GuidanceWindow
                   KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]))
             : 0.0;
         UpdateAccelBias(x, now, thrustDelivered, ThrustDirModel(vehicle, thrustDelivered));
+        // NO LATER IGNITION holds for as long as touchdown has the craft, whatever guidance it flies now: a rebuild without a plan (RebuildUnplannedColdAt) or a direct engage starts a fresh guidance unarmed (2026-11-27 review).
+        if (_s.Active && _s.Guidance != null && !_s.Guidance.IgnitionCapArmed)
+            _s.Guidance.ArmIgnitionCap();
 
         // NODE SCHEDULE: drop node count at fixed altitude GATES.
         //
@@ -2196,7 +2199,8 @@ public static partial class GuidanceWindow
         }
         double3 deflect = slot.ThrustDirAsmb - slot.ThrustRestDirAsmb;
         // The gimbals' share of the thrust from rated thrusts, theirs against every active engine's: the live gimbal thrust against the delivered estimate lags through a throttle change, and on the 2026-11-27 booster that cut the deflection the estimate took and left part of the phantom force in (1 of 4 landed, against 4 of 4 with the whole deflection).
-        double allRated = KsaEnginePerf.VacuumThrust(vehicle);
+        // Active engines only: VacuumThrust totals every engine on the craft, and a Starship landing on one engine of six read a share of a sixth (2026-11-27 review).
+        double allRated = KsaEnginePerf.ActiveVacuumThrust(vehicle);
         double share = allRated > 0.0 ? Math.Clamp(slot.GimbalRatedThrustN / allRated, 0.0, 1.0) : 1.0;
         // Above 0.85 it is all gimbals: the gimbals' rated thrust and the engines' vacuum thrust need not be read at the same pressure, and a craft with fixed engines beside the gimballed ones sits well under this.
         if (share > 0.85)

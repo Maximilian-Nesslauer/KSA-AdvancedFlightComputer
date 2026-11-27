@@ -175,7 +175,7 @@ public sealed class Scvx6DofConfig
     public double CoastSigmaMax { get; set; } = 30.0;
 
     /// <summary>
-    /// NO LATER IGNITION, s, or negative for none: a warm re-solve's coast may be at most the coast left on the plan it starts from plus this, so a re-solve can light the engine earlier but never more than this later (Ksa6DofGuidance.CoastNow). A shrinking horizon on the ignition.
+    /// NO LATER IGNITION, s, or negative for none: once touchdown has the craft (Ksa6DofGuidance.ArmIgnitionCap), the ignition no later than the earliest a published plan - or the plan in hand at the hand-over - has promised, plus this (Ksa6DofGuidance.CoastNow): a re-solve can light the engine earlier but not later. A shrinking horizon on the ignition. 0.2 s by default (Ksa6DofSetup).
     ///  WHY (2026-11-27 campaign). The coast stays free until the ignition locks, and each re-solve of a Starship's approach pushed the ignition a little later - the 17:29 landing planned to light 4.9 s after the hand-over and lit 7.7 s after, the plan's touchdown sliding 7 s later over the coast - so the burn began lower and faster and ended on its limits. The literature's receding-horizon fix: keep the time-to-go the plan promised.
     /// </summary>
     public double CoastGrowthCapS { get; set; } = -1.0;
