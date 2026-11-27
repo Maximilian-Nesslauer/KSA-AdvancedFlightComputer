@@ -132,7 +132,7 @@ internal sealed class AscentDynamics
         _atm = p.Atmosphere;
         _stages = p.Stages;
         _alphaRounding = p.Settings.AlphaRounding;
-        // The body-axis force, about the plane's held roll: the unturned plane normal, which the flight's roll reference is built on.
+        // Unturned reference plane normal; BodyForce rotates it about +z by phi.
         _bodyForce = _atm.BodyForce is { NoseFirst: true } table ? table : null;
         double nn = Math.Sqrt(p.PlaneNormal[0] * p.PlaneNormal[0] + p.PlaneNormal[1] * p.PlaneNormal[1] + p.PlaneNormal[2] * p.PlaneNormal[2]);
         _nx = p.PlaneNormal[0] / nn;
@@ -149,6 +149,11 @@ internal sealed class AscentDynamics
             AscentStage st = _stages[i];
             _mdotC[i] = st.MassFlow * TU / MU;
             _kd[i] = 0.5 * VU * VU * st.DragArea / FU;
+            if (st.IsCoast)
+            {
+                _uEps2[i] = TEps2;
+                continue;
+            }
             // A stage of solids alone has no liquid thrust to scale by: its solids' mean stands in.
             double tref = (st.HasLiquid ? st.Thrust : st.Solid!.MeanThrust()) / FU;
             _uEps2[i] = TEps2 / (tref * tref);
@@ -194,20 +199,47 @@ internal sealed class AscentDynamics
         hMetres = (rn - 1.0) * LU;
     }
 
-    private void F(ReadOnlySpan<Dual> x, ReadOnlySpan<Dual> u, int stage, in SolidPoint solid, Span<Dual> dx)
+    private void F(ReadOnlySpan<Dual> x, ReadOnlySpan<Dual> u, int stage, in SolidPoint solid, Dual phi, Span<Dual> dx)
     {
         Air(x, out Dual rn, out Dual ax, out Dual ay, out Dual az, out Dual vrn, out Dual h);
         Dual m = x[IM];
 
         Dual rho = _atm.Density(h);
         Dual mach = vrn * VU / _atm.SpeedOfSound(h);
+        Dual rn3 = rn * rn * rn;
+        if (_stages[stage].IsCoast)
+        {
+            Dual cAeroX, cAeroY, cAeroZ;
+            if (_bodyForce != null)
+            {
+                Span<Dual> pro = stackalloc Dual[3] { ax, ay, az };
+                BodyForce(pro, vrn, ax, ay, az, vrn, mach, _kd[stage] * rho * vrn * vrn / m, phi, out cAeroX, out cAeroY, out cAeroZ);
+            }
+            else
+            {
+                Dual cd = _atm.DragCoefficient(mach, new Dual(0.0));
+                Dual kdrag = _kd[stage] * rho * cd * vrn / m;
+                cAeroX = -kdrag * ax;
+                cAeroY = -kdrag * ay;
+                cAeroZ = -kdrag * az;
+            }
+            dx[0] = x[3];
+            dx[1] = x[4];
+            dx[2] = x[5];
+            dx[3] = -x[0] / rn3 + cAeroX;
+            dx[4] = -x[1] / rn3 + cAeroY;
+            dx[5] = -x[2] / rn3 + cAeroZ;
+            dx[6] = new Dual(0.0);
+            return;
+        }
+
         Dual pressure = _atm.Pressure(h);
         Dual tmax = _stages[stage].MaxThrust(pressure) / FU;
 
         Dual umag = Dual.Sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2] + _uEps2[stage]);
         Dual aeroX, aeroY, aeroZ;
         if (_bodyForce != null)
-            BodyForce(u, umag, ax, ay, az, vrn, mach, _kd[stage] * rho * vrn * vrn / m, out aeroX, out aeroY, out aeroZ);
+            BodyForce(u, umag, ax, ay, az, vrn, mach, _kd[stage] * rho * vrn * vrn / m, phi, out aeroX, out aeroY, out aeroZ);
         else
         {
             Dual cd = _atm.DragCoefficient(mach, AngleOfAttack(u, umag, ax, ay, az, vrn));
@@ -216,7 +248,6 @@ internal sealed class AscentDynamics
             aeroY = -kdrag * ay;
             aeroZ = -kdrag * az;
         }
-        Dual rn3 = rn * rn * rn;
         // Liquid thrust scales with u; the solids' along u's direction only, so per unit of u they push ts / |u|.
         Dual tm = tmax / m;
         if (solid.MassFlowC > 0.0)
@@ -232,17 +263,22 @@ internal sealed class AscentDynamics
     }
 
     /// <summary>
-    /// The aero acceleration from the nose-first body-axis table (see the type summary): <paramref name="scale"/> = Kd rho |v_rel|^2 / m, canonical, times the table's coefficients turned out of the body axes the flight holds.
+    /// The aero acceleration from the nose-first body-axis table (see the type summary): <paramref name="scale"/> = Kd rho |v_rel|^2 / m, canonical, times the table's coefficients turned out of the body axes the flight holds, using the plane normal rotated by <paramref name="phi"/> about the spin axis.
     /// </summary>
     private void BodyForce(ReadOnlySpan<Dual> u, Dual umag, Dual ax, Dual ay, Dual az, Dual vrn, Dual mach, Dual scale,
-                           out Dual fx, out Dual fy, out Dual fz)
+                           Dual phi, out Dual fx, out Dual fy, out Dual fz)
     {
         var table = _bodyForce!;
         // Body x: the thrust axis.
         Dual xx = u[0] / umag, xy = u[1] / umag, xz = u[2] / umag;
-        // Body y: -n square to x, turned about x by the held roll; z = x x y.
-        Dual along = -(xx * _nx + xy * _ny + xz * _nz);
-        Dual y0x = -_nx - along * xx, y0y = -_ny - along * xy, y0z = -_nz - along * xz;
+        // Plane normal turned about +z by phi so lateral/normal forces track PlaneTurn.
+        Dual cPhi = Dual.Cos(phi), sPhi = Dual.Sin(phi);
+        Dual nx = cPhi * _nx - sPhi * _ny;
+        Dual ny = sPhi * _nx + cPhi * _ny;
+        Dual nz = new(_nz);
+        // Body y: -n(phi) square to x, turned about x by the held roll; z = x x y.
+        Dual along = -(xx * nx + xy * ny + xz * nz);
+        Dual y0x = -nx - along * xx, y0y = -ny - along * xy, y0z = -nz - along * xz;
         Dual y0n = Dual.Sqrt(y0x * y0x + y0y * y0y + y0z * y0z + 1e-12);
         y0x /= y0n;
         y0y /= y0n;
@@ -285,14 +321,14 @@ internal sealed class AscentDynamics
     /// <summary>
     /// The aero acceleration at a state and liquid-only throttle, canonical, whichever law the dynamics fly: for the offline check against the table.
     /// </summary>
-    public void AeroAt(ReadOnlySpan<double> x, ReadOnlySpan<double> u, int stage, Span<double> accel)
+    public void AeroAt(ReadOnlySpan<double> x, ReadOnlySpan<double> u, int stage, Span<double> accel, double phi = 0.0)
     {
         Span<Dual> dxs = stackalloc Dual[NX];
         Span<Dual> dus = stackalloc Dual[NU];
         Span<Dual> fo = stackalloc Dual[NX];
         for (int i = 0; i < NX; i++) dxs[i] = new Dual(x[i]);
         for (int j = 0; j < NU; j++) dus[j] = new Dual(u[j]);
-        F(dxs, dus, stage, SolidPoint.None, fo);
+        F(dxs, dus, stage, SolidPoint.None, new Dual(phi), fo);
         Air(dxs, out Dual rn, out _, out _, out _, out _, out _);
         // Less gravity and the liquid thrust: what is left is the air's.
         Dual tmax = _stages[stage].MaxThrust(_atm.Pressure((rn - 1.0) * LU)) / FU / dxs[IM];
@@ -307,7 +343,7 @@ internal sealed class AscentDynamics
     /// <summary>
     /// The aero acceleration the dynamics apply, SI (m/s^2), at a position and velocity (inertial, m and m/s), mass (kg) and throttle vector in a stage: what a check compares with the table it was built from.
     /// </summary>
-    public static double[] AeroAcceleration(AscentProblem p, int stage, double[] r, double[] v, double mass, double[] u)
+    public static double[] AeroAcceleration(AscentProblem p, int stage, double[] r, double[] v, double mass, double[] u, double phi = 0.0)
     {
         var d = new AscentDynamics(p);
         Span<double> x = stackalloc double[NX];
@@ -318,7 +354,7 @@ internal sealed class AscentDynamics
         }
         x[IM] = mass / d.MU;
         Span<double> a = stackalloc double[3];
-        d.AeroAt(x, u, stage, a);
+        d.AeroAt(x, u, stage, a, phi);
         return [a[0] * d.AU, a[1] * d.AU, a[2] * d.AU];
     }
 
@@ -341,6 +377,8 @@ internal sealed class AscentDynamics
     /// <summary>The true angle of attack at a node, degrees, unrounded, for the report.</summary>
     public double AngleOfAttackDeg(ReadOnlySpan<double> x, ReadOnlySpan<double> u, int stage)
     {
+        if (_stages[stage].IsCoast)
+            return 0.0;
         Span<Dual> dxs = stackalloc Dual[NX];
         Span<Dual> dus = stackalloc Dual[NU];
         for (int i = 0; i < NX; i++) dxs[i] = new Dual(x[i]);
@@ -363,6 +401,11 @@ internal sealed class AscentDynamics
     /// </summary>
     public void W(ReadOnlySpan<Dual> x, ReadOnlySpan<Dual> u, int stage, Span<Dual> w)
     {
+        if (_stages[stage].IsCoast)
+        {
+            w[0] = w[1] = w[2] = new Dual(0.0);
+            return;
+        }
         Air(x, out _, out Dual ax, out Dual ay, out Dual az, out Dual vrn, out _);
         Dual wx = ax / vrn, wy = ay / vrn, wz = az / vrn;
         Dual umag = Dual.Sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2] + _uEps2[stage]);
@@ -374,12 +417,13 @@ internal sealed class AscentDynamics
     }
 
     /// <summary>
-    /// Everything the subproblem linearises at one node, from ten seeded sweeps - one per state and control component. f and w depend on both, q on the state alone.
+    /// Everything the subproblem linearises at one node, from ten seeded sweeps (plus one plane-turn sweep when body-force aerodynamics are active and <paramref name="dFphi"/> is provided).
     /// </summary>
     public void Linearize(ReadOnlySpan<double> x, ReadOnlySpan<double> u, int node,
                           Span<double> f, Span<double> a, Span<double> b,
                           Span<double> w, Span<double> jwx, Span<double> jwu,
-                          out double q, Span<double> jq)
+                          out double q, Span<double> jq,
+                          double phi = 0.0, Span<double> dFphi = default)
     {
         Span<Dual> dxs = stackalloc Dual[NX];
         Span<Dual> dus = stackalloc Dual[NU];
@@ -388,13 +432,14 @@ internal sealed class AscentDynamics
         q = 0.0;
         int stage = _nodeStage[node];
         SolidPoint solid = _nodeSolid[node];
+        Dual phiConst = new(phi);
 
         for (int col = 0; col < NX + NU; col++)
         {
             for (int i = 0; i < NX; i++) dxs[i] = new Dual(x[i], col == i ? 1.0 : 0.0);
             for (int j = 0; j < NU; j++) dus[j] = new Dual(u[j], col == NX + j ? 1.0 : 0.0);
 
-            F(dxs, dus, stage, solid, fo);
+            F(dxs, dus, stage, solid, phiConst, fo);
             W(dxs, dus, stage, wo);
 
             if (col == 0)
@@ -418,21 +463,36 @@ internal sealed class AscentDynamics
                 for (int r = 0; r < 3; r++) jwu[r * NU + c] = wo[r].D;
             }
         }
+
+        if (!dFphi.IsEmpty)
+        {
+            if (_bodyForce != null)
+            {
+                for (int i = 0; i < NX; i++) dxs[i] = new Dual(x[i]);
+                for (int j = 0; j < NU; j++) dus[j] = new Dual(u[j]);
+                F(dxs, dus, stage, solid, Dual.Seed(phi), fo);
+                for (int r = 0; r < NX; r++) dFphi[r] = fo[r].D;
+            }
+            else
+            {
+                dFphi.Clear();
+            }
+        }
     }
 
     /// <summary>The dynamics at a node.</summary>
-    public void Eval(ReadOnlySpan<double> x, ReadOnlySpan<double> u, int node, Span<double> f)
-        => Eval(x, u, _nodeStage[node], _nodeSolid[node], f);
+    public void Eval(ReadOnlySpan<double> x, ReadOnlySpan<double> u, int node, Span<double> f, double phi = 0.0)
+        => Eval(x, u, _nodeStage[node], _nodeSolid[node], f, phi);
 
     /// <summary>The dynamics anywhere in a stage, given its solids there.</summary>
-    public void Eval(ReadOnlySpan<double> x, ReadOnlySpan<double> u, int stage, in SolidPoint solid, Span<double> f)
+    public void Eval(ReadOnlySpan<double> x, ReadOnlySpan<double> u, int stage, in SolidPoint solid, Span<double> f, double phi = 0.0)
     {
         Span<Dual> dxs = stackalloc Dual[NX];
         Span<Dual> dus = stackalloc Dual[NU];
         Span<Dual> fo = stackalloc Dual[NX];
         for (int i = 0; i < NX; i++) dxs[i] = new Dual(x[i]);
         for (int j = 0; j < NU; j++) dus[j] = new Dual(u[j]);
-        F(dxs, dus, stage, solid, fo);
+        F(dxs, dus, stage, solid, new Dual(phi), fo);
         for (int r = 0; r < NX; r++) f[r] = fo[r].V;
     }
 
@@ -446,6 +506,8 @@ internal sealed class AscentDynamics
     /// <summary>q times sin(alpha), Pa rad - the true nonlinear value, as the script's qalpha().</summary>
     public double QAlpha(ReadOnlySpan<double> x, ReadOnlySpan<double> u, int stage)
     {
+        if (_stages[stage].IsCoast)
+            return 0.0;
         Span<Dual> dxs = stackalloc Dual[NX];
         Span<Dual> dus = stackalloc Dual[NU];
         Span<Dual> wo = stackalloc Dual[3];
@@ -460,8 +522,13 @@ internal sealed class AscentDynamics
     public void ThrustAt(ReadOnlySpan<double> x, ReadOnlySpan<double> u, int node,
                          out double liquidFull, out double delivered, out double solid)
     {
-        Dual pressure = PressureAt(x);
         int stage = _nodeStage[node];
+        if (_stages[stage].IsCoast)
+        {
+            liquidFull = delivered = solid = 0.0;
+            return;
+        }
+        Dual pressure = PressureAt(x);
         liquidFull = _stages[stage].MaxThrust(pressure).V;
         SolidPoint sp = _nodeSolid[node];
         solid = sp.MassFlowC > 0.0 ? sp.Thrust(pressure).V : 0.0;
@@ -483,6 +550,6 @@ internal sealed class AscentDynamics
 public static class AscentAeroLaw
 {
     /// <summary>AscentDynamics.AeroAcceleration: the aero acceleration the plan flies, m/s^2.</summary>
-    public static double[] Acceleration(AscentProblem p, int stage, double[] r, double[] v, double mass, double[] u)
-        => AscentDynamics.AeroAcceleration(p, stage, r, v, mass, u);
+    public static double[] Acceleration(AscentProblem p, int stage, double[] r, double[] v, double mass, double[] u, double phi = 0.0)
+        => AscentDynamics.AeroAcceleration(p, stage, r, v, mass, u, phi);
 }

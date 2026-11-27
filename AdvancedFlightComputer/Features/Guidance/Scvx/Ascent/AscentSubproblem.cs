@@ -3,32 +3,28 @@ using AdvancedFlightComputer.Guidance.Conic;
 namespace AdvancedFlightComputer.Guidance.Scvx.Ascent;
 
 /// <summary>
-/// The convex subproblem solved at each SCvx iteration, assembled for Clarabel. Constraint for constraint the problem of launch3dof.py's loop, which is set out in "The Saturn V Ascent Problem" section 05:
+/// Convex subproblem solved at each ascent SCvx iteration, assembled into a reusable
+/// frozen-sparsity <see cref="CcsAssembler"/> and solved with a persistent <see cref="ClarabelWorkspace"/>.
 ///
 ///   minimise   (1 - m_N) + lambda sum ||u_k+1 - u_k||^2
-///              + rho_nu sum ||D^-1 nu_k||^2 + rho_s ||s||^2 + rho_q sum (s^q_k + s^qa_k + s^g_k)
+///              + rho_nu sum ||D^-1 nu_k||^2 + rho_s ||s||^2
+///              + rho_q sum (s^q_k + s^qa_k + s^pro_k) + rho_g sum s^g_k
 ///   s.t.       x_1 = x_0,  u_1 parallel to straight up                 lift-off
 ///              x_k+1 = x_k + dtau/2 (g_k + g_k+1) + nu_k               collocation
 ///              r, v continuous, m drops by the dry mass                staging links
 ///              lower stages burn their load, the last at most its load propellant
-///              sigma_i = the solids' burn where one pins it               solids (#73)
+///              sigma_i = the solids' burn where one pins it            solids (#73)
+///              u_k = 0 on ballistic coast stages                       coast
 ///              ||u_k|| &lt;= 1,  u_bar_hat . u_k &gt;= throttle floor        throttle
-///              T_bar_k ||u_k|| &lt;= a (backoff m_k + m_bar_k s^g_k)       thrust acceleration, where a stage has a limit a
-///              r_bar_hat . r_k &gt;= R_floor,  m_k &gt;= m_floor              ground, structure
+///              T_bar_k ||u_k|| &lt;= a (backoff m_k + m_bar_k s^g_k)      thrust acceleration
+///              r_bar_hat . r_k &gt;= R_floor,  m_k &gt;= m_floor             ground, structure
 ///              tangent q &lt;= backoff + s^q,  cone q-alpha &lt;= backoff + s^qa   where q_bar &gt; QActive
-///              -v_rel_bar_hat . u_k &lt;= s^pro                          thrust never against the airflow, there too
-///              linearised insertion = s,  linearised prograde &gt;= 0     orbit, the plane turned by phi
-///              trust box on x, u, sigma, phi;  sigma_min &lt;= sigma &lt;= sigma_max,  phi_min &lt;= phi &lt;= phi_max
+///              -v_rel_bar_hat . u_k &lt;= s^pro                           thrust with airflow
+///              linearised insertion = s,  linearised prograde &gt;= 0     orbit, plane turned by phi
+///              trust box on x, u (accel-normalised), sigma, phi;       trust region and bounds
 ///
-/// plus PlaneTurnPrice |phi| in the objective, through a bound t &gt;= |phi|. phi turns the target plane about the spin axis, which is how a free launch time or a free LAN enters (AscentProblem.PlaneTurnMin). Pinned - both bounds equal - neither phi nor t is a variable and none of their rows is emitted, so the problem is exactly the script's: even unused, they move the interior-point path enough to change a sensitive solve.
-///
-/// with g_k = sigma_i f_k + sigma_bar_i (A_k dx_k + B_k du_k), the time-scaled dynamics linearised in all three of sigma, x and u.
-///
-/// A "stage" in the propellant rows is really a run of stages that share one liquid load: a core lit with its boosters keeps burning after they burn out, and only the load's total is fixed, not how it splits across the burnout (AscentCase.Loads).
-///
-/// The acceleration limit is the one constraint launch3dof.py does not have. T ||u|| &lt;= a m is bilinear in the true model, because T depends on the altitude, so the liquid thrust is frozen at the reference T_bar, which leaves a cone in u, m and the slack. The slack term uses the reference mass so the cone stays linear in it, and the slack is priced as the other path slacks are, the exact-penalty treatment of a linearised path constraint in successive convexification (Mao, Szmuk and Acikmese 2016). Where the limit binds on the reference, the node's throttle floor is that fraction of the ceiling the limit leaves at the node's own mass, a b m_k / T_bar, so the floor and the limit never exclude each other, and the next reference meets its floor whatever the step did to its mass.
-///
-/// Two departures, both conditioning rather than modelling. The lift-off thrust constraint is two rows (the two directions perpendicular to straight up) instead of the script's three rank-2 rows. And the whole problem is assembled fresh each iteration, as CVXPY rebuilt it: the set of nodes carrying a path limit changes with the reference, so the structure is not fixed.
+/// To keep the CSC pattern identical across pattern-hit refills, assembly never skips explicit
+/// zeros: every structural entry is emitted in identical order on both pattern build and refill.
 /// </summary>
 internal sealed class AscentSubproblem
 {
@@ -50,7 +46,7 @@ internal sealed class AscentSubproblem
     {
         _c = c;
         _act = activeNodes;
-        // The script sizes its path buffers max(len(act), 1): keep that, an unconstrained buffer is simply priced to zero.
+        // Keep the script's max(len(act), 1) path buffer sizing; an unused slack is priced to zero.
         _nA = Math.Max(activeNodes.Length, 1);
         _oU = c.N * NX;
         _oW = _oU + c.N * NU;
@@ -86,23 +82,210 @@ internal sealed class AscentSubproblem
     private int IDR(int r) => _oDR + r;
     private int ISRec(int j) => _oSRec + j;
 
-    /// <summary>A growable block of rows: triplets and a right-hand side.</summary>
-    private sealed class Rows
+    /// <summary>
+    /// Persistent per-solve conic workspace holding frozen <see cref="CcsAssembler"/> matrices,
+    /// structural pattern signatures, scratch buffers, and the native <see cref="ClarabelWorkspace"/>.
+    /// </summary>
+    public sealed class Workspace : IDisposable
     {
-        public readonly List<(int Row, int Col, double Val)> Entries = [];
-        public readonly List<double> Rhs = [];
-        public int Count => Rhs.Count;
+        public readonly ClarabelWorkspace Clarabel;
 
-        public int NewRow(double rhs)
+        public CcsAssembler? A, P;
+        public double[] B = [], C = [];
+        public int NVar, NEq, NIneq;
+        public int[] SocDims = [];
+        public int[] ActiveNodes = [];
+        public bool[] FloorScales = [];
+        public bool[] LimitActive = [];
+        public bool[] NeedOk = [];
+
+        internal double[] ScratchLimitThrust = [];
+        internal double[] ScratchFloorPerMass = [];
+        internal bool[] ScratchFloorScales = [];
+        internal bool[] ScratchLimitActive = [];
+        internal bool[] ScratchNeedOk = [];
+        internal double[] ScratchVerticalThrottle = [];
+
+        public Workspace(AscentSettings st)
         {
-            Rhs.Add(rhs);
-            return Rhs.Count - 1;
+            Clarabel = new ClarabelWorkspace
+            {
+                AllowPersistent = st.UseClarabelPersistent,
+                DefaultIterativeRefinement = st.ClarabelIterativeRefinement ? true : null,
+                DefaultEquilibrateMaxIter = st.ClarabelEquilibrateMaxIter >= 0 ? (uint)st.ClarabelEquilibrateMaxIter : null,
+            };
         }
 
-        public void Add(int row, int col, double value)
+        public bool ForceRefinement
         {
-            if (value != 0.0)
-                Entries.Add((row, col, value));
+            get => Clarabel.ForceIterativeRefinement;
+            set => Clarabel.ForceIterativeRefinement = value;
+        }
+
+        public void ResetSolver() => Clarabel.Reset();
+
+        public bool Matches(int nVar, ReadOnlySpan<int> activeNodes, ReadOnlySpan<bool> floorScales,
+                            ReadOnlySpan<bool> limitActive, ReadOnlySpan<bool> needOk)
+            => A != null && P != null && NVar == nVar
+               && ActiveNodes.AsSpan().SequenceEqual(activeNodes)
+               && FloorScales.AsSpan().SequenceEqual(floorScales)
+               && LimitActive.AsSpan().SequenceEqual(limitActive)
+               && NeedOk.AsSpan().SequenceEqual(needOk);
+
+        public void Dispose() => Clarabel.Dispose();
+    }
+
+    /// <summary>
+    /// Dual-mode matrix sink: records entries in emission order on a pattern miss to freeze a new
+    /// <see cref="CcsAssembler"/>, or writes directly into the frozen matrix and RHS on a pattern hit.
+    /// Never skips zero values so refill ordinals match the frozen slot table.
+    /// </summary>
+    private ref struct RowSink
+    {
+        private readonly bool _refill;
+        private readonly CcsAssembler? _a;
+        private readonly double[]? _b;
+        private readonly int _nEqRefill, _nIneqRefill;
+        private int _eqRow, _ineqRow, _socRow;
+        private readonly List<(byte Block, int Row, int Col, double Val)>? _entries;
+        private readonly List<double>? _eqRhs, _ineqRhs, _socRhs;
+        private readonly List<int>? _socDims;
+
+        private RowSink(bool refill, CcsAssembler? a, double[]? b, int nEqRefill, int nIneqRefill,
+                        List<(byte Block, int Row, int Col, double Val)>? entries,
+                        List<double>? eqRhs, List<double>? ineqRhs, List<double>? socRhs, List<int>? socDims)
+        {
+            _refill = refill;
+            _a = a;
+            _b = b;
+            _nEqRefill = nEqRefill;
+            _nIneqRefill = nIneqRefill;
+            _entries = entries;
+            _eqRhs = eqRhs;
+            _ineqRhs = ineqRhs;
+            _socRhs = socRhs;
+            _socDims = socDims;
+        }
+
+        public static RowSink ForRecord() => new(false, null, null, 0, 0, [], [], [], [], []);
+
+        public static RowSink ForRefill(Workspace ws)
+        {
+            ws.A!.BeginRefill();
+            return new(true, ws.A, ws.B, ws.NEq, ws.NIneq, null, null, null, null, null);
+        }
+
+        public int NewEq(double rhs)
+        {
+            if (_refill)
+            {
+                int row = _eqRow++;
+                _b![row] = rhs;
+                return row;
+            }
+            _eqRhs!.Add(rhs);
+            return _eqRhs.Count - 1;
+        }
+
+        public int NewIneq(double rhs)
+        {
+            if (_refill)
+            {
+                int row = _ineqRow++;
+                _b![_nEqRefill + row] = rhs;
+                return row;
+            }
+            _ineqRhs!.Add(rhs);
+            return _ineqRhs.Count - 1;
+        }
+
+        public int NewSoc(double rhs)
+        {
+            if (_refill)
+            {
+                int row = _socRow++;
+                _b![_nEqRefill + _nIneqRefill + row] = rhs;
+                return row;
+            }
+            _socRhs!.Add(rhs);
+            return _socRhs.Count - 1;
+        }
+
+        public void AddSocDim(int dim)
+        {
+            if (!_refill)
+                _socDims!.Add(dim);
+        }
+
+        public void AddEq(int row, int col, double value)
+        {
+            if (_refill)
+                _a!.Add(row, col, value);
+            else
+                _entries!.Add((0, row, col, value));
+        }
+
+        public void AddIneq(int row, int col, double value)
+        {
+            if (_refill)
+                _a!.Add(_nEqRefill + row, col, value);
+            else
+                _entries!.Add((1, row, col, value));
+        }
+
+        public void AddSoc(int row, int col, double value)
+        {
+            if (_refill)
+                _a!.Add(_nEqRefill + _nIneqRefill + row, col, value);
+            else
+                _entries!.Add((2, row, col, value));
+        }
+
+        public void Add(bool isEq, int row, int col, double value)
+        {
+            if (isEq)
+                AddEq(row, col, value);
+            else
+                AddIneq(row, col, value);
+        }
+
+        public void Commit(Workspace ws, int nVar)
+        {
+            if (_refill)
+            {
+                _a!.EndRefill();
+                int expectedSoc = ws.B.Length - ws.NEq - ws.NIneq;
+                if (_eqRow != ws.NEq || _ineqRow != ws.NIneq || _socRow != expectedSoc)
+                    throw new InvalidOperationException(
+                        $"ascent subproblem refill row mismatch: got ({_eqRow},{_ineqRow},{_socRow}), expected ({ws.NEq},{ws.NIneq},{expectedSoc})");
+                return;
+            }
+
+            int nEq = _eqRhs!.Count;
+            int nIneq = _ineqRhs!.Count;
+            int nSoc = _socRhs!.Count;
+            int totalRows = nEq + nIneq + nSoc;
+            var a = new CcsAssembler(totalRows, nVar);
+            List<(byte Block, int Row, int Col, double Val)> entries = _entries!;
+            for (int i = 0; i < entries.Count; i++)
+            {
+                (byte block, int row, int col, double val) = entries[i];
+                int baseRow = block == 0 ? 0 : block == 1 ? nEq : nEq + nIneq;
+                a.Add(baseRow + row, col, val);
+            }
+            a.Freeze();
+
+            var b = new double[totalRows];
+            _eqRhs.CopyTo(b, 0);
+            _ineqRhs.CopyTo(b, nEq);
+            _socRhs.CopyTo(b, nEq + nIneq);
+
+            ws.A = a;
+            ws.B = b;
+            ws.NVar = nVar;
+            ws.NEq = nEq;
+            ws.NIneq = nIneq;
+            ws.SocDims = [.. _socDims!];
         }
     }
 
@@ -110,33 +293,71 @@ internal sealed class AscentSubproblem
                                 double[] Sigma, double[] STerm, double[] Sq, double[] Sqa, double[] Spro, double[] Sg,
                                 int SolverIterations, double SolveMs, double Phi = 0.0, double[]? DR = null, double[]? SRec = null);
 
-    /// <param name="drBar">The reference's change of each reserve, canonical (AscentCase.Reserve.R0C), when boosters are brought home; null for none.</param>
-    /// <param name="needs">Each booster's need at the reference's separation, which its recovery row linearises; one not Ok leaves its row out for this iteration, holding its reserve where the others put it.</param>
+    /// <param name="ws">Persistent conic workspace reused across iterations of one SCvx solve.</param>
+    /// <param name="eps">Clarabel primal/dual gap and feasibility tolerance for this iteration.</param>
+    /// <param name="drBar">Reference reserve changes, canonical (AscentCase.Reserve.R0C), or null for none.</param>
+    /// <param name="needs">Booster recovery needs at the reference separation; entries with Ok == false omit their row.</param>
     public Solved Solve(Linearization lin, double[] xbar, double[] ubar, double[] sigBar, double phiBar, double tr,
-                        double[]? drBar = null, BoostbackOracle.Need[]? needs = null)
+                        Workspace ws, double eps, double[]? drBar = null, BoostbackOracle.Need[]? needs = null)
     {
         drBar ??= new double[_nR];
         AscentCase c = _c;
         AscentSettings st = c.Settings;
         int n = c.N;
+        int[] limited = c.LimitedNodes;
 
-        var eq = new Rows();
-        var ineq = new Rows();
-        var soc = new Rows();
-        var socDims = new List<int>();
+        // Precompute dynamic structural flags to decide between zero-alloc refill and fresh pattern freeze.
+        if (ws.ScratchLimitThrust.Length != limited.Length)
+            ws.ScratchLimitThrust = new double[limited.Length];
+        if (ws.ScratchLimitActive.Length != limited.Length)
+            ws.ScratchLimitActive = new bool[limited.Length];
+        if (ws.ScratchFloorPerMass.Length != n)
+            ws.ScratchFloorPerMass = new double[n];
+        if (ws.ScratchFloorScales.Length != n)
+            ws.ScratchFloorScales = new bool[n];
+        if (ws.ScratchNeedOk.Length != _nNeed)
+            ws.ScratchNeedOk = new bool[_nNeed];
+        if (ws.ScratchVerticalThrottle.Length != c.VerticalDirections.Length)
+            ws.ScratchVerticalThrottle = new double[c.VerticalDirections.Length];
+
+        double[] limitThrust = ws.ScratchLimitThrust;
+        bool[] limitActive = ws.ScratchLimitActive;
+        double[] floorPerMass = ws.ScratchFloorPerMass;
+        bool[] floorScales = ws.ScratchFloorScales;
+        bool[] needOk = ws.ScratchNeedOk;
+        double[] verticalThrottle = ws.ScratchVerticalThrottle;
+
+        Array.Clear(floorPerMass);
+        for (int g = 0; g < limited.Length; g++)
+        {
+            int k = limited[g], s = c.NodeStage[k];
+            limitThrust[g] = c.Dyn.LiquidThrustC(s, xbar.AsSpan(k * NX, NX));
+            limitActive[g] = limitThrust[g] > 0.0;
+            if (limitActive[g] && c.AccC[s] * st.PathBackoff * xbar[k * NX + AscentDynamics.IM] < limitThrust[g])
+                floorPerMass[k] = c.AccC[s] * st.PathBackoff / limitThrust[g];
+        }
+        for (int k = 0; k < n; k++)
+        {
+            int stage = c.NodeStage[k];
+            floorScales[k] = !c.IsCoast[stage] && floorPerMass[k] > 0.0 && c.ThrottleMin[stage] > c.PhysicalThrottleMin[stage];
+        }
+        for (int j = 0; j < _nNeed; j++)
+            needOk[j] = needs != null && j < needs.Length && needs[j].Ok;
+
+        bool patternHit = ws.Matches(_nVar, _act, floorScales, limitActive, needOk);
+        RowSink sink = patternHit ? RowSink.ForRefill(ws) : RowSink.ForRecord();
 
         // ---- lift-off: x_1 = x_0, and u_1 has no component across straight up.
         for (int i = 0; i < NX; i++)
-            eq.Add(eq.NewRow(c.X0[i]), IX(0, i), 1.0);
-        var verticalThrottle = new double[c.VerticalDirections.Length];
+            sink.AddEq(sink.NewEq(c.X0[i]), IX(0, i), 1.0);
         for (int k = 0; k < c.VerticalDirections.Length; k++)
         {
             Perpendiculars(c.VerticalDirections[k], out double[] p1, out double[] p2);
-            int r1 = eq.NewRow(0.0), r2 = eq.NewRow(0.0);
+            int r1 = sink.NewEq(0.0), r2 = sink.NewEq(0.0);
             for (int j = 0; j < NU; j++)
             {
-                eq.Add(r1, IU(k, j), p1[j]);
-                eq.Add(r2, IU(k, j), p2[j]);
+                sink.AddEq(r1, IU(k, j), p1[j]);
+                sink.AddEq(r2, IU(k, j), p2[j]);
             }
             verticalThrottle[k] = AscentCase.Norm3(ubar.AsSpan(k * NU, NU));
         }
@@ -145,18 +366,19 @@ internal sealed class AscentSubproblem
         {
             for (int k = 0; k < c.Ends[0]; k++)
             {
-                soc.NewRow(c.PadTurnStep);
+                sink.NewSoc(c.PadTurnStep);
                 for (int j = 0; j < NU; j++)
                 {
-                    int r = soc.NewRow(0.0);
-                    soc.Add(r, IU(k, j), 1.0);
-                    soc.Add(r, IU(k + 1, j), -1.0);
+                    int r = sink.NewSoc(0.0);
+                    sink.AddSoc(r, IU(k, j), 1.0);
+                    sink.AddSoc(r, IU(k + 1, j), -1.0);
                 }
-                socDims.Add(4);
+                sink.AddSocDim(4);
             }
         }
 
         // ---- collocation, with virtual control; staging links between the blocks.
+        bool hasPhiDynamics = _turnFree && c.Dyn.HasBodyForce;
         for (int k = 0; k < n - 1; k++)
         {
             int s = c.NodeStage[k];
@@ -165,216 +387,226 @@ internal sealed class AscentSubproblem
                 double half = 0.5 * c.Dtau[k];
                 double sb = sigBar[s];
                 int cw = c.CollRow[k];
+                bool coast = c.IsCoast[s];
                 for (int r = 0; r < NX; r++)
                 {
-                    // g_k = sigma f0_k + sb (A_k x_k + B_k u_k) + c_k, with c_k = -sb (A_k xbar_k + B_k ubar_k).
+                    // g_k = sigma f0_k + sb (A_k x_k + B_k u_k + Dphi_k phi) + c_k.
                     double ck = 0.0, ck1 = 0.0;
                     for (int q = 0; q < NX; q++)
                     {
                         ck -= sb * lin.A[(k * NX + r) * NX + q] * xbar[k * NX + q];
                         ck1 -= sb * lin.A[((k + 1) * NX + r) * NX + q] * xbar[(k + 1) * NX + q];
                     }
-                    for (int j = 0; j < NU; j++)
+                    if (!coast)
                     {
-                        ck -= sb * lin.B[(k * NX + r) * NU + j] * ubar[k * NU + j];
-                        ck1 -= sb * lin.B[((k + 1) * NX + r) * NU + j] * ubar[(k + 1) * NU + j];
+                        for (int j = 0; j < NU; j++)
+                        {
+                            ck -= sb * lin.B[(k * NX + r) * NU + j] * ubar[k * NU + j];
+                            ck1 -= sb * lin.B[((k + 1) * NX + r) * NU + j] * ubar[(k + 1) * NU + j];
+                        }
+                    }
+                    bool phiRow = hasPhiDynamics && r is >= 3 and < 6;
+                    if (phiRow)
+                    {
+                        ck -= sb * lin.DPhi[k * NX + r] * phiBar;
+                        ck1 -= sb * lin.DPhi[(k + 1) * NX + r] * phiBar;
                     }
 
-                    int row = eq.NewRow(half * (ck + ck1));
-                    eq.Add(row, IX(k + 1, r), 1.0);
-                    eq.Add(row, IX(k, r), -1.0);
+                    int row = sink.NewEq(half * (ck + ck1));
+                    sink.AddEq(row, IX(k + 1, r), 1.0);
+                    sink.AddEq(row, IX(k, r), -1.0);
                     for (int q = 0; q < NX; q++)
                     {
-                        eq.Add(row, IX(k, q), -half * sb * lin.A[(k * NX + r) * NX + q]);
-                        eq.Add(row, IX(k + 1, q), -half * sb * lin.A[((k + 1) * NX + r) * NX + q]);
+                        sink.AddEq(row, IX(k, q), -half * sb * lin.A[(k * NX + r) * NX + q]);
+                        sink.AddEq(row, IX(k + 1, q), -half * sb * lin.A[((k + 1) * NX + r) * NX + q]);
                     }
-                    for (int j = 0; j < NU; j++)
+                    if (!coast)
                     {
-                        eq.Add(row, IU(k, j), -half * sb * lin.B[(k * NX + r) * NU + j]);
-                        eq.Add(row, IU(k + 1, j), -half * sb * lin.B[((k + 1) * NX + r) * NU + j]);
+                        for (int j = 0; j < NU; j++)
+                        {
+                            sink.AddEq(row, IU(k, j), -half * sb * lin.B[(k * NX + r) * NU + j]);
+                            sink.AddEq(row, IU(k + 1, j), -half * sb * lin.B[((k + 1) * NX + r) * NU + j]);
+                        }
                     }
-                    eq.Add(row, ISig(s), -half * (lin.F[k * NX + r] + lin.F[(k + 1) * NX + r]));
-                    eq.Add(row, IW(cw, r), -1.0);
+                    if (phiRow)
+                        sink.AddEq(row, IPhi, -half * sb * (lin.DPhi[k * NX + r] + lin.DPhi[(k + 1) * NX + r]));
+                    sink.AddEq(row, ISig(s), -half * (lin.F[k * NX + r] + lin.F[(k + 1) * NX + r]));
+                    sink.AddEq(row, IW(cw, r), -1.0);
                 }
             }
             else
             {
                 for (int r = 0; r < NX; r++)
                 {
-                    int row = eq.NewRow(r == AscentDynamics.IM ? -c.DryC[s] : 0.0);
-                    // The boosters leave with their reserve: the drop at their separation is their dry mass and the reserve, which moves with dR.
+                    int row = sink.NewEq(r == AscentDynamics.IM ? -c.DryC[s] : 0.0);
                     if (r == AscentDynamics.IM)
                         for (int v = 0; v < _nR; v++)
                             if (s == c.Reserves[v].Stage)
-                                eq.Add(row, IDR(v), 1.0);
-                    eq.Add(row, IX(k + 1, r), 1.0);
-                    eq.Add(row, IX(k, r), -1.0);
+                                sink.AddEq(row, IDR(v), 1.0);
+                    sink.AddEq(row, IX(k + 1, r), 1.0);
+                    sink.AddEq(row, IX(k, r), -1.0);
                 }
             }
         }
 
-        // ---- propellant: the lower stages burn exactly their load; the last at most its load. A load is per run of stages sharing one (see AscentCase.Loads): the sum of the run's drops, each stage's own from its first node to its last, so the jettisons between them stay out of it.
+        // ---- propellant: lower runs burn their load exactly; the last run at most its load.
         foreach ((int first, int last, double prop, bool exact) in c.Loads)
         {
-            int row = exact ? eq.NewRow(-prop) : ineq.NewRow(prop);
-            Rows rows = exact ? eq : ineq;
+            int row = exact ? sink.NewEq(-prop) : sink.NewIneq(prop);
             double sign = exact ? 1.0 : -1.0;
             for (int s = first; s <= last; s++)
             {
-                rows.Add(row, IX(c.Ends[s], 6), sign);
-                rows.Add(row, IX(c.Starts[s], 6), -sign);
+                sink.Add(exact, row, IX(c.Ends[s], 6), sign);
+                sink.Add(exact, row, IX(c.Starts[s], 6), -sign);
             }
-            // The booster's load burns its propellant less what it keeps back: dR more kept is dR less burned, over the booster's share of the stage's flow (AscentRecovery.FlowShare). With side boosters that ends the stage dR / share sooner, and the core's part of it, dR (1 / share - 1), is burned in the next stage instead.
             for (int v = 0; v < _nR; v++)
             {
                 AscentCase.Reserve rsv = c.Reserves[v];
                 if (last == rsv.Stage)
-                    rows.Add(row, IDR(v), -sign / rsv.Share);
+                    sink.Add(exact, row, IDR(v), -sign / rsv.Share);
                 if (rsv.Share < 1.0 && first == rsv.Stage + 1)
-                    rows.Add(row, IDR(v), sign * (1.0 / rsv.Share - 1.0));
+                    sink.Add(exact, row, IDR(v), sign * (1.0 / rsv.Share - 1.0));
             }
         }
 
-        // ---- a pinned burn time: a solid's burn, or a liquid held at full thrust, sets it.
+        // ---- pinned burn times.
         for (int s = 0; s < c.S; s++)
             if (double.IsFinite(c.SigFixed[s]))
-                eq.Add(eq.NewRow(c.SigFixed[s]), ISig(s), 1.0);
+                sink.AddEq(sink.NewEq(c.SigFixed[s]), ISig(s), 1.0);
 
-        // ---- the reference's liquid thrust and, under an acceleration limit, the throttle that limit leaves it.
-        int[] limited = c.LimitedNodes;
-        var limitThrust = new double[limited.Length];
-        // The floor follows the node's own mass m_k, not the reference's, because a floor fixed at the reference's mass is not met by the next reference when a step raises that mass. With a floor near full thrust, as on a stage held at full thrust, that gap is more than the trust region can close, and every subproblem after it is infeasible.
-        var floorPerMass = new double[n];
-        for (int g = 0; g < limited.Length; g++)
-        {
-            int k = limited[g], s = c.NodeStage[k];
-            limitThrust[g] = c.Dyn.LiquidThrustC(s, xbar.AsSpan(k * NX, NX));
-            if (limitThrust[g] > 0.0 && c.AccC[s] * st.PathBackoff * xbar[k * NX + AscentDynamics.IM] < limitThrust[g])
-                floorPerMass[k] = c.AccC[s] * st.PathBackoff / limitThrust[g];
-        }
-
-        // ---- per-node: throttle floor (tangent halfspace), mass floor, ground (tangent halfspace).
-        // The thrust floor and trust box must use the same vertical direction as the equality rows.
+        // ---- coast control pinning: u_k = [0, 0, 0].
         for (int k = 0; k < n; k++)
         {
-            double ux = ubar[k * NU], uy = ubar[k * NU + 1], uz = ubar[k * NU + 2];
-            if (k < c.VerticalDirections.Length)
-            {
-                ux = verticalThrottle[k] * c.VerticalDirections[k][0];
-                uy = verticalThrottle[k] * c.VerticalDirections[k][1];
-                uz = verticalThrottle[k] * c.VerticalDirections[k][2];
-            }
-            double un = Math.Sqrt(ux * ux + uy * uy + uz * uz);
+            if (!c.IsCoast[c.NodeStage[k]])
+                continue;
+            for (int j = 0; j < NU; j++)
+                sink.AddEq(sink.NewEq(0.0), IU(k, j), 1.0);
+        }
+
+        // ---- per-node: throttle floor (burn stages only), mass floor, ground floor.
+        for (int k = 0; k < n; k++)
+        {
             int stage = c.NodeStage[k];
-            double floor = c.ThrottleMin[stage], physicalFloor = c.PhysicalThrottleMin[stage];
-            bool scalesWithMass = floorPerMass[k] > 0.0 && floor > physicalFloor;
-            int row = ineq.NewRow(scalesWithMass ? 0.0 : -Math.Max(floorPerMass[k] > 0.0 ? 0.0 : floor, physicalFloor));
-            if (scalesWithMass)
-                ineq.Add(row, IX(k, AscentDynamics.IM), floor * floorPerMass[k]);
-            if (un > 1e-12)
+            if (!c.IsCoast[stage])
             {
-                ineq.Add(row, IU(k, 0), -ux / un);
-                ineq.Add(row, IU(k, 1), -uy / un);
-                ineq.Add(row, IU(k, 2), -uz / un);
-            }
-            if (scalesWithMass && physicalFloor > 0.0)
-            {
-                row = ineq.NewRow(-physicalFloor);
-                if (un > 1e-12)
+                double ux = ubar[k * NU], uy = ubar[k * NU + 1], uz = ubar[k * NU + 2];
+                if (k < c.VerticalDirections.Length)
                 {
-                    ineq.Add(row, IU(k, 0), -ux / un);
-                    ineq.Add(row, IU(k, 1), -uy / un);
-                    ineq.Add(row, IU(k, 2), -uz / un);
+                    ux = verticalThrottle[k] * c.VerticalDirections[k][0];
+                    uy = verticalThrottle[k] * c.VerticalDirections[k][1];
+                    uz = verticalThrottle[k] * c.VerticalDirections[k][2];
+                }
+                double un = Math.Sqrt(ux * ux + uy * uy + uz * uz);
+                double invUn = un > 1e-12 ? -1.0 / un : 0.0;
+                double floor = c.ThrottleMin[stage], physicalFloor = c.PhysicalThrottleMin[stage];
+                bool scalesWithMass = floorScales[k];
+                int row = sink.NewIneq(scalesWithMass ? 0.0 : -Math.Max(floorPerMass[k] > 0.0 ? 0.0 : floor, physicalFloor));
+                if (scalesWithMass)
+                    sink.AddIneq(row, IX(k, AscentDynamics.IM), floor * floorPerMass[k]);
+                // Always emit all 3 control slots (0.0 if un <= 1e-12) to keep CSC sparsity invariant.
+                sink.AddIneq(row, IU(k, 0), ux * invUn);
+                sink.AddIneq(row, IU(k, 1), uy * invUn);
+                sink.AddIneq(row, IU(k, 2), uz * invUn);
+                if (scalesWithMass && physicalFloor > 0.0)
+                {
+                    row = sink.NewIneq(-physicalFloor);
+                    sink.AddIneq(row, IU(k, 0), ux * invUn);
+                    sink.AddIneq(row, IU(k, 1), uy * invUn);
+                    sink.AddIneq(row, IU(k, 2), uz * invUn);
                 }
             }
 
-            row = ineq.NewRow(-c.MFloor);
-            ineq.Add(row, IX(k, 6), -1.0);
+            sink.AddIneq(sink.NewIneq(-c.MFloor), IX(k, 6), -1.0);
 
             double rx = xbar[k * NX], ry = xbar[k * NX + 1], rz = xbar[k * NX + 2];
             double rn = Math.Sqrt(rx * rx + ry * ry + rz * rz);
-            row = ineq.NewRow(-c.RFloor);
-            ineq.Add(row, IX(k, 0), -rx / rn);
-            ineq.Add(row, IX(k, 1), -ry / rn);
-            ineq.Add(row, IX(k, 2), -rz / rn);
+            double invRn = rn > 1e-12 ? -1.0 / rn : 0.0;
+            int groundRow = sink.NewIneq(-c.RFloor);
+            sink.AddIneq(groundRow, IX(k, 0), rx * invRn);
+            sink.AddIneq(groundRow, IX(k, 1), ry * invRn);
+            sink.AddIneq(groundRow, IX(k, 2), rz * invRn);
         }
 
-        // ---- q (tangent, backed off, slacked) and q-alpha (a cone on the linearised w, backed off, slacked).
+        // ---- q (tangent, backed off, slacked) and on burn nodes: q-alpha cone and prograde halfspace.
         for (int a = 0; a < _act.Length; a++)
         {
             int k = _act[a];
+            bool coast = c.IsCoast[c.NodeStage[k]];
             double q0 = lin.Q[k];
             double jqXbar = 0.0;
             for (int i = 0; i < NX; i++) jqXbar += lin.Jq[k * NX + i] * xbar[k * NX + i];
 
             // (q0 + Jq (x - xbar)) / qmax <= backoff + s_q
-            int row = ineq.NewRow(st.PathBackoff - (q0 - jqXbar) / c.QMax);
+            int row = sink.NewIneq(st.PathBackoff - (q0 - jqXbar) / c.QMax);
             for (int i = 0; i < NX; i++)
-                ineq.Add(row, IX(k, i), lin.Jq[k * NX + i] / c.QMax);
-            ineq.Add(row, ISq(a), -1.0);
+                sink.AddIneq(row, IX(k, i), lin.Jq[k * NX + i] / c.QMax);
+            sink.AddIneq(row, ISq(a), -1.0);
+
+            if (coast)
+                continue;
 
             // ||w0 + JwX dx + JwU du|| <= (QAmax / q0)(backoff + s_qa) - (|w0| / q0) Jq dx
             double w0x = lin.W[k * 3], w0y = lin.W[k * 3 + 1], w0z = lin.W[k * 3 + 2];
             double w0n = Math.Sqrt(w0x * w0x + w0y * w0y + w0z * w0z);
-            int t = soc.NewRow(c.QAlphaMax / q0 * st.PathBackoff + w0n / q0 * jqXbar);
-            soc.Add(t, ISqa(a), -c.QAlphaMax / q0);
+            int t = sink.NewSoc(c.QAlphaMax / q0 * st.PathBackoff + w0n / q0 * jqXbar);
+            sink.AddSoc(t, ISqa(a), -c.QAlphaMax / q0);
             for (int i = 0; i < NX; i++)
-                soc.Add(t, IX(k, i), w0n / q0 * lin.Jq[k * NX + i]);
+                sink.AddSoc(t, IX(k, i), w0n / q0 * lin.Jq[k * NX + i]);
             for (int r = 0; r < 3; r++)
             {
                 double hw = lin.W[k * 3 + r];
                 for (int i = 0; i < NX; i++) hw -= lin.JwX[(k * 3 + r) * NX + i] * xbar[k * NX + i];
                 for (int j = 0; j < NU; j++) hw -= lin.JwU[(k * 3 + r) * NU + j] * ubar[k * NU + j];
-                int wr = soc.NewRow(hw);
+                int wr = sink.NewSoc(hw);
                 for (int i = 0; i < NX; i++)
-                    soc.Add(wr, IX(k, i), -lin.JwX[(k * 3 + r) * NX + i]);
+                    sink.AddSoc(wr, IX(k, i), -lin.JwX[(k * 3 + r) * NX + i]);
                 for (int j = 0; j < NU; j++)
-                    soc.Add(wr, IU(k, j), -lin.JwU[(k * 3 + r) * NU + j]);
+                    sink.AddSoc(wr, IU(k, j), -lin.JwU[(k * 3 + r) * NU + j]);
             }
-            socDims.Add(4);
+            sink.AddSocDim(4);
 
-            // Thrust within 90 deg of the air-relative velocity, as a halfspace on the reference's airflow direction, slacked: -v_rel_hat . u <= s_pro. q-alpha is measured by sin(alpha), which is back to zero at 180 deg, so without this a stack whose thrust it cannot throttle meets the q limit by firing against the airflow to bleed off speed - a trajectory no speed-indexed profile can fly (#73). It never binds on a sane ascent.
+            // Thrust within 90 deg of relative airflow: always emit row and all 3 control slots.
             double[] air = c.AirVelocity(xbar.AsSpan(k * NX, NX));
             double an = AscentCase.Norm3(air);
-            if (an > 1e-12)
-            {
-                int pro = ineq.NewRow(0.0);
-                for (int j = 0; j < NU; j++)
-                    ineq.Add(pro, IU(k, j), -air[j] / an);
-                ineq.Add(pro, ISpro(a), -1.0);
-            }
+            double invAn = an > 1e-12 ? -1.0 / an : 0.0;
+            int pro = sink.NewIneq(0.0);
+            for (int j = 0; j < NU; j++)
+                sink.AddIneq(pro, IU(k, j), air[j] * invAn);
+            sink.AddIneq(pro, ISpro(a), -1.0);
         }
         for (int a = 0; a < _nA; a++)
         {
-            ineq.Add(ineq.NewRow(0.0), ISq(a), -1.0);
-            ineq.Add(ineq.NewRow(0.0), ISqa(a), -1.0);
-            ineq.Add(ineq.NewRow(0.0), ISpro(a), -1.0);
+            sink.AddIneq(sink.NewIneq(0.0), ISq(a), -1.0);
+            sink.AddIneq(sink.NewIneq(0.0), ISqa(a), -1.0);
+            sink.AddIneq(sink.NewIneq(0.0), ISpro(a), -1.0);
         }
         for (int g = 0; g < limited.Length; g++)
-            ineq.Add(ineq.NewRow(0.0), ISg(g), -1.0);
+            sink.AddIneq(sink.NewIneq(0.0), ISg(g), -1.0);
 
-        // ---- thrust ceiling ||u_k|| <= 1, a cone per node.
+        // ---- thrust ceiling ||u_k|| <= 1 on burn nodes.
         for (int k = 0; k < n; k++)
         {
-            soc.NewRow(1.0);
+            if (c.IsCoast[c.NodeStage[k]])
+                continue;
+            sink.NewSoc(1.0);
             for (int j = 0; j < NU; j++)
-                soc.Add(soc.NewRow(0.0), IU(k, j), -1.0);
-            socDims.Add(4);
+                sink.AddSoc(sink.NewSoc(0.0), IU(k, j), -1.0);
+            sink.AddSocDim(4);
         }
 
         // ---- thrust acceleration T_bar ||u_k|| <= a (backoff m_k + m_bar_k s^g_k), a cone per limited node.
         for (int g = 0; g < limited.Length; g++)
         {
-            if (!(limitThrust[g] > 0.0))
+            if (!limitActive[g])
                 continue;
             int k = limited[g];
             double a = c.AccC[c.NodeStage[k]], tl = limitThrust[g];
-            int top = soc.NewRow(0.0);
-            soc.Add(top, IX(k, AscentDynamics.IM), -a * st.PathBackoff / tl);
-            soc.Add(top, ISg(g), -a * xbar[k * NX + AscentDynamics.IM] / tl);
+            int top = sink.NewSoc(0.0);
+            sink.AddSoc(top, IX(k, AscentDynamics.IM), -a * st.PathBackoff / tl);
+            sink.AddSoc(top, ISg(g), -a * xbar[k * NX + AscentDynamics.IM] / tl);
             for (int j = 0; j < NU; j++)
-                soc.Add(soc.NewRow(0.0), IU(k, j), -1.0);
-            socDims.Add(4);
+                sink.AddSoc(sink.NewSoc(0.0), IU(k, j), -1.0);
+            sink.AddSocDim(4);
         }
 
         // ---- insertion, linearised about the last node, with slacks; and prograde.
@@ -382,210 +614,223 @@ internal sealed class AscentSubproblem
             int o = (n - 1) * NX;
             double rbx = xbar[o], rby = xbar[o + 1], rbz = xbar[o + 2];
             double vbx = xbar[o + 3], vby = xbar[o + 4], vbz = xbar[o + 5];
-            double rbn = Math.Sqrt(rbx * rbx + rby * rby + rbz * rbz);
-            double vbn = Math.Sqrt(vbx * vbx + vby * vby + vbz * vbz);
+            double rbn = Math.Max(Math.Sqrt(rbx * rbx + rby * rby + rbz * rbz), 1e-12);
+            double vbn = Math.Max(Math.Sqrt(vbx * vbx + vby * vby + vbz * vbz), 1e-12);
             int f = n - 1;
 
-            int row = eq.NewRow(c.RTarget);
-            eq.Add(row, IX(f, 0), rbx / rbn); eq.Add(row, IX(f, 1), rby / rbn); eq.Add(row, IX(f, 2), rbz / rbn);
-            eq.Add(row, ITerm(0), -1.0);
+            int row = sink.NewEq(c.RTarget);
+            sink.AddEq(row, IX(f, 0), rbx / rbn); sink.AddEq(row, IX(f, 1), rby / rbn); sink.AddEq(row, IX(f, 2), rbz / rbn);
+            sink.AddEq(row, ITerm(0), -1.0);
 
-            row = eq.NewRow(c.VTarget);
-            eq.Add(row, IX(f, 3), vbx / vbn); eq.Add(row, IX(f, 4), vby / vbn); eq.Add(row, IX(f, 5), vbz / vbn);
-            eq.Add(row, ITerm(1), -1.0);
+            row = sink.NewEq(c.VTarget);
+            sink.AddEq(row, IX(f, 3), vbx / vbn); sink.AddEq(row, IX(f, 4), vby / vbn); sink.AddEq(row, IX(f, 5), vbz / vbn);
+            sink.AddEq(row, ITerm(1), -1.0);
 
             double rbvb = rbx * vbx + rby * vby + rbz * vbz;
-            row = eq.NewRow(rbvb + c.RvTarget);
-            eq.Add(row, IX(f, 0), vbx); eq.Add(row, IX(f, 1), vby); eq.Add(row, IX(f, 2), vbz);
-            eq.Add(row, IX(f, 3), rbx); eq.Add(row, IX(f, 4), rby); eq.Add(row, IX(f, 5), rbz);
-            eq.Add(row, ITerm(2), -1.0);
+            row = sink.NewEq(rbvb + c.RvTarget);
+            sink.AddEq(row, IX(f, 0), vbx); sink.AddEq(row, IX(f, 1), vby); sink.AddEq(row, IX(f, 2), vbz);
+            sink.AddEq(row, IX(f, 3), rbx); sink.AddEq(row, IX(f, 4), rby); sink.AddEq(row, IX(f, 5), rbz);
+            sink.AddEq(row, ITerm(2), -1.0);
 
-            // n(phi).r_f and n(phi).v_f, linearised in phi too: n(phi) ~ n_bar + (z x n_bar)(phi - phi_bar), and the cross term (z x n_bar).(r_f - r_bar)(phi - phi_bar) is second order.
             if (!_turnFree)
                 phiBar = c.PlaneTurn0;
             double[] nh = c.PlaneNormal(phiBar);
             double[] dn = [-nh[1], nh[0], 0.0];
             double dnr = dn[0] * rbx + dn[1] * rby + dn[2] * rbz;
             double dnv = dn[0] * vbx + dn[1] * vby + dn[2] * vbz;
-            row = eq.NewRow(_turnFree ? dnr * phiBar : 0.0);
-            for (int i = 0; i < 3; i++) eq.Add(row, IX(f, i), nh[i]);
-            if (_turnFree) eq.Add(row, IPhi, dnr);
-            eq.Add(row, ITerm(3), -1.0);
-            row = eq.NewRow(_turnFree ? dnv * phiBar : 0.0);
-            for (int i = 0; i < 3; i++) eq.Add(row, IX(f, 3 + i), nh[i]);
-            if (_turnFree) eq.Add(row, IPhi, dnv);
-            eq.Add(row, ITerm(4), -1.0);
+            row = sink.NewEq(_turnFree ? dnr * phiBar : 0.0);
+            for (int i = 0; i < 3; i++) sink.AddEq(row, IX(f, i), nh[i]);
+            if (_turnFree) sink.AddEq(row, IPhi, dnr);
+            sink.AddEq(row, ITerm(3), -1.0);
+            row = sink.NewEq(_turnFree ? dnv * phiBar : 0.0);
+            for (int i = 0; i < 3; i++) sink.AddEq(row, IX(f, 3 + i), nh[i]);
+            if (_turnFree) sink.AddEq(row, IPhi, dnv);
+            sink.AddEq(row, ITerm(4), -1.0);
 
-            // (rb x vb).n + (vb x n).(rf - rb) + (n x rb).(vf - vb) >= 0
             double hx = rby * vbz - rbz * vby, hy = rbz * vbx - rbx * vbz, hz = rbx * vby - rby * vbx;
             double hpro = hx * nh[0] + hy * nh[1] + hz * nh[2];
             double[] vxn = [vby * nh[2] - vbz * nh[1], vbz * nh[0] - vbx * nh[2], vbx * nh[1] - vby * nh[0]];
             double[] nxr = [nh[1] * rbz - nh[2] * rby, nh[2] * rbx - nh[0] * rbz, nh[0] * rby - nh[1] * rbx];
             double rhs = hpro - (vxn[0] * rbx + vxn[1] * rby + vxn[2] * rbz) - (nxr[0] * vbx + nxr[1] * vby + nxr[2] * vbz);
-            row = ineq.NewRow(rhs);
+            row = sink.NewIneq(rhs);
             for (int i = 0; i < 3; i++)
             {
-                ineq.Add(row, IX(f, i), -vxn[i]);
-                ineq.Add(row, IX(f, 3 + i), -nxr[i]);
+                sink.AddIneq(row, IX(f, i), -vxn[i]);
+                sink.AddIneq(row, IX(f, 3 + i), -nxr[i]);
             }
         }
 
-        // ---- trust region: a box on x (scaled), u, and sigma; and sigma's own bounds.
+        // ---- trust region: box on x (scaled), u (accel-normalised on burn nodes), sigma (stage-scaled), and bounds.
         for (int k = 0; k < n; k++)
         {
             for (int i = 0; i < NX; i++)
             {
                 double xb = xbar[k * NX + i], w = tr * c.XScale[i];
-                ineq.Add(ineq.NewRow(xb + w), IX(k, i), 1.0);
-                ineq.Add(ineq.NewRow(-xb + w), IX(k, i), -1.0);
+                sink.AddIneq(sink.NewIneq(xb + w), IX(k, i), 1.0);
+                sink.AddIneq(sink.NewIneq(-xb + w), IX(k, i), -1.0);
             }
-            for (int j = 0; j < NU; j++)
+            if (!c.IsCoast[c.NodeStage[k]])
             {
-                double ub = k < c.VerticalDirections.Length
-                    ? verticalThrottle[k] * c.VerticalDirections[k][j]
-                    : ubar[k * NU + j];
-                ineq.Add(ineq.NewRow(ub + tr), IU(k, j), 1.0);
-                ineq.Add(ineq.NewRow(-ub + tr), IU(k, j), -1.0);
+                double wu = tr * c.ControlTrustScale(k, xbar.AsSpan(k * NX, NX));
+                for (int j = 0; j < NU; j++)
+                {
+                    double ub = k < c.VerticalDirections.Length
+                        ? verticalThrottle[k] * c.VerticalDirections[k][j]
+                        : ubar[k * NU + j];
+                    sink.AddIneq(sink.NewIneq(ub + wu), IU(k, j), 1.0);
+                    sink.AddIneq(sink.NewIneq(-ub + wu), IU(k, j), -1.0);
+                }
             }
         }
         for (int s = 0; s < c.S; s++)
         {
             if (double.IsFinite(c.SigFixed[s]))
                 continue;
-            double w = tr * c.SigScale;
-            ineq.Add(ineq.NewRow(sigBar[s] + w), ISig(s), 1.0);
-            ineq.Add(ineq.NewRow(-sigBar[s] + w), ISig(s), -1.0);
-            ineq.Add(ineq.NewRow(-c.SigMin[s]), ISig(s), -1.0);
-            ineq.Add(ineq.NewRow(c.SigMax[s]), ISig(s), 1.0);
+            double w = tr * c.StageSigScale(s);
+            sink.AddIneq(sink.NewIneq(sigBar[s] + w), ISig(s), 1.0);
+            sink.AddIneq(sink.NewIneq(-sigBar[s] + w), ISig(s), -1.0);
+            sink.AddIneq(sink.NewIneq(-c.SigMin[s]), ISig(s), -1.0);
+            sink.AddIneq(sink.NewIneq(c.SigMax[s]), ISig(s), 1.0);
         }
         if (_turnFree)
         {
             double w = tr * st.PlaneTurnTrust;
-            ineq.Add(ineq.NewRow(phiBar + w), IPhi, 1.0);
-            ineq.Add(ineq.NewRow(-phiBar + w), IPhi, -1.0);
-            ineq.Add(ineq.NewRow(c.PlaneTurnMax), IPhi, 1.0);
-            ineq.Add(ineq.NewRow(-c.PlaneTurnMin), IPhi, -1.0);
-            // t >= |phi|, which the objective prices.
-            int up = ineq.NewRow(0.0);
-            ineq.Add(up, IPhi, 1.0);
-            ineq.Add(up, IPhiAbs, -1.0);
-            int dn = ineq.NewRow(0.0);
-            ineq.Add(dn, IPhi, -1.0);
-            ineq.Add(dn, IPhiAbs, -1.0);
+            sink.AddIneq(sink.NewIneq(phiBar + w), IPhi, 1.0);
+            sink.AddIneq(sink.NewIneq(-phiBar + w), IPhi, -1.0);
+            sink.AddIneq(sink.NewIneq(c.PlaneTurnMax), IPhi, 1.0);
+            sink.AddIneq(sink.NewIneq(-c.PlaneTurnMin), IPhi, -1.0);
+            int up = sink.NewIneq(0.0);
+            sink.AddIneq(up, IPhi, 1.0);
+            sink.AddIneq(up, IPhiAbs, -1.0);
+            int dn = sink.NewIneq(0.0);
+            sink.AddIneq(dn, IPhi, -1.0);
+            sink.AddIneq(dn, IPhiAbs, -1.0);
         }
 
-        // ---- each reserve: its change from the stage list's, boxed and bounded; and what each booster needs from where it separates, linearised in the separation state and time:
-        //   R0 + dR + s >= need_bar + g_r.(r - r_bar) + g_v.(v - v_bar) + g_t (t - t_bar),  t = sum of the burns to separation.
-        // Boosters sharing a reserve (side boosters leaving together, with their own sites) each hold it to their own need.
+        // ---- booster reserves and recovery rows.
         for (int v = 0; v < _nR; v++)
         {
             AscentCase.Reserve rsv = c.Reserves[v];
             double w = tr * st.RecoveryTrust;
-            ineq.Add(ineq.NewRow(drBar[v] + w), IDR(v), 1.0);
-            ineq.Add(ineq.NewRow(-drBar[v] + w), IDR(v), -1.0);
-            ineq.Add(ineq.NewRow(rsv.RMaxC), IDR(v), 1.0);
-            ineq.Add(ineq.NewRow(-rsv.RMinC), IDR(v), -1.0);
+            sink.AddIneq(sink.NewIneq(drBar[v] + w), IDR(v), 1.0);
+            sink.AddIneq(sink.NewIneq(-drBar[v] + w), IDR(v), -1.0);
+            sink.AddIneq(sink.NewIneq(rsv.RMaxC), IDR(v), 1.0);
+            sink.AddIneq(sink.NewIneq(-rsv.RMinC), IDR(v), -1.0);
         }
         for (int j = 0; j < _nNeed; j++)
         {
-            ineq.Add(ineq.NewRow(0.0), ISRec(j), -1.0);
-            BoostbackOracle.Need need = needs != null && j < needs.Length ? needs[j] : default;
+            sink.AddIneq(sink.NewIneq(0.0), ISRec(j), -1.0);
+            if (!needOk[j])
+                continue;
+            BoostbackOracle.Need need = needs![j];
             int v = c.Needs[j].Reserve;
             AscentCase.Reserve rsv = c.Reserves[v];
-            if (need.Ok)
+            AscentDynamics d = c.Dyn;
+            int ks = c.Ends[rsv.Stage];
+            double needC = need.RequiredKg / d.MU;
+            double rhs = rsv.R0C - needC;
+            for (int i = 0; i < 3; i++)
             {
-                AscentDynamics d = c.Dyn;
-                int ks = c.Ends[rsv.Stage];
-                double needC = need.RequiredKg / d.MU;
-                double rhs = rsv.R0C - needC;
-                int row = ineq.NewRow(0.0);
-                for (int i = 0; i < 3; i++)
-                {
-                    double gr = need.GradPosition[i] * d.LU / d.MU, gv = need.GradVelocity[i] * d.VU / d.MU;
-                    ineq.Add(row, IX(ks, i), gr);
-                    ineq.Add(row, IX(ks, 3 + i), gv);
-                    rhs += gr * xbar[ks * NX + i] + gv * xbar[ks * NX + 3 + i];
-                }
-                double gt = need.GradTime * d.TU / d.MU;
-                for (int s = 0; s <= rsv.Stage; s++)
-                {
-                    ineq.Add(row, ISig(s), gt);
-                    rhs += gt * sigBar[s];
-                }
-                ineq.Add(row, IDR(v), -1.0);
-                ineq.Add(row, ISRec(j), -1.0);
-                ineq.Rhs[row] = rhs;
+                double gr = need.GradPosition[i] * d.LU / d.MU;
+                double gv = need.GradVelocity[i] * d.VU / d.MU;
+                rhs += gr * xbar[ks * NX + i] + gv * xbar[ks * NX + 3 + i];
             }
+            double gt = need.GradTime * d.TU / d.MU;
+            for (int s = 0; s <= rsv.Stage; s++)
+                rhs += gt * sigBar[s];
+            int row = sink.NewIneq(rhs);
+            for (int i = 0; i < 3; i++)
+            {
+                sink.AddIneq(row, IX(ks, i), need.GradPosition[i] * d.LU / d.MU);
+                sink.AddIneq(row, IX(ks, 3 + i), need.GradVelocity[i] * d.VU / d.MU);
+            }
+            for (int s = 0; s <= rsv.Stage; s++)
+                sink.AddIneq(row, ISig(s), gt);
+            sink.AddIneq(row, IDR(v), -1.0);
+            sink.AddIneq(row, ISRec(j), -1.0);
         }
 
-        // ---- objective.
-        var cvec = new double[_nVar];
-        cvec[IX(n - 1, 6)] = -1.0;
-        for (int a = 0; a < _nA; a++)
+        sink.Commit(ws, _nVar);
+
+        // Objective vectors C and P depend only on structural layout, so rebuild them only on a pattern miss.
+        if (!patternHit)
         {
-            cvec[ISq(a)] = st.RhoPath;
-            cvec[ISqa(a)] = st.RhoPath;
-            cvec[ISpro(a)] = st.RhoPath;
+            var cvec = new double[_nVar];
+            cvec[IX(n - 1, 6)] = -1.0;
+            for (int a = 0; a < _nA; a++)
+            {
+                cvec[ISq(a)] = st.RhoPath;
+                cvec[ISqa(a)] = st.RhoPath;
+                cvec[ISpro(a)] = st.RhoPath;
+            }
+            for (int g = 0; g < limited.Length; g++)
+                cvec[ISg(g)] = st.RhoAccel;
+            if (_turnFree)
+                cvec[IPhiAbs] = st.PlaneTurnPrice;
+            for (int j = 0; j < _nNeed; j++)
+                cvec[ISRec(j)] = st.RhoRecovery;
+            ws.C = cvec;
+
+            // Upper triangle only, as ClarabelWorkspace requires.
+            var p = new CcsAssembler(_nVar, _nVar);
+            double wdt = st.SmoothingWeight;
+            for (int k = 0; k < n - 1; k++)
+            {
+                if (c.IsCoast[c.NodeStage[k]] || c.IsCoast[c.NodeStage[k + 1]])
+                    continue;
+                for (int j = 0; j < NU; j++)
+                {
+                    int ia = IU(k, j), ib = IU(k + 1, j);
+                    p.Add(ia, ia, 2.0 * wdt);
+                    p.Add(ib, ib, 2.0 * wdt);
+                    p.Add(ia, ib, -2.0 * wdt);
+                }
+            }
+            for (int cw = 0; cw < c.Coll.Length; cw++)
+                for (int i = 0; i < NX; i++)
+                {
+                    double d = c.DScale[i];
+                    p.Add(IW(cw, i), IW(cw, i), 2.0 * st.RhoVirtualControl / (d * d));
+                }
+            for (int j = 0; j < 5; j++)
+                p.Add(ITerm(j), ITerm(j), 2.0 * st.RhoTerminal);
+            p.Freeze();
+            ws.P = p;
+
+            ws.ActiveNodes = (int[])_act.Clone();
+            ws.FloorScales = (bool[])floorScales.Clone();
+            ws.LimitActive = (bool[])limitActive.Clone();
+            ws.NeedOk = (bool[])needOk.Clone();
         }
-        for (int g = 0; g < limited.Length; g++)
-            cvec[ISg(g)] = st.RhoPath;
-        if (_turnFree)
-            cvec[IPhiAbs] = st.PlaneTurnPrice;
-        for (int j = 0; j < _nNeed; j++)
-            cvec[ISRec(j)] = st.RhoRecovery;
 
-        var p = new SparseCcs(_nVar, _nVar);
-        double wdt = st.SmoothingWeight;
-        for (int k = 0; k < n - 1; k++)
-            for (int j = 0; j < NU; j++)
-            {
-                int ia = IU(k, j), ib = IU(k + 1, j);
-                p.Add(ia, ia, 2.0 * wdt);
-                p.Add(ib, ib, 2.0 * wdt);
-                p.Add(ia, ib, -2.0 * wdt);
-            }
-        for (int cw = 0; cw < c.Coll.Length; cw++)
-            for (int i = 0; i < NX; i++)
-            {
-                double d = c.DScale[i];
-                p.Add(IW(cw, i), IW(cw, i), 2.0 * st.RhoVirtualControl / (d * d));
-            }
-        for (int j = 0; j < 5; j++)
-            p.Add(ITerm(j), ITerm(j), 2.0 * st.RhoTerminal);
+        ws.Clarabel.Solve(ws.A!, ws.B, ws.C, ws.P, ws.NEq, ws.NIneq, ws.SocDims,
+            warmStart: false, verbose: false, maxIterations: st.SubproblemMaxIterations,
+            epsAbs: eps, epsRel: eps);
 
-        // ---- to Clarabel: equalities, then the orthant, then the cones in order.
-        var aMat = new SparseCcs(eq.Count, _nVar);
-        foreach ((int row, int col, double v) in eq.Entries) aMat.Add(row, col, v);
-        var gMat = new SparseCcs(ineq.Count + soc.Count, _nVar);
-        foreach ((int row, int col, double v) in ineq.Entries) gMat.Add(row, col, v);
-        foreach ((int row, int col, double v) in soc.Entries) gMat.Add(ineq.Count + row, col, v);
-        var h = new double[ineq.Count + soc.Count];
-        ineq.Rhs.CopyTo(h, 0);
-        soc.Rhs.CopyTo(h, ineq.Count);
-
-        // The thrust cones were emitted after the q-alpha cones and the acceleration cones after them, so the dimension list is in row order already.
-        var problem = new ConicProblem
+        ClarabelExit nativeStatus = ws.Clarabel.NativeStatus;
+        string statusText = nativeStatus switch
         {
-            C = cvec,
-            P = p,
-            A = aMat,
-            B = [.. eq.Rhs],
-            G = gMat,
-            H = h,
-            PositiveOrthantDim = ineq.Count,
-            SocDims = [.. socDims],
+            ClarabelExit.Solved => "Optimal",
+            ClarabelExit.AlmostSolved => "OptimalInaccurate",
+            ClarabelExit.PrimalInfeasible => "PrimalInfeasible",
+            ClarabelExit.AlmostPrimalInfeasible => "PrimalInfeasibleInaccurate",
+            ClarabelExit.DualInfeasible => "DualInfeasible",
+            ClarabelExit.AlmostDualInfeasible => "DualInfeasibleInaccurate",
+            ClarabelExit.MaxIterations or ClarabelExit.MaxTime => "MaxIterations",
+            ClarabelExit.InsufficientProgress or ClarabelExit.NumericalError => "Numerics",
+            ClarabelExit.CallbackTerminated => "Interrupted",
+            _ => nativeStatus.ToString(),
         };
+        double solveMs = ws.Clarabel.LastSetupMs + ws.Clarabel.LastSolveMs;
+        bool ok = nativeStatus is ClarabelExit.Solved or ClarabelExit.AlmostSolved && ws.Clarabel.X.Length == _nVar;
+        if (!ok)
+            return new Solved(false, statusText, [], [], [], [], [], [], [], [], [], ws.Clarabel.Iterations, solveMs);
 
-        ConicResult res = ClarabelSolver.Solve(problem, out ClarabelSolver.ClarabelSolveInfo info,
-            maxIterations: st.SubproblemMaxIterations, eps: st.SubproblemEps);
-        if (!res.IsOptimal || res.X.Length != _nVar)
-            return new Solved(false, res.Status.ToString(), [], [], [], [], [], [], [], [], [], res.Iterations, info.TotalMs);
-
-        double[] x = res.X;
-        return new Solved(true, res.Status.ToString(),
+        double[] x = ws.Clarabel.X;
+        return new Solved(true, statusText,
             x[..(n * NX)], x[_oU..(_oU + n * NU)], x[_oW..(_oW + c.Coll.Length * NX)],
             x[_oSig..(_oSig + c.S)], x[_oTerm..(_oTerm + 5)], x[_oSq..(_oSq + _nA)], x[_oSqa..(_oSqa + _nA)], x[_oSpro..(_oSpro + _nA)],
-            x[_oSg..(_oSg + limited.Length)], res.Iterations, info.TotalMs, _turnFree ? x[_oPhi] : c.PlaneTurn0,
+            x[_oSg..(_oSg + limited.Length)], ws.Clarabel.Iterations, solveMs, _turnFree ? x[_oPhi] : c.PlaneTurn0,
             x[_oDR..(_oDR + _nR)], x[_oSRec..(_oSRec + _nNeed)]);
     }
 
@@ -605,7 +850,7 @@ internal sealed class AscentSubproblem
 /// <summary>Every node's linearisation, flat, node-major.</summary>
 internal sealed class Linearization
 {
-    public readonly double[] F, A, B, W, JwX, JwU, Q, Jq;
+    public readonly double[] F, A, B, DPhi, W, JwX, JwU, Q, Jq;
 
     public Linearization(int n)
     {
@@ -613,6 +858,7 @@ internal sealed class Linearization
         F = new double[n * nx];
         A = new double[n * nx * nx];
         B = new double[n * nx * nu];
+        DPhi = new double[n * nx];
         W = new double[n * 3];
         JwX = new double[n * 3 * nx];
         JwU = new double[n * 3 * nu];
@@ -620,15 +866,17 @@ internal sealed class Linearization
         Jq = new double[n * nx];
     }
 
-    public void Fill(AscentCase c, double[] xbar, double[] ubar)
+    public void Fill(AscentCase c, double[] xbar, double[] ubar, double phiBar = 0.0)
     {
         const int nx = AscentCase.NX, nu = AscentCase.NU;
+        bool needPhiDeriv = c.PlaneTurnMin < c.PlaneTurnMax && c.Dyn.HasBodyForce;
         for (int k = 0; k < c.N; k++)
         {
             c.Dyn.Linearize(xbar.AsSpan(k * nx, nx), ubar.AsSpan(k * nu, nu), k,
                 F.AsSpan(k * nx, nx), A.AsSpan(k * nx * nx, nx * nx), B.AsSpan(k * nx * nu, nx * nu),
                 W.AsSpan(k * 3, 3), JwX.AsSpan(k * 3 * nx, 3 * nx), JwU.AsSpan(k * 3 * nu, 3 * nu),
-                out Q[k], Jq.AsSpan(k * nx, nx));
+                out Q[k], Jq.AsSpan(k * nx, nx),
+                phiBar, needPhiDeriv ? DPhi.AsSpan(k * nx, nx) : default);
         }
     }
 }

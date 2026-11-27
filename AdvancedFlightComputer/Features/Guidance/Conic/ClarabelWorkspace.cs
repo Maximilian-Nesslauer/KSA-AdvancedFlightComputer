@@ -55,13 +55,24 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
     public static uint? EquilibrateMaxIter;
 
     /// <summary>Per-workspace equilibration iteration count when <see cref="EquilibrateMaxIter"/> is unset, or null for Clarabel's default (10).</summary>
-    public uint? DefaultEquilibrateMaxIter { get; init; }
+    public uint? DefaultEquilibrateMaxIter { get; set; }
+
+    /// <summary>Per-workspace initial iterative refinement flag when non-null, overriding <see cref="IterativeRefinementDefault"/>.</summary>
+    public bool? DefaultIterativeRefinement { get; init; }
+
+    /// <summary>Forces iterative refinement on for subsequent solves on this workspace and rebuilds if the current native solver was built without it.</summary>
+    public bool ForceIterativeRefinement { get; set; }
+
+    /// <summary>Per-workspace persistence override when non-null; false forces a fresh native solver each solve without mutating <see cref="Persistent"/>.</summary>
+    public bool? AllowPersistent { get; init; }
 
     /// <summary>Keep the native solver between solves and update it in place. False builds a fresh one every solve (for A/B checks).</summary>
     public static bool Persistent = true;
 
     private IntPtr _solver;
-    private bool _iterativeRefinement = IterativeRefinementDefault;
+    private bool _iterativeRefinementInitialized;
+    private bool _iterativeRefinement;
+    private bool _builtIterativeRefinement;
 
     // What the live solver was built from: the frozen CCS arrays (stable for an assembler's life), the cones, the tolerance, the cap and equilibration.
     private int[]? _aColPtr, _aRowIdx, _pColPtr, _pRowIdx;
@@ -71,6 +82,17 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
     private uint? _equilibrateMaxIter;
 
     private uint? EffectiveEquilibrateMaxIter => EquilibrateMaxIter ?? DefaultEquilibrateMaxIter;
+    private bool EffectivePersistent => (AllowPersistent ?? true) && Persistent;
+
+    private bool EffectiveIterativeRefinement()
+    {
+        if (!_iterativeRefinementInitialized)
+        {
+            _iterativeRefinement = DefaultIterativeRefinement ?? IterativeRefinementDefault;
+            _iterativeRefinementInitialized = true;
+        }
+        return _iterativeRefinement || ForceIterativeRefinement;
+    }
 
     private bool _hasSolution;
 
@@ -93,6 +115,13 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
     public bool HasWarmStart => _hasSolution;
 
     public void ResetWarmStart() => _hasSolution = false;
+
+    /// <summary>Frees the native solver so the next solve rebuilds and re-equilibrates from scratch.</summary>
+    public void Reset()
+    {
+        Free();
+        _hasSolution = false;
+    }
 
     public int EffectiveIterationCap(int requested) => Math.Clamp(requested, 1, IpmIterationCeiling);
 
@@ -151,11 +180,13 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
         bool hasP = P is { NonZeros: > 0 };
 
         long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        bool wantIr = EffectiveIterativeRefinement();
+        bool persistent = EffectivePersistent;
         bool rebuilt = false;
-        if (!Persistent || _solver == IntPtr.Zero || verbose
-            || !SameStructure(A, hasP ? P : null, m, n, zeroDim, posDim, socDims, eps, cap))
+        if (!persistent || _solver == IntPtr.Zero || verbose
+            || !SameStructure(A, hasP ? P : null, m, n, zeroDim, posDim, socDims, eps, cap, wantIr))
         {
-            Rebuild(A, b, c, hasP ? P : null, m, n, zeroDim, posDim, socDims, eps, cap, verbose);
+            Rebuild(A, b, c, hasP ? P : null, m, n, zeroDim, posDim, socDims, eps, cap, wantIr, verbose);
             rebuilt = true;
         }
         else
@@ -175,14 +206,15 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
             or ClarabelExit.PrimalInfeasible or ClarabelExit.AlmostPrimalInfeasible
             or ClarabelExit.DualInfeasible or ClarabelExit.AlmostDualInfeasible);
         bool numericTrouble = sol.Status is ClarabelExit.NumericalError or ClarabelExit.InsufficientProgress;
-        if (badExit && (!rebuilt || (!_iterativeRefinement && numericTrouble)))
+        if (badExit && (!rebuilt || (!wantIr && numericTrouble)))
         {
-            if (!_iterativeRefinement && numericTrouble)
+            if (!wantIr && numericTrouble)
             {
                 _iterativeRefinement = true;
+                wantIr = true;
                 lock (StatsGate) TotalRefinementFallbacks++;
             }
-            Rebuild(A, b, c, hasP ? P : null, m, n, zeroDim, posDim, socDims, eps, cap, verbose);
+            Rebuild(A, b, c, hasP ? P : null, m, n, zeroDim, posDim, socDims, eps, cap, wantIr, verbose);
             rebuilt = true;
             ClarabelNative.clarabel_DefaultSolver_f64_solve(_solver);
             sol = ClarabelNative.clarabel_DefaultSolver_f64_solution(_solver);
@@ -203,7 +235,7 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
         ScsStatus status = Map(sol.Status);
         _hasSolution = status.IsUsable() && !HitIterationLimit;
 
-        if (!Persistent)
+        if (!persistent)
             Free();
 
         lock (StatsGate)
@@ -245,10 +277,11 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
     };
 
     private bool SameStructure(CcsAssembler A, CcsAssembler? P, int m, int n, int zeroDim, int posDim,
-                               int[] socDims, double eps, int cap)
+                               int[] socDims, double eps, int cap, bool wantIr)
     {
         if (m != _m || n != _n || zeroDim != _zeroDim || posDim != _posDim
-            || eps != _eps || cap != _maxIter || EffectiveEquilibrateMaxIter != _equilibrateMaxIter)
+            || eps != _eps || cap != _maxIter || EffectiveEquilibrateMaxIter != _equilibrateMaxIter
+            || wantIr != _builtIterativeRefinement)
             return false;
         if (!ReferenceEquals(A.ColumnPointers, _aColPtr) || !ReferenceEquals(A.RowIndices, _aRowIdx))
             return false;
@@ -282,7 +315,7 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
     }
 
     private void Rebuild(CcsAssembler A, double[] b, double[] c, CcsAssembler? P, int m, int n,
-                         int zeroDim, int posDim, int[] socDims, double eps, int cap, bool verbose)
+                         int zeroDim, int posDim, int[] socDims, double eps, int cap, bool wantIr, bool verbose)
     {
         Free();
 
@@ -345,7 +378,7 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
             // Keep Clarabel's default ReducedTol* (5e-5 gap, 1e-4 feasibility) for AlmostSolved fallback.
             s.PresolveEnable = false;
             s.InputSparseDropzeros = false;
-            s.IterativeRefinementEnable = _iterativeRefinement;
+            s.IterativeRefinementEnable = wantIr;
             uint? eqMax = EffectiveEquilibrateMaxIter;
             if (eqMax == 0)
                 s.EquilibrateEnable = false;
@@ -358,6 +391,7 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
             if (_solver == IntPtr.Zero)
                 throw new InvalidOperationException("clarabel_DefaultSolver_f64_new failed");
             _equilibrateMaxIter = eqMax;
+            _builtIterativeRefinement = wantIr;
         }
         finally
         {

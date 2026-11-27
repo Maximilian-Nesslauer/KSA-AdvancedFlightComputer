@@ -257,6 +257,8 @@ public static class AscentScvx
         onPhase?.Invoke($"seed: kick {seed.KickDeg:F3} deg after {seed.Evaluations} flights{(seed.Note.Length > 0 ? " (" + seed.Note + ")" : "")}, "
                       + $"merit {refMerit.J:E3}, defect {refMerit.DefectNorm:E2}, path {refMerit.PathViolation:E2}, insertion {refMerit.TerminalViolation:E2}");
         var lin = new Linearization(c.N);
+        using var ws = new AscentSubproblem.Workspace(st);
+        var eqSigRef = (double[])sigBar.Clone();
         var trace = new List<AscentIteration>();
         double tr = st.TrustInitial;
         int stall = 0, accepted = 0;
@@ -276,7 +278,22 @@ public static class AscentScvx
             }
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
-            lin.Fill(c, xbar, ubar);
+            // Re-equilibrate the persistent solver when any free stage duration shifts by 2x or more.
+            for (int s = 0; s < c.S; s++)
+            {
+                if (double.IsFinite(c.SigFixed[s]))
+                    continue;
+                double prev = eqSigRef[s];
+                bool shifted = prev > 1e-9 ? (sigBar[s] >= 2.0 * prev || sigBar[s] <= 0.5 * prev) : sigBar[s] > 1e-6;
+                if (shifted)
+                {
+                    ws.ResetSolver();
+                    Array.Copy(sigBar, eqSigRef, c.S);
+                    break;
+                }
+            }
+
+            lin.Fill(c, xbar, ubar, phiBar);
             if (c.Needs.Length > 0 && needStale)
             {
                 needRef = c.EvaluateNeeds(xbar, sigBar, refMerit.Needs, gradient: true);
@@ -286,11 +303,15 @@ public static class AscentScvx
             for (int k = 0; k < c.N; k++)
                 if (lin.Q[k] > st.QActive) act.Add(k);
 
+            bool polish = GatesMet(st, refMerit) && it >= st.MaxIterations - 25;
+            ws.ForceRefinement = polish;
+            double eps = polish ? Math.Min(st.SubproblemEps, 1e-8) : st.SubproblemEps;
+
             var sub = new AscentSubproblem(c, [.. act]);
             AscentSubproblem.Solved sol;
             try
             {
-                sol = sub.Solve(lin, xbar, ubar, sigBar, phiBar, tr, drBar, needRef);
+                sol = sub.Solve(lin, xbar, ubar, sigBar, phiBar, tr, ws, eps, drBar, needRef);
             }
             // A missing solver is not a numerical failure, so a smaller box cannot help. The job reports it.
             catch (DllNotFoundException)
@@ -326,7 +347,8 @@ public static class AscentScvx
             double jLin = (1.0 - sol.X[(c.N - 1) * NX + 6]) + Smoothing(c, sol.U)
                 + st.RhoVirtualControl * SumSquaresScaled(sol.Wv, c.DScale)
                 + st.RhoTerminal * SumSquares(sol.STerm)
-                + st.RhoPath * (sol.Sq.Sum() + sol.Sqa.Sum() + sol.Spro.Sum() + sol.Sg.Sum())
+                + st.RhoPath * (sol.Sq.Sum() + sol.Sqa.Sum() + sol.Spro.Sum())
+                + st.RhoAccel * sol.Sg.Sum()
                 + TurnCost(st, sol.Phi)
                 + st.RhoRecovery * (sol.SRec?.Sum() ?? 0.0);
             double[] drSol = sol.DR ?? new double[c.Reserves.Length];
@@ -336,9 +358,22 @@ public static class AscentScvx
             lastPred = pred;
 
             double dX = MaxScaledDiff(sol.X, xbar, c.XScale);
-            double dU = MaxScaledDiff(sol.U, ubar, [1.0, 1.0, 1.0]);
+            double dU = 0.0;
+            for (int k = 0; k < c.N; k++)
+            {
+                if (c.IsCoast[c.NodeStage[k]])
+                    continue;
+                double us = c.ControlTrustScale(k, xbar.AsSpan(k * NX, NX));
+                for (int j = 0; j < NU; j++)
+                    dU = Math.Max(dU, Math.Abs(sol.U[k * NU + j] - ubar[k * NU + j]) / us);
+            }
             double dS = 0.0;
-            for (int s = 0; s < c.S; s++) dS = Math.Max(dS, Math.Abs(sol.Sigma[s] - sigBar[s]) / c.SigScale);
+            for (int s = 0; s < c.S; s++)
+            {
+                if (double.IsFinite(c.SigFixed[s]))
+                    continue;
+                dS = Math.Max(dS, Math.Abs(sol.Sigma[s] - sigBar[s]) / c.StageSigScale(s));
+            }
             double dP = Math.Abs(sol.Phi - phiBar) / st.PlaneTurnTrust;
             double dRr = 0.0;
             for (int v = 0; v < drBar.Length; v++)
@@ -403,12 +438,14 @@ public static class AscentScvx
             }
         }
         if (status == AscentStatus.IterationLimit)
-            message = $"no convergence in {st.MaxIterations} iterations";
+            message = $"no convergence in {st.MaxIterations} iterations" + StallNote(c, refMerit, lastPred);
 
         bool gates = GatesMet(st, refMerit);
+        bool stallUsable = (status is AscentStatus.Stalled or AscentStatus.IterationLimit)
+            && StallAcceptable(st, refMerit, lastPred);
         return Build(c, xbar, ubar, sigBar, phiBar, drBar, refMerit.Needs, status, message, seed, it, accepted,
             total.Elapsed.TotalSeconds, seedSeconds, trace, gates,
-            status == AscentStatus.Stalled && StallAcceptable(st, refMerit, lastPred),
+            stallUsable,
             lastPred * c.Dyn.MU);
     }
 
@@ -452,6 +489,11 @@ public static class AscentScvx
             x[k * NX + 6] = w.Mass[k] / d.MU;
             // A plan solved to a lower floor can sit under this problem's floor, and a reference under its floor by more than the trust region leaves the first subproblem infeasible. The thrust direction is kept.
             int stage = c.NodeStage[k];
+            if (c.IsCoast[stage])
+            {
+                u[k * NU] = u[k * NU + 1] = u[k * NU + 2] = 0.0;
+                continue;
+            }
             double floor = Math.Max(c.PhysicalThrottleMin[stage],
                                     c.ThrottleMin[stage] * c.LimitedThrottle(stage, x.AsSpan(k * NX, NX)));
             double un = Math.Sqrt(u[k * NU] * u[k * NU] + u[k * NU + 1] * u[k * NU + 1] + u[k * NU + 2] * u[k * NU + 2]);
@@ -491,7 +533,7 @@ public static class AscentScvx
         int n = c.N;
         var f = new double[n * NX];
         for (int k = 0; k < n; k++)
-            c.Dyn.Eval(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), k, f.AsSpan(k * NX, NX));
+            c.Dyn.Eval(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), k, f.AsSpan(k * NX, NX), phi);
 
         double defect = 0.0, worst = 0.0;
         foreach (int k in c.Coll)
@@ -519,27 +561,32 @@ public static class AscentScvx
         double path = 0.0, pathWorst = 0.0;
         for (int k = 0; k < n; k++)
         {
-            double qa = c.Dyn.QAlpha(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), c.NodeStage[k]);
+            int stage = c.NodeStage[k];
+            double qa = c.Dyn.QAlpha(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), stage);
             double q = c.Dyn.QValue(x.AsSpan(k * NX, NX));
+            // Keep aerodynamic path merits against 1.0 so active q*alpha boundaries do not shift.
             double vqa = Math.Max(0.0, qa / c.QAlphaMax - 1.0);
             double vq = Math.Max(0.0, q / c.QMax - 1.0);
-            // Thrust against the airflow, where the subproblem forbids it (AscentSubproblem): the true -v_rel_hat . u.
-            double vpro = q > st.QActive ? Math.Max(0.0, -AirAlong(c, x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU))) : 0.0;
+            double vpro = !c.IsCoast[stage] && q > st.QActive ? Math.Max(0.0, -AirAlong(c, x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU))) : 0.0;
             path += vqa + vq + vpro;
             pathWorst = Math.Max(pathWorst, Math.Max(Math.Max(vqa, vq), vpro));
         }
-        // Thrust acceleration over the limit, where a stage has one (AscentSubproblem): the true thrust at the node's altitude.
+        // Thrust acceleration over the limit: align merit with backed-off s_g when ExactBackoffMerit is enabled,
+        // while keeping the feasibility gate against the true 1.0 limit.
+        double accelMerit = 0.0;
+        double accelBackoff = st.ExactBackoffMerit ? st.PathBackoff : 1.0;
         foreach (int k in c.LimitedNodes)
         {
             c.Dyn.ThrustAt(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), k, out _, out double delivered, out _);
             double mass = Math.Max(x[k * NX + AscentDynamics.IM], 1e-12);
-            double vg = Math.Max(0.0, delivered / c.Dyn.FU / (c.AccC[c.NodeStage[k]] * mass) - 1.0);
-            path += vg;
-            pathWorst = Math.Max(pathWorst, vg);
+            double ratio = delivered / c.Dyn.FU / (c.AccC[c.NodeStage[k]] * mass);
+            accelMerit += Math.Max(0.0, ratio - accelBackoff);
+            pathWorst = Math.Max(pathWorst, Math.Max(0.0, ratio - 1.0));
         }
 
         double j0 = (1.0 - x[(n - 1) * NX + 6]) + Smoothing(c, u)
-            + st.RhoVirtualControl * defect + st.RhoTerminal * term + st.RhoPath * path + TurnCost(st, phi);
+            + st.RhoVirtualControl * defect + st.RhoTerminal * term
+            + st.RhoPath * path + st.RhoAccel * accelMerit + TurnCost(st, phi);
         // Each booster's shortfall: the true need at this plan's separation, against what its stage keeps. A booster that cannot land at all is short the whole stack. The gate takes the worst of them.
         double shortWorst = 0.0;
         BoostbackOracle.Need[]? needs = null;
@@ -569,11 +616,15 @@ public static class AscentScvx
     {
         double s = 0.0;
         for (int k = 0; k < c.N - 1; k++)
+        {
+            if (c.IsCoast[c.NodeStage[k]] || c.IsCoast[c.NodeStage[k + 1]])
+                continue;
             for (int j = 0; j < NU; j++)
             {
                 double d = u[(k + 1) * NU + j] - u[k * NU + j];
                 s += d * d;
             }
+        }
         return c.Settings.SmoothingWeight * s;
     }
 
@@ -675,7 +726,7 @@ public static class AscentScvx
         // True defects of the reference, per channel, in SI.
         var f = new double[n * NX];
         for (int k = 0; k < n; k++)
-            d.Eval(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), k, f.AsSpan(k * NX, NX));
+            d.Eval(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), k, f.AsSpan(k * NX, NX), phi);
         double dp = 0, dvv = 0, dm = 0;
         foreach (int k in c.Coll)
         {

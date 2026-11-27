@@ -11,6 +11,10 @@ public static class AscentProblemFile
 {
     private sealed class StageDto
     {
+        public bool IsCoast { get; set; }
+        public double? CoastMinSeconds { get; set; }
+        public double? CoastMaxSeconds { get; set; }
+        public double? CoastSeedSeconds { get; set; }
         public double Thrust { get; set; }
         public double MassFlow { get; set; }
         public double PropellantMass { get; set; }
@@ -118,6 +122,10 @@ public static class AscentProblemFile
             M0 = p.M0,
             Stages = p.Stages.Select(s => new StageDto
             {
+                IsCoast = s.IsCoast,
+                CoastMinSeconds = s.IsCoast ? s.CoastMinSeconds : null,
+                CoastMaxSeconds = s.IsCoast ? s.CoastMaxSeconds : null,
+                CoastSeedSeconds = s.IsCoast && double.IsFinite(s.CoastSeedSeconds) ? s.CoastSeedSeconds : null,
                 Thrust = s.Thrust,
                 MassFlow = s.MassFlow,
                 PropellantMass = s.PropellantMass,
@@ -283,16 +291,19 @@ public static class AscentProblemFile
             R0 = dto.R0,
             V0 = dto.V0,
             M0 = dto.M0,
-            Stages = dto.Stages.Select(s => new AscentStage(s.Thrust, s.MassFlow, s.PropellantMass, s.JettisonMass,
-                                                            s.DragArea, s.PressureGrid, s.ThrustAtPressure,
-                                                            s.ThrottleMin ?? double.NaN,
-                                                            s.SolidTime is { } st && s.SolidMassFlow is { } sm
-                                                                && s.SolidPressureGrid is { } sg && s.SolidThrust is { } sf
-                                                                ? new AscentSolidBurn(st, sm, sg, sf) : null,
-                                                            s.FixedBurnTime ?? double.NaN, s.LiquidCarriesOver,
-                                                            s.SeedThrottle ?? 1.0,
-                                                            s.AccelerationLimit ?? double.PositiveInfinity,
-                                                            s.PhysicalThrottleMin)).ToArray(),
+            Stages = dto.Stages.Select(s => s.IsCoast
+                ? AscentStage.Coast(s.DragArea, s.CoastMinSeconds ?? 0.0, s.CoastMaxSeconds ?? 1800.0,
+                                    s.JettisonMass, s.CoastSeedSeconds ?? double.NaN, s.LiquidCarriesOver)
+                : new AscentStage(s.Thrust, s.MassFlow, s.PropellantMass, s.JettisonMass,
+                                  s.DragArea, s.PressureGrid, s.ThrustAtPressure,
+                                  s.ThrottleMin ?? double.NaN,
+                                  s.SolidTime is { } st && s.SolidMassFlow is { } sm
+                                      && s.SolidPressureGrid is { } sg && s.SolidThrust is { } sf
+                                      ? new AscentSolidBurn(st, sm, sg, sf) : null,
+                                  s.FixedBurnTime ?? double.NaN, s.LiquidCarriesOver,
+                                  s.SeedThrottle ?? 1.0,
+                                  s.AccelerationLimit ?? double.PositiveInfinity,
+                                  s.PhysicalThrottleMin)).ToArray(),
             Atmosphere = air,
             GroundRadius = dto.GroundRadius,
             TargetRadius = dto.TargetRadius,

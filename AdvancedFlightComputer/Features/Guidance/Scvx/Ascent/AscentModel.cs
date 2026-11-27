@@ -193,6 +193,45 @@ public sealed class AscentStage
         }
     }
 
+    private AscentStage(double dragArea, double coastMinSeconds, double coastMaxSeconds,
+                        double jettisonMass, double coastSeedSeconds, bool liquidCarriesOver)
+    {
+        if (!(dragArea >= 0.0) || !double.IsFinite(dragArea))
+            throw new ArgumentOutOfRangeException(nameof(dragArea), dragArea, "Drag area must be finite and non-negative.");
+        if (!(coastMinSeconds >= 0.0) || !double.IsFinite(coastMinSeconds))
+            throw new ArgumentOutOfRangeException(nameof(coastMinSeconds), coastMinSeconds, "Coast minimum duration must be finite and non-negative.");
+        if (!(coastMaxSeconds >= coastMinSeconds) || !double.IsFinite(coastMaxSeconds))
+            throw new ArgumentOutOfRangeException(nameof(coastMaxSeconds), coastMaxSeconds, "Coast maximum duration must be finite and at least the minimum.");
+        if (!(jettisonMass >= 0.0) || !double.IsFinite(jettisonMass))
+            throw new ArgumentOutOfRangeException(nameof(jettisonMass), jettisonMass, "Jettisoned mass must be finite and non-negative.");
+        if (!double.IsNaN(coastSeedSeconds) && (!(coastSeedSeconds >= 0.0) || !double.IsFinite(coastSeedSeconds)))
+            throw new ArgumentOutOfRangeException(nameof(coastSeedSeconds), coastSeedSeconds, "Coast seed duration must be finite and non-negative, or NaN.");
+
+        IsCoast = true;
+        CoastMinSeconds = coastMinSeconds;
+        CoastMaxSeconds = coastMaxSeconds;
+        CoastSeedSeconds = coastSeedSeconds;
+        DragArea = dragArea;
+        JettisonMass = jettisonMass;
+        ThrottleMin = double.NaN;
+        FixedBurnTime = double.NaN;
+        LiquidCarriesOver = liquidCarriesOver;
+        SeedThrottle = 1.0;
+        AccelerationLimit = double.PositiveInfinity;
+    }
+
+    /// <summary>Creates a variable-duration ballistic coast stage with zero thrust and zero propellant flow.</summary>
+    public static AscentStage Coast(double dragArea, double minSeconds = 0.0, double maxSeconds = 1800.0,
+                                    double jettisonMass = 0.0, double seedSeconds = double.NaN,
+                                    bool liquidCarriesOver = false)
+        => new(dragArea, minSeconds, maxSeconds, jettisonMass, seedSeconds, liquidCarriesOver);
+
+    public bool IsCoast { get; }
+    public double CoastMinSeconds { get; }
+    public double CoastMaxSeconds { get; }
+    /// <summary>Seed coast duration, s, or NaN to seed analytically from the Keplerian orbit.</summary>
+    public double CoastSeedSeconds { get; }
+
     public double Thrust { get; }
     public double MassFlow { get; }
     public double PropellantMass { get; }
@@ -224,19 +263,25 @@ public sealed class AscentStage
 
     /// <summary>A copy with another jettison mass, propellant and carry-over: what the planner does to the last stage of a truncated stack.</summary>
     public AscentStage With(double propellantMass, double jettisonMass, bool liquidCarriesOver)
-        => new(Thrust, MassFlow, propellantMass, jettisonMass, DragArea, PressureGrid, ThrustAtPressure,
-               ThrottleMin, Solid, FixedBurnTime, liquidCarriesOver, SeedThrottle, AccelerationLimit, PhysicalThrottleMin);
+        => IsCoast
+            ? Coast(DragArea, CoastMinSeconds, CoastMaxSeconds, jettisonMass, CoastSeedSeconds, liquidCarriesOver)
+            : new(Thrust, MassFlow, propellantMass, jettisonMass, DragArea, PressureGrid, ThrustAtPressure,
+                  ThrottleMin, Solid, FixedBurnTime, liquidCarriesOver, SeedThrottle, AccelerationLimit, PhysicalThrottleMin);
 
     /// <summary>A copy with another throttle floor, a fraction of full thrust. The acceleration limit still scales it down where full thrust would pass the limit.</summary>
     public AscentStage WithThrottleMin(double throttleMin)
-        => new(Thrust, MassFlow, PropellantMass, JettisonMass, DragArea, PressureGrid, ThrustAtPressure,
-               throttleMin, Solid, FixedBurnTime, LiquidCarriesOver, SeedThrottle, AccelerationLimit, PhysicalThrottleMin);
+        => IsCoast
+            ? this
+            : new(Thrust, MassFlow, PropellantMass, JettisonMass, DragArea, PressureGrid, ThrustAtPressure,
+                  throttleMin, Solid, FixedBurnTime, LiquidCarriesOver, SeedThrottle, AccelerationLimit, PhysicalThrottleMin);
 
     /// <summary>Exhaust velocity at the reference thrust, m/s, solids at their mean over the stage - for the dV readout only.</summary>
     public double ExhaustVelocity
     {
         get
         {
+            if (IsCoast)
+                return 0.0;
             if (Solid == null)
                 return Thrust / MassFlow;
             double t = FixedBurnTime;
@@ -244,8 +289,10 @@ public sealed class AscentStage
         }
     }
 
-    /// <summary>Full-throttle burn time, s: the pinned one if there is one.</summary>
-    public double FullBurnTime => IsPinned ? FixedBurnTime : PropellantMass / MassFlow;
+    /// <summary>Full-throttle burn time, s: the pinned one if there is one, or the nominal coast seed for a coast stage.</summary>
+    public double FullBurnTime => IsCoast
+        ? (double.IsFinite(CoastSeedSeconds) ? CoastSeedSeconds : 0.5 * (CoastMinSeconds + CoastMaxSeconds))
+        : (IsPinned ? FixedBurnTime : PropellantMass / MassFlow);
 
     /// <summary>Full-throttle thrust of the liquid engines at a back pressure, N.</summary>
     public Dual MaxThrust(Dual pressure)
@@ -270,6 +317,7 @@ public sealed class AscentStage
 public sealed class AscentSettings
 {
     public int NodesPerStage = 60;
+    public int CoastNodes = 25;
 
     /// <summary>
     /// Throttle floor as a fraction of full thrust, for every stage that does not set its own. The script's 99 %.
@@ -301,7 +349,13 @@ public sealed class AscentSettings
     public double RhoVirtualControl = 1e5;
     public double RhoTerminal = 1e5;
     public double RhoPath = 1.0;
+    /// <summary>Linear penalty weight on thrust-acceleration limit slacks s_g.</summary>
+    public double RhoAccel = 100.0;
     public double SmoothingWeight = 4e-3;
+    /// <summary>Scales per-node control trust box by local throttle cap on high-TWR stages.</summary>
+    public bool ScaleControlTrust = true;
+    /// <summary>Evaluates nonlinear acceleration merit against PathBackoff (s_g only; q and q-alpha stay at 1.0).</summary>
+    public bool ExactBackoffMerit = true;
 
     // Convergence.
     public double PredictedTolerance = 1e-5;
@@ -401,9 +455,13 @@ public sealed class AscentSettings
     /// </summary>
     public int KickWindowSlides = 4;
 
-    /// <summary>Clarabel tolerance and iteration cap per subproblem. CVXPY's defaults for Clarabel, which are Clarabel's own.</summary>
-    public double SubproblemEps = 1e-8;
+    /// <summary>Clarabel tolerance, iteration cap, and persistent workspace settings per subproblem.</summary>
+    public double SubproblemEps = 1e-6;
     public int SubproblemMaxIterations = 200;
+    public bool UseClarabelPersistent = true;
+    public bool ClarabelIterativeRefinement = false;
+    /// <summary>Ruiz equilibration iterations on Clarabel workspace build (-1 for Clarabel default 10, 0 to disable).</summary>
+    public int ClarabelEquilibrateMaxIter = -1;
 }
 
 /// <summary>
@@ -563,9 +621,20 @@ public sealed class AscentProblem
                 return "the lift-off state is not finite";
         if (Stages == null || Stages.Length == 0)
             return "there are no stages";
+        if (Stages[0].IsCoast)
+            return "the first stage cannot be a coast";
         for (int i = 0; i < Stages.Length; i++)
-            if (Stages[i].LiquidCarriesOver && (i == Stages.Length - 1 || !Stages[i + 1].HasLiquid))
-                return $"stage {i + 1} carries its liquid load into {(i == Stages.Length - 1 ? "nothing" : "a stage with no liquid engines")}";
+        {
+            if (!Stages[i].LiquidCarriesOver)
+                continue;
+            if (Stages[i].IsCoast && (i == 0 || !Stages[i - 1].LiquidCarriesOver))
+                return $"coast stage {i + 1} cannot carry a liquid load without a preceding carry-over stage";
+            int next = i + 1;
+            while (next < Stages.Length && Stages[next].IsCoast && Stages[next].LiquidCarriesOver)
+                next++;
+            if (next >= Stages.Length || !Stages[next].HasLiquid)
+                return $"stage {i + 1} carries its liquid load into {(next >= Stages.Length ? "nothing" : "a stage with no liquid engines")}";
+        }
         if (!(M0 > 0.0))
             return "the lift-off mass is not positive";
         if (!(FinalMassFloor > 0.0))
