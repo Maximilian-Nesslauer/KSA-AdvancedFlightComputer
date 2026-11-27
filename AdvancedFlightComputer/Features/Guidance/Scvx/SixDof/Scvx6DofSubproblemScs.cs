@@ -228,7 +228,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         Array.Clear(_b);
         Array.Clear(_c);
 
-        AssembleObjective(x0[Dynamics6Dof.IM], xbar);
+        AssembleObjective(x0[Dynamics6Dof.IM], xbar, sigBar);
         AssembleEqualities(x0, xf, xbar, ubar, sigBar, A, B, f0);
         AssembleCone(x0, xf, xbar, ubar, sigBar, tr);
 
@@ -394,7 +394,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
 
     // ---------------------------------------------------------------- objective
 
-    private void AssembleObjective(double mInit, double[] xbar)
+    private void AssembleObjective(double mInit, double[] xbar, double sigBar)
     {
         _c[IX(_n - 1, Dynamics6Dof.IM)] = -1.0 / mInit * _colScale[IX(_n - 1, Dynamics6Dof.IM)];
 
@@ -450,11 +450,12 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
                 }
 
         // RhoVc * sum_k ||Wv[k]/VirtualControlScale||^2 - pure diagonal. The scale is XScale unless the config prices a channel on its own; see Scvx6DofConfig.VirtualControlScale.
+        //  Per second (Scvx6DofConfig.VirtualControlRefIntervalS): each interval's price times its length factor, at the reference burn time, as Scvx6DofSolver's merit prices it.
         for (int k = 0; k < _n - 1; k++)
             for (int i = 0; i < NX; i++)
             {
                 double vs = _cfg.VirtualControlScaleOf(i, k);
-                double w = _cfg.RhoVc / (vs * vs);
+                double w = _cfg.RhoVc / (vs * vs) * _cfg.VirtualControlIntervalWeight(CoastInterval(k) ? 0.0 : _dtauB * sigBar);
                 AddP(IW(k, i), IW(k, i), 2.0 * w);
             }
 

@@ -225,10 +225,13 @@ internal static class SixDofLiftCheck
                 PathShaping.Anchor(cfg, su, gx: plantGx, gy: plantGy);
                 s.Reseed(x, sx, su, ss, trustRegion: Math.Clamp(s.TrustRegion, WarmTrustRegion, s.TrustRegionMax));
                 double ratio = double.PositiveInfinity;
-                for (int i = 0; i < 3; i++)
+                for (int i = 0; i < PathShaping.Iterations(left); i++)
                 {
                     ScvxIteration it = s.Iterate();
-                    ratio = it.Accepted ? s.WeightedDefect(tol, n - 2, 1.0, out _, out _, out _) : double.PositiveInfinity;
+                    int gch = -1, gnode = -1; double graw = double.NaN;
+                    ratio = it.Accepted ? s.WeightedDefect(tol, n - 2, 1.0, out gch, out gnode, out graw, refIntervalS: PathShaping.GateRefS) : double.PositiveInfinity;
+                    if (it.Accepted && ratio > 1.0 && Environment.GetCommandLineArgs().Contains("--gate-diag"))
+                        Console.WriteLine(FormattableString.Invariant($"      gate {ratio:F2}x on {Scvx6DofSolver.ChannelName(gch)} at interval {gnode} of {n - 1}, raw {graw:G3}, dt {s.NodeTime(gnode + 1) - s.NodeTime(gnode):F3} s, burn {left:F2} s"));
                     if (ratio <= 0.05) break;
                 }
                 gates.Add(ratio);

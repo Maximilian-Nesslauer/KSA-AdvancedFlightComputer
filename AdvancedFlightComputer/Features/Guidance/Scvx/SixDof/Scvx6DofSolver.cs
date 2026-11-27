@@ -598,7 +598,7 @@ public sealed class Scvx6DofSolver : IDisposable
             {
                 double d = x[(k + 1) * NX + i] - x[k * NX + i] - half * (fk[i] + fk1[i]);
                 double priced = d / (k < _cfg.VirtualControlNearIntervals ? _cfg.VirtualControlScaleOf(i, k) : _vcs[i]);
-                sumSq += priced * priced;
+                sumSq += priced * priced * VcIntervalWeight(k);
                 double scaled = d / _xs[i];
                 if (Math.Abs(scaled) > worst)
                 {
@@ -793,12 +793,18 @@ public sealed class Scvx6DofSolver : IDisposable
     /// <param name="farSlack">Allowance multiplier at the last interval. 1 disables.</param>
     /// <param name="worstRaw">The offending defect in its OWN units, for the report.</param>
     public double WeightedDefect(ReadOnlySpan<double> tol, int commitIntervals, double farSlack,
-                                 out int worstChannel, out int worstNode, out double worstRaw)
-        => WeightedDefect(_xbar, tol, commitIntervals, farSlack, out worstChannel, out worstNode, out worstRaw);
+                                 out int worstChannel, out int worstNode, out double worstRaw,
+                                 double refIntervalS = 0.0, double commitS = double.NaN, double farS = 0.0)
+        => WeightedDefect(_xbar, tol, commitIntervals, farSlack, out worstChannel, out worstNode, out worstRaw, refIntervalS, commitS, farS);
 
-    /// <summary>Check a candidate state against the current reference controls and burn duration.</summary>
+    /// <summary>
+    /// Check a candidate state against the current reference controls and burn duration: the worst multiple of its tolerance any channel's defect reaches on any interval.
+    ///  PER SECOND, with <paramref name="refIntervalS"/> &gt; 0: an interval shorter than it is held to its share of the tolerance, dt / refIntervalS, so the tolerances are rates - what the plan may do per second that its dynamics do not - and an interval of refIntervalS or longer keeps the whole tolerance. Off (0), every interval gets the whole tolerance whatever its length, which let the last plans of the 2026-11-27 Starship landings (15-85 ms intervals) turn their attitude 3-40 deg/s faster or slower than their own rates.
+    ///  THE TAIL'S SLACK IN SECONDS, with <paramref name="farS"/> &gt; <paramref name="commitS"/>: the allowance is 1 up to commitS of plan time and rises linearly to <paramref name="farSlack"/> at farS, so a long plan's far tail - re-solved many times before it is flown - may carry a coarse flare, and a short plan's end, flown within a second or two, may not. Otherwise it rises over the intervals after <paramref name="commitIntervals"/> to the last.
+    /// </summary>
     public double WeightedDefect(ReadOnlySpan<double> state, ReadOnlySpan<double> tol, int commitIntervals,
-                                 double farSlack, out int worstChannel, out int worstNode, out double worstRaw)
+                                 double farSlack, out int worstChannel, out int worstNode, out double worstRaw,
+                                 double refIntervalS = 0.0, double commitS = double.NaN, double farS = 0.0)
     {
         worstChannel = -1;
         worstNode = -1;
@@ -825,8 +831,13 @@ public sealed class Scvx6DofSolver : IDisposable
 
             // Allowance is 1 across the commit window, then rises LINEARLY to slack at the last interval.
             // Linear in the ALLOWANCE rather than in its reciprocal, because the allowance is the half with a physical reading: "this interval may carry N times its tolerance".
-            double frac = k <= commit ? 0.0 : (k - commit) / span;
+            double frac = double.IsFinite(commitS) && farS > commitS
+                ? Math.Clamp((NodeTime(k + 1) - commitS) / (farS - commitS), 0.0, 1.0)
+                : k <= commit ? 0.0 : (k - commit) / span;
             double allowance = 1.0 + frac * (slack - 1.0);
+            // A zero-length interval - a coast after ignition, kept at zero length - has nothing to scale: the whole tolerance, as before. A short one no less than a fiftieth of it, so a few-millisecond interval is not held to round-off.
+            if (refIntervalS > 0.0 && half > 1e-9)
+                allowance *= Math.Clamp(2.0 * half / refIntervalS, 0.02, 1.0);
 
             for (int i = 0; i < NX; i++)
             {
@@ -925,6 +936,9 @@ public sealed class Scvx6DofSolver : IDisposable
     }
 
     /// <summary>The virtual control's sum of squares, each interval's on its own scale (Scvx6DofConfig.VirtualControlScaleOf(i, k)).</summary>
+    /// <summary>Interval <paramref name="k"/>'s virtual-control price factor for its length (Scvx6DofConfig.VirtualControlIntervalWeight), at the REFERENCE burn time, as the subproblem prices it, so the merit and the subproblem's prediction agree. A coast interval keeps its price.</summary>
+    private double VcIntervalWeight(int k) => _cfg.VirtualControlIntervalWeight(k < _nCoast ? 0.0 : IntervalDt(k, _sigBar, _sigCBar));
+
     private double VirtualControlSumSquares(double[] wv)
     {
         double s = 0;
@@ -932,7 +946,7 @@ public sealed class Scvx6DofSolver : IDisposable
         {
             int k = j / NX, i = j % NX;
             double d = wv[j] / (k < _cfg.VirtualControlNearIntervals ? _cfg.VirtualControlScaleOf(i, k) : _vcs[i]);
-            s += d * d;
+            s += d * d * VcIntervalWeight(k);
         }
         return s;
     }

@@ -49,6 +49,19 @@ public sealed class Scvx6DofConfig
     public double RhoVc { get; init; } = 1e5;                   // virtual-control penalty
 
     /// <summary>
+    /// VIRTUAL CONTROL PRICED PER SECOND, s, or 0 for per interval: an interval shorter than this has its virtual control priced up by this over its length (at most <see cref="VirtualControlShortCap"/> times), so the penalty is RhoVc * sum (w / scale)^2 * max(1, this / dt) - the integral of the squared rate, against the interval it was sized on. Longer intervals keep their price.
+    ///  WHY (2026-11-27). Priced per interval, a plan that moves its state at some rate its dynamics do not make pays c^2 T^2 / N over T seconds in N intervals: as a 15-node landing plan shrank from 4.5 s to 1.2 s, the same cheating got 14 times cheaper, and the last plans of the Starship landings turned their attitude 3-40 deg/s faster or slower than their own rates rather than pay the soft limits' L1 prices. 0.35 s is the interval the per-channel tolerances were sized on (Ksa6DofGuidance.GateReferenceIntervalS).
+    /// </summary>
+    public double VirtualControlRefIntervalS { get; set; } = 0.35;
+
+    /// <summary>The most an interval's virtual control is priced up for being short (VirtualControlRefIntervalS): a fiftieth of it, 7 ms, and under.</summary>
+    public const double VirtualControlShortCap = 50.0;
+
+    /// <summary>The factor on an interval's virtual-control price for its length <paramref name="dt"/>, s: 1 at VirtualControlRefIntervalS or longer, for a zero-length interval (a coast after ignition) and when off.</summary>
+    public double VirtualControlIntervalWeight(double dt)
+        => VirtualControlRefIntervalS > 0.0 && dt > 1e-9 ? Math.Clamp(VirtualControlRefIntervalS / dt, 1.0, VirtualControlShortCap) : 1.0;
+
+    /// <summary>
     /// The scale each state channel's virtual control is priced on, NX long, or null for <see cref="XScale"/>: the dynamics penalty is RhoVc * sum (w / scale)^2, in the subproblem and in the merit alike. An entry of 0 or less keeps that channel on XScale.
     ///  DECOUPLED FROM XScale, which also sets the column scaling and the trust region, so a channel's price can be chosen for what a jump in it means without touching either - the ascent's DScale (launch3dof.py's Dscale). The convergence test still reads the defect on XScale.
     ///  Why it matters: priced on XScale, a velocity jump is measured against the speed at engage, and the quadratic makes a small jump repeated on every interval nearly free - cheaper, below some size per interval, than the L1 terminal slack it can stand in for. On the 2026-10-09 7 t booster a plan carried 0.18 m/s of phantom braking on every interval, about 9 m/s over the burn, at a twentieth of the price of arriving that much faster.

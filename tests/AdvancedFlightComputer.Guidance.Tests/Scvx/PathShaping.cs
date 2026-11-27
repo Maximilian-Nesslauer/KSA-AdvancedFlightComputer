@@ -43,6 +43,9 @@ internal static class PathShaping
     /// <summary>--anchor: a warm re-solve's first gimbal command is held within --anchor-s (0.3 s) of the plan's slew of where the gimbal is - the plant's angle (gx, gy) at node 0's thrust under --plant-slew, else node 0 of the shifted seed, the command being flown - as flight does (Ksa6DofGuidance.FirstGimbalAnchorAt). --anchor-cmd: the command even under --plant-slew. Off: free, as before.</summary>
     internal static void Anchor(Scvx6DofConfig cfg, double[] shiftedU, bool coasting = false, double gx = double.NaN, double gy = double.NaN)
     {
+        // --vc-per-interval: virtual control priced per interval, as before 2026-11-27 (Scvx6DofConfig.VirtualControlRefIntervalS 0); set here, before every warm re-solve.
+        if (Environment.GetCommandLineArgs().Contains("--vc-per-interval"))
+            cfg.VirtualControlRefIntervalS = 0.0;
         if (!Environment.GetCommandLineArgs().Contains("--anchor") || coasting || cfg.CoastIntervals > 0 || !(cfg.GimbalSlewPerS > 0.0) || cfg.TorqueDemand)
         {
             cfg.FirstGimbalAnchor = null;
@@ -55,6 +58,12 @@ internal static class PathShaping
             ? [gx * thrust, gy * thrust, band]
             : [shiftedU[Dynamics6Dof.ITDX], shiftedU[Dynamics6Dof.ITDY], band];
     }
+
+    /// <summary>--gate-per-s: the closed-loop checks judge re-solves with flight's per-second gate (Ksa6DofGuidance.GateReferenceIntervalS, 0.35 s, --gate-ref) instead of a flat tolerance per interval; 0 when off.</summary>
+    internal static double GateRefS => Environment.GetCommandLineArgs().Contains("--gate-per-s") ? Arg("--gate-ref", 0.35) : 0.0;
+
+    /// <summary>--late-its k: a re-solve of a plan with under 2 s left gets k SCvx iterations (3, as the others), as flight gives a short plan a larger budget (Ksa6DofGuidance.LateCycleBudgetMs).</summary>
+    internal static int Iterations(double planLeftS) => planLeftS < 2.0 ? (int)Arg("--late-its", 3.0) : 3;
 
     internal static double[]? FunnelHeightsM => On ? [Arg("--gs-len", 40.0), 300.0, 1000.0] : null;
 

@@ -401,6 +401,27 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// </summary>
     public double HorizonFarSlack { get; set; } = 25.0;
 
+    /// <summary>
+    /// How far ahead, seconds of plan, the defect allowance reaches <see cref="HorizonFarSlack"/> (Scvx6DofSolver.WeightedDefect): 1 up to <see cref="CommitHorizonS"/>, linear between. It was reached at the plan's last interval, however soon that was, which suited the plans it was sized on (flight 20260820-150038, about 18 s long, whose flare was re-solved some hundred times before it was flown). Near touchdown a plan is a second or two long and its last interval is flown within it: on 2026-11-27 the Starship landings' final plans let their last intervals carry up to 25x the gate a quarter of a second ahead. 10 s keeps the long plans' flare allowance and holds a short plan nearly to the full gate.
+    /// </summary>
+    ///  OFF BY DEFAULT (0: the old interval count) until flown: offline it was not tested, the closed-loop checks judging with no tail slack at all.
+    public double HorizonFarS { get; set; } = 0.0;
+
+    /// <summary>
+    /// THE TOLERANCES ARE RATES (Scvx6DofSolver.WeightedDefect): an interval of this length or longer gets the whole per-channel tolerance below, a shorter one its share dt / this. 0.35 s is about the interval they were sized on (flight 20260820-150038, 50 nodes over about 18 s), so they mean what they did then - 1 deg of attitude in 0.35 s is about 2.9 deg/s, 0.01 rad/s is 0.029 rad/s^2, 0.5 m/s is 1.4 m/s^2 - and a long interval is never judged more loosely than before.
+    ///  WHY (2026-11-27). Fixed per interval, the gate let a plan carry its tolerance on every interval however short. The last Starship plans (15 nodes over 1.2 s, then 25 over 0.35 s: 85 ms and 15 ms intervals) turned their attitude 3-40 deg/s faster or slower than their own rates, 5-12 deg over a plan, and the attitude feedback was asked to make up the difference with the one gimbal: 6-10 deg of deflection, a side force, and a topple.
+    /// </summary>
+    ///  OFF BY DEFAULT (0: the whole tolerance per interval). Offline (2026-11-27, --gate-per-s) it refused far more re-solves in the hard lift and coast cases - their plans carry position and mass virtual control the solver cannot remove - and those landings missed further, while the cases that land well were unchanged. Pricing the virtual control per second (Scvx6DofConfig.VirtualControlRefIntervalS) fixes the cause instead; this stays for the gate to be tightened once flights show the plans physical.
+    public double GateReferenceIntervalS { get; set; } = 0.0;
+
+    /// <summary>A plan shorter than this, seconds of burn, is one the craft is about to fly to its end: its warm re-solves get <see cref="LateCycleBudgetMs"/>.</summary>
+    public double LateSigmaS { get; set; } = 2.0;
+
+    /// <summary>
+    /// The wall-clock budget for a warm re-solve of a short plan (<see cref="LateSigmaS"/>), ms. The 25 ms cycle stopped the last Starship plans at 2-4 SCvx iterations, short of converged (IterationLimit on every one in the last 3 s), and what was left unconverged is what the per-second gate now refuses. The re-solve runs on the solve worker, so the sim thread does not wait for it; 60 ms is under the 0.1 s cadence.
+    /// </summary>
+    public double LateCycleBudgetMs { get; set; } = 60.0;
+
     // ------------------------------------------------------------------------ PER-CHANNEL DEFECT TOLERANCES, each in its own SI units.
     //  The state has four physically unrelated groups in it, and one number cannot express a tolerance for all of them. Previously it tried: every channel was divided by its XScale and multiplied by the POSITION scale, so the effective tolerance on a body rate was MaxDefectM / rangeToTarget - 0.026 deg/s at 2 km, twenty times looser at 100 m, and never a quantity anyone chose. These are chosen, they are readable, and they do not move with range.
     //  The near field stays strict while the flare can satisfy the collocation residual.
@@ -1465,7 +1486,8 @@ public sealed class Ksa6DofGuidance : IDisposable
         //  None while node 0 is a coast node - a plan built with a coast keeps its coast intervals after ignition at zero length, and the coast rows pin node 0's gimbal at zero, so an anchor elsewhere would leave no plan (offline, the two-phase landings' re-solves were refused 83 times in 135).
         _cfg.FirstGimbalAnchor = coast > 0.0 || _cfg.CoastIntervals > 0 ? null : FirstGimbalAnchorAt(simNow);
         // A cycle whose predecessor refused gets the larger budget, so it can take the second and third iterations that let SCvx shrink its way to an accepted step. A healthy cycle never reaches the deadline at all.
-        double budget = _consecutiveFailures > 0 ? RecoveryCycleBudgetMs : CycleBudgetMs;
+        double budget = _consecutiveFailures > 0 ? RecoveryCycleBudgetMs
+                      : sigma < LateSigmaS ? Math.Max(CycleBudgetMs, LateCycleBudgetMs) : CycleBudgetMs;
 
         FellBack = false;
         // Carrying on, in the trust region the last attempt reached; a fresh cycle in the warm one.
@@ -1727,7 +1749,8 @@ public sealed class Ksa6DofGuidance : IDisposable
 
         double[] tol = DefectTolerances(cold);
         LastGatedRatio = _solver.WeightedDefect(flightState, tol, commit, HorizonFarSlack,
-                                                out int gCh, out int gNode, out double gRaw);
+                                                out int gCh, out int gNode, out double gRaw,
+                                                GateReferenceIntervalS, CommitHorizonS, HorizonFarS);
         LastGatedDefectChannel = gCh;
         LastGatedDefectNode = gNode;
         LastGatedRaw = gRaw;
