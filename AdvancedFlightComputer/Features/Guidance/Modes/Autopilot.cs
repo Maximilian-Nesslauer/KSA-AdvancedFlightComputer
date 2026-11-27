@@ -2311,6 +2311,9 @@ public static partial class GuidanceWindow
                 PhasePlaneRcs = true,
                 RcsAngleBandDeg = _s.OrbitalEntryRcsDeadbandDeg,
             };
+            // Experiment (AFC_XBF_RollPriority, off unless set): under bellyflop, the roll's weight against pitch and yaw where the flaps fall short.
+            if (_s.OrbitalEntry.Phase == OrbitalEntryPhase.Bellyflop)
+                settings = settings with { RollPriority = BellyflopExperiment.Number("RollPriority", settings.RollPriority) };
         }
         // RETRO BURN'S GLIDE with NEW ATTITUDE CONTROL: the same authority-aware capture and per-axis flaps or phase-plane RCS as orbital entry, at the glide's own capture rates.
         else if (_s.ThreeDofNewAttitude && ThreeDofLive && _s.ThreeDofPhase == ThreeDofPhase.Glide)
