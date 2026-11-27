@@ -91,6 +91,19 @@ public sealed class GuidanceSaveLandingTest : AfcTest
             }
             craft = v;
             int restored = CraftSettings.RestoreFrom(new DirectoryInfo(saveDir), system);
+            // THE OTHER CRAFT of the save are removed (AFC_SCENARIO_KEEP_OTHERS=1 keeps them): the bellyflop save's second Starship stands about 35 m from the site, and a run on 2026-11-27 (18:54) struck it 33 m up on a divert - a collision guidance cannot see, which says nothing about the touchdown.
+            if (Env("AFC_SCENARIO_KEEP_OTHERS", 0.0) == 0.0)
+            {
+                var others = new List<Vehicle>();
+                for (int i = 0; i < system.Count; i++)
+                    if (system.GetIndex(i) is Vehicle other && !ReferenceEquals(other, craft) && !other.IsDisposed)
+                        others.Add(other);
+                foreach (Vehicle other in others)
+                {
+                    t.Info($"removed other craft '{other.Id}', {(other.Orbit.StateVectors.PositionCci - craft.Orbit.StateVectors.PositionCci).Length():F0} m from this one");
+                    VehicleSpawner.Despawn(other);
+                }
+            }
             PhysicsBubble._forceOffRails = true;
             Program.ControlledVehicle = craft;
             IParentBody body = craft.Orbit.Parent;
