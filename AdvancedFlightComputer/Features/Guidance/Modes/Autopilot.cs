@@ -2262,6 +2262,11 @@ public static partial class GuidanceWindow
     ///  ON AN ASCENT the gimbals take the torque first and the RCS the rest; the fins only with STEER WITH FINS (AscentAeroControl), held at rest otherwise; the roll held only where the stock flight computer would track it (AscentHoldsRoll), free with its rate damped elsewhere; and the air's moment read off the ascent's nose-first tables (AscentControllerAero).
     /// </summary>
     /// <param name="heldRoll">The roll is the returning booster's held one (ReturnRollRefCci), which the glide may turn to its least rolling moment (UpdateGlideRoll).</param>
+    /// <summary>
+    /// The roll's weight against pitch and yaw's 1 in the flaps' and RCS's allocation under bellyflop (AttitudeController.Settings.RollPriority; a rocket's 0.3 elsewhere). Belly first the roll is the sideslip, and the air's rolling moment grows with it; at 0.3 the saturated flaps served the weak pitch and yaw axes (1-2.4 deg/s^2 spare against the roll's 8-15) and gave the roll away, once 150 kN m the wrong way against 450 asked, and a Starship departed to 47 deg of bank with the plan asking none; half the runs reached 9-46 deg of attitude error after the first 40 s. At 4 (harness, 2026-11-27, 14 runs) the worst was 1-4 deg, the save's 28 deg of bank came out without swinging past 4-19 deg, and the flop's RCS fell from 0.3-0.8 t to 0.03-0.16 t.
+    /// </summary>
+    private const double BellyflopRollPriority = 4.0;
+
     private static void FlyOwnAttitude(Vehicle vehicle, IParentBody parent, double3? rollRef, bool heldRoll)
     {
         using var _perf = new PerfTracker.Scope("Guidance.FlyOwnAttitude");
@@ -2311,9 +2316,9 @@ public static partial class GuidanceWindow
                 PhasePlaneRcs = true,
                 RcsAngleBandDeg = _s.OrbitalEntryRcsDeadbandDeg,
             };
-            // Experiment (AFC_XBF_RollPriority, off unless set): under bellyflop, the roll's weight against pitch and yaw where the flaps fall short.
+            // BELLYFLOP'S ROLL FIRST: under bellyflop the roll's shortfall weighs BellyflopRollPriority against pitch and yaw's 1 where the flaps fall short (AFC_XBF_RollPriority for experiments).
             if (_s.OrbitalEntry.Phase == OrbitalEntryPhase.Bellyflop)
-                settings = settings with { RollPriority = BellyflopExperiment.Number("RollPriority", settings.RollPriority) };
+                settings = settings with { RollPriority = BellyflopExperiment.Number("RollPriority", BellyflopRollPriority) };
         }
         // RETRO BURN'S GLIDE with NEW ATTITUDE CONTROL: the same authority-aware capture and per-axis flaps or phase-plane RCS as orbital entry, at the glide's own capture rates.
         else if (_s.ThreeDofNewAttitude && ThreeDofLive && _s.ThreeDofPhase == ThreeDofPhase.Glide)
