@@ -22,30 +22,38 @@ internal static class PathShaping
     internal static double FunnelWeight => Arg("--gs-weight", 10.0);
     internal static double SideSpeedPerM => Arg("--gs-side", 0.0);
 
-    /// <summary>--plant-slew: the plant's gimbal moves towards the commanded lateral thrust no faster than the gimbal slews (GimbalSlewPerS x tan(gimbal) x thrust per second), as the game's does, instead of taking the command at once. Rewrites u's lateral thrust in place; (gx, gy) is the gimbal's lateral thrust carried between steps, NaN to start at the command.</summary>
+    /// <summary>--slew-share s: the plan's gimbal slew is this share of the hardware's (1), as flight plans at its torque share (Ksa6DofSetup); the plant keeps the hardware's.</summary>
+    internal static double SlewShare => Arg("--slew-share", 1.0);
+
+    /// <summary>--plant-slew: the plant's gimbal ANGLE - lateral thrust over axial - moves towards the commanded one no faster than the hardware slews (the plan's GimbalSlewPerS over --slew-share, times tan(gimbal), per second), as the game's does, instead of taking the command at once. Rewrites u's lateral thrust in place at u's thrust; (gx, gy) is the gimbal's angle as td/T, carried between steps, NaN to start at the command.</summary>
     internal static void SlewPlant(Scvx6DofConfig cfg, double[] u, double dt, ref double gx, ref double gy)
     {
         if (!Environment.GetCommandLineArgs().Contains("--plant-slew") || !(cfg.GimbalSlewPerS > 0.0))
             return;
-        double cx = u[Dynamics6Dof.ITDX], cy = u[Dynamics6Dof.ITDY];
+        double thrust = Math.Max(u[Dynamics6Dof.IT], 1e-9);
+        double cx = u[Dynamics6Dof.ITDX] / thrust, cy = u[Dynamics6Dof.ITDY] / thrust;
         if (!double.IsFinite(gx) || !double.IsFinite(gy)) { gx = cx; gy = cy; return; }
-        double step = cfg.GimbalSlewPerS * cfg.TanGimbal * Math.Max(u[Dynamics6Dof.IT], 0.0) * dt;
+        double step = cfg.GimbalSlewPerS / SlewShare * cfg.TanGimbal * dt;
         gx += Math.Clamp(cx - gx, -step, step);
         gy += Math.Clamp(cy - gy, -step, step);
-        u[Dynamics6Dof.ITDX] = gx;
-        u[Dynamics6Dof.ITDY] = gy;
+        u[Dynamics6Dof.ITDX] = gx * thrust;
+        u[Dynamics6Dof.ITDY] = gy * thrust;
     }
 
-    /// <summary>--anchor: a warm re-solve's first gimbal command is held within one re-solve cycle's slew (0.15 s) of the command being flown - node 0 of the shifted seed - as flight does (Ksa6DofGuidance.FirstGimbalAnchorAt). Off: free, as before.</summary>
-    internal static void Anchor(Scvx6DofConfig cfg, double[] shiftedU, bool coasting = false)
+    /// <summary>--anchor: a warm re-solve's first gimbal command is held within --anchor-s (0.3 s) of the plan's slew of where the gimbal is - the plant's angle (gx, gy) at node 0's thrust under --plant-slew, else node 0 of the shifted seed, the command being flown - as flight does (Ksa6DofGuidance.FirstGimbalAnchorAt). --anchor-cmd: the command even under --plant-slew. Off: free, as before.</summary>
+    internal static void Anchor(Scvx6DofConfig cfg, double[] shiftedU, bool coasting = false, double gx = double.NaN, double gy = double.NaN)
     {
         if (!Environment.GetCommandLineArgs().Contains("--anchor") || coasting || cfg.CoastIntervals > 0 || !(cfg.GimbalSlewPerS > 0.0) || cfg.TorqueDemand)
         {
             cfg.FirstGimbalAnchor = null;
             return;
         }
-        double band = cfg.GimbalSlewPerS * Arg("--anchor-s", 0.3) * cfg.TanGimbal * Math.Max(shiftedU[Dynamics6Dof.IT], cfg.Tmin);
-        cfg.FirstGimbalAnchor = [shiftedU[Dynamics6Dof.ITDX], shiftedU[Dynamics6Dof.ITDY], band];
+        double thrust = shiftedU[Dynamics6Dof.IT];
+        double band = cfg.GimbalSlewPerS * Arg("--anchor-s", 0.3) * cfg.TanGimbal * Math.Max(thrust, cfg.Tmin);
+        bool actual = double.IsFinite(gx) && double.IsFinite(gy) && !Environment.GetCommandLineArgs().Contains("--anchor-cmd");
+        cfg.FirstGimbalAnchor = actual
+            ? [gx * thrust, gy * thrust, band]
+            : [shiftedU[Dynamics6Dof.ITDX], shiftedU[Dynamics6Dof.ITDY], band];
     }
 
     internal static double[]? FunnelHeightsM => On ? [Arg("--gs-len", 40.0), 300.0, 1000.0] : null;

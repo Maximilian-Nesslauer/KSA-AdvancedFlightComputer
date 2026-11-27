@@ -389,7 +389,7 @@ internal static class SixDofRcsCheck
             // --no-gimbal: a craft that points its thrust with the RCS alone, as Ksa6DofSetup plans one (a zero cone and no arm).
             GimbalMaxDeg = NoGimbal ? 0.0 : GimbalDeg,
             GimbalArm = Environment.GetCommandLineArgs().Contains("--old-scale") || NoGimbal ? 0.0 : Arm,
-            GimbalSlewPerS = Environment.GetCommandLineArgs().Contains("--noslew") ? 0.0 : SlewPerS,
+            GimbalSlewPerS = Environment.GetCommandLineArgs().Contains("--noslew") ? 0.0 : SlewPerS * PathShaping.SlewShare,
             // --roll-pinned (coast check): as the 12:20-12:53 boosters flew - their engine gives 88.8 kN m of roll at full thrust, so the plan holds the heading to the end (Ksa6DofSetup.RollModel).
             TauRollMax = RollPinned ? 88_833.0 : 1.0e4,
             RollTorqueFollowsThrust = RollPinned,
@@ -539,7 +539,7 @@ internal static class SixDofRcsCheck
                 Shift(fx, fu, fs, t - f0, n, out double[] sx, out double[] su, out double ss);
                 // As the game re-seeds a warm solve (Ksa6DofGuidance): the whole reference moved with the measured state, not node 0 alone, and the trust region opened to its warm start rather than left where the last solve shrank it.
                 ColdReferenceShift.Apply(sx, n, ss, x);
-                PathShaping.Anchor(cfg, su);
+                PathShaping.Anchor(cfg, su, gx: plantGx, gy: plantGy);
                 s.Reseed(x, sx, su, ss, trustRegion: Math.Clamp(s.TrustRegion, WarmTrustRegion, s.TrustRegionMax));
                 double ratio = double.PositiveInfinity;
                 for (int i = 0; i < 3; i++)

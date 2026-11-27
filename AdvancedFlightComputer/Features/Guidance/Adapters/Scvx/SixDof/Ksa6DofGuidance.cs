@@ -1514,7 +1514,8 @@ public sealed class Ksa6DofGuidance : IDisposable
     internal const double FirstGimbalAnchorS = 0.3;
 
     /// <summary>
-    /// The anchor for a warm re-solve's first gimbal command (Scvx6DofConfig.FirstGimbalAnchor): the published plan's lateral thrust at <paramref name="simNow"/>, the command being flown, and a band of what the gimbal slews in <see cref="FirstGimbalAnchorS"/> at that thrust. Null when there is no published plan, it is in its coast, or the plan has no slew limit.
+    /// The anchor for a warm re-solve's first gimbal command (Scvx6DofConfig.FirstGimbalAnchor): WHERE THE GIMBALS ARE - the lateral thrust of the torque last asked for, plan and feedback, plus the gimbals' lag behind it (NoteGimbalLag) - and a band of what the gimbal slews in <see cref="FirstGimbalAnchorS"/> at the plan's thrust. Without a measured lag, the published plan's lateral thrust at <paramref name="simNow"/>. Null when there is no published plan, it is in its coast, or the plan has no slew limit.
+    ///  WHY WHERE THEY ARE (2026-11-27). Anchored to the plan's own command, the anchor never bound in flight: new plans already carried the command on within 1-5 deg. What they did not carry on from was the gimbal, which sat 2-10 deg behind its command, rate-limited, in the last seconds of the Starship landings.
     /// </summary>
     private double[] FirstGimbalAnchorAt(double simNow)
     {
@@ -1526,6 +1527,11 @@ public sealed class Ksa6DofGuidance : IDisposable
             return null;
         (int k, double f) = plan.Locate(t);
         double tdx = Lerp(plan.U, 0, k, f), tdy = Lerp(plan.U, 1, k, f), thrust = Lerp(plan.U, 2, k, f);
+        if (_gimbalAt is { Length: 2 } at)
+        {
+            tdx = at[0];
+            tdy = at[1];
+        }
         double band = _cfg.GimbalSlewPerS * FirstGimbalAnchorS * _cfg.TanGimbal * Math.Max(thrust, _cfg.Tmin);
         return double.IsFinite(tdx) && double.IsFinite(tdy) && band > 0.0 ? [tdx, tdy, band] : null;
     }
@@ -1782,6 +1788,21 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <summary>What the attitude feedback added on the last command - default when there was none.</summary>
     public AttitudeFeedback6Dof.Result AttitudeCorrection { get; private set; }
 
+    /// <summary>The gimbal torque the last <see cref="Command"/> asked for, plan and feedback, model body axes; null in the coast or before the first.</summary>
+    private double3? _lastGimbalTorque;
+
+    /// <summary>Where the gimbals are, as the plan's lateral thrust (tdx, tdy), N, or null: noted by the flight each step (NoteGimbalLag) and read by a re-solve, which may run on the worker, so it is published whole.</summary>
+    private volatile double[] _gimbalAt;
+
+    /// <summary>
+    /// THE GIMBALS' LAG, N m, model body axes: the torque the gimbals give where they are, less what they were told by the last <see cref="Command"/> (KsaGimbalControl.Slot.LagTorqueNm), or null when not measured. The flight notes it each step before a re-solve, on the sim thread, while the last command is still the one the gimbals were given; with it, the lateral thrust the gimbals give now, tdy = tau_x / L, tdx = -tau_y / L, is what a re-solve's first gimbal command starts from (FirstGimbalAnchorAt).
+    /// </summary>
+    public void NoteGimbalLag(double3? lagModel)
+    {
+        double3 at = _lastGimbalTorque is { } told && lagModel is { } lag ? told + lag : new double3(double.NaN, double.NaN, double.NaN);
+        _gimbalAt = _dyn.LArm > 0.0 && double.IsFinite(at.X) && double.IsFinite(at.Y) ? [-at.Y / _dyn.LArm, at.X / _dyn.LArm] : null;
+    }
+
     /// <summary>The roll the last command's lateral gimbal torque brings with it, model body z, N m (Dynamics6Dof.Params.GimbalRollPerTdx/Tdy): already in the command's roll, and the part the allocator solves with pitch and yaw (KsaTvcAllocator.Solve's coupled). Zero for a balanced cluster.</summary>
     public double CoupledRollNm { get; private set; }
 
@@ -1900,6 +1921,8 @@ public sealed class Ksa6DofGuidance : IDisposable
         // THE ROLL THAT COMES WITH THE LATERAL TORQUE, plan and feedback together, as the dynamics have it: the deflection makes it whether asked or not, so it is asked for, and the allocator solves it with pitch and yaw rather than holding it at zero with the verniers (KsaTvcAllocator.Solve's coupled).
         CoupledRollNm = InCoast ? 0.0 : RollWith(torqueModel.X, torqueModel.Y);
         torqueModel = new double3(torqueModel.X, torqueModel.Y, torqueModel.Z + CoupledRollNm);
+        // What the gimbals are told, plan and feedback, for the next re-solve's anchor (FirstGimbalAnchorAt).
+        _lastGimbalTorque = InCoast ? null : torqueModel;
 
         // THE TRACKER, when there is one: the axial thrust corrected for where the vehicle is against the plan. The torques, and the lateral thrust they come from, are the plan's. Not in the coast, where there is no thrust to correct.
         if (!InCoast && tracker != null && x != null && x.Length >= NX && plan.X.Length >= plan.Nodes * NX)

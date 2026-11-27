@@ -1863,6 +1863,8 @@ public static partial class GuidanceWindow
             .WithMomentLimiterExact(_s.MomentLimiterPerPa, _s.MomentLimiterStiffnessPerPa, _s.MomentLimiterDampingPerPaMs)
             .WithMomentBias(UpdateMomentBias(vehicle, x, now));
         LogAeroCheck(vehicle, x, now, "flying");
+        // Where the gimbals are, for a re-solve's first gimbal command to start from (Ksa6DofGuidance.NoteGimbalLag).
+        NoteGimbalLag(vehicle);
 
         // The first command after braking handover uses the plan the braking mode checked.
         if (!firstBrakingCommand && now - _s.LastReplan >= cadence)
@@ -2138,6 +2140,20 @@ public static partial class GuidanceWindow
     /// <summary>
     /// Turns one plan command into the throttle and the gimbal torque, and logs the cycle.
     /// </summary>
+    /// <summary>Hands touchdown guidance the gimbals' lag behind their last command, model body axes (KsaGimbalControl.Slot.LagTorqueNm), or null when the last pass did not measure it.</summary>
+    private static void NoteGimbalLag(Vehicle vehicle)
+    {
+        KsaGimbalControl.Slot slot = KsaGimbalControl.Diagnostics(vehicle);
+        if (slot == null || !slot.LagKnown)
+        {
+            _s.Guidance.NoteGimbalLag(null);
+            return;
+        }
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        double3 lag = slot.LagTorqueNm;
+        _s.Guidance.NoteGimbalLag(new double3(double3.Dot(lag, mx), double3.Dot(lag, my), double3.Dot(lag, mz)));
+    }
+
     private static void ApplyPlanCommand(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x,
                                          double now, double3 torqueModel, double thrustN)
     {

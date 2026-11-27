@@ -121,7 +121,7 @@ internal static class SixDofLiftCheck
             Tmax = Tmax,
             ThrottleFloor = Floor,
             GimbalMaxDeg = GimbalDeg,
-            GimbalSlewPerS = SlewPerS,
+            GimbalSlewPerS = SlewPerS * PathShaping.SlewShare,
             TauRollMax = 1.0e4,
             TerminalRollFree = true,
             TiltMaxDeg = 60.0,
@@ -222,7 +222,7 @@ internal static class SixDofLiftCheck
                 Shift(fx, fu, fs, t - f0, n, out double[] sx, out double[] su, out double ss);
                 // As the game re-seeds a warm solve (Ksa6DofGuidance): the whole reference moved with the measured state, not node 0 alone, and the trust region opened to its warm start rather than left where the last solve shrank it.
                 ColdReferenceShift.Apply(sx, n, ss, x);
-                PathShaping.Anchor(cfg, su);
+                PathShaping.Anchor(cfg, su, gx: plantGx, gy: plantGy);
                 s.Reseed(x, sx, su, ss, trustRegion: Math.Clamp(s.TrustRegion, WarmTrustRegion, s.TrustRegionMax));
                 double ratio = double.PositiveInfinity;
                 for (int i = 0; i < 3; i++)

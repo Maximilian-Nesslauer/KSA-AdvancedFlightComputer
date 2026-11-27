@@ -69,6 +69,10 @@ public static class KsaGimbalControl
         /// <summary>The highest-thrust gimbal on the last Lsq pass: what it was told against where it is. Written by the worker and read by the sim thread after worker join.</summary>
         public GimbalTrace? Trace;
 
+        /// <summary>THE GIMBALS' LAG on the last Lsq pass, N m, VEHICLE assembly frame: the torque the lit gimbals give where they are, less what that pass's commands would give, at that pass's thrusts; and whether it was measured. Touchdown guidance starts a re-solve's gimbal from where the gimbals are (Ksa6DofGuidance.GimbalLagTorqueModel). Written by the worker and read by the sim thread after worker join.</summary>
+        public double3 LagTorqueNm;
+        public bool LagKnown;
+
         /// <summary>The vehicle the demand is for. The worker reads Vehicle.IsControllable through it, which Vehicle.UpdateControl writes on the main thread while no worker runs.</summary>
         internal volatile Vehicle Owner;
 
@@ -164,6 +168,8 @@ public static class KsaGimbalControl
         // ONE read of the demand, into a local. Re-reading the field would let a sim thread publish land between two reads and mix two demands together.
         Command cmd = st.Cmd;
         GimbalOverrideMode mode = cmd.Mode;
+        // Measured again by an Lsq pass; nothing else does.
+        st.LagKnown = false;
         if (mode == GimbalOverrideMode.Off)
             return;
 
@@ -428,6 +434,27 @@ public static class KsaGimbalControl
             st.Gimbals.AsSpan(0, n), st.Thrusts.AsSpan(0, n), com,
             new double3(cmd.TorqueXNm, cmd.TorqueYNm, cmd.TorqueZNm), st.Commands,
             coupled: new double3(cmd.CoupledXNm, cmd.CoupledYNm, cmd.CoupledZNm));
+
+        // Where the gimbals are against where they are told (Slot.LagTorqueNm), from the angles the game's state had before this pass.
+        {
+            double3 lag = default;
+            bool known = false;
+            for (int i = 0; i < n; i++)
+            {
+                GimbalController gc = st.Gimbals[i];
+                Gimbal g = gc.Gimbal;
+                if (g == null || !(st.Thrusts[i] > 0.0))
+                    continue;
+                GimbalControllerState was = outputs.Gimbals.GetModuleAndReadOnlyState(gc).State;
+                double ay = g.AxisY.MaxAngle > 0.0 ? was.Angles.X / g.AxisY.MaxAngle : 0.0;
+                double az = g.AxisZ.MaxAngle > 0.0 ? was.Angles.Y / g.AxisZ.MaxAngle : 0.0;
+                lag += KsaTvcAllocator.Torque(gc, com, st.Thrusts[i], ay, az)
+                       - KsaTvcAllocator.Torque(gc, com, st.Thrusts[i], st.Commands[2 * i], st.Commands[2 * i + 1]);
+                known = true;
+            }
+            st.LagTorqueNm = lag;
+            st.LagKnown = known;
+        }
 
         // The log's gimbal: the one with the most thrust through it.
         int lead = 0;

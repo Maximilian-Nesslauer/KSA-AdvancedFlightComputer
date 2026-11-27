@@ -663,7 +663,7 @@ public static class Ksa6DofSetup
         }
         RollModel(tauRoll, izz, keptRollFree, out bool rollFree, out tauRoll, RcsRollNm(rcs));
 
-        // THE TORQUE MARGIN (Scvx6DofConfig.PlanTorqueShare): the plan gets this share of the gimbals' torque, their roll and the RCS's, and the attitude feedback the rest (AttitudeFeedback6Dof). The cone is shrunk in torque, through its tangent; the gimbals' slew, in full deflections a second, is widened by as much so it stays the hardware's rate in degrees. After the roll model, so a margin cannot by itself decide the roll is left free.
+        // THE TORQUE MARGIN (Scvx6DofConfig.PlanTorqueShare): the plan gets this share of the gimbals' torque, their roll and the RCS's, and the attitude feedback the rest (AttitudeFeedback6Dof). The cone is shrunk in torque, through its tangent; the gimbals' slew stays the hardware's full deflections a second of that smaller cone, so the plan slews at the same share of the hardware's rate in degrees and the feedback has the rest. It was widened by the share to keep the hardware's whole rate until 2026-11-27: the last plans of two Starship landings then swung the gimbal at its full 20 deg/s on nearly every interval, the feedback's deflection came on top, and the gimbal sat on its rate cap in 35-46 % of the last 4 s, 175 ms behind its command. After the roll model, so a margin cannot by itself decide the roll is left free.
         double torqueShare = Math.Clamp(1.0 - (double.IsFinite(torqueMargin) ? torqueMargin : 0.0), 0.5, 1.0);
         gimbalDeg = Math.Atan(Math.Tan(gimbalDeg * Math.PI / 180.0) * torqueShare) * 180.0 / Math.PI;
         tauRoll *= torqueShare;
@@ -795,7 +795,7 @@ public static class Ksa6DofSetup
             GimbalTrimY = !noGimbal && arm > 0.0 ? -dyn.ThrustMomentX / arm : 0.0,
             // The RCS controls are scaled on each axis's whole control torque (Scvx6DofConfig.ResolvedUScale).
             GimbalArm = arm,
-            GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) / torqueShare : 0.0,
+            GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) : 0.0,
             PlanTorqueShare = torqueShare,
             PlanRcsShare = surfaceShare,
             TauRollMax = tauRoll,

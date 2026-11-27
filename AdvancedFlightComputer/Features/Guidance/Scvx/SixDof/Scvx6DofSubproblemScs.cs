@@ -702,7 +702,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             _b[row++] = hi;
         }
 
-        // THE GIMBAL'S SLEW RATE (Scvx6DofConfig.GimbalSlewPerS): |td_{k+1} - td_k| <= rate * dt * tan(gimbal) * (T_k + T_{k+1}) / 2 on each lateral axis, linearised in (sigma, T_k, T_{k+1}) about the reference.
+        // THE GIMBAL'S SLEW RATE (Scvx6DofConfig.GimbalSlewPerS), on the gimbal's ANGLE: |td_{k+1}/T_{k+1} - td_k/T_k| <= rate * dt * tan(gimbal) on each lateral axis, linearised in (td, T) about the reference and scaled by the mean reference thrust so the row is in newtons like the rest. Exact in sigma: dt = sigma * dtau. Coast intervals keep the lateral-thrust form below, whose limit is zero there.
         // In TorqueDemand the same limit falls on the pitch and yaw torque: the gimbals' share slews at their rate, |tau_{k+1} - tau_k| <= rate * dt * DemandTorquePerN * (T_k + T_{k+1}) / 2 + what the RCS can jump, from one bound to the other.
         if (_nSlew > 0)
         {
@@ -718,6 +718,24 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
                     double free = _nCoast > 0 && k == _nCoast - 1 ? 2.0 * perN * _cfg.Tmax : 0.0;
                     int j = _cfg.TorqueDemand ? Dynamics6Dof.IRCS + axis : axis == 0 ? Dynamics6Dof.ITDX : Dynamics6Dof.ITDY;
                     (double pos, double neg) = _cfg.TorqueDemand ? _cfg.RcsBounds(axis) : (0.0, 0.0);
+                    if (!_cfg.TorqueDemand && !coast)
+                    {
+                        double floorT = Math.Max(_cfg.Tmin, 1e-3 * _cfg.Tmax);
+                        double tb0 = Math.Max(ubar[k * NU + Dynamics6Dof.IT], floorT), tb1 = Math.Max(ubar[(k + 1) * NU + Dynamics6Dof.IT], floorT);
+                        double a0 = ubar[k * NU + j] / tb0, a1 = ubar[(k + 1) * NU + j] / tb1;
+                        double scale = 0.5 * (tb0 + tb1);
+                        double perSig = 2.0 * coeff * scale;
+                        for (int sign = 1; sign >= -1; sign -= 2)
+                        {
+                            AddA(row, IU(k + 1, j), sign * scale / tb1);
+                            AddA(row, IU(k + 1, Dynamics6Dof.IT), -sign * scale * a1 / tb1);
+                            AddA(row, IU(k, j), -sign * scale / tb0);
+                            AddA(row, IU(k, Dynamics6Dof.IT), sign * scale * a0 / tb0);
+                            AddA(row, _iSig, -perSig);
+                            _b[row++] = -sign * scale * (a1 - a0);
+                        }
+                        continue;
+                    }
                     double rhs = pos + neg + free - coeff * sigBar * tBarSum;
                     for (int sign = 1; sign >= -1; sign -= 2)
                     {
