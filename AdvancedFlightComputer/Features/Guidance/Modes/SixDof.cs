@@ -1865,6 +1865,8 @@ public static partial class GuidanceWindow
         LogAeroCheck(vehicle, x, now, "flying");
         // Where the gimbals are, for a re-solve's first gimbal command to start from (Ksa6DofGuidance.NoteGimbalLag).
         NoteGimbalLag(vehicle);
+        // The end height for the next re-solve, as the propellant moves the centre of mass (Ksa6DofGuidance.TargetAltM).
+        _s.Guidance.TargetAltM = _s.SixDofTargetComAltM;
 
         // The first command after braking handover uses the plan the braking mode checked.
         if (!firstBrakingCommand && now - _s.LastReplan >= cadence)

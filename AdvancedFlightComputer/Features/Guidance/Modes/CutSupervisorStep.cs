@@ -58,7 +58,8 @@ public static partial class GuidanceWindow
 
         var settings = new CutSupervisorSettings(s.CutSupervisorSinkMs, s.CutSupervisorShortfallM, s.CutSupervisorMaxHeightM, s.CutSupervisorWatchHeightM);
         double before = s.CutSup.ShortfallM;
-        CutSupervisorAction action = CutSupervisor.Step(ref s.CutSup, in settings, legs, vUp, dt, lit, contact);
+        // At the plan's end with no contact, touchdown guidance flies to contact (NoPlanNearGround); a cut since sets the same flag, but the engine is off then.
+        CutSupervisorAction action = CutSupervisor.Step(ref s.CutSup, in settings, legs, vUp, dt, lit, contact, planEnded: s.SixDofToContact);
         s.CutSupAction = action;
 
         switch (action)
@@ -75,7 +76,8 @@ public static partial class GuidanceWindow
                 double g = parent.Mu / r.LengthSquared();
                 double3 horizontal = vSrf - vUp * up;
                 string why = FormattableString.Invariant(
-                    $"CUT SUPERVISOR: ENGINE CUT, legs {legs:F2} m above the ground, {vUp:F2} m/s, shortfall {s.CutSup.ShortfallM:F2} m of {settings.ShortfallToCutM(legs):F2} below {s.CutSupervisorSinkMs:F2} m/s, ")
+                    $"CUT SUPERVISOR: ENGINE CUT, legs {legs:F2} m above the ground, {vUp:F2} m/s, ")
+                    + (s.CutSup.CutAtPlanEnd ? "at the plan's end, " : FormattableString.Invariant($"shortfall {s.CutSup.ShortfallM:F2} m of {settings.ShortfallToCutM(legs):F2} below {s.CutSupervisorSinkMs:F2} m/s, "))
                     + FormattableString.Invariant($"{horizontal.Length():F1} m/s sideways, tilt {TiltFromUpDeg(vehicle, up):F1} deg; the drop lands at about {CutSupervisor.ImpactSpeedMs(legs, vUp, g):F1} m/s.");
                 SixDofLog.Event(s, now, why);
                 GuidanceLog.Info(vehicle, why);

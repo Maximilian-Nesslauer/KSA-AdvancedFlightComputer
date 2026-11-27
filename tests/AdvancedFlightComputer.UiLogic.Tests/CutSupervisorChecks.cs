@@ -25,10 +25,10 @@ internal static partial class Program
             return (-1.0, double.NaN);
         }
 
-        // The threshold: the full shortfall at the cut height, less in proportion lower down, never under 0.1 m.
-        Check("the cut threshold is 0.3 m at 2 m, 0.15 m at 1 m, 0.1 m near the ground",
+        // The threshold: the full shortfall at the cut height, less in proportion lower down, never under 0.05 m.
+        Check("the cut threshold is 0.3 m at 2 m, 0.15 m at 1 m, 0.05 m near the ground",
             Math.Abs(cfg.ShortfallToCutM(2.0) - 0.3) < 1e-12 && Math.Abs(cfg.ShortfallToCutM(1.0) - 0.15) < 1e-12
-            && Math.Abs(cfg.ShortfallToCutM(0.1) - 0.1) < 1e-12 && Math.Abs(cfg.ShortfallToCutM(4.0) - 0.3) < 1e-12);
+            && Math.Abs(cfg.ShortfallToCutM(0.1) - 0.05) < 1e-12 && Math.Abs(cfg.ShortfallToCutM(4.0) - 0.3) < 1e-12);
 
         // On the pad, engine lit, never descended: not armed, never cuts.
         var pad = new CutSupervisorState();
@@ -40,10 +40,23 @@ internal static partial class Program
         var n = Fly(cfg, ref normal, 30.0, 30.0, h => -Math.Max(0.3, Math.Min(6.0, 0.3 + 1.5 * h)));
         Check("a normal landing, slowing to 0.3 m/s at contact, is never cut", n.cutAtS < 0.0, $"cut at {n.cutHeightM:F2} m");
 
-        // 2026-11-27 10:21: the plan brought the craft to rest 0.5 m up. Threshold 0.1 m: cut in a fifth of a second.
+        // 2026-11-27 10:21: the plan brought the craft to rest 0.5 m up. Threshold 0.075 m: cut in about 0.15 s.
         var hover05 = new CutSupervisorState { Armed = true };
         var h05 = Fly(cfg, ref hover05, 0.5, 5.0, _ => 0.0);
-        Check("a hover 0.5 m up is cut after about 0.2 s", Math.Abs(h05.cutAtS - 0.2) < 0.05, $"cut after {h05.cutAtS:F2} s");
+        Check("a hover 0.5 m up is cut after about 0.15 s", Math.Abs(h05.cutAtS - 0.15) < 0.05, $"cut after {h05.cutAtS:F2} s");
+
+        // 14:28: legs 0.49 m up, sinking 0.2 m/s rising to 0.4 m/s; the old 0.1 m floor took 0.54 s. Now well under 0.4 s.
+        var slide = new CutSupervisorState { Armed = true };
+        var sl = Fly(cfg, ref slide, 0.49, 3.0, h => -(0.2 + 0.2 * (0.49 - h) / 0.16));
+        Check("the 14:28 slow sink at 0.49 m is cut within 0.4 s", sl.cutAtS > 0.0 && sl.cutAtS < 0.4, $"cut after {sl.cutAtS:F2} s");
+
+        // 14:27: the plan ended with the legs 0.47 m up and the craft sliding: cut at once, at the plan's end, whatever the shortfall.
+        var ended = new CutSupervisorState { Armed = true };
+        Check("a plan that ends inside the cut height is cut at once",
+            CutSupervisor.Step(ref ended, in cfg, 0.47, -0.2, dt, true, false, planEnded: true) == CutSupervisorAction.Cut && ended.CutAtPlanEnd);
+        var endedHigh = new CutSupervisorState { Armed = true };
+        Check("a plan that ends above the cut height is not cut for it",
+            CutSupervisor.Step(ref endedHigh, in cfg, 3.0, -0.2, dt, true, false, planEnded: true) != CutSupervisorAction.Cut);
 
         // 10:21 earlier: rest 1.9 m up. Threshold 0.285 m: cut after about 0.57 s.
         var hover19 = new CutSupervisorState { Armed = true };

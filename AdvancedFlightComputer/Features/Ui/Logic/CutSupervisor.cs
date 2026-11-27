@@ -22,8 +22,8 @@ public enum CutSupervisorAction
 /// </summary>
 public readonly record struct CutSupervisorSettings(double TargetSinkMs, double ShortfallCutM, double MaxCutHeightM, double WatchHeightM, double ArmSinkMs = 1.0)
 {
-    /// <summary>The smallest shortfall that cuts, m, however low the legs.</summary>
-    public const double MinShortfallM = 0.1;
+    /// <summary>The smallest shortfall that cuts, m, however low the legs. 0.05 since 2026-11-27: at 0.1 a Starship sinking 0.2-0.4 m/s with its legs 0.45 m up (14:28) took half a second to cut while it slid sideways at 3 m/s.</summary>
+    public const double MinShortfallM = 0.05;
 
     /// <summary>The shortfall that cuts with the legs <paramref name="legsHeightM"/> above the ground: <see cref="ShortfallCutM"/> at the cut height, in proportion below it, never under <see cref="MinShortfallM"/>.</summary>
     public double ShortfallToCutM(double legsHeightM)
@@ -42,6 +42,8 @@ public struct CutSupervisorState
     public bool Armed;
     /// <summary>Has cut; latched until the craft is released.</summary>
     public bool Cut;
+    /// <summary>The cut came at the plan's end, not from the shortfall.</summary>
+    public bool CutAtPlanEnd;
     /// <summary>The height not descended, m: the integral of the target sink less the actual sink inside the watch window, never below zero, capped at the settings' ShortfallCapM.</summary>
     public double ShortfallM;
 }
@@ -54,8 +56,10 @@ public struct CutSupervisorState
 /// </summary>
 public static class CutSupervisor
 {
+    /// <param name="planEnded">Touchdown guidance has reached the end of its plan without contact and flies the rest to contact. Within the cut height that is a cut at once: the plan said the craft was down. On 2026-11-27 (14:27) a Starship reached its plan's end with the legs 0.47 m up, sliding at 4.6 m/s, and the shortfall took another 0.2 s to build.</param>
     public static CutSupervisorAction Step(ref CutSupervisorState state, in CutSupervisorSettings settings,
-                                           double legsHeightM, double verticalSpeedMs, double dt, bool engineLit, bool contact)
+                                           double legsHeightM, double verticalSpeedMs, double dt, bool engineLit, bool contact,
+                                           bool planEnded = false)
     {
         if (state.Cut)
             return CutSupervisorAction.HoldOff;
@@ -80,6 +84,14 @@ public static class CutSupervisor
         {
             state.ShortfallM = 0.0;
             return CutSupervisorAction.Watching;
+        }
+
+        // AT THE PLAN'S END, inside the cut height: down, as far as the plan knows.
+        if (planEnded && legsHeightM <= settings.MaxCutHeightM)
+        {
+            state.Cut = true;
+            state.CutAtPlanEnd = true;
+            return CutSupervisorAction.Cut;
         }
 
         double step = Math.Clamp(dt, 0.0, 0.25);

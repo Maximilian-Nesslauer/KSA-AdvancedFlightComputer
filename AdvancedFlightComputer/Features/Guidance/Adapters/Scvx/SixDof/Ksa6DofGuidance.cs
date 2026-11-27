@@ -1482,6 +1482,7 @@ public sealed class Ksa6DofGuidance : IDisposable
         }
 
         BuildShiftedSeed(x0, simNow, sigma, out double[] xs, out double[] us, out _, coast, fromWork);
+        FollowTargetHeight(xs);
         // The first gimbal command carries on from the one being flown (FirstGimbalAnchor), for both attempts below.
         //  None while node 0 is a coast node - a plan built with a coast keeps its coast intervals after ignition at zero length, and the coast rows pin node 0's gimbal at zero, so an anchor elsewhere would leave no plan (offline, the two-phase landings' re-solves were refused 83 times in 135).
         _cfg.FirstGimbalAnchor = coast > 0.0 || _cfg.CoastIntervals > 0 ? null : FirstGimbalAnchorAt(simNow);
@@ -1813,6 +1814,30 @@ public sealed class Ksa6DofGuidance : IDisposable
 
     /// <summary>The gimbal torque the last <see cref="Command"/> asked for, plan and feedback, model body axes; null in the coast or before the first.</summary>
     private double3? _lastGimbalTorque;
+
+    /// <summary>
+    /// THE END HEIGHT THE FLIGHT WANTS NOW, m: the centre of mass's height over the target at first contact (VehicleAutopilotState.SixDofTargetComAltM), set by the flight each step, NaN for none. Each warm re-solve ends on it (FollowTargetHeight).
+    ///  WHY (2026-11-27). The end height was set when a plan was built and kept by every re-solve after, while the Starship's nose header tank drained and its centre of mass came down 1.1-1.4 m nearer the legs over the burn: the last plans ended 0.4-1.1 m above the ground, and the landings reached their plans' ends with the legs that far up ("TOUCHDOWN AT PLAN END WITHOUT CONTACT, 0.3-1.0 m OVER IT", 15 times that day).
+    /// </summary>
+    public double TargetAltM
+    {
+        get => BitConverter.Int64BitsToDouble(Interlocked.Read(ref _targetAltBits));
+        set => Interlocked.Exchange(ref _targetAltBits, BitConverter.DoubleToInt64Bits(value));
+    }
+    private long _targetAltBits = BitConverter.DoubleToInt64Bits(double.NaN);
+
+    /// <summary>Moves the plan's end to <see cref="TargetAltM"/> when it has moved more than a centimetre: the solver's terminal height, and the seed's nodes by their share of the plan, as SeedFrom does at a node step, so the seed still ends where the solver pins it.</summary>
+    private void FollowTargetHeight(double[] xs)
+    {
+        double target = TargetAltM;
+        if (!double.IsFinite(target) || _xf.Length <= 2 || Math.Abs(target - _xf[2]) <= 0.01)
+            return;
+        double shift = target - _xf[2];
+        for (int k = 1; k < _n; k++)
+            xs[k * NX + 2] += shift * k / (_n - 1);
+        _xf[2] = target;
+        _solver.SetTargetHeight(target);
+    }
 
     /// <summary>Where the gimbals are, as the plan's lateral thrust (tdx, tdy), N, or null: noted by the flight each step (NoteGimbalLag) and read by a re-solve, which may run on the worker, so it is published whole.</summary>
     private volatile double[] _gimbalAt;

@@ -342,6 +342,13 @@ public sealed class Scvx6DofSolver : IDisposable
     /// solution is still an excellent starting point, because one control
     /// interval of vehicle motion barely changes the problem.
     /// </summary>
+    /// <summary>The terminal height the plan ends on, m (the end state's z), for a warm re-solve whose target moved: the craft's centre of mass comes nearer its legs as the propellant drains.</summary>
+    public void SetTargetHeight(double z)
+    {
+        if (_xf.Length > Dynamics6Dof.IR + 2 && double.IsFinite(z))
+            _xf[Dynamics6Dof.IR + 2] = z;
+    }
+
     public void Reseed(ReadOnlySpan<double> x0, double[] xShifted, double[] uShifted,
                        double sigma, double? trustRegion = null, double coastSigma = 0.0)
     {
