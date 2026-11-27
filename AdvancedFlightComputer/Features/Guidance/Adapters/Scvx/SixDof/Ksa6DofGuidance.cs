@@ -239,6 +239,9 @@ public sealed class Ksa6DofGuidance : IDisposable
             _dyn.BodyAero.MomentBiasZPerPa = inputs.MomentBiasPerPa.Z;
         }
         if (inputs.Iyy > 0.0) _dyn.Iyy = inputs.Iyy;
+        // The engine's arm, live (Ksa6DofInputs.LArm); not for a plan built without a gimbal, whose arm is a placeholder.
+        if (inputs.LArm > 0.0 && double.IsFinite(inputs.LArm) && _dyn.LArm > 0.0 && !_cfg.TorqueDemand)
+            _dyn.LArm = inputs.LArm;
         if (inputs.Izz > 0.0) _dyn.Izz = inputs.Izz;
 
         double3 accelBias = inputs.AccelBias;

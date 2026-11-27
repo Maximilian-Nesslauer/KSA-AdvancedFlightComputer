@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **Touchdown's engine lever arm follows the centre of mass** (#335). The arm from the centre of mass to the gimbal pivot was measured when a plan was built; it is now read each step and taken at every re-solve, as the inertia already was (`Ksa6DofInputs.LArm`). The Starship's centre of mass comes 1.1-1.4 m nearer the engine over the landing burn, so the plan's arm was about 6 % long by touchdown and the torque it asked for came with that much more side force. Not flown.
+
 - **Touchdown plans end where the legs touch, as the propellant drains** (#335). The plan's end height was set when a plan was built and kept by every re-solve after. On the Starship the nose header tank drains over the burn and the centre of mass comes 1.1-1.4 m nearer the legs, so the last plans ended 0.4-1.1 m above the ground: 15 landings on 2026-11-27 reached their plan's end with the legs 0.3-1.0 m up. Each warm re-solve now ends on the live height (`Ksa6DofGuidance.TargetAltM`). Not flown.
 
 - **Cut supervisor: cuts at once at a plan's end inside the cut height, and its smallest threshold is 0.05 m** (was 0.1). At 14:27 a Starship reached its plan's end with the legs 0.47 m up, sliding at 4.6 m/s, and the shortfall took 0.2 s more; at 14:28 a 0.2-0.4 m/s sink with the legs 0.45 m up took 0.54 s. Checked offline (UiLogic); not flown.
