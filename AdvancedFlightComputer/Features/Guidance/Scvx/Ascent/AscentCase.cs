@@ -16,6 +16,7 @@ internal sealed class AscentCase
 
     // Mesh.
     public readonly int S, N;
+    public readonly bool[] IsCoast;
     public readonly int[] NodeStage, Starts, Ends;
     public readonly double[] Dtau;       // per interval; zero across a staging link
     public readonly int[] Coll;          // collocation intervals, in order
@@ -85,17 +86,24 @@ internal sealed class AscentCase
         AscentSettings st = Settings;
 
         S = p.Stages.Length;
-        int per = Math.Max(3, st.NodesPerStage);
-        N = S * per;
-        NodeStage = new int[N];
+        IsCoast = new bool[S];
+        int perBurn = Math.Max(3, st.NodesPerStage);
+        int perCoast = Math.Max(5, st.CoastNodes);
         Starts = new int[S];
         Ends = new int[S];
+        int totalNodes = 0;
         for (int i = 0; i < S; i++)
         {
-            Starts[i] = i * per;
-            Ends[i] = i * per + per - 1;
-            for (int k = Starts[i]; k <= Ends[i]; k++) NodeStage[k] = i;
+            IsCoast[i] = p.Stages[i].IsCoast;
+            int cnt = IsCoast[i] ? perCoast : perBurn;
+            Starts[i] = totalNodes;
+            Ends[i] = totalNodes + cnt - 1;
+            totalNodes += cnt;
         }
+        N = totalNodes;
+        NodeStage = new int[N];
+        for (int i = 0; i < S; i++)
+            for (int k = Starts[i]; k <= Ends[i]; k++) NodeStage[k] = i;
 
         Dtau = new double[N - 1];
         CollRow = new int[N - 1];
@@ -104,9 +112,11 @@ internal sealed class AscentCase
         {
             if (NodeStage[k] == NodeStage[k + 1])
             {
-                // linspace(0, 1, per) differenced, exactly as the script's uniform mesh.
-                int j = k - Starts[NodeStage[k]];
-                Dtau[k] = (double)(j + 1) / (per - 1) - (double)j / (per - 1);
+                // linspace(0, 1, cnt) differenced, matching the uniform per-stage mesh.
+                int stIdx = NodeStage[k];
+                int cnt = Ends[stIdx] - Starts[stIdx] + 1;
+                int j = k - Starts[stIdx];
+                Dtau[k] = (double)(j + 1) / (cnt - 1) - (double)j / (cnt - 1);
                 CollRow[k] = coll.Count;
                 coll.Add(k);
             }
@@ -168,6 +178,17 @@ internal sealed class AscentCase
             AscentStage stg = p.Stages[i];
             PropC[i] = stg.PropellantMass / mu;
             DryC[i] = i < S - 1 ? stg.JettisonMass / mu : 0.0;
+            if (stg.IsCoast)
+            {
+                ThrottleMin[i] = 0.0;
+                PhysicalThrottleMin[i] = 0.0;
+                SeedThrottle[i] = 0.0;
+                AccC[i] = double.PositiveInfinity;
+                SigFixed[i] = double.NaN;
+                SigMin[i] = stg.CoastMinSeconds / tu;
+                SigMax[i] = stg.CoastMaxSeconds / tu;
+                continue;
+            }
             double full = stg.FullBurnTime;
             ThrottleMin[i] = double.IsNaN(stg.ThrottleMin) ? st.ThrottleMin : stg.ThrottleMin;
             PhysicalThrottleMin[i] = stg.PhysicalThrottleMin;
@@ -185,31 +206,15 @@ internal sealed class AscentCase
                 SigMax[i] = Math.Max(st.SigmaMaxSeconds, 1.1 * full / ThrottleMin[i]) / tu;
             }
         }
+        // Relax SigMin on burn stages adjacent to a coast so short pre-coast or circularisation burns are not blocked by SigmaMinSeconds.
+        for (int i = 0; i < S; i++)
+            if (!IsCoast[i] && !p.Stages[i].IsPinned && ((i > 0 && IsCoast[i - 1]) || (i < S - 1 && IsCoast[i + 1])))
+                SigMin[i] = Math.Min(SigMin[i], 1.0 / tu);
         SigScale = st.SigmaTrustSeconds / tu;
 
-        // A limit binds only on a stage whose highest liquid thrust over its lightest mass passes the backed-off limit, so every other stage drops it and adds nothing to the subproblem.
-        // A stage that keeps its limit throttles down as it gets lighter. Its box is widened to the burn at its throttle floor scaled to the limit, which is that burn at full throttle over the floor.
-        double mStart = X0[AscentDynamics.IM];
-        for (int i = 0; i < S; i++)
-        {
-            if (double.IsFinite(AccC[i]))
-            {
-                double peak = PeakLiquidThrustC(p.Stages[i]);
-                if (peak <= AccC[i] * st.PathBackoff * (mStart - PropC[i]))
-                    AccC[i] = double.PositiveInfinity;
-                else if (!p.Stages[i].IsPinned)
-                    SigMax[i] = Math.Max(SigMax[i], 1.1 * LimitedBurnTime(i, mStart, 1.0, peak) / ThrottleMin[i]);
-            }
-            mStart -= PropC[i] + DryC[i];
-        }
-
-        var limited = new List<int>();
-        for (int k = 0; k < N; k++)
-            if (double.IsFinite(AccC[NodeStage[k]]))
-                limited.Add(k);
-        LimitedNodes = limited.ToArray();
-
         var loads = new List<(int, int, double, bool)>();
+        var stageRunFirst = new int[S];
+        var stageRunProp = new double[S];
         for (int first = 0; first < S;)
         {
             int last = first;
@@ -221,11 +226,56 @@ internal sealed class AscentCase
                 prop += PropC[i];
                 liquid |= p.Stages[i].HasLiquid;
             }
+            for (int i = first; i <= last; i++)
+            {
+                stageRunFirst[i] = first;
+                stageRunProp[i] = prop;
+            }
             if (liquid)
                 loads.Add((first, last, prop, last < S - 1 && !p.Stages[last].IsPinned));
             first = last + 1;
         }
         Loads = loads.ToArray();
+
+        // A limit binds only on a stage whose highest liquid thrust over its lightest mass passes the backed-off limit, so every other stage drops it and adds nothing to the subproblem.
+        // For carry-over runs, accumulate the combined propellant across the chain to widen both minMass and SigMax for every burn half in the run.
+        var stageStartMass = new double[S];
+        double mStart = X0[AscentDynamics.IM];
+        for (int i = 0; i < S; i++)
+        {
+            stageStartMass[i] = mStart;
+            mStart -= PropC[i] + DryC[i];
+        }
+        for (int i = 0; i < S; i++)
+        {
+            if (IsCoast[i])
+                continue;
+            int first = stageRunFirst[i];
+            double runProp = stageRunProp[i];
+            double dryBefore = 0.0;
+            for (int j = first; j < i; j++) dryBefore += DryC[j];
+            double mHigh = Math.Max(stageStartMass[first] - dryBefore, stageStartMass[i]);
+            double minMass = Math.Max(stageStartMass[first] - runProp - dryBefore, MFloor);
+            if (!p.Stages[i].IsPinned && runProp > PropC[i] && p.Stages[i].HasLiquid)
+            {
+                double fullCombined = runProp / Dyn.MassFlowC(i);
+                SigMax[i] = Math.Max(SigMax[i], 1.1 * fullCombined / ThrottleMin[i]);
+            }
+            if (double.IsFinite(AccC[i]))
+            {
+                double peak = PeakLiquidThrustC(p.Stages[i]);
+                if (peak <= AccC[i] * st.PathBackoff * minMass)
+                    AccC[i] = double.PositiveInfinity;
+                else if (!p.Stages[i].IsPinned)
+                    SigMax[i] = Math.Max(SigMax[i], 1.1 * LimitedBurnTime(i, mHigh, runProp, 1.0, peak) / ThrottleMin[i]);
+            }
+        }
+
+        var limited = new List<int>();
+        for (int k = 0; k < N; k++)
+            if (double.IsFinite(AccC[NodeStage[k]]))
+                limited.Add(k);
+        LimitedNodes = limited.ToArray();
 
         if (p.Recoveries.Count > 0)
         {
@@ -262,21 +312,22 @@ internal sealed class AscentCase
             }
             // Each node at its fixed second of the stage. The collocation integrates the mass flow by trapezoid over the nodes, so it is scaled to make that trapezoid burn exactly the table's grain: otherwise the stage's drop and its propellant disagree by the trapezoid's error, which only the virtual control could absorb.
             double seconds = p.Stages[i].FixedBurnTime;
+            int cnt = Ends[i] - Starts[i] + 1;
             int np = table.Pressures;
-            var flow = new double[per];
-            var rows = new double[per][];
+            var flow = new double[cnt];
+            var rows = new double[cnt][];
             double trap = 0.0;
-            for (int j = 0; j < per; j++)
+            for (int j = 0; j < cnt; j++)
             {
-                double t = seconds * j / (per - 1);
+                double t = seconds * j / (cnt - 1);
                 flow[j] = table.MassFlowAt(t);
                 rows[j] = new double[np];
                 table.ThrustRow(t, rows[j]);
-                if (j > 0) trap += 0.5 * (flow[j - 1] + flow[j]) * seconds / (per - 1);
+                if (j > 0) trap += 0.5 * (flow[j - 1] + flow[j]) * seconds / (cnt - 1);
             }
             double burned = table.Propellant(0.0, seconds);
             double scale = trap > 0.0 ? burned / trap : 1.0;
-            for (int j = 0; j < per; j++)
+            for (int j = 0; j < cnt; j++)
                 NodeSolid[Starts[i] + j] = SolidPoint.AtNode(flow[j] * scale * tu / mu, table.PressureGrid, rows[j]);
         }
         Dyn.BindNodes(NodeStage, NodeSolid);
@@ -297,7 +348,7 @@ internal sealed class AscentCase
         int lastVertical = 0;
         if (p.PadRoll is { } roll)
         {
-            double dt = p.Stages[0].FixedBurnTime / (per - 1);
+            double dt = p.Stages[0].FixedBurnTime / (Ends[0] - Starts[0]);
             double clear = AscentSeed.TimeToClearPad(this, roll.ClearanceM);
             double deadline = clear + roll.MaxSeconds;
             PadRollFits = deadline <= p.Stages[0].FixedBurnTime;
@@ -360,6 +411,41 @@ internal sealed class AscentCase
         return true;
     }
 
+    /// <summary>Per-node control trust-box scale, normalized to the local throttle cap on high-TWR stages.</summary>
+    public double ControlTrustScale(int node, ReadOnlySpan<double> x)
+    {
+        int s = NodeStage[node];
+        if (!Settings.ScaleControlTrust || IsCoast[s])
+            return 1.0;
+        double uCap = LimitedThrottle(s, x);
+        if (Problem.Stages[s].HasLiquid)
+        {
+            double full = Dyn.LiquidThrustC(s, x);
+            double m = Math.Max(x[AscentDynamics.IM], 1e-6);
+            double aFull = full / m;
+            if (aFull > 6.0)
+                uCap = Math.Min(uCap, 6.0 / aFull);
+        }
+        return Math.Clamp(uCap, 0.02, 1.0);
+    }
+
+    /// <summary>Per-stage duration trust-box scale, widened on long ballistic coasts.</summary>
+    public double StageSigScale(int stage)
+        => IsCoast[stage] ? Math.Max(SigScale, 0.5 * (SigMax[stage] - SigMin[stage])) : SigScale;
+
+    /// <summary>Combined canonical propellant in the carry-over chain starting at <paramref name="stage"/>.</summary>
+    public double RunPropellantFrom(int stage)
+    {
+        double prop = PropC[stage];
+        int s = stage;
+        while (s < S - 1 && Problem.Stages[s].LiquidCarriesOver)
+        {
+            s++;
+            prop += PropC[s];
+        }
+        return prop;
+    }
+
     /// <summary>The most throttle a stage's acceleration limit leaves it at a state, held at the subproblem's back-off, and 1 for a stage with no limit or no liquid thrust.</summary>
     public double LimitedThrottle(int stage, ReadOnlySpan<double> x)
     {
@@ -373,30 +459,36 @@ internal sealed class AscentCase
     /// The liquid throttle the seed flies a stage at from a state. That is its seed throttle, or less where the seed throttle would push past the stage's acceleration limit, held at the same back-off the subproblem holds the limit to.
     /// </summary>
     public double SeedThrottleAt(int stage, ReadOnlySpan<double> x)
-        => Math.Max(PhysicalThrottleMin[stage], Math.Min(SeedThrottle[stage], LimitedThrottle(stage, x)));
+        => IsCoast[stage] ? 0.0 : Math.Max(PhysicalThrottleMin[stage], Math.Min(SeedThrottle[stage], LimitedThrottle(stage, x)));
 
     /// <summary>
     /// The seed's burn time for a stage's whole load from mass <paramref name="m0"/>, canonical.
     /// It integrates the full-throttle, acceleration-limited and hardware-floor portions using reference thrust.
     /// </summary>
-    public double SeedBurnTime(int stage, double m0) => LimitedBurnTime(stage, m0, SeedThrottle[stage], Dyn.ThrustRefC(stage));
+    public double SeedBurnTime(int stage, double m0)
+        => IsCoast[stage] ? Problem.Stages[stage].FullBurnTime / Dyn.TU
+            : LimitedBurnTime(stage, m0, PropC[stage], SeedThrottle[stage], Dyn.ThrustRefC(stage));
 
-    // The same burn time at throttle theta with the canonical liquid thrust T.
-    private double LimitedBurnTime(int stage, double m0, double theta, double thrust)
+    /// <summary>The seed's burn time for an arbitrary canonical propellant amount <paramref name="propC"/> from mass <paramref name="m0"/>.</summary>
+    public double SeedBurnTimeForProp(int stage, double m0, double propC)
+        => LimitedBurnTime(stage, m0, propC, SeedThrottle[stage], Dyn.ThrustRefC(stage));
+
+    // The same burn time at throttle theta with the canonical liquid thrust T for canonical propellant propC.
+    private double LimitedBurnTime(int stage, double m0, double propC, double theta, double thrust)
     {
         double flow = Dyn.MassFlowC(stage);
-        double atFull = PropC[stage] / (flow * theta);
+        double atFull = propC / (flow * theta);
         if (!double.IsFinite(AccC[stage]))
             return atFull;
         double a = AccC[stage] * Settings.PathBackoff;
-        double m1 = m0 - PropC[stage];
+        double m1 = m0 - propC;
         double mStar = theta * thrust / a;
         if (!(m1 > 0.0) || mStar <= m1)
             return atFull;
         double physical = PhysicalThrottleMin[stage];
         double mFloorStart = physical * thrust / a;
         if (mFloorStart >= m0)
-            return PropC[stage] / (flow * physical);
+            return propC / (flow * physical);
         double mLimitedStart = Math.Min(mStar, m0);
         double mLimitedEnd = Math.Max(mFloorStart, m1);
         double tau = thrust / (flow * a);

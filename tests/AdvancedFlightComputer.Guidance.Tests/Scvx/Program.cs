@@ -170,6 +170,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --ascent-booster-return each booster's way down from the plan, and the optimal return (a drone ship)
           --ascent-side-boosters a reserve kept in side boosters beside a core on one throttle, the core's share carried on
           --ascent-qceiling the relaxed max q a planner retries at stays under the break-up dynamic pressure
+          --ascent-high-twr high-TWR trust scaling, s_g backoff merit, coast stages, persistent Clarabel, turned BodyForce
           --3dof          the 3-DOF glide-and-burn loop against 3dof.py's result
           --3dof-model    the KSA point-mass model: AD slopes, the rotating frame against CCI, lift and thrust
           --3dof-ksa      glide-and-burn and burn-only solves of a returning booster on the KSA model
@@ -328,6 +329,11 @@ if (args.Contains("--ascent-solids"))
 if (args.Contains("--ascent-qceiling"))
 {
     return AscentQCeilingCheck.Run(verbose);
+}
+
+if (args.Contains("--ascent-high-twr"))
+{
+    return AscentHighTwrCheck.Run(verbose);
 }
 
 if (args.Contains("--ascent"))

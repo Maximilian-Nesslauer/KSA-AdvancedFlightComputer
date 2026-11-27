@@ -10,9 +10,9 @@ The convex ascent plans the climb from the pad to orbit insertion: the steering 
 | State | $\mathbf x = (\mathbf r, \mathbf v, m) \in \mathbb R^7$ |
 | Controls | $\mathbf u \in \mathbb R^3$, the throttle vector: its direction is the thrust axis, its length the liquid throttle |
 | Parameters | one burn time $\sigma_i$ per stage (free, or pinned); optionally a plane turn $\varphi$ (launch time or LAN); optionally one reserve change $\Delta R_j$ per booster stage |
-| Phases and nodes | one phase per planned stage, 60 nodes each (`NodesPerStage`), so $N = 60\,S$; two nodes share each staging instant |
+| Phases and nodes | one phase per planned stage, 60 nodes per burn stage (`NodesPerStage`) and 25 per coast stage (`CoastNodes`); two nodes share each staging instant |
 | Discretisation | trapezoidal collocation on a uniform mesh in each stage's own $\tau \in [0,1]$ |
-| Cone solver | Clarabel, assembled fresh every iteration |
+| Cone solver | persistent `ClarabelWorkspace` backed by frozen-sparsity `CcsAssembler` (`AscentSubproblem.Workspace`), rebuilt only when the active pattern changes or stage duration shifts by $\ge 2\times$ |
 | Where and when | the `afc-ascent-scvx` worker thread, once per launch on the pad (plus retries); seconds to tens of seconds, cancellable between iterations |
 
 ## State and controls
@@ -89,10 +89,12 @@ Separations are instantaneous. The last node of one stage and the first node of 
     $$
     E_t = \begin{cases} \arccos\!\left(\dfrac{1 - R_{\text{target}}/a}{e}\right), & r_a > R_{\text{target}} \land r < R_{\text{target}} \\ \pi, & \text{otherwise} \end{cases},
     \qquad
-    \Delta t = \operatorname{clamp}\!\big((M_t - M_0)\,a\sqrt{a},\ \sigma_{\min},\ \sigma_{\max}\big).
+    \Delta t = \operatorname{clamp}\!\big((M_t - M_0)\,a\sqrt{a},\ \sigma_{\min},\ \sigma_{\max}\big),
     $$
 
-- In flight, coast stages pair with `AscentPhase.Coast` and apoapsis circularisation in `Modes/Ascent.cs` with time/phase-indexed stage lookup in `ConvexAscentProfile`.
+    returning $\sigma_{\min}$ directly when the state is unbound ($\varepsilon \ge -10^{-9}$), descending ($\mathbf r\cdot\mathbf v < 0$), near-circular ($e \le 10^{-6}$), or already at $r \ge R_{\text{target}}$.
+
+- Live flight execution currently uses single-burn `KsaAscentPlan` and UPFG hand-over; wiring `AscentStage.Coast` into a dedicated flight coast and circularisation mode is a separate follow-up.
 
 Which durations are free:
 
@@ -160,7 +162,7 @@ plus a prograde condition $(\mathbf r_f\times\mathbf v_f)\cdot\mathbf n(\varphi)
 | [Booster reserve](#booster-reserve) | $R_j \ge R_{\text{req},j}(\mathbf r_s,\mathbf v_s,t_s)$, $R_{\min}\le R_j\le R_{\max}$ | linear row, finite-difference slopes, slacked | `BoostbackOracle` |
 | [Peak q ceiling](#maximum-dynamic-pressure) | $\max q < 0.98\,q_{\text{breakup}}$ | not in the subproblem: checked on the plan | `AscentPlan.OverQCeiling` |
 
-The path limits on $q$, q-alpha and the airflow apply only at the nodes where the reference dynamic pressure exceeds 100 Pa (`QActive`). That set changes with the reference, which is why the cone program is assembled fresh each iteration. Backed-off limits use $b = 0.98$ (`PathBackoff`). Every slack is non-negative and priced linearly at $w_{\text{path}} = 1$; see [Soft constraints and slacks](index.md#soft-constraints-and-slacks).
+The path limits on $q$, q-alpha and the airflow apply only at the nodes where the reference dynamic pressure exceeds 100 Pa (`QActive`). When that active set, the mass-scaled floor mask, the limited-node thrust mask, and the recovery-oracle validity mask match the previous iteration, `AscentSubproblem.Workspace` refills the frozen `CcsAssembler` in place and updates the persistent `ClarabelWorkspace` without reallocating or refactorising. Backed-off limits use $b = 0.98$ (`PathBackoff`). Aerodynamic slacks are priced linearly at $w_{\text{path}} = 1$ (`RhoPath`), and thrust-acceleration slacks $s^g_k$ at $w_{\text{accel}} = 100$ (`RhoAccel`); see [Soft constraints and slacks](index.md#soft-constraints-and-slacks).
 
 ### Lift-off direction
 
@@ -189,7 +191,7 @@ Since $\lVert\mathbf u_{k+1} - \mathbf u_k\rVert \ge 2\,\theta_{\min}\sin(\tfrac
 
 ### Dynamics and staging links
 
-The dynamics are linearised about the reference and discretised by the trapezoidal rule, with a virtual control $\boldsymbol\nu_k$ on each interval inside a stage; see [Linearisation](index.md#linearisation), [Discretisation](index.md#discretisation) and [Virtual control](index.md#virtual-control). With $\mathbf g_k = \sigma_i\,\bar{\mathbf f}_k + \bar\sigma_i\,(A_k\,\delta\mathbf x_k + B_k\,\delta\mathbf u_k)$,
+The dynamics are linearised about the reference and discretised by the trapezoidal rule, with a virtual control $\boldsymbol\nu_k$ on each interval inside a stage; see [Linearisation](index.md#linearisation), [Discretisation](index.md#discretisation) and [Virtual control](index.md#virtual-control). With $\mathbf g_k = \sigma_i\,\bar{\mathbf f}_k + \bar\sigma_i\,(A_k\,\delta\mathbf x_k + B_k\,\delta\mathbf u_k + D_{\varphi,k}\,\delta\varphi)$ (the $D_{\varphi,k}$ term enters the velocity rows when `BodyForce` and a free `PlaneTurn` are both active),
 
 $$
 \mathbf x_{k+1} = \mathbf x_k + \frac{\Delta\tau}{2}\,(\mathbf g_k + \mathbf g_{k+1}) + \boldsymbol\nu_k .
@@ -371,7 +373,8 @@ J_{\text{sub}} ={}& (1 - m_{N-1})
 + \lambda\sum_{k=0}^{N-2}\lVert\mathbf u_{k+1} - \mathbf u_k\rVert^2
 + w_\nu\sum_k\big\lVert\boldsymbol\nu_k\oslash\mathbf D\big\rVert^2
 + w_T\sum_{j=0}^{4}s_j^2 \\
-&+ w_{\text{path}}\sum_k\big(s^q_k + s^{q\alpha}_k + s^{\text{pro}}_k + s^g_k\big)
+&+ w_{\text{path}}\sum_k\big(s^q_k + s^{q\alpha}_k + s^{\text{pro}}_k\big)
++ w_{\text{accel}}\sum_k s^g_k
 + c_\varphi\,\lvert\varphi\rvert
 + w_{\text{rec}}\sum_j s^{\text{rec}}_j .
 \end{aligned}
@@ -380,10 +383,11 @@ $$
 | Term | Weight | Setting | Why |
 | --- | --- | --- | --- |
 | propellant | 1 | | the final mass over the lift-off mass |
-| control smoothing | $\lambda = 4\times10^{-3}$ | `SmoothingWeight` | damps node-to-node chatter in attitude and throttle; it runs across staging links too |
+| control smoothing | $\lambda = 4\times10^{-3}$ | `SmoothingWeight` | damps node-to-node chatter in attitude and throttle; skipped across coast boundaries |
 | virtual control | $w_\nu = 10^5$ | `RhoVirtualControl` | scaled by $\mathbf D$ = (0.05 for position, $v^\star$ for velocity, 1 for mass), canonical |
 | insertion slacks | $w_T = 10^5$ | `RhoTerminal` | canonical units |
-| path slacks | $w_{\text{path}} = 1$ | `RhoPath` | linear, as a fraction of each limit |
+| aero path slacks | $w_{\text{path}} = 1$ | `RhoPath` | linear, as a fraction of each aerodynamic limit |
+| accel path slacks | $w_{\text{accel}} = 100$ | `RhoAccel` | linear, strong enough that high-TWR stages honour the g limit rather than buying fuel with slack |
 | plane turn | $c_\varphi = 10^{-3}$ per radian | `PlaneTurnPrice` | a tie-break that keeps the launch where it was asked for when the propellant does not care |
 | booster shortfall | $w_{\text{rec}} = 10^3$ | `RhoRecovery` | far above the propellant's price of 1, so the plan never buys mass to orbit by leaving a booster short |
 
@@ -395,7 +399,7 @@ The smoothing penalises the rate of the control, not its size, so it does not bi
 
 | Item | This solver |
 | --- | --- |
-| [Linearisation](index.md#linearisation) | analytic, by forward-mode automatic differentiation (`Dual`): ten seeded sweeps per node, one per state and control component, give $\mathbf f$, $A$, $B$, $\mathbf w$, its Jacobians, $q$ and $\nabla q$. Only the booster need is a finite difference. |
+| [Linearisation](index.md#linearisation) | analytic, by forward-mode automatic differentiation (`Dual`): ten seeded sweeps per node (plus one $\varphi$ sweep when `BodyForce` and a free `PlaneTurn` are active) give $\mathbf f$, $A$, $B$, $D_\varphi$, $\mathbf w$, its Jacobians, $q$ and $\nabla q$. Only the booster need is a finite difference. |
 | [Discretisation](index.md#discretisation) | trapezoidal collocation, so the control enters at both ends of each interval like a first-order hold; no sub-steps in the subproblem; the true defect in the merit uses the same trapezoid with the true $\mathbf f$ |
 | [Free time](index.md#free-final-time-and-phases) | one $\sigma_i$ per stage in canonical time; trust scale `StageSigScale(s)` = $\sigma_{\text{scale}}$ (300 s, `SigmaTrustSeconds`) on burn stages and $\max(\sigma_{\text{scale}}, \tfrac12(\sigma_{\max,s} - \sigma_{\min,s}))$ on coast stages |
 | [Virtual control](index.md#virtual-control) | on all seven rows of every collocation interval, none on staging links; **squared two-norm**, weight $10^5$, scaled by $\mathbf D$ |

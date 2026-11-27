@@ -19,6 +19,9 @@ internal static class AscentSeed
     public sealed record Result(bool Ok, double[] X, double[] U, double[] Sigma, double KickDeg,
                                 double Cost, int Evaluations, string Note, double LeastMaxQ);
 
+    private static double EffectivePitchOverSpeed(AscentCase c)
+        => Math.Min(c.Settings.PitchOverSpeed, Math.Max(15.0, 0.02 * c.VTarget * c.Dyn.VU));
+
     /// <summary>Burn times at the seed's throttle, with the last stage at its seed fraction; a pinned one as it is pinned. A stage under an acceleration limit throttles down as it gets lighter, which the seed burns at the mass it lights at (see AscentCase.SeedBurnTime).</summary>
     public static double[] SeedSigma(AscentCase c)
     {
@@ -29,7 +32,7 @@ internal static class AscentSeed
             sig[i] = double.IsFinite(c.SigFixed[i]) ? c.SigFixed[i] : Math.Clamp(c.SeedBurnTime(i, m0), c.SigMin[i], c.SigMax[i]);
             m0 -= c.PropC[i] + c.DryC[i];
         }
-        if (!double.IsFinite(c.SigFixed[c.S - 1]))
+        if (!double.IsFinite(c.SigFixed[c.S - 1]) && !c.IsCoast[c.S - 1])
             sig[c.S - 1] *= c.Settings.FinalBurnFraction;
         return sig;
     }
@@ -47,7 +50,10 @@ internal static class AscentSeed
         double Score(Flight f) => !f.Ok ? st.BadSeedCost : f.Miss + Math.Max(0.0, f.Path - Band());
         double Cost(double kick) { evals++; return Score(Fly(c, sig, kick)); }
 
-        double lo = st.KickMinDeg * Deg, hi = st.KickMaxDeg * Deg;
+        bool airless = c.Problem.Atmosphere is VacuumAscentAtmosphere;
+        double lo = st.KickMinDeg * Deg;
+        double hi = (airless ? Math.Max(st.KickMaxDeg, 75.0) : st.KickMaxDeg) * Deg;
+        double hiLimit = (airless ? 85.0 : 60.0) * Deg;
         int nScan = Math.Max(3, st.KickScan);
         var scanK = new double[nScan];
         var scanF = new Flight[nScan];
@@ -87,13 +93,13 @@ internal static class AscentSeed
             {
                 double ratio = Math.Sqrt(hi / lo);
                 lo = Math.Max(0.01 * Deg, centre / ratio);
-                hi = Math.Min(60.0 * Deg, centre * ratio);
+                hi = Math.Min(hiLimit, centre * ratio);
             }
             else
             {
                 double width = hi - lo;
                 lo = Math.Max(0.05 * Deg, centre - 0.5 * width);
-                hi = Math.Min(30.0 * Deg, lo + width);
+                hi = Math.Min(airless ? hiLimit : 30.0 * Deg, lo + width);
             }
         }
 
@@ -180,7 +186,8 @@ internal static class AscentSeed
         Span<double> x = stackalloc double[nx];
         c.X0.CopyTo(xb, 0);
 
-        bool kicked = c.PadVerticalTime == 0.0 && AirSpeed(c, xb) > st.PitchOverSpeed;
+        double pitchSpeed = EffectivePitchOverSpeed(c);
+        bool kicked = c.PadVerticalTime == 0.0 && AirSpeed(c, xb) > pitchSpeed;
         if (kicked)
             Kick(c, xb.AsSpan(0, nx), kick);
 
@@ -191,28 +198,64 @@ internal static class AscentSeed
         {
             int s = c.NodeStage[n];
             if (n == c.Starts[s])
-                stageTime = 0.0;
-            if (st.SeedEnergyCutoff && n == c.Starts[last] && !double.IsFinite(c.SigFixed[last]))
             {
-                xb.AsSpan(n * nx, nx).CopyTo(x);
-                sigUsed[last] = EnergyCutoff(c, x, kicked, kick, reentry);
+                stageTime = 0.0;
+                if (c.IsCoast[s])
+                {
+                    double manual = c.Problem.Stages[s].CoastSeedSeconds;
+                    xb.AsSpan(n * nx, nx).CopyTo(x);
+                    sigUsed[s] = double.IsFinite(manual)
+                        ? Math.Clamp(manual / c.Dyn.TU, c.SigMin[s], c.SigMax[s])
+                        : CoastDurationSeed(c, s, x);
+                }
+                else if (!double.IsFinite(c.SigFixed[s]) && s + 1 < c.S && c.IsCoast[s + 1]
+                         && c.Problem.Stages[s].LiquidCarriesOver)
+                {
+                    xb.AsSpan(n * nx, nx).CopyTo(x);
+                    sigUsed[s] = ApoapsisCutoff(c, s, x, kicked, kick, reentry);
+                }
+                else if (st.SeedEnergyCutoff && s == last && !double.IsFinite(c.SigFixed[last]))
+                {
+                    xb.AsSpan(n * nx, nx).CopyTo(x);
+                    sigUsed[last] = EnergyCutoff(c, x, kicked, kick, reentry);
+                }
+                else if (s > 0 && c.Problem.Stages[s - 1].LiquidCarriesOver && !double.IsFinite(c.SigFixed[s])
+                         && !c.Problem.Stages[s].LiquidCarriesOver)
+                {
+                    int rFirst = s;
+                    while (rFirst > 0 && c.Problem.Stages[rFirst - 1].LiquidCarriesOver) rFirst--;
+                    double runProp = c.RunPropellantFrom(rFirst);
+                    double dryBefore = 0.0;
+                    for (int j = rFirst; j < s; j++) dryBefore += c.DryC[j];
+                    double remProp = Math.Max(0.0, xb[n * nx + AscentDynamics.IM] - (xb[c.Starts[rFirst] * nx + AscentDynamics.IM] - runProp - dryBefore));
+                    if (s == last)
+                        remProp *= st.FinalBurnFraction;
+                    sigUsed[s] = Math.Clamp(c.SeedBurnTimeForProp(s, xb[n * nx + AscentDynamics.IM], remProp), c.SigMin[s], c.SigMax[s]);
+                }
             }
 
             Span<double> direction = ub.AsSpan(n * nu, nu);
-            if (c.PadVerticalTime > 0.0 && n < c.VerticalDirections.Length)
-                c.VerticalDirections[n].AsSpan().CopyTo(direction);
-            else
-                Direction(c, xb.AsSpan(n * nx, nx), kicked, direction);
-            double nodeThrottle = c.SeedThrottleAt(s, xb.AsSpan(n * nx, nx));
-            for (int j = 0; j < nu; j++) ub[n * nu + j] *= nodeThrottle;
-            if (c.PadTurnStep > 0.0 && n >= c.VerticalDirections.Length && n <= c.Ends[0])
+            if (c.IsCoast[s])
             {
-                ReadOnlySpan<double> previous = ub.AsSpan((n - 1) * nu, nu);
-                double dx = direction[0] - previous[0], dy = direction[1] - previous[1], dz = direction[2] - previous[2];
-                double change = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-                if (change > c.PadTurnStep)
-                    for (int j = 0; j < nu; j++)
-                        direction[j] = previous[j] + (direction[j] - previous[j]) * c.PadTurnStep / change;
+                direction.Clear();
+            }
+            else
+            {
+                if (c.PadVerticalTime > 0.0 && n < c.VerticalDirections.Length)
+                    c.VerticalDirections[n].AsSpan().CopyTo(direction);
+                else
+                    Direction(c, xb.AsSpan(n * nx, nx), kicked, direction);
+                double nodeThrottle = c.SeedThrottleAt(s, xb.AsSpan(n * nx, nx));
+                for (int j = 0; j < nu; j++) ub[n * nu + j] *= nodeThrottle;
+                if (c.PadTurnStep > 0.0 && n >= c.VerticalDirections.Length && n <= c.Ends[0])
+                {
+                    ReadOnlySpan<double> previous = ub.AsSpan((n - 1) * nu, nu);
+                    double dx = direction[0] - previous[0], dy = direction[1] - previous[1], dz = direction[2] - previous[2];
+                    double change = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                    if (change > c.PadTurnStep)
+                        for (int j = 0; j < nu; j++)
+                            direction[j] = previous[j] + (direction[j] - previous[j]) * c.PadTurnStep / change;
+                }
             }
             if (c.PadTurnStep > 0.0 && n == c.Ends[0] && !FollowFirstPhaseControls(c, xb, ub, reentry))
                 return false;
@@ -258,12 +301,12 @@ internal static class AscentSeed
             ReadOnlySpan<double> current = x.AsSpan(k * nx, nx);
             Span<double> next = x.AsSpan((k + 1) * nx, nx);
             double dt = c.Dtau[k] * c.SigFixed[0];
-            c.Dyn.Eval(current, u.AsSpan(k * nu, nu), k, f);
+            c.Dyn.Eval(current, u.AsSpan(k * nu, nu), k, f, c.PlaneTurn0);
             for (int j = 0; j < nx; j++)
                 next[j] = current[j] + dt * f[j];
             for (int iter = 0; iter < 4; iter++)
             {
-                c.Dyn.Eval(next, u.AsSpan((k + 1) * nu, nu), k + 1, nextF);
+                c.Dyn.Eval(next, u.AsSpan((k + 1) * nu, nu), k + 1, nextF, c.PlaneTurn0);
                 for (int j = 0; j < nx; j++)
                     next[j] = current[j] + 0.5 * dt * (f[j] + nextF[j]);
             }
@@ -274,13 +317,100 @@ internal static class AscentSeed
     }
 
     /// <summary>
+    /// Pre-coast burn duration for a carry-over stage: integrates up to 95 % of combined propellant and cuts off when Keplerian apoapsis reaches RTarget or specific energy reaches the target orbit's.
+    /// </summary>
+    private static double ApoapsisCutoff(AscentCase c, int stage, ReadOnlySpan<double> start, bool kicked, double kick, double reentry)
+    {
+        const int steps = 800;
+        double combined = c.RunPropellantFrom(stage);
+        double maxProp = Math.Min(0.95 * combined, Math.Max(0.0, start[AscentDynamics.IM] - c.MFloor));
+        double full = Math.Clamp(c.SeedBurnTimeForProp(stage, start[AscentDynamics.IM], maxProp), c.SigMin[stage], c.SigMax[stage]);
+        double targetE = 0.5 * c.VTarget * c.VTarget - 1.0 / c.RTarget;
+        Span<double> x = stackalloc double[AscentCase.NX];
+        start.CopyTo(x);
+        double h = full / steps;
+        double r0 = ApoapsisRadius(x), e0 = Energy(x);
+        if (r0 >= c.RTarget || e0 >= targetE)
+            return c.SigMin[stage];
+        bool localKicked = kicked;
+        for (int i = 1; i <= steps; i++)
+        {
+            if (!Substep(c, x, h, stage, (i - 1) * h, ref localKicked, kick, reentry))
+                return full;
+            double r1 = ApoapsisRadius(x), e1 = Energy(x);
+            if (r1 >= c.RTarget || e1 >= targetE)
+            {
+                double frac = double.IsFinite(r1) && r1 >= c.RTarget && r1 > r0
+                    ? (c.RTarget - r0) / (r1 - r0)
+                    : (e1 > e0 ? (targetE - e0) / (e1 - e0) : 1.0);
+                frac = Math.Clamp(frac, 0.0, 1.0);
+                return Math.Clamp((i - 1 + frac) * h, c.SigMin[stage], full);
+            }
+            r0 = r1;
+            e0 = e1;
+        }
+        return full;
+    }
+
+    private static double ApoapsisRadius(ReadOnlySpan<double> x)
+    {
+        double r = AscentCase.Norm3(x);
+        double v2 = x[3] * x[3] + x[4] * x[4] + x[5] * x[5];
+        double eps = 0.5 * v2 - 1.0 / r;
+        if (eps >= -1e-9)
+            return double.PositiveInfinity;
+        double a = -0.5 / eps;
+        double hx = x[1] * x[5] - x[2] * x[4];
+        double hy = x[2] * x[3] - x[0] * x[5];
+        double hz = x[0] * x[4] - x[1] * x[3];
+        double h2 = hx * hx + hy * hy + hz * hz;
+        double e2 = Math.Max(0.0, 1.0 + 2.0 * eps * h2);
+        return a * (1.0 + Math.Sqrt(e2));
+    }
+
+    /// <summary>Analytical Keplerian coast duration from the current state to RTarget (or apoapsis) in canonical time.</summary>
+    private static double CoastDurationSeed(AscentCase c, int stage, ReadOnlySpan<double> x)
+    {
+        double r = AscentCase.Norm3(x);
+        double v2 = x[3] * x[3] + x[4] * x[4] + x[5] * x[5];
+        double rv = x[0] * x[3] + x[1] * x[4] + x[2] * x[5];
+        double eps = 0.5 * v2 - 1.0 / r;
+        if (!(eps < -1e-9) || !(rv >= 0.0) || r >= c.RTarget)
+            return c.SigMin[stage];
+        double a = -0.5 / eps;
+        double sqrtA = Math.Sqrt(a);
+        double eCosE = 1.0 - r / a;
+        // Guard against -0.0 at apoapsis so atan2 does not wrap to -pi.
+        double eSinE = rv > 0.0 ? rv / sqrtA : 0.0;
+        double e = Math.Sqrt(eCosE * eCosE + eSinE * eSinE);
+        if (e <= 1e-6)
+            return c.SigMin[stage];
+        double e0 = Math.Atan2(eSinE, eCosE);
+        double m0 = e0 - eSinE;
+        double rApo = a * (1.0 + e);
+        double targetE = Math.PI;
+        if (rApo > c.RTarget && r < c.RTarget)
+        {
+            double cosEt = Math.Clamp((1.0 - c.RTarget / a) / e, -1.0, 1.0);
+            targetE = Math.Acos(cosEt);
+        }
+        double mt = targetE - e * Math.Sin(targetE);
+        double dm = Math.Max(0.0, mt - m0);
+        double dt = dm * a * sqrtA;
+        return Math.Clamp(dt, c.SigMin[stage], c.SigMax[stage]);
+    }
+
+    /// <summary>
     /// How long the last stage burns to bring the specific orbital energy up to the target orbit's, canonical time, by flying it with the seed's law at a fine step. Clamped to the stage's burn-time bounds; its full load if the energy is never reached.
     /// </summary>
     private static double EnergyCutoff(AscentCase c, ReadOnlySpan<double> start, bool kicked, double kick, double reentry)
     {
         const int steps = 1000;
         int last = c.S - 1;
-        double full = c.SeedBurnTime(last, start[AscentDynamics.IM]);
+        bool carriesIn = last > 0 && c.Problem.Stages[last - 1].LiquidCarriesOver;
+        double full = carriesIn
+            ? Math.Clamp(c.SeedBurnTimeForProp(last, start[AscentDynamics.IM], Math.Max(0.0, start[AscentDynamics.IM] - c.MFloor)), c.SigMin[last], c.SigMax[last])
+            : c.SeedBurnTime(last, start[AscentDynamics.IM]);
         double target = 0.5 * c.VTarget * c.VTarget - 1.0 / c.RTarget;
         Span<double> x = stackalloc double[AscentCase.NX];
         start.CopyTo(x);
@@ -335,10 +465,15 @@ internal static class AscentSeed
     private static bool Substep(AscentCase c, Span<double> x, double h, int s, double t, ref bool kicked, double kick, double reentry)
     {
         const int nx = AscentCase.NX;
-        AscentSettings st = c.Settings;
+        double pitchSpeed = EffectivePitchOverSpeed(c);
         Span<double> xt = stackalloc double[nx];
         Span<double> tmp = stackalloc double[nx];
-        if (s == 0 && t < c.PadVerticalTime - 1e-12)
+        if (c.IsCoast[s])
+        {
+            Rk4(c, x, h, s, t, kicked, xt);
+            xt.CopyTo(x);
+        }
+        else if (s == 0 && t < c.PadVerticalTime - 1e-12)
         {
             Rk4(c, x, h, s, t, false, xt, vertical: true);
             xt.CopyTo(x);
@@ -351,7 +486,7 @@ internal static class AscentSeed
         else
         {
             Rk4(c, x, h, s, t, false, xt);
-            if (AirSpeed(c, xt) <= st.PitchOverSpeed)
+            if (AirSpeed(c, xt) <= pitchSpeed)
             {
                 xt.CopyTo(x);
             }
@@ -362,7 +497,7 @@ internal static class AscentSeed
                 {
                     double mid = 0.5 * (lo + hiT);
                     Rk4(c, x, mid, s, t, false, tmp);
-                    if (AirSpeed(c, tmp) > st.PitchOverSpeed) hiT = mid;
+                    if (AirSpeed(c, tmp) > pitchSpeed) hiT = mid;
                     else lo = mid;
                 }
                 Rk4(c, x, hiT, s, t, false, tmp);
@@ -425,13 +560,16 @@ internal static class AscentSeed
                               bool vertical, double? fixedThrottle)
     {
         Span<double> u = stackalloc double[3];
-        if (vertical)
-            c.PadVertical(t, u);
-        else
-            Direction(c, x, kicked, u);
-        double throttle = fixedThrottle ?? c.SeedThrottleAt(stage, x);
-        for (int i = 0; i < 3; i++) u[i] *= throttle;
-        c.Dyn.Eval(x, u, stage, c.Dyn.SolidBetween(stage, t * c.Dyn.TU), dx);
+        if (!c.IsCoast[stage])
+        {
+            if (vertical)
+                c.PadVertical(t, u);
+            else
+                Direction(c, x, kicked, u);
+            double throttle = fixedThrottle ?? c.SeedThrottleAt(stage, x);
+            for (int i = 0; i < 3; i++) u[i] *= throttle;
+        }
+        c.Dyn.Eval(x, u, stage, c.Dyn.SolidBetween(stage, t * c.Dyn.TU), dx, c.PlaneTurn0);
     }
 
     private static double AirSpeed(AscentCase c, ReadOnlySpan<double> x)
