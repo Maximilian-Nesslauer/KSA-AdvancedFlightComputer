@@ -23,7 +23,20 @@ internal static class TouchdownExperiment
         _overrides ??= Read();
         foreach ((PropertyInfo property, object value) in _overrides)
             property.SetValue(cfg, value);
+        // AFC_XVC_Q / AFC_XVC_W: the virtual control's attitude (quaternion components) and body-rate scales, rad/s (Ksa6DofSetup.VirtualControlAttitudeScale, VirtualControlRateScaleRadS), which live in an array.
+        if (cfg.VirtualControlScale is { Length: >= 13 } scale)
+        {
+            if (Number("AFC_XVC_Q") is double q)
+                for (int i = 6; i <= 9; i++)
+                    scale[i] = q;
+            if (Number("AFC_XVC_W") is double w)
+                for (int i = 10; i <= 12; i++)
+                    scale[i] = w;
+        }
     }
+
+    private static double? Number(string name)
+        => double.TryParse(Environment.GetEnvironmentVariable(name), NumberStyles.Float, CultureInfo.InvariantCulture, out double v) && v > 0.0 ? v : null;
 
     private static List<(PropertyInfo, object)> Read()
     {
