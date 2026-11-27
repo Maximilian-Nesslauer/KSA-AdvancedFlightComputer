@@ -6,6 +6,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 using System;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Guidance.Conic;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
@@ -708,6 +709,7 @@ public sealed class Ksa6DofGuidance : IDisposable
     {
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
+        _solver.SubproblemEps = Scvx6DofSolver.RealTimeEpsFor(_dyn, _n);
 
         BuildColdSeed(x0, xf, sigmaSeed, out double[] xSeed, out double[] uSeed, CoastNow(simNow, _ignitionAt - simNow));
         _xf = (double[])xf.Clone();
@@ -900,7 +902,9 @@ public sealed class Ksa6DofGuidance : IDisposable
         _coldIterations = 0;
         _coldRefusedRun = 0;
         NeedsMoreNodes = false;
-        _solver.SubproblemEps = ColdSubproblemEps;
+        _solver.SubproblemEps = ScvxConic.Backend == ScvxConicBackend.Clarabel
+            ? Scvx6DofSolver.RealTimeEps
+            : ColdSubproblemEps;
     }
 
     /// <summary>
@@ -938,6 +942,9 @@ public sealed class Ksa6DofGuidance : IDisposable
     {
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
+        _solver.SubproblemEps = ScvxConic.Backend == ScvxConicBackend.Clarabel
+            ? Scvx6DofSolver.RealTimeEps
+            : ColdSubproblemEps;
 
         // PACING. An SCvx iteration is the indivisible unit of work here, so the cost of one is whatever it is; what can be chosen is how close together they land.
         // Back to back on consecutive frames, three iterations read as ONE freeze of their combined length. Spaced a few hundred milliseconds apart they read as three brief hitches with normal frames in between, which is far less noticeable even though the total work - and the total wall time - is the same or worse.
@@ -1255,6 +1262,7 @@ public sealed class Ksa6DofGuidance : IDisposable
     {
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
+        _solver.SubproblemEps = Scvx6DofSolver.RealTimeEpsFor(_dyn, _n);
 
         if (prev == null || !prev.HasPlan)
             return false;
@@ -1425,6 +1433,7 @@ public sealed class Ksa6DofGuidance : IDisposable
 
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
+        _solver.SubproblemEps = Scvx6DofSolver.RealTimeEpsFor(_dyn, _n);
 
 
         // Bounded worst case from here on: this runs inside the guidance loop.
@@ -1526,6 +1535,7 @@ public sealed class Ksa6DofGuidance : IDisposable
             return Update(x0, simNow, maxIterations);
 
         CommitInputs();
+        _solver.SubproblemEps = Scvx6DofSolver.RealTimeEpsFor(_dyn, _n);
         ApplyTimeBudget(SubproblemBudgetMs, EscalatedBudgetMs);
 
         // From whichever is newer: the working trajectory, or a plan published since by a cold solve.
@@ -1593,7 +1603,7 @@ public sealed class Ksa6DofGuidance : IDisposable
         foreach (ScvxIteration it in _solver.Trace)
             admm += it.SolverIterations;
         LastAdmmIterations = admm;
-        if (admm > 50 && elapsedMs > 0.0)
+        if (ScvxConic.Backend == ScvxConicBackend.Scs && admm > 50 && elapsedMs > 0.0)
         {
             double sample = elapsedMs / admm;
             MsPerAdmmIteration = 0.8 * MsPerAdmmIteration + 0.2 * sample;

@@ -66,19 +66,21 @@ public static class ScvxConic
 /// </summary>
 public sealed class ScvxConicWorkspaces : IDisposable
 {
+    private readonly uint? _clarabelEquilibrateMaxIter;
     private ScsWorkspace? _scs;
     private ClarabelWorkspace? _clarabel;
 
     /// <summary>The workspace of the last solve, for reading its solution; the selected one before any solve.</summary>
     public IScvxConicWorkspace Last { get; private set; }
 
-    public ScvxConicWorkspaces()
+    public ScvxConicWorkspaces(uint? clarabelEquilibrateMaxIter = null)
     {
+        _clarabelEquilibrateMaxIter = clarabelEquilibrateMaxIter;
         Last = Current;
     }
 
     public IScvxConicWorkspace Current => ScvxConic.Backend == ScvxConicBackend.Clarabel
-        ? _clarabel ??= new ClarabelWorkspace()
+        ? _clarabel ??= new ClarabelWorkspace { DefaultEquilibrateMaxIter = _clarabelEquilibrateMaxIter }
         : _scs ??= new ScsWorkspace();
 
     /// <summary>The selected workspace, which becomes <see cref="Last"/>.</summary>

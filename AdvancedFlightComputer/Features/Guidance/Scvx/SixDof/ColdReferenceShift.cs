@@ -39,7 +39,64 @@ public static class ColdReferenceShift
             reference[offset + v + 2] += dvz;
             reference[offset + Dynamics6Dof.IM] += dm;
         }
-        // Only node zero takes measured attitude and body rates because rotating the full path would also change its thrust directions.
+        // Blend measured attitude and body-rate offsets over the first few nodes before overwriting node 0,
+        // so interval 0 does not inherit a step discontinuity while the terminal node remains untouched.
+        const int iq = Dynamics6Dof.IQ, iw = Dynamics6Dof.IW;
+        double q0w = reference[iq], q0x = reference[iq + 1], q0y = reference[iq + 2], q0z = reference[iq + 3];
+        double q0n = Math.Sqrt(q0w * q0w + q0x * q0x + q0y * q0y + q0z * q0z);
+        double qow = observed[iq], qox = observed[iq + 1], qoy = observed[iq + 2], qoz = observed[iq + 3];
+        double qon = Math.Sqrt(qow * qow + qox * qox + qoy * qoy + qoz * qoz);
+        double dqx = 0.0, dqy = 0.0, dqz = 0.0, vNorm = 0.0, halfAngle = 0.0;
+        if (q0n > 1e-12 && qon > 1e-12)
+        {
+            q0w /= q0n; q0x /= q0n; q0y /= q0n; q0z /= q0n;
+            qow /= qon; qox /= qon; qoy /= qon; qoz /= qon;
+            // Shortest-arc hemisphere alignment so a pure sign flip (q -> -q) produces zero rotation
+            // and leaves branch alignment to AlignQuaternionBranch.
+            double dot = q0w * qow + q0x * qox + q0y * qoy + q0z * qoz;
+            if (dot < 0.0) { qow = -qow; qox = -qox; qoy = -qoy; qoz = -qoz; }
+            double dqw = qow * q0w + qox * q0x + qoy * q0y + qoz * q0z;
+            dqx = -qow * q0x + qox * q0w - qoy * q0z + qoz * q0y;
+            dqy = -qow * q0y + qox * q0z + qoy * q0w - qoz * q0x;
+            dqz = -qow * q0z - qox * q0y + qoy * q0x + qoz * q0w;
+            vNorm = Math.Sqrt(dqx * dqx + dqy * dqy + dqz * dqz);
+            halfAngle = Math.Atan2(vNorm, Math.Clamp(dqw, 0.0, 1.0));
+        }
+
+        double dwx = observed[iw] - reference[iw];
+        double dwy = observed[iw + 1] - reference[iw + 1];
+        double dwz = observed[iw + 2] - reference[iw + 2];
+
+        int blendEnd = Math.Min(5, nodes - 1);
+        for (int k = 1; k < blendEnd; k++)
+        {
+            double alpha = 1.0 - (double)k / blendEnd;
+            int offset = k * stride;
+            if (vNorm > 1e-12 && halfAngle > 1e-12)
+            {
+                double aHalf = alpha * halfAngle;
+                double rw = Math.Cos(aHalf), rs = Math.Sin(aHalf) / vNorm;
+                double rx = dqx * rs, ry = dqy * rs, rz = dqz * rs;
+                double kw = reference[offset + iq], kx = reference[offset + iq + 1];
+                double ky = reference[offset + iq + 2], kz = reference[offset + iq + 3];
+                double nw = rw * kw - rx * kx - ry * ky - rz * kz;
+                double nx = rw * kx + rx * kw + ry * kz - rz * ky;
+                double ny = rw * ky - rx * kz + ry * kw + rz * kx;
+                double nz = rw * kz + rx * ky - ry * kx + rz * kw;
+                double nn = Math.Sqrt(nw * nw + nx * nx + ny * ny + nz * nz);
+                if (nn > 1e-12)
+                {
+                    reference[offset + iq] = nw / nn;
+                    reference[offset + iq + 1] = nx / nn;
+                    reference[offset + iq + 2] = ny / nn;
+                    reference[offset + iq + 3] = nz / nn;
+                }
+            }
+            reference[offset + iw] += alpha * dwx;
+            reference[offset + iw + 1] += alpha * dwy;
+            reference[offset + iw + 2] += alpha * dwz;
+        }
+
         observed[..stride].CopyTo(reference);
     }
 }

@@ -195,7 +195,7 @@ internal static class GuidanceSettingSpecs
 
     #region Touchdown guidance (6-DOF)
 
-    public static readonly SettingSpec SixDofNodes = new("SixDofNodes", "SOLVER POINTS", "", T, 50.0, 5.0, 50.0, "%.0f",
+    public static readonly SettingSpec SixDofNodes = new("SixDofNodes", "SOLVER POINTS", "", T, 25.0, 5.0, 50.0, "%.0f",
         "Number of points of the touchdown guidance plan.");
     public static readonly SettingSpec SixDofSurfaceShare = new("SixDofSurfaceShare", "PLAN RCS AND FLAPS", "frac", T, 0.75, 0.1, 1.0, "%.2f",
         "The share of the RCS's torque and of the control surfaces' travel touchdown's plans may use; the rest is left for flying the plan. Lower plans more gently and leaves turns the air, the flaps and the thrusters cannot do with room to spare to the gimbals, with the engine lit. Never above the gimbals' share.");
@@ -221,7 +221,7 @@ internal static class GuidanceSettingSpecs
         "Weight of the rotation rate against the fuel use.");
     public static readonly SettingSpec SixDofControlSmooth = new("SixDofControlSmooth", "CONTROL SMOOTHING", "weight", T, 0.05, 0.0, 100.0, "%.3f",
         "Weight on control changes between points.");
-    public static readonly SettingSpec SixDofProximal = new("SixDofProximal", "PROXIMAL CONDITIONING", "", T, 0.05, 0.0, 100.0, "%.3f",
+    public static readonly SettingSpec SixDofProximal = new("SixDofProximal", "PROXIMAL CONDITIONING", "", T, 0.0, 0.0, 100.0, "%.3f",
         "Proximal weight that holds each iteration near the last.");
     public static readonly SettingSpec SixDofTrackKp = new("SixDofTrackKp", "TRACK KP", "1/s^2", T, 0.25, 0.0, 100.0, "%.3f",
         "Position gain of the thrust feedback between re-solves.");

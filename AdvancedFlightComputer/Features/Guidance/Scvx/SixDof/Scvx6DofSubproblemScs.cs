@@ -54,7 +54,8 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
     private readonly double[] _colScale;
 
     // The conic backend (ScvxConic.Backend): SCS or Clarabel, one workspace each, the same problem data for both.
-    private readonly ScvxConicWorkspaces _wss = new();
+    // Real-time 6-DOF warm updates use 3 Ruiz equilibration iterations on Clarabel.
+    private readonly ScvxConicWorkspaces _wss = new(clarabelEquilibrateMaxIter: 3);
     /// <summary>The workspace of the last solve, whose solution and statistics the properties below read.</summary>
     private IScvxConicWorkspace _ws => _wss.Last;
     private double _sigCBar;
@@ -681,7 +682,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             _b[row++] = hi;
         }
 
-        // THE GIMBAL'S SLEW RATE (Scvx6DofConfig.GimbalSlewPerS): |td_{k+1} - td_k| <= rate * dt * tan(gimbal) * (T_k + T_{k+1}) / 2 on each lateral axis, with dt at the reference burn time as the dynamics take it.
+        // THE GIMBAL'S SLEW RATE (Scvx6DofConfig.GimbalSlewPerS): |td_{k+1} - td_k| <= rate * dt * tan(gimbal) * (T_k + T_{k+1}) / 2 on each lateral axis, linearised in (sigma, T_k, T_{k+1}) about the reference.
         // In TorqueDemand the same limit falls on the pitch and yaw torque: the gimbals' share slews at their rate, |tau_{k+1} - tau_k| <= rate * dt * DemandTorquePerN * (T_k + T_{k+1}) / 2 + what the RCS can jump, from one bound to the other.
         if (_nSlew > 0)
         {
@@ -690,17 +691,22 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
                 for (int axis = 0; axis < 2; axis++)
                 {
                     // In the coast there is no thrust and so no gimbal to slew; at ignition the nozzle may already be where the burn wants it, so the step onto the burn is free.
-                    double reach = CoastInterval(k) ? 0.0 : 0.5 * _cfg.GimbalSlewPerS * _dtauB * sigBar * perN;
+                    bool coast = CoastInterval(k);
+                    double coeff = coast ? 0.0 : 0.5 * _cfg.GimbalSlewPerS * _dtauB * perN;
+                    double reach = coeff * sigBar;
+                    double tBarSum = coast ? 0.0 : ubar[k * NU + Dynamics6Dof.IT] + ubar[(k + 1) * NU + Dynamics6Dof.IT];
                     double free = _nCoast > 0 && k == _nCoast - 1 ? 2.0 * perN * _cfg.Tmax : 0.0;
                     int j = _cfg.TorqueDemand ? Dynamics6Dof.IRCS + axis : axis == 0 ? Dynamics6Dof.ITDX : Dynamics6Dof.ITDY;
                     (double pos, double neg) = _cfg.TorqueDemand ? _cfg.RcsBounds(axis) : (0.0, 0.0);
+                    double rhs = pos + neg + free - coeff * sigBar * tBarSum;
                     for (int sign = 1; sign >= -1; sign -= 2)
                     {
                         AddA(row, IU(k + 1, j), sign);
                         AddA(row, IU(k, j), -sign);
                         AddA(row, IU(k, Dynamics6Dof.IT), -reach);
                         AddA(row, IU(k + 1, Dynamics6Dof.IT), -reach);
-                        _b[row++] = pos + neg + free;
+                        if (!coast) AddA(row, _iSig, -coeff * tBarSum);
+                        _b[row++] = rhs;
                     }
                 }
         }
@@ -734,18 +740,28 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             }
         for (int k = 0; k < _n - 1; k++)
         {
-            double interval = CoastInterval(k) ? _dtauC * _sigCBar : _dtauB * sigBar;
+            bool coast = CoastInterval(k);
+            double dtau = coast ? _dtauC : _dtauB;
+            int sigCol = coast ? _iSigC : _iSig;
             for (int i = 0; i < _cfg.FinCount; i++)
             {
                 (double lo, double hi) = _cfg.FinBounds(i);
                 double rate = _cfg.FinRate(i);
-                // Without a rate, the whole range in one step.
-                double reach = rate > 0.0 && interval > 0.0 ? rate * interval : hi - lo;
                 for (int sign = 1; sign >= -1; sign -= 2)
                 {
                     AddA(row, IU(k + 1, Dynamics6Dof.IFIN + i), sign);
                     AddA(row, IU(k, Dynamics6Dof.IFIN + i), -sign);
-                    _b[row++] = reach;
+                    if (rate > 0.0)
+                    {
+                        // Relax fin-rate across a pinned-zero coast while keeping the sigma slot for frozen CCS sparsity.
+                        bool zeroCoast = coast && (_cfg.CoastSigmaFixed is <= 0.0 || _cfg.CoastSigmaMax <= 0.0);
+                        AddA(row, sigCol, zeroCoast ? 0.0 : -rate * dtau);
+                        _b[row++] = zeroCoast ? hi - lo : 0.0;
+                    }
+                    else
+                    {
+                        _b[row++] = hi - lo;
+                    }
                 }
             }
         }

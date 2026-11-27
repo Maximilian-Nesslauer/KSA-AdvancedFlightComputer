@@ -106,7 +106,7 @@ internal static class ThreeDofScenario
     /// <param name="accelMax">Thrust acceleration limit, m/s^2, or 0 for none; see Scvx3DofConfig.AccelMax.</param>
     public static Scvx3DofConfig Config(int nodes = 30, int glideIntervals = 12, double alphaMaxDeg = 15.0, bool anchor = false,
                                         double accelMax = 0.0, double turnAccel = 0.0, double vcVelocity = 0.0,
-                                        double burnTiltPerSDeg = 0.0)
+                                        double burnTiltPerSDeg = 0.0, bool useAugmentedLagrangian = true)
     {
         var min = Enumerable.Repeat(double.NegativeInfinity, 7).ToArray();
         var max = Enumerable.Repeat(double.PositiveInfinity, 7).ToArray();
@@ -126,6 +126,7 @@ internal static class ThreeDofScenario
             AttitudeAccelMax = turnAccel,
             BurnTiltPerS = burnTiltPerSDeg * Math.PI / 180,
             VirtualControlScale = vcVelocity > 0.0 ? [0, 0, 0, vcVelocity, vcVelocity, vcVelocity, 0] : null,
+            UseAugmentedLagrangian = useAugmentedLagrangian,
             PathSlackWeight = 1e3,
             AttitudeAnchor = anchor,
             // Soft terminal, the 6-DOF's weights: miss the pad before faking the dynamics, and miss the speed last of all.

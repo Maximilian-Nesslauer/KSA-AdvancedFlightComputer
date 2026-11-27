@@ -49,8 +49,28 @@ internal static class ThreeDofKsaCheck
         ok &= AccelLimit(model, verbose);
 
         Console.WriteLine();
+        Console.WriteLine("5. pure-dual AL-SCvx vs quadratic L2 comparison and _jRef consistency");
+        ok &= CompareAlVsL2(model, plan, flat, verbose);
+
+        Console.WriteLine();
         Console.WriteLine(ok ? "PASS - glide-and-burn and burn-only solves on the KSA model" : "FAIL");
         return ok ? 0 : 1;
+    }
+
+    private static bool CompareAlVsL2(KsaPointMassModel model, Scvx3DofSolver alPlan, Scvx3DofSolver alFlat, bool verbose)
+    {
+        (bool l2Ok, Scvx3DofSolver l2Plan) = SolveCold(model, ThreeDofScenario.Config(useAugmentedLagrangian: false), verbose);
+        double alProp = X0[6] - alPlan.ReferenceX[^1];
+        double l2Prop = X0[6] - l2Plan.ReferenceX[^1];
+        // Verify _jRef matches TrueCost evaluated on the normalized stored reference (zero bias after NormaliseAttitudes).
+        double recomputedCost = alPlan.TrueCost(alPlan.ReferenceX, alPlan.ReferenceU, alPlan.SigmaGlide, alPlan.SigmaBurn, out _, out _, out _);
+        double jRefDiff = Math.Abs(alPlan.Cost - recomputedCost);
+        bool costConsistent = jRefDiff <= 1e-9 * Math.Max(1.0, Math.Abs(recomputedCost));
+        bool fuelBetterOrEqual = l2Ok && alProp <= l2Prop + 5.0;
+        Console.WriteLine($"  AL-SCvx fuel {alProp:F1} kg vs L2 {l2Prop:F1} kg (delta {alProp - l2Prop:+0.0;-0.0} kg), no-lift iters {alFlat.IterationCount}, |_jRef - TrueCost|={jRefDiff:E2}");
+        bool pass = fuelBetterOrEqual && costConsistent;
+        Console.WriteLine($"  {(pass ? "ok" : "FAIL")}");
+        return pass;
     }
 
     private static bool AccelLimit(KsaPointMassModel scenario, bool verbose)

@@ -153,11 +153,12 @@ public sealed class Scvx6DofSolver : IDisposable
     public const int TightEpsMaxNodes = 10;
 
     /// <summary>
-    /// The flight tolerance for these dynamics at <paramref name="nodes"/> nodes: <see cref="RealTimeEpsWithRcs"/> with RCS torque in the plan above <see cref="TightEpsMaxNodes"/> nodes, <see cref="RealTimeEps"/> otherwise.
-    ///  The last rungs keep the tight tolerance: at 1e-3 a 5-node plan could not get its attitude under the gate at the last interval (1.4-2.1x, every iteration accepted), every re-solve near the ground was refused, and the booster flew a stale plan to a stop 1.6 m short (2026-11-20). At 5-10 nodes an SCS iteration costs 13-30 microseconds, so the extra iterations cost milliseconds.
+    /// The flight tolerance for these dynamics at <paramref name="nodes"/> nodes: <see cref="RealTimeEpsWithRcs"/> on SCS with RCS torque in the plan above <see cref="TightEpsMaxNodes"/> nodes, <see cref="RealTimeEps"/> otherwise.
     /// </summary>
     public static double RealTimeEpsFor(Dynamics6Dof.Params dyn, int nodes)
-        => dyn.Rcs != null && nodes > TightEpsMaxNodes ? RealTimeEpsWithRcs : RealTimeEps;
+        => ScvxConic.Backend == ScvxConicBackend.Scs && dyn.Rcs != null && nodes > TightEpsMaxNodes
+            ? RealTimeEpsWithRcs
+            : RealTimeEps;
 
     /// <summary>
     /// Hard cap on ADMM iterations per subproblem. THE REAL-TIME PATH MUST HAVE A
@@ -305,6 +306,7 @@ public sealed class Scvx6DofSolver : IDisposable
         _xbar = (double[])xSeed.Clone();
         _ubar = (double[])uSeed.Clone();
         ClampRcsSeed(_ubar);
+        NormaliseQuaternions(_xbar);
         AlignTerminalBranch();
         _sigBar = sigmaSeed;
         _sigCBar = CoastSeed(coastSigmaSeed);
@@ -530,12 +532,14 @@ public sealed class Scvx6DofSolver : IDisposable
         {
             _xbar = x;
             _ubar = u;
-            // Reproject onto the unit sphere: the subproblem only enforces the tangent plane at the reference, which is exact only at the fixpoint.
-            // Skipping this lets |q| drift and quietly degrades every subsequent linearisation.
+            // Reproject onto the unit sphere before recording _jRef so the stored reference and merit match.
             NormaliseQuaternions(_xbar);
             _sigBar = sigma;
             _sigCBar = coastSigma;
-            _jRef = jTrue;
+            (double normCost, double normDefect) = TrueCost(_xbar, _ubar, _sigBar, _sigCBar,
+                                                            out defectChannel, out defectNode);
+            _jRef = normCost + convexSlack - SoftLimitCost(_xbar, _ubar);
+            defectNorm = normDefect;
             step = Math.Max(dX, dSigma);   // matches the reference: dU is not part of the measure
         }
 

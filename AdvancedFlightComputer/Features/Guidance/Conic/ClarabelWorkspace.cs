@@ -51,8 +51,11 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
     /// <summary>Iterative refinement on every new solver. Off is Maxi's setting; on is Clarabel's default.</summary>
     public static bool IterativeRefinementDefault = false;
 
-    /// <summary>Equilibration iterations, or null to keep Clarabel's default.</summary>
+    /// <summary>Process-wide equilibration iteration override (CLI), or null to use the workspace default.</summary>
     public static uint? EquilibrateMaxIter;
+
+    /// <summary>Per-workspace equilibration iteration count when <see cref="EquilibrateMaxIter"/> is unset, or null for Clarabel's default (10).</summary>
+    public uint? DefaultEquilibrateMaxIter { get; init; }
 
     /// <summary>Keep the native solver between solves and update it in place. False builds a fresh one every solve (for A/B checks).</summary>
     public static bool Persistent = true;
@@ -60,11 +63,14 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
     private IntPtr _solver;
     private bool _iterativeRefinement = IterativeRefinementDefault;
 
-    // What the live solver was built from: the frozen CCS arrays (stable for an assembler's life), the cones, the tolerance and the cap.
+    // What the live solver was built from: the frozen CCS arrays (stable for an assembler's life), the cones, the tolerance, the cap and equilibration.
     private int[]? _aColPtr, _aRowIdx, _pColPtr, _pRowIdx;
     private int _m, _n, _zeroDim, _posDim, _maxIter;
     private int[] _socDims = [];
     private double _eps;
+    private uint? _equilibrateMaxIter;
+
+    private uint? EffectiveEquilibrateMaxIter => EquilibrateMaxIter ?? DefaultEquilibrateMaxIter;
 
     private bool _hasSolution;
 
@@ -241,7 +247,8 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
     private bool SameStructure(CcsAssembler A, CcsAssembler? P, int m, int n, int zeroDim, int posDim,
                                int[] socDims, double eps, int cap)
     {
-        if (m != _m || n != _n || zeroDim != _zeroDim || posDim != _posDim || eps != _eps || cap != _maxIter)
+        if (m != _m || n != _n || zeroDim != _zeroDim || posDim != _posDim
+            || eps != _eps || cap != _maxIter || EffectiveEquilibrateMaxIter != _equilibrateMaxIter)
             return false;
         if (!ReferenceEquals(A.ColumnPointers, _aColPtr) || !ReferenceEquals(A.RowIndices, _aRowIdx))
             return false;
@@ -339,13 +346,18 @@ public sealed class ClarabelWorkspace : IScvxConicWorkspace, IDisposable
             s.PresolveEnable = false;
             s.InputSparseDropzeros = false;
             s.IterativeRefinementEnable = _iterativeRefinement;
-            if (EquilibrateMaxIter is uint eq) s.EquilibrateMaxIter = eq;
+            uint? eqMax = EffectiveEquilibrateMaxIter;
+            if (eqMax == 0)
+                s.EquilibrateEnable = false;
+            else if (eqMax is uint eq)
+                s.EquilibrateMaxIter = eq;
 
             _solver = ClarabelNative.clarabel_DefaultSolver_f64_new(
                 ref pMat, Pin(c), ref aMat, Pin(b),
                 (nuint)coneArray.Length, Pin(coneArray), ref s);
             if (_solver == IntPtr.Zero)
                 throw new InvalidOperationException("clarabel_DefaultSolver_f64_new failed");
+            _equilibrateMaxIter = eqMax;
         }
         finally
         {

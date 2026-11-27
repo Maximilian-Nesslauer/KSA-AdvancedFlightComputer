@@ -80,9 +80,10 @@ public static partial class GuidanceWindow
     {
         StopSixDofStandby();
         _s.SixDofStandbyRetryAt = now + SixDofStandbyRetryS;
-        // AT THE FINEST RUNG, not the count the engage would pick from the burn time. Mid-burn the craft is fast and the spacing that suits a descent is too coarse: the first standby flown stalled at 25, 30 and 40 nodes and only converged at 50, 3.6 s after ignition. Off the sim thread the extra nodes cost nothing that matters, and the ladder steps them down once there is a plan.
         if (nodes <= 0)
-            nodes = MaxNodes;
+            nodes = ScvxUsesClarabel
+                ? (_s.SixDofCoastPending ? TwoGridCoastNodes : TwoGridBurnNodes)
+                : MaxNodes;
 
         // The standby runs the spread cold solve; the two options that replace it plan synchronously on engage instead.
         if (_s.SixDofFixedTime || _s.SixDofGfoldSeed)
@@ -118,11 +119,8 @@ public static partial class GuidanceWindow
         _s.Converging = true;
         _s.ColdFrames = 0;
         _s.SixDofLastPublishedPlan = null;
-        _s.GateIndex = -1;
+        ResetNodeLadderForBackend(ScvxUsesClarabel);
         _s.RefusalRun = 0;
-        _s.RungFloor = int.MaxValue;
-        _s.RungFloorSpeed = 0.0;
-        _s.BackedOffTo = -1;
         _s.PrevV = null;
         _s.Bias = default;
         _s.LastReplan = now;
@@ -423,6 +421,10 @@ public static partial class GuidanceWindow
     /// <summary>The next node rung finer than <paramref name="nodes"/>, or the finest.</summary>
     private static int FinerNodeRung(int nodes)
     {
+        if (ScvxUsesClarabel)
+            return nodes < TwoGridBurnNodes ? TwoGridBurnNodes
+                : nodes < TwoGridCoastNodes ? TwoGridCoastNodes
+                : MaxNodes;
         for (int i = NodeRungs.Length - 1; i >= 0; i--)
             if (NodeRungs[i] > nodes)
                 return NodeRungs[i];

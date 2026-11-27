@@ -12,10 +12,10 @@ This page states the problem in continuous form, then says how each part becomes
 | State | $\mathbf x = (\mathbf r, \mathbf v, \mathbf q, \boldsymbol\omega, m) \in \mathbb R^{14}$ |
 | Controls | $7 + n_f$: lateral thrust $t_x, t_y$, axial thrust $T$, roll torque $\tau_r$, three RCS torques, and one deflection per fin ($n_f$ fins) |
 | Parameters | burn duration $\sigma$, free; coast duration $\sigma_c$ when the plan starts before ignition, free until it is locked |
-| Nodes | 5 to 50, on the rungs 50, 40, 30, 25, 20, 15, 10, 5, chosen for about 0.6 s between nodes |
+| Nodes | Two-grid schedule under Clarabel: 25 for coast + burn, 15 for burn-only (5 to 50 configurable; 10 to 50 ladder under SCS) |
 | Discretisation | trapezoidal collocation, controls linear between nodes, uniform grid in each phase |
 | Linearisation | forward-mode automatic differentiation (dual numbers); RCS columns in closed form |
-| Cone solver | SCS (ADMM), with the quadratic terms passed as SCS's own $\tfrac12\mathbf y^\top P\mathbf y$ |
+| Cone solver | Persistent Clarabel (interior point, `EquilibrateMaxIter = 3`), with quadratic terms in $\tfrac12\mathbf y^\top P\mathbf y$; SCS behind a switch |
 | Where it runs | a worker thread per craft (`SixDofThreaded`, on) |
 | Re-solve cadence | every 0.1 s (`SixDofReplanSec`), from the measured state, warm-started from the last plan |
 
@@ -480,7 +480,7 @@ The subproblem is solved through a persistent native **`ClarabelWorkspace`** (ba
 
 | Clarabel setting | Value |
 | --- | --- |
-| tolerance (`ClarabelEpsCap`) | $10^{-4}$ |
+| tolerance (`MaxPrimaryTolerance`) | $5 \times 10^{-6}$ (default reduced tolerances $5 \times 10^{-5}$ / $10^{-4}$ kept for `AlmostSolved`) |
 | `PresolveEnable` / `InputSparseDropzeros` | `false` / `false` (mandatory for numeric `update_A` sparsity invariance) |
 | `EquilibrateMaxIter` | `3` (fast Ruiz equilibration on real-time warm updates) |
 | `IterativeRefinementEnable` | `false` (automatic one-shot `IR = true` rebuild on numerical faults) |
