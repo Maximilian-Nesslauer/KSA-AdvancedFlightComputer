@@ -128,6 +128,7 @@ internal static partial class Program
         Check("a climb rises before it falls", CutSupervisor.ImpactSpeedMs(1.0, 1.0, 9.81) > CutSupervisor.ImpactSpeedMs(1.0, 0.0, 9.81));
 
         ContactDepthRules();
+        TipOverRules();
     }
 
     // The contact height at an attitude (#339): a Starship's skirt, four splayed legs, one collider on the axis.
@@ -151,5 +152,35 @@ internal static partial class Program
         double[] ox = [0.0], oh = [0.0], od = [10.0];
         Check("a point on the axis rises as the craft tilts", ContactDepth.ExtraDepthM(ox, ox, oh, oh, od, s10, 0, c10) < 0.0);
         Check("no colliders: nothing to add", ContactDepth.ExtraDepthM([], [], [], [], [], s10, 0, c10) == 0.0);
+    }
+
+    // Would the touchdown tip it over (TipOver): a 102 t Starship, 2e7 kg m^2, skirt 4.5 m out, centre of mass 22 m up.
+    private static void TipOverRules()
+    {
+        const double m = 1.02e5, i = 2.0e7, r = 4.5, h = 22.0, g = 9.81;
+        double alpha = TipOver.BalanceTiltRad(r, h);
+        Check("it balances on the skirt's edge at about 11.6 deg", Math.Abs(alpha * 180.0 / Math.PI - 11.56) < 0.05, $"{alpha * 180.0 / Math.PI:F2} deg");
+        Check("standing still and upright, nothing tips it", TipOver.Share(m, i, r, h, g, 0.0, 0.0, 0.0) == 0.0);
+        // The sideways speed that tips it, upright and not turning: L^2 / 2 I_e = m g d (1 - cos alpha).
+        double d = Math.Sqrt(r * r + h * h), ie = i + m * d * d;
+        double vTip = Math.Sqrt(2.0 * ie * m * g * d * (1.0 - Math.Cos(alpha))) / (m * h);
+        Check("at its tipping speed the share is 1", Math.Abs(TipOver.Share(m, i, r, h, g, vTip, 0.0, 0.0) - 1.0) < 1e-9, $"{vTip:F2} m/s");
+        Check("upright and not turning, about 3.6 m/s sideways tips it", Math.Abs(vTip - 3.6) < 0.2, $"{vTip:F2} m/s");
+        // Tilt eats the margin: 5 deg towards the edge leaves much less.
+        double v5 = vTip * Math.Sqrt(TipOver.BarrierJ(m, r, h, g, 5.0 * Math.PI / 180.0) / TipOver.BarrierJ(m, r, h, g, 0.0));
+        Check("tilted 5 deg, it tips at well under 2.5 m/s", Math.Abs(TipOver.Share(m, i, r, h, g, v5, 0.0, 5.0 * Math.PI / 180.0) - 1.0) < 1e-9 && v5 < 2.5, $"{v5:F2} m/s");
+        Check("past the balance tilt nothing holds it", double.IsPositiveInfinity(TipOver.Share(m, i, r, h, g, 0.0, 0.0, alpha + 0.01)));
+        // 2026-11-27 15:12: 1.5 m/s, 6.3 deg/s, 3.3 deg - over the 80 % line.
+        double s1512 = TipOver.Share(m, i, r, h, g, 1.49, 6.3 * Math.PI / 180.0, 3.3 * Math.PI / 180.0);
+        Check("15:12's touchdown is over the 80 % line", s1512 > TipOver.AcceptShare, $"{s1512:P0}");
+        // The plan's linear line agrees with the exact share where it matters: at 80 % on the linear line, the exact share is close to 80 %.
+        double k = TipOver.LimitGain(m, i, r, h, g);
+        double vLine = k * alpha / (m * h);
+        double exact = TipOver.Share(m, i, r, h, g, vLine, 0.0, 0.0);
+        Check("on the plan's linear line, upright, the exact share is within 2 % of 80 %", Math.Abs(exact - 0.8) < 0.02, $"{exact:P1} at {vLine:F2} m/s");
+        double vLine5 = k * (alpha - 5.0 * Math.PI / 180.0) / (m * h);
+        double exact5 = TipOver.Share(m, i, r, h, g, vLine5, 0.0, 5.0 * Math.PI / 180.0);
+        Check("on the linear line at 5 deg tilt, the exact share is within 2 % of 80 %", Math.Abs(exact5 - 0.8) < 0.02, $"{exact5:P1} at {vLine5:F2} m/s");
+        Check("a craft with nothing to stand on has no line", double.IsNaN(TipOver.LimitGain(m, i, 0.0, h, g)));
     }
 }

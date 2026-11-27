@@ -578,7 +578,7 @@ public static partial class GuidanceWindow
                                    momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
                                    momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
                                    momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs,
-                                   glideFunnelDeg: GlideFunnelDeg(), sideSpeedPerM: _s.SixDofSideSpeedPerM))
+                                   glideFunnelDeg: GlideFunnelDeg(), sideSpeedPerM: _s.SixDofSideSpeedPerM, lastSecondsSmooth: _s.SixDofLastSecondsSmooth))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -1364,7 +1364,7 @@ public static partial class GuidanceWindow
             manual.EngineThrottle = 0f;
             _s.LastThrottle = 0.0;
             string what = FormattableString.Invariant($"TOUCHDOWN AFTER PLAN END, {-x[5]:F1} m/s down, {Math.Sqrt(x[3] * x[3] + x[4] * x[4]):F1} m/s sideways, ")
-                        + FormattableString.Invariant($"tilt {TiltFromUpDeg(vehicle, double3.Normalize(vehicle.Orbit.StateVectors.PositionCci)):F1} deg, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m FROM TARGET");
+                        + FormattableString.Invariant($"tilt {TiltFromUpDeg(vehicle, double3.Normalize(vehicle.Orbit.StateVectors.PositionCci)):F1} deg, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m FROM TARGET") + TipText(vehicle, x);
             SixDofLog.Event(_s, now, what);
             GuidanceLog.Info(vehicle, "Touchdown guidance: " + what + ".");
             ReportLogStop(SixDofLog.Stop(_s));
@@ -1594,7 +1594,7 @@ public static partial class GuidanceWindow
             else if (_s.TouchdownArmed)
             {
                 SixDofLog.Event(_s, now, $"TOUCHDOWN at alt {x[2]:F1} m (plan end {_s.SixDofTargetComAltM:F1} m), vz {x[5]:F2} m/s, " +
-                                     $"lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from target");
+                                     $"lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from target, {Math.Sqrt(x[3] * x[3] + x[4] * x[4]):F1} m/s sideways" + TipText(vehicle, x));
                 // In the game log too: without it a landing reads the same there as an abort.
                 GuidanceLog.Info(vehicle, $"Touchdown guidance: touchdown at {-x[5]:F1} m/s down and {Math.Sqrt(x[3] * x[3] + x[4] * x[4]):F1} m/s sideways, " +
                                           $"{Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from the target - engine cut.");
@@ -1861,6 +1861,7 @@ public static partial class GuidanceWindow
         UpdateMomentLimiter(vehicle, now);
         _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz)
             .WithArm(Ksa6DofSetup.EngineArm(vehicle))
+            .WithTipGeometry(TipRadiusM(_s), _s.VehicleHeightM)
             .WithMomentLimiterExact(_s.MomentLimiterPerPa, _s.MomentLimiterStiffnessPerPa, _s.MomentLimiterDampingPerPaMs)
             .WithMomentBias(UpdateMomentBias(vehicle, x, now));
         LogAeroCheck(vehicle, x, now, "flying");
@@ -2143,6 +2144,36 @@ public static partial class GuidanceWindow
     /// <summary>
     /// Turns one plan command into the throttle and the gimbal torque, and logs the cycle.
     /// </summary>
+    /// <summary>The radius of what the craft stands on, m: the outermost reach from the thrust axis of the colliders whose lowest point is within half a metre of the deepest (VehicleAutopilotState.FootX...), a skirt's rim or the feet; NaN with none measured.</summary>
+    internal static double TipRadiusM(VehicleAutopilotState s)
+    {
+        double deepest = double.NegativeInfinity, radius = double.NaN;
+        foreach (double d in s.FootDepthM)
+            deepest = Math.Max(deepest, d);
+        for (int i = 0; i < s.FootDepthM.Length; i++)
+        {
+            if (s.FootDepthM[i] < deepest - 0.5)
+                continue;
+            double reach = Math.Sqrt(s.FootX[i] * s.FootX[i] + s.FootY[i] * s.FootY[i]) + Math.Max(s.FootHalfX[i], s.FootHalfY[i]);
+            radius = double.IsNaN(radius) ? reach : Math.Max(radius, reach);
+        }
+        return radius;
+    }
+
+    /// <summary>The touchdown's share of the energy that tips the craft over (TipOver.Share), worst case, for the log: "tip 63 % of what tips it", or empty with nothing measured.</summary>
+    private static string TipText(Vehicle vehicle, double[] x)
+    {
+        double radius = TipRadiusM(_s);
+        Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out _);
+        double3 r = vehicle.Orbit.StateVectors.PositionCci;
+        double g = vehicle.Orbit.Parent.Mu / r.LengthSquared();
+        double side = Math.Sqrt(x[3] * x[3] + x[4] * x[4]);
+        double rate = Math.Sqrt(x[10] * x[10] + x[11] * x[11]);
+        double tilt = TiltFromUpDeg(vehicle, double3.Normalize(r)) * Math.PI / 180.0;
+        double share = Features.Ui.Logic.TipOver.Share(vehicle.TotalMass, 0.5 * (ixx + iyy), radius, _s.VehicleHeightM, g, side, rate, tilt);
+        return double.IsNaN(radius) ? "" : FormattableString.Invariant($", tip {share * 100.0:F0} % of what tips it (line {Features.Ui.Logic.TipOver.AcceptShare * 100.0:F0} %)");
+    }
+
     /// <summary>Hands touchdown guidance the gimbals' lag behind their last command, model body axes (KsaGimbalControl.Slot.LagTorqueNm), or null when the last pass did not measure it.</summary>
     private static void NoteGimbalLag(Vehicle vehicle)
     {
@@ -2310,7 +2341,7 @@ public static partial class GuidanceWindow
                                      momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
                                      momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
                                      momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs,
-                                     glideFunnelDeg: GlideFunnelDeg(), sideSpeedPerM: _s.SixDofSideSpeedPerM);
+                                     glideFunnelDeg: GlideFunnelDeg(), sideSpeedPerM: _s.SixDofSideSpeedPerM, lastSecondsSmooth: _s.SixDofLastSecondsSmooth);
     }
 
     /// <summary>

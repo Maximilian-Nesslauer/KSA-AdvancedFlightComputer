@@ -312,6 +312,55 @@ public sealed class Scvx6DofConfig
 
     public bool SoftTerminal => TerminalMissWeight > 0.0 || TerminalSpeedWeight > 0.0 || TerminalAttitudeWeight > 0.0 || TerminalRateWeight > 0.0;
 
+    /// <summary>The end speed's price ACROSS (x, y), as a multiple of TerminalSpeedWeight's; the height axis keeps the whole. Low, so a plan does not chase the last of the sideways speed with a lean and a turn it cannot finish: the tip-over line (TipLimit) says how much sideways speed the touchdown can carry.</summary>
+    public double TerminalSideSpeedFactor { get; set; } = 1.0;
+
+    /// <summary>
+    /// THE TIP-OVER LINE at the end (2026-11-27, the user's): the touchdown may carry at most TipShare (80 %) of the energy that tips the craft over its skirt's or feet's edge. With R the edge's distance from the axis, H the centre of mass's height over the contact plane, I the pitch-yaw inertia, m the end mass, d = sqrt(R^2 + H^2), alpha = atan(R / H) and K = sqrt(TipShare (I + m d^2) m g d), that is, for tilts short of alpha,
+    /// <c>(m H |v_xy| + I |w_xy|) / K + 2 |q_xy| &lt;= alpha</c>
+    /// at the last node (the barrier is m g d (alpha - theta)^2 / 2 to within a percent there, so the line is straight). Three cones and one row, soft with its own slack in radians of the line, priced TipWeight a degree. On from the build (the pattern is fixed then); the numbers - TipRadiusM, TipHeightM, TipInertiaKgM2, TipGravity - are the flight's, set each re-solve, and the line is loose until they are.
+    /// </summary>
+    public bool TipLimit { get; set; }
+    public double TipRadiusM { get; set; }
+    public double TipHeightM { get; set; }
+    public double TipInertiaKgM2 { get; set; }
+    public double TipGravity { get; set; } = 9.81;
+    public double TipShare { get; set; } = 0.8;
+    public double TipWeight { get; set; } = 2.0e4;
+
+    /// <summary>The line's gain K, N m s a radian, and alpha, rad, at end mass <paramref name="massKg"/>; false while the numbers are missing (the line is then loose).</summary>
+    public bool TipLine(double massKg, out double k, out double alpha)
+    {
+        double r = TipRadiusM, h = TipHeightM, d = Math.Sqrt(r * r + h * h);
+        alpha = Math.Atan2(Math.Max(r, 0.0), Math.Max(h, 1e-6));
+        k = Math.Sqrt(Math.Max(TipShare, 0.0) * (TipInertiaKgM2 + massKg * d * d) * massKg * TipGravity * d);
+        return TipLimit && r > 0.0 && h > 0.0 && TipInertiaKgM2 > 0.0 && massKg > 0.0 && TipGravity > 0.0 && double.IsFinite(k) && k > 0.0;
+    }
+
+    /// <summary>
+    /// THE LAST SECONDS PRICED FOR SMOOTHNESS (2026-11-27, the user's idea): from TerminalPhaseS to go, each node's tilt and pitch-yaw rate cost TerminalPhaseTiltWeight a degree squared second and TerminalPhaseRateWeight a (deg/s) squared second, ramped in as the square of how far into those seconds it is. Far out the plan flies for propellant; near the end, leaning and turning are dear, so it kills the sideways speed early or lands with a little drift rather than leaning late and swinging back through upright. 0 for none.
+    /// </summary>
+    public double TerminalPhaseS { get; set; }
+    public double TerminalPhaseTiltWeight { get; set; }
+    public double TerminalPhaseRateWeight { get; set; }
+
+    /// <summary>Node <paramref name="k"/>'s share of the last-seconds price, s: the ramp at its time to go, times the plan time it stands for. 0 in the coast and outside TerminalPhaseS.</summary>
+    public double TerminalPhaseShare(int k, int n, int coastIntervals, double sigma, double coastSigma)
+    {
+        if (!(TerminalPhaseS > 0.0) || k < coastIntervals || !(sigma > 0.0))
+            return 0.0;
+        double end = Scvx6DofSolver.NodeTime(n - 1, n, coastIntervals, sigma, coastSigma);
+        double toGo = end - Scvx6DofSolver.NodeTime(k, n, coastIntervals, sigma, coastSigma);
+        double ramp = Math.Clamp(1.0 - toGo / TerminalPhaseS, 0.0, 1.0);
+        double dt = sigma / Math.Max(n - 1 - coastIntervals, 1);
+        double span = k == coastIntervals || k == n - 1 ? 0.5 * dt : dt;
+        return ramp * ramp * span;
+    }
+
+    /// <summary>A degree of tilt as the quaternion's x or y component and a degree a second in rad/s: what the last-seconds prices are per.</summary>
+    public static readonly double PhaseTiltScaleQuat = Math.Sin(0.5 * Math.PI / 180.0);
+    public const double PhaseRateScaleRadS = Math.PI / 180.0;
+
     public bool GlideSlopeEnabled => GlideSlopeDeg > 0.0;
     public bool VzLimitEnabled => VzMax >= 0.0;
 

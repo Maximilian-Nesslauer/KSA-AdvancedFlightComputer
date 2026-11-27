@@ -39,12 +39,12 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
     private readonly double _dtau;
     private readonly double[] _xs, _us;
 
-    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _oAc, _oRr, _iSigC, _oGf, _oSv, _nVars;
+    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _oAc, _oRr, _iSigC, _oGf, _oSv, _oTip, _nVars;
 
     // The coast before ignition (Scvx6DofConfig.CoastIntervals): its interval count, and each phase's share of normalised time per interval.
     private readonly int _nCoast;
     private readonly double _dtauC, _dtauB;
-    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nTmAtt, _nTmRate, _nAc, _nRr, _nGf, _nSv, _nAnchor;
+    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nTmAtt, _nTmRate, _nAc, _nRr, _nGf, _nSv, _nAnchor, _nTip;
     private readonly int _nEq, _lDim, _nCone;   // _nCone = total rows = nEq + lDim + sum(soc)
     private readonly int[] _socDims;
 
@@ -144,6 +144,10 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         _nAnchor = cfg.TorqueDemand ? 0 : 4;
         _oSv = _nVars;
         _nVars += _nSv;
+        // THE TIP-OVER LINE (Scvx6DofConfig.TipLimit): |v|, |w| and |q_xy| at the last node and the line's slack, after everything else.
+        _nTip = cfg.TipLimit ? 4 : 0;
+        _oTip = _nVars;
+        _nVars += _nTip;
 
         // With the terminal roll free, three terminal rows go (qw, qz, wz) and the last node gets a tangent-plane row.
         _nEq = NX + (NX - 1) + (_n - 1) * NX + (_n - 2) - (cfg.TerminalRollFree ? 2 : 0);
@@ -157,8 +161,8 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         // + two rows per node for each fin's range, and two per interval for its rate, after the RCS's.
         _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm + 2 * _nAc + _nSlew
                 + 2 * _n * Dynamics6Dof.NRCS + 2 * _n * _cfg.FinCount + 2 * (_n - 1) * _cfg.FinCount
-                + _nPin + _nRr + (_nCoast > 0 ? 4 : 0) + 2 * _nGf + _nSv + _nAnchor;
-        _socDims = new int[_n + _nGs + _n + _nRr + _nSv];
+                + _nPin + _nRr + (_nCoast > 0 ? 4 : 0) + 2 * _nGf + _nSv + _nAnchor + (_nTip > 0 ? 2 : 0);
+        _socDims = new int[_n + _nGs + _n + _nRr + _nSv + (_nTip > 0 ? 3 : 0)];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
         // Tilt cones LAST, so adding them leaves every pre-existing block at the row offset it already had - anything reading a cone index keeps its meaning.
@@ -167,6 +171,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         for (int k = 0; k < _nRr; k++) _socDims[_n + _nGs + _n + k] = 1 + cfg.RateLimitComponents; // |w| (or its pitch and yaw) per node from node 1
         // ...and the sideways-speed cones after those, for the same reason.
         for (int k = 0; k < _nSv; k++) _socDims[_n + _nGs + _n + _nRr + k] = 3;
+        for (int k = 0; k < (_nTip > 0 ? 3 : 0); k++) _socDims[_n + _nGs + _n + _nRr + _nSv + k] = 3;
         _nCone = _nEq + _lDim + _socDims.Sum();
 
         _A = new CcsAssembler(_nCone, _nVars);
@@ -188,6 +193,13 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         for (int k = 0; k < _nGs; k++) _colScale[IGs(k)] = _xs[Dynamics6Dof.IR];
         for (int k = 0; k < _nGf; k++) _colScale[IGf(k)] = _xs[Dynamics6Dof.IR];
         for (int k = 0; k < _nSv; k++) _colScale[ISv(k)] = _xs[Dynamics6Dof.IV];
+        if (_nTip > 0)
+        {
+            _colScale[_oTip] = _xs[Dynamics6Dof.IV];
+            _colScale[_oTip + 1] = _xs[Dynamics6Dof.IW];
+            _colScale[_oTip + 2] = _xs[Dynamics6Dof.IQ + 1];
+            _colScale[_oTip + 3] = 0.1;
+        }
         for (int k = 0; k < _nVz; k++) _colScale[IVz(k)] = _xs[Dynamics6Dof.IV];
         for (int i = 0; i < _nTmPos; i++) _colScale[_oTm + i] = _xs[Dynamics6Dof.IR];
         for (int i = 0; i < _nTmVel; i++) _colScale[_oTm + _nTmPos + i] = _xs[Dynamics6Dof.IV];
@@ -476,6 +488,21 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             _c[IGf(k)] += _cfg.GlideFunnelWeight * _colScale[IGf(k)] / Scvx6DofConfig.GlideFunnelPriceScaleM;
         for (int k = 0; k < _nSv; k++)
             _c[ISv(k)] += _cfg.SideSpeedWeight * _colScale[ISv(k)] / Scvx6DofConfig.SideSpeedPriceScaleMs;
+        // The tip-over line's slack, a degree of it at TipWeight (Scvx6DofConfig.TipLimit).
+        if (_nTip > 0)
+            _c[_oTip + 3] += _cfg.TipWeight * _colScale[_oTip + 3] / (Math.PI / 180.0);
+        // THE LAST SECONDS: tilt and pitch-yaw rate, squared, at each node's share (Scvx6DofConfig.TerminalPhaseShare) - pure diagonal. Every node gets its entries, zero outside the window: the pattern is frozen after the first fill, and the window moves as the plan shortens.
+        if (_cfg.TerminalPhaseS > 0.0)
+            for (int k = 0; k < _n; k++)
+            {
+                double share = Math.Max(_cfg.TerminalPhaseShare(k, _n, _nCoast, sigBar, _sigCBar), 0.0);
+                double wq = share * _cfg.TerminalPhaseTiltWeight / (Scvx6DofConfig.PhaseTiltScaleQuat * Scvx6DofConfig.PhaseTiltScaleQuat);
+                double ww = share * _cfg.TerminalPhaseRateWeight / (Scvx6DofConfig.PhaseRateScaleRadS * Scvx6DofConfig.PhaseRateScaleRadS);
+                for (int a = 1; a <= 2; a++)
+                    AddP(IX(k, Dynamics6Dof.IQ + a), IX(k, Dynamics6Dof.IQ + a), 2.0 * wq);
+                for (int a = 0; a < 2; a++)
+                    AddP(IX(k, Dynamics6Dof.IW + a), IX(k, Dynamics6Dof.IW + a), 2.0 * ww);
+            }
         for (int k = 0; k < _nVz; k++)
             _c[IVz(k)] += _cfg.VzWeight * _colScale[IVz(k)] / _xs[Dynamics6Dof.IV];
         // The height axis (slacks 4 and 5) at TerminalHeightMissFactor times the miss across.
@@ -487,7 +514,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             _c[_oTm + _nTmPos + _nTmVel + _nTmAtt + i] += _cfg.TerminalRateWeight * _colScale[_oTm + _nTmPos + _nTmVel + _nTmAtt + i] / Scvx6DofConfig.TerminalRatePriceRadS;
         for (int i = 0; i < _nTmVel; i++)
             _c[_oTm + _nTmPos + i] +=
-                _cfg.TerminalSpeedWeight * _colScale[_oTm + _nTmPos + i] / _cfg.TerminalSpeedPriceScale;
+                _cfg.TerminalSpeedWeight * (i < 4 ? _cfg.TerminalSideSpeedFactor : 1.0) * _colScale[_oTm + _nTmPos + i] / _cfg.TerminalSpeedPriceScale;
         for (int k = 0; k < _nAc; k++)
             _c[_oAc + k] += _cfg.AccelWeight * _colScale[_oAc + k] / _us[Dynamics6Dof.IT];
         for (int k = 0; k < _nRr; k++)
@@ -881,6 +908,20 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             _b[row++] = 0.0;
         }
 
+        // THE TIP-OVER LINE (Scvx6DofConfig.TipLimit): (m H |v| + I |w|) / K + 2 |q_xy| - s <= alpha at the reference end mass, and s >= 0. Loose (a radian's worth of margin over everything) until the flight has set the numbers.
+        if (_nTip > 0)
+        {
+            double mEnd = xbar[(_n - 1) * NX + Dynamics6Dof.IM];
+            bool live = _cfg.TipLine(mEnd, out double k, out double alpha);
+            AddA(row, _oTip, live ? mEnd * _cfg.TipHeightM / k : 0.0);
+            AddA(row, _oTip + 1, live ? _cfg.TipInertiaKgM2 / k : 0.0);
+            AddA(row, _oTip + 2, 2.0);
+            AddA(row, _oTip + 3, -1.0);
+            _b[row++] = live ? alpha : 10.0;
+            AddA(row, _oTip + 3, -1.0);
+            _b[row++] = 0.0;
+        }
+
         // In TorqueDemand the same cone bounds the pitch and yaw torque as the mixer can give it together: ||(tau_x, tau_y)|| <= DemandTorquePerN T + the largest disc inside the RCS's box. The gimbals' share is a disc (they tilt one nozzle), so the box rows alone would promise up to 1.4 times the gimbals' torque at its corners.
         for (int k = 0; k < _n; k++)
         {
@@ -1008,6 +1049,22 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
 
             AddA(row, IX(node, Dynamics6Dof.IV + 1), -1.0);
             _b[row++] = -xf[Dynamics6Dof.IV + 1];
+        }
+
+        // The tip-over line's three cones at the last node: a >= |v_xy|, b >= |w_xy|, c >= |(q_x, q_y)| (Scvx6DofConfig.TipLimit).
+        if (_nTip > 0)
+        {
+            int last = _n - 1;
+            (int first, int comp)[] cones = [(_oTip, Dynamics6Dof.IV), (_oTip + 1, Dynamics6Dof.IW), (_oTip + 2, Dynamics6Dof.IQ + 1)];
+            foreach ((int first, int comp) in cones)
+            {
+                AddA(row, first, -1.0);
+                _b[row++] = 0.0;
+                AddA(row, IX(last, comp), -1.0);
+                _b[row++] = 0.0;
+                AddA(row, IX(last, comp + 1), -1.0);
+                _b[row++] = 0.0;
+            }
         }
 
         if (row != _nCone)

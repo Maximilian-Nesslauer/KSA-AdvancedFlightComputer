@@ -75,6 +75,23 @@ internal static class PathShaping
         cfg.TerminalHeightMissFactor = Arg("--end-height", 20.0);
         cfg.TerminalAttitudeWeight = Arg("--end-att", 5.0) * perM;
         cfg.TerminalRateWeight = Arg("--end-rate", 5.0) * perM;
+        // --phase: flight's last-seconds prices against the check's metre of miss (400 a metre in flight: 100 a degree squared second of tilt, 25 a (deg/s) squared second of rate, over the last 3 s), and its cheap sideways end speed.
+        if (Environment.GetCommandLineArgs().Contains("--phase"))
+        {
+            cfg.TerminalPhaseS = Arg("--phase-s", 3.0);
+            cfg.TerminalPhaseTiltWeight = Arg("--phase-w", 1.0) * perM * 100.0 / 400.0;
+            cfg.TerminalPhaseRateWeight = Arg("--phase-w", 1.0) * perM * 25.0 / 400.0;
+            cfg.TerminalSideSpeedFactor = 0.05;
+        }
+        // --tip: the tip-over line, on a craft standing --tip-r (3 m) out with its centre of mass --tip-h (13 m, the checks' target) up and --tip-i (1e6 kg m^2) of inertia.
+        if (Environment.GetCommandLineArgs().Contains("--tip"))
+        {
+            cfg.TipLimit = true;
+            cfg.TipRadiusM = Arg("--tip-r", 3.0);
+            cfg.TipHeightM = Arg("--tip-h", 13.0);
+            cfg.TipInertiaKgM2 = Arg("--tip-i", 1.0e6);
+            cfg.TipWeight = perM * 2.0e4 / 400.0;
+        }
         return cfg;
     }
 

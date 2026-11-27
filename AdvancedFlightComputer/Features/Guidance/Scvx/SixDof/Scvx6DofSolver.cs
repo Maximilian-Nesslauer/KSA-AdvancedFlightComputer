@@ -669,8 +669,29 @@ public sealed class Scvx6DofSolver : IDisposable
             if (_cfg.TerminalMissWeight > 0.0)
                 tmPos += _cfg.TerminalMissWeight * (a == 2 ? _cfg.TerminalHeightMissFactor : 1.0) * Math.Abs(x[last + Dynamics6Dof.IR + a] - _xf[Dynamics6Dof.IR + a]) / _cfg.TerminalMissPriceScale;
             if (_cfg.TerminalSpeedWeight > 0.0)
-                tmVel += _cfg.TerminalSpeedWeight * Math.Abs(x[last + Dynamics6Dof.IV + a] - _xf[Dynamics6Dof.IV + a]) / _cfg.TerminalSpeedPriceScale;
+                tmVel += _cfg.TerminalSpeedWeight * (a < 2 ? _cfg.TerminalSideSpeedFactor : 1.0) * Math.Abs(x[last + Dynamics6Dof.IV + a] - _xf[Dynamics6Dof.IV + a]) / _cfg.TerminalSpeedPriceScale;
         }
+        // The tip-over line's overrun (Scvx6DofConfig.TipLimit), at the reference end mass as the subproblem has it.
+        if (_cfg.TipLimit && _cfg.TipLine(_xbar[last + Dynamics6Dof.IM], out double tipK, out double tipAlpha))
+        {
+            double mEnd = _xbar[last + Dynamics6Dof.IM];
+            double v = Math.Sqrt(x[last + Dynamics6Dof.IV] * x[last + Dynamics6Dof.IV] + x[last + Dynamics6Dof.IV + 1] * x[last + Dynamics6Dof.IV + 1]);
+            double w = Math.Sqrt(x[last + Dynamics6Dof.IW] * x[last + Dynamics6Dof.IW] + x[last + Dynamics6Dof.IW + 1] * x[last + Dynamics6Dof.IW + 1]);
+            double q = Math.Sqrt(x[last + Dynamics6Dof.IQ + 1] * x[last + Dynamics6Dof.IQ + 1] + x[last + Dynamics6Dof.IQ + 2] * x[last + Dynamics6Dof.IQ + 2]);
+            double over = (mEnd * _cfg.TipHeightM * v + _cfg.TipInertiaKgM2 * w) / tipK + 2.0 * q - tipAlpha;
+            tmVel += _cfg.TipWeight * Math.Max(0.0, over) / (Math.PI / 180.0);
+        }
+        // The last seconds' tilt and rate (Scvx6DofConfig.TerminalPhaseS), as the subproblem prices them.
+        if (_cfg.TerminalPhaseS > 0.0)
+            for (int k = 0; k < _n; k++)
+            {
+                double share = _cfg.TerminalPhaseShare(k, _n, _nCoast, _sigBar, _sigCBar);
+                if (!(share > 0.0))
+                    continue;
+                double qx = x[k * NX + Dynamics6Dof.IQ + 1] / Scvx6DofConfig.PhaseTiltScaleQuat, qy = x[k * NX + Dynamics6Dof.IQ + 2] / Scvx6DofConfig.PhaseTiltScaleQuat;
+                double wx = x[k * NX + Dynamics6Dof.IW] / Scvx6DofConfig.PhaseRateScaleRadS, wy = x[k * NX + Dynamics6Dof.IW + 1] / Scvx6DofConfig.PhaseRateScaleRadS;
+                tmVel += share * (_cfg.TerminalPhaseTiltWeight * (qx * qx + qy * qy) + _cfg.TerminalPhaseRateWeight * (wx * wx + wy * wy));
+            }
         // The end's tilt and pitch and yaw rate, when soft (Scvx6DofConfig.TerminalAttitudeWeight).
         for (int a = 0; a < 2; a++)
         {

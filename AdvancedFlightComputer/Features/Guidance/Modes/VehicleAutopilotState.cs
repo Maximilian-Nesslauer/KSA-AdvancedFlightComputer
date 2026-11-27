@@ -939,6 +939,8 @@ public sealed class VehicleAutopilotState
     public double SixDofFunnel300Deg = 30.0;
     public double SixDofFunnel1000Deg = 60.0;
     /// <summary>Touchdown's sideways-speed cone, 1/s (Scvx6DofConfig.SideSpeedPerM): the plan's sideways speed at most this times its height over the target, plus 0.3 m/s. 0.3: 3.3 m/s at 10 m, 0.9 m/s at 2 m, where the 2026-11-27 Starships carried 3.4-3.9 m/s. Offline, 0.2 cost the boosters that light low and sideways far more accuracy (14-28 m off against 1-13) and 0.5 barely touched the Starship's speeds. 0 for none.</summary>
+    /// <summary>The last seconds priced for smoothness (Scvx6DofConfig.TerminalPhaseS): 0 off, 1 the tuned weights (two degrees of tilt or 4 deg/s held through the last second about a metre of miss), more is smoother. Off by default: offline it cost the low-authority boosters 3-29 m of miss even at 0.1.</summary>
+    public double SixDofLastSecondsSmooth = 0.0;
     public double SixDofSideSpeedPerM = 0.3;   // 0 = off; degrees above horizontal
     public bool SixDofVzEnabled = true;
     public double SixDofVzMaxMs;

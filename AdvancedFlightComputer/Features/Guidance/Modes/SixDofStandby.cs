@@ -391,6 +391,7 @@ public static partial class GuidanceWindow
         UpdateMomentLimiter(vehicle, now);
         _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz)
             .WithArm(Ksa6DofSetup.EngineArm(vehicle))
+            .WithTipGeometry(TipRadiusM(_s), _s.VehicleHeightM)
             .WithMomentLimiterExact(_s.MomentLimiterPerPa, _s.MomentLimiterStiffnessPerPa, _s.MomentLimiterDampingPerPaMs)
             .WithMomentBias(_s.SixDofStandbyPredicted ? _s.MomentBiasPerPa : UpdateMomentBias(vehicle, x, now));
         if (!_s.SixDofStandbyPredicted)

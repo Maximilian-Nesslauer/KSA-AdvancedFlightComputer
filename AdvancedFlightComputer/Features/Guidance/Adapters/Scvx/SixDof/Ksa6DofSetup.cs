@@ -553,7 +553,7 @@ public static class Ksa6DofSetup
                                 double rateMaxDegS = 0.0, int coastIntervals = 0, double[] scaleFrom = null,
                                 double momentLimiterPerPa = 0.0, double torqueMargin = 0.0, bool fins = true, double surfaceShare = PlanSurfaceShare,
                                 double momentLimiterStiffnessPerPa = 0.0, double momentLimiterDampingPerPaMs = 0.0,
-                                double[] glideFunnelDeg = null, double sideSpeedPerM = 0.0)
+                                double[] glideFunnelDeg = null, double sideSpeedPerM = 0.0, double lastSecondsSmooth = 0.0)
     {
         cfg = null!;
         dyn = null!;
@@ -853,6 +853,14 @@ public static class Ksa6DofSetup
             TerminalHeightMissFactor = 20.0,
             TerminalAttitudeWeight = 2.0e3,
             TerminalRateWeight = 2.0e3,
+            // SIDEWAYS END SPEED CHEAP: 100 a m/s, a quarter of a metre of miss, as before the end was repriced. The tip-over line below says how much the touchdown can carry, and inside it the plan does not chase the last of it with a lean it cannot finish (2026-11-27, 15:12).
+            TerminalSideSpeedFactor = 0.05,
+            // THE TIP-OVER LINE (2026-11-27, the user's): at most 80 % of the energy that tips the craft over its edge, the flight's numbers set each re-solve (Ksa6DofInputs.WithTipGeometry). A degree past the line costs 20000, fifty metres of miss.
+            TipLimit = true,
+            // THE LAST SECONDS FOR SMOOTHNESS (LAST SECONDS SMOOTH, VehicleAutopilotState.SixDofLastSecondsSmooth): over the last 3 s, ramped in, at 1 two degrees of tilt held a second cost 400 - a metre of miss - and 4 deg/s of pitch-yaw rate the same. Off by default: offline it cost the low-authority boosters 3-29 m of miss, even at 0.1.
+            TerminalPhaseS = lastSecondsSmooth > 0.0 ? 3.0 : 0.0,
+            TerminalPhaseTiltWeight = 100.0 * Math.Max(lastSecondsSmooth, 0.0),
+            TerminalPhaseRateWeight = 25.0 * Math.Max(lastSecondsSmooth, 0.0),
             // Priced per fixed metre and m/s - the ~250 m and ~100 m/s scales of the hand-over these weights were tuned at - so a metre of miss costs the same however far away the plan starts (Scvx6DofConfig.TerminalMissScaleM).
             TerminalMissScaleM = TerminalMissPriceM,
             TerminalSpeedScaleMs = TerminalSpeedPriceMs,

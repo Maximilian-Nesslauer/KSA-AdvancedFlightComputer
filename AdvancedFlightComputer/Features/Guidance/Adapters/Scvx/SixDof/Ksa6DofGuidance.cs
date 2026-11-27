@@ -242,6 +242,14 @@ public sealed class Ksa6DofGuidance : IDisposable
         // The engine's arm, live (Ksa6DofInputs.LArm); not for a plan built without a gimbal, whose arm is a placeholder.
         if (inputs.LArm > 0.0 && double.IsFinite(inputs.LArm) && _dyn.LArm > 0.0 && !_cfg.TorqueDemand)
             _dyn.LArm = inputs.LArm;
+        // The tip-over line's numbers (Scvx6DofConfig.TipLimit): what the craft stands on, its pitch-yaw inertia and the gravity, live.
+        if (_cfg.TipLimit)
+        {
+            _cfg.TipRadiusM = double.IsFinite(inputs.TipRadiusM) ? inputs.TipRadiusM : 0.0;
+            _cfg.TipHeightM = double.IsFinite(inputs.TipHeightM) ? inputs.TipHeightM : 0.0;
+            _cfg.TipInertiaKgM2 = 0.5 * (_dyn.Ixx + _dyn.Iyy);
+            _cfg.TipGravity = Math.Sqrt(_baseGravity.X * _baseGravity.X + _baseGravity.Y * _baseGravity.Y + _baseGravity.Z * _baseGravity.Z);
+        }
         if (inputs.Izz > 0.0) _dyn.Izz = inputs.Izz;
 
         double3 accelBias = inputs.AccelBias;
