@@ -2195,7 +2195,12 @@ public static partial class GuidanceWindow
             return raw.Z > Math.Cos(20.0 * Math.PI / 180.0) ? raw : null;
         }
         double3 deflect = slot.ThrustDirAsmb - slot.ThrustRestDirAsmb;
-        double share = Math.Clamp(KsaGimbalControl.LitGimbalThrust(vehicle) / thrustDelivered, 0.0, 1.0);
+        // The gimbals' share of the thrust from rated thrusts, theirs against every active engine's: the live gimbal thrust against the delivered estimate lags through a throttle change, and on the 2026-11-27 booster that cut the deflection the estimate took and left part of the phantom force in (1 of 4 landed, against 4 of 4 with the whole deflection).
+        double allRated = KsaEnginePerf.VacuumThrust(vehicle);
+        double share = allRated > 0.0 ? Math.Clamp(slot.GimbalRatedThrustN / allRated, 0.0, 1.0) : 1.0;
+        // Above 0.85 it is all gimbals: the gimbals' rated thrust and the engines' vacuum thrust need not be read at the same pressure, and a craft with fixed engines beside the gimballed ones sits well under this.
+        if (share > 0.85)
+            share = 1.0;
         var model = new double3(share * double3.Dot(deflect, mx), share * double3.Dot(deflect, my), 1.0 + share * double3.Dot(deflect, mz));
         // A deflection within 20 deg (the gimbals' travel), else not believed: a stale or mis-framed reading must not turn the estimate's thrust.
         double length = model.Length();
