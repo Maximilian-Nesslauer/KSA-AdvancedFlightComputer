@@ -426,6 +426,8 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
     private void AssembleObjective(double mInit, double[] xbar, double sigBar)
     {
         _c[IX(_n - 1, Dynamics6Dof.IM)] = -1.0 / mInit * _colScale[IX(_n - 1, Dynamics6Dof.IM)];
+        // THE PRICE OF TIME (Scvx6DofConfig.TimeWeight), per second of burn.
+        _c[_iSig] = _cfg.TimeWeight * _colScale[_iSig];
 
         // WDu * sum_k,j ((U[k+1,j]-U[k,j])/Uscale[j])^2
         for (int k = 0; k < _n - 1; k++)

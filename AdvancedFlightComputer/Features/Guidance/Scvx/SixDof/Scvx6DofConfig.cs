@@ -482,6 +482,12 @@ public sealed class Scvx6DofConfig
 
     public bool DescentFloorEnabled => DescentFloorMs > 0.0;
 
+    /// <summary>
+    /// THE PRICE OF TIME, per second of burn, or 0 for none: a linear cost on the burn time (sigma) in the subproblem and in the merit alike, exact and convex.
+    ///  WHY (2026-11-27 review of the in-game lunar landing). The objective's fuel term is the share of the mass burned - hundredths - against 400 a metre of miss, so on a light craft that can hover, seconds of hover were all but free: its plans hovered 3 s at 5 m to take out a 0.4 m miss rather than lean or land a little off.
+    /// </summary>
+    public double TimeWeight { get; set; }
+
     /// <summary>The descent floor at <paramref name="heightM"/> over the target, m/s down.</summary>
     public double DescentFloorAt(double heightM) => Math.Min(DescentFloorMs, DescentFloorPerM * Math.Max(heightM, 0.0));
 

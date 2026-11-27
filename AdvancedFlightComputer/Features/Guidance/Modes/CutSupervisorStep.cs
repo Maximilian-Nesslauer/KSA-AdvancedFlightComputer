@@ -96,7 +96,7 @@ public static partial class GuidanceWindow
                 break;
             case CutSupervisorAction.Building when before <= 0.0:
                 SixDofLog.Event(s, now, FormattableString.Invariant(
-                    $"CUT SUPERVISOR: legs {legs:F2} m above the ground at {vUp:F2} m/s, slower than {s.CutSupervisorSinkMs:F2} m/s down: shortfall building toward {settings.ShortfallToCutM(Math.Min(legs, s.CutSupervisorMaxHeightM)):F2} m."));
+                    $"CUT SUPERVISOR: legs {legs:F2} m above the ground at {vUp:F2} m/s, slower than {targetSink:F2} m/s down: shortfall building toward {settings.ShortfallToCutM(Math.Min(legs, s.CutSupervisorMaxHeightM)):F2} m."));
                 break;
         }
 
