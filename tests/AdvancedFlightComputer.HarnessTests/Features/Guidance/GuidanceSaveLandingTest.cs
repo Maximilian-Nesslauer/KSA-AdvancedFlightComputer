@@ -196,7 +196,7 @@ public sealed class GuidanceSaveLandingTest : AfcTest
         double maxTiltAfter = 0.0, endTilt = double.NaN;
         bool engineWasOn = false, impact = false;
         double3 lastNose = default;
-        double lastRate = 0.0;
+        double lastRate = 0.0, nextAfter = 0.0;
         string endReason = "timeout";
         GuidanceWindow.OrbitalEntryPhase lastPhase = GuidanceWindow.OrbitalEntryPhase.Idle;
 
@@ -294,6 +294,15 @@ public sealed class GuidanceSaveLandingTest : AfcTest
             }
             if (!double.IsNaN(contactAt))
             {
+                // After contact, every 0.25 s: what the craft does once guidance lets go - a lander that touched at 0.3 deg and toppled over the next 8 s had to be pushed (2026-11-27).
+                if (sim >= nextAfter)
+                {
+                    nextAfter = sim + 0.25;
+                    var fc = craft.FlightComputer;
+                    double3 w = craft.BodyRates;
+                    t.Info($"  t {sim,7:F2}  after +{sim - contactAt,4:F2} s  tilt {tilt,5:F1} deg  rates {w.X,6:F3} {w.Y,6:F3} {w.Z,6:F3} rad/s  vz {vz,6:F2} vh {vh,5:F2}  contact {(contact ? 1 : 0)}  engine {(engineOn ? inputs.EngineThrottle : 0f),4:P0}  " +
+                           $"fc {fc.AttitudeMode}/{fc.AttitudeTrackTarget} rcs {fc.RCSMode}  owner {(VehicleControlOwnership.Holds(craft, ControlClaimant.Guidance) ? "AFC" : "stock")}");
+                }
                 maxTiltAfter = Math.Max(maxTiltAfter, tilt);
                 endTilt = tilt;
                 if (sim - contactAt >= SettleS)

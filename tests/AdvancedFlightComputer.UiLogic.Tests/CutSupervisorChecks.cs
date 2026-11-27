@@ -57,6 +57,9 @@ internal static partial class Program
         var endedHigh = new CutSupervisorState { Armed = true };
         Check("a plan that ends above the cut height is not cut for it",
             CutSupervisor.Step(ref endedHigh, in cfg, 3.0, -0.2, dt, true, false, planEnded: true) != CutSupervisorAction.Cut);
+        var endedLander = new CutSupervisorState { Armed = true };
+        Check("a plan's end 0.7 m up does not cut: the craft flies to contact under power (the lunar lander that dropped and toppled)",
+            CutSupervisor.Step(ref endedLander, in cfg, 0.7, -0.1, dt, true, false, planEnded: true) != CutSupervisorAction.Cut);
 
         // 10:21 earlier: rest 1.9 m up. Threshold 0.285 m: cut after about 0.57 s.
         var hover19 = new CutSupervisorState { Armed = true };
