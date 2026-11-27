@@ -48,6 +48,9 @@ bool verbose = args.Contains("--verbose");
 if (args.Contains("--clarabel-workspace"))
     return ClarabelWorkspaceCheck.Run();
 
+if (args.Contains("--warm-bench"))
+    return WarmBenchCheck();
+
 if (args.Contains("--standby"))
 {
     StandbyTrackCheck.Verbose = verbose;
@@ -196,6 +199,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --soft          soft terminal position: unreachable target still yields a plan
 
         MEASUREMENT - closed-loop MPC with injected dispersions
+          --warm-bench          30 warm MPC single-iteration perturbations at N = 15, 25, 50
           --mpc                 sweep configurations
           --mpc --split         where solve time goes, and its distribution
           --mpc --tail          tolerance and Anderson memory against the tail
@@ -2094,5 +2098,112 @@ static int FixedTimeCheck()
     Console.WriteLine();
     Console.WriteLine("free: sigma should DRIFT UPWARD with W_DU (the regulariser buying time).");
     Console.WriteLine("fixed: sigma constant, so W_DU only smooths and does not distort.");
+    return 0;
+}
+
+static int WarmBenchCheck()
+{
+    const int trials = 30;
+    Dynamics6Dof.RcsModel rcs = SixDofRcsCheck.RcsModel();
+    Dynamics6Dof.Params dyn = SixDofRcsCheck.Params(SixDofRcsCheck.MomentPerDeg(1.0), rcs);
+    double[] x0Base = SixDofRcsCheck.State(257.0, [25.0, -10.0], [-12.0, -8.0, -102.0], 7.3, 16_400.0);
+    double[] xf = SixDofRcsCheck.Target(x0Base[13]);
+    const double sigmaInit = 6.0;
+
+    Console.WriteLine("Warm MPC single-iteration benchmark (30 perturbations, RCS + gimbal slew, warm vc-rv):");
+    Console.WriteLine("   N | total p50 / p95 / max (ms) | native p50 (ms) | C#+AD p50 (ms) | IPM p50/p95 | max defect | rebuilds/updates");
+
+    double prevProx = SixDofRcsCheck.ProbeProx;
+    SixDofRcsCheck.ProbeProx = 0.0;
+    try
+    {
+        foreach (int n in new[] { 15, 25, 50 })
+        {
+            Scvx6DofConfig cfg = SixDofRcsCheck.Config(n, sigmaInit, x0Base, xf, dyn);
+            cfg.VirtualControlScale = [5, 5, 5, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0];
+            using var solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+
+            ColdSeed6Dof.Build(x0Base, xf, sigmaInit, n, cfg, dyn, out double[] xs, out double[] us);
+            solver.Initialize(x0Base, xf, xs, us, sigmaInit);
+            solver.Solve(maxIterations: 25);
+
+            double[] baseX = (double[])solver.ReferenceX.Clone();
+            double[] baseU = (double[])solver.ReferenceU.Clone();
+            double baseSig = solver.Sigma;
+
+            ClarabelWorkspace.ResetTimers();
+            ScsWorkspace.ResetTimers();
+            var totalMs = new List<double>(trials);
+            var nativeMs = new List<double>(trials);
+            var managedMs = new List<double>(trials);
+            var innerIters = new List<int>(trials);
+            double maxDefect = 0.0;
+
+            // Prime persistent solver once before timing warm updates.
+            solver.Reseed(x0Base, baseX, baseU, baseSig, trustRegion: 0.05);
+            solver.Iterate();
+
+            long rebuildsBefore = ClarabelWorkspace.TotalRebuilds;
+            long callsBefore = ClarabelWorkspace.TotalCalls;
+            for (int t = 0; t < trials; t++)
+            {
+                double phase = 0.35 * (t + 1);
+                double[] xPert = (double[])x0Base.Clone();
+                xPert[0] += 0.8 * Math.Sin(phase);
+                xPert[1] += 0.8 * Math.Cos(1.3 * phase);
+                xPert[2] += 0.5 * Math.Sin(0.7 * phase);
+                xPert[3] += 0.4 * Math.Cos(phase);
+                xPert[4] += 0.4 * Math.Sin(1.1 * phase);
+                xPert[5] += 0.3 * Math.Cos(0.9 * phase);
+                xPert[10] += 0.015 * Math.Sin(phase);
+                xPert[11] += 0.015 * Math.Cos(phase);
+
+                double[] xRef = (double[])baseX.Clone();
+                double[] uRef = (double[])baseU.Clone();
+                ColdReferenceShift.Apply(xRef, n, baseSig, xPert);
+                solver.Reseed(xPert, xRef, uRef, baseSig, trustRegion: 0.05);
+
+                double natBefore = ScvxConic.Backend == ScvxConicBackend.Clarabel
+                    ? ClarabelWorkspace.TotalSetupMs + ClarabelWorkspace.TotalSolveMs
+                    : ScsWorkspace.TotalInitMs + ScsWorkspace.TotalSolveMs + ScsWorkspace.TotalFinishMs;
+                ScvxIteration it = solver.Iterate();
+                double natAfter = ScvxConic.Backend == ScvxConicBackend.Clarabel
+                    ? ClarabelWorkspace.TotalSetupMs + ClarabelWorkspace.TotalSolveMs
+                    : ScsWorkspace.TotalInitMs + ScsWorkspace.TotalSolveMs + ScsWorkspace.TotalFinishMs;
+                double nat = Math.Max(0.0, natAfter - natBefore);
+
+                totalMs.Add(it.ElapsedMs);
+                nativeMs.Add(nat);
+                managedMs.Add(Math.Max(0.0, it.ElapsedMs - nat));
+                innerIters.Add(it.SolverIterations);
+                if (double.IsFinite(it.DefectNorm))
+                    maxDefect = Math.Max(maxDefect, it.DefectNorm);
+            }
+
+            static double Pct(List<double> v, double q)
+            {
+                var s = new List<double>(v);
+                s.Sort();
+                return s[Math.Clamp((int)Math.Round(q * (s.Count - 1)), 0, s.Count - 1)];
+            }
+            static int PctInt(List<int> v, double q)
+            {
+                var s = new List<int>(v);
+                s.Sort();
+                return s[Math.Clamp((int)Math.Round(q * (s.Count - 1)), 0, s.Count - 1)];
+            }
+
+            string reuse = ScvxConic.Backend == ScvxConicBackend.Clarabel
+                ? $"{ClarabelWorkspace.TotalRebuilds - rebuildsBefore} / {(ClarabelWorkspace.TotalCalls - callsBefore) - (ClarabelWorkspace.TotalRebuilds - rebuildsBefore)}"
+                : "n/a (scs)";
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"  {n,2} | {Pct(totalMs, 0.5),6:F2} / {Pct(totalMs, 0.95),6:F2} / {Pct(totalMs, 1.0),6:F2}      | {Pct(nativeMs, 0.5),15:F2} | {Pct(managedMs, 0.5),14:F2} | {PctInt(innerIters, 0.5),4} / {PctInt(innerIters, 0.95),4} | {maxDefect,10:E2} | {reuse}"));
+        }
+    }
+    finally
+    {
+        SixDofRcsCheck.ProbeProx = prevProx;
+    }
+
     return 0;
 }

@@ -60,8 +60,69 @@ internal static class ColdReferenceShiftCheck
         bool passed = original < 1e-8 && falseDefect > 100 && shifted < 1e-8
             && shiftedMass > 1e-4 && shiftedMass < 1 && anchored;
         Console.WriteLine($"Cold reference shift: original defect {original:G3}, first-node defect {falseDefect:G3}, shifted defect {shifted:G3}, fuel-use defect {shiftedMass:G3}, anchored {anchored}.");
+
+        bool blendPassed = CheckAttitudeAndRateBlend();
+        passed &= blendPassed;
         Console.WriteLine(passed ? "PASS - cold reference shift" : "FAIL - cold reference shift");
         return passed ? 0 : 1;
+    }
+
+    private static bool CheckAttitudeAndRateBlend()
+    {
+        const int nodes = 20, nx = Dynamics6Dof.NX, iq = Dynamics6Dof.IQ, iw = Dynamics6Dof.IW;
+        var states = new double[nodes * nx];
+        for (int k = 0; k < nodes; k++)
+        {
+            states[k * nx + iq] = 1.0;
+            states[k * nx + Dynamics6Dof.IM] = 50_000.0;
+        }
+
+        double[] observed = states[..nx].ToArray();
+        double half = 0.5 * 5.0 * Math.PI / 180.0;
+        observed[iq] = Math.Cos(half);
+        observed[iq + 1] = Math.Sin(half);
+        observed[iw] = 0.08;
+        observed[iw + 1] = -0.05;
+        observed[iw + 2] = 0.03;
+
+        ColdReferenceShift.Apply(states, nodes, 10.0, observed);
+
+        bool anchored = states.AsSpan(0, nx).SequenceEqual(observed);
+        double dot01 = Math.Abs(states[iq] * states[nx + iq] + states[iq + 1] * states[nx + iq + 1]
+                              + states[iq + 2] * states[nx + iq + 2] + states[iq + 3] * states[nx + iq + 3]);
+        double jumpDeg = 2.0 * Math.Acos(Math.Clamp(dot01, 0.0, 1.0)) * 180.0 / Math.PI;
+        double rateJump = Math.Abs(states[nx + iw] - states[iw]);
+
+        double maxNormErr = 0.0;
+        for (int k = 0; k < nodes; k++)
+        {
+            int o = k * nx + iq;
+            double n = Math.Sqrt(states[o] * states[o] + states[o + 1] * states[o + 1]
+                               + states[o + 2] * states[o + 2] + states[o + 3] * states[o + 3]);
+            maxNormErr = Math.Max(maxNormErr, Math.Abs(n - 1.0));
+        }
+
+        int last = (nodes - 1) * nx;
+        bool terminalUntouched = Math.Abs(states[last + iq] - 1.0) < 1e-12
+            && Math.Abs(states[last + iq + 1]) < 1e-12
+            && Math.Abs(states[last + iw]) < 1e-12;
+
+        // Pure antipodal sign flip (q -> -q) must not rotate interior nodes so branch alignment sees the flip cleanly.
+        var anti = new double[nodes * nx];
+        for (int k = 0; k < nodes; k++)
+        {
+            anti[k * nx + iq] = 1.0;
+            anti[k * nx + Dynamics6Dof.IM] = 50_000.0;
+        }
+        double[] obsAnti = anti[..nx].ToArray();
+        obsAnti[iq] = -1.0;
+        ColdReferenceShift.Apply(anti, nodes, 10.0, obsAnti);
+        bool antipodalSafe = anti[iq] == -1.0 && Math.Abs(anti[nx + iq] - 1.0) < 1e-12;
+
+        bool ok = anchored && jumpDeg < 1.05 && rateJump < 0.02 && maxNormErr < 1e-12
+            && terminalUntouched && antipodalSafe;
+        Console.WriteLine($"Attitude/rate blend: interval-0 jump {jumpDeg:F2} deg (vs 5.00), rate jump {rateJump:F3} rad/s (vs 0.080), |q| err {maxNormErr:E1}, terminal untouched {terminalUntouched}, antipodal safe {antipodalSafe}.");
+        return ok;
     }
 
     private static double WorstDefect(double[] states, double[] controls, Dynamics6Dof.Params dynamics,

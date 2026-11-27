@@ -222,14 +222,15 @@ public sealed class Scvx3DofSubproblemScs : IDisposable
                          double[] xbar, double[] ubar, double sigGBar, double sigBBar, double tr,
                          Linearisation3Dof lin, double[] alphaRadius,
                          ReadOnlySpan<double> anchor, double anchorCos, ReadOnlySpan<double> anchorRate,
-                         double[]? thrustSlope, double[] lossConstant, double[] lossGradient)
+                         double[]? thrustSlope, double[] lossConstant, double[] lossGradient,
+                         double[]? alDual = null, double alRho = 0.0)
     {
         if (_frozen) { _A.BeginRefill(); _P.BeginRefill(); }
         RefreshScales();
         Array.Clear(_b);
         Array.Clear(_c);
 
-        AssembleObjective(x0[PointMass3Dof.IM], xbar);
+        AssembleObjective(x0[PointMass3Dof.IM], xbar, alDual, alRho);
         int row = AssembleEqualities(x0, xf, xbar, ubar, sigGBar, sigBBar, lin);
         if (row != _nEq)
             throw new InvalidOperationException($"equality rows: emitted {row}, expected {_nEq}");
@@ -290,7 +291,7 @@ public sealed class Scvx3DofSubproblemScs : IDisposable
 
     // ---------------------------------------------------------------- objective
 
-    private void AssembleObjective(double mInit, double[] xbar)
+    private void AssembleObjective(double mInit, double[] xbar, double[]? alDual, double alRho)
     {
         _c[IX(_n - 1, PointMass3Dof.IM)] = -1.0 / mInit * _colScale[IX(_n - 1, PointMass3Dof.IM)];
 
@@ -326,12 +327,16 @@ public sealed class Scvx3DofSubproblemScs : IDisposable
                 }
 
         // Priced on XScale unless the config prices a channel on its own; see Scvx3DofConfig.VirtualControlScale.
+        double rhoVc = alDual != null && alRho > 0.0 ? alRho : _cfg.RhoVc;
         for (int k = 0; k < _n - 1; k++)
             for (int i = 0; i < NX; i++)
             {
                 double vs = _cfg.VirtualControlScaleOf(i);
-                double w = _cfg.RhoVc / (vs * vs);
-                AddP(IW(k, i), IW(k, i), 2.0 * w);
+                int col = IW(k, i);
+                double w = rhoVc / (vs * vs);
+                AddP(col, col, 2.0 * w);
+                if (alDual != null)
+                    _c[col] += alDual[k * NX + i] * _colScale[col] / vs;
             }
 
         // L1 on the NORMALISED slack, so the weight is dimensionless next to the fuel fraction. See Scvx6DofSubproblemScs.AssembleObjective.

@@ -55,6 +55,7 @@ public sealed class VehicleAutopilotState
     public int RungFloor = int.MaxValue;
     public double RungFloorSpeed;
     public int BackedOffTo = -1;
+    internal bool GateRungsClarabel = true;
 
     // Actuation values used by the telemetry and bias estimator.
     public double LastThrottle;
@@ -918,7 +919,7 @@ public sealed class VehicleAutopilotState
     public bool TermInit;
 
     // 6-DOF SCvx state.
-    public int SixDofNodes = 50;
+    public int SixDofNodes = 25;
     public double SixDofTiltDeg = 120.0;
     /// <summary>The share of the RCS's torque and the control surfaces' travel touchdown's plans may use (PLAN RCS AND FLAPS; Ksa6DofSetup.TryBuild's surfaceShare).</summary>
     public double SixDofSurfaceShare = 0.75;
@@ -952,7 +953,7 @@ public sealed class VehicleAutopilotState
     public double SixDofReplanSec = 0.1;
     public double SixDofRateDampShare = 0.002;
     public double SixDofControlSmooth = 0.05;
-    public double SixDofProximal = 0.05;
+    public double SixDofProximal = 0.0;
     public bool SixDofFixedTime;
     public int SixDofSigmaSamples = 5;
     public double SixDofNodeDtTarget = 0.60;

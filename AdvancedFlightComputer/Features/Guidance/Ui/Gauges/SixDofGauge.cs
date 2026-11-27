@@ -188,6 +188,9 @@ public static partial class GuidanceWindow
 
         // Switching threading mid-flight is the point of having the toggle, so it has to be safe: stop the worker on the way off, start one on the way on.
         GaugeRowCheck(Specs.ScvxClarabel, ref _s.ScvxClarabel);
+        AdvancedFlightComputer.Guidance.Conic.ScvxConic.Backend = _s.ScvxClarabel
+            ? AdvancedFlightComputer.Guidance.Conic.ScvxConicBackend.Clarabel
+            : AdvancedFlightComputer.Guidance.Conic.ScvxConicBackend.Scs;
         GaugeRowCheck(Specs.SixDofThreaded, ref _s.SixDofThreaded);
         if (_s.SixDofThreaded && _s.Worker != null)
             GaugeRowText(T, "WORKER",

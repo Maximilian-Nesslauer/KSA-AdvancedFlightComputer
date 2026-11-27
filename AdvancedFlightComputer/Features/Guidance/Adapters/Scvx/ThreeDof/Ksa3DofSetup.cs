@@ -183,7 +183,7 @@ public static class Ksa3DofSetup
             AttitudeRateMax = PlanRateMax(vehicle),
             AttitudeAccelMax = Math.Max(turnAccelRadS2, 0.0),
             BurnTiltPerS = Math.Max(burnTiltPerSDeg, 0.0) * Math.PI / 180.0,
-            // Virtual control stays on XScale here, unlike 6-DOF's (Ksa6DofSetup.VirtualControlVelocityScaleMs). Priced at 5 m/s, the 2026-10-13 headless 7 t booster's locked burn solves ran out of ADMM iterations twelve times before ignition and handed 6-DOF a burn it had no plan for, and offline the 2 km cross-range cold solve gave up at both engine scales.
+            UseAugmentedLagrangian = true,
             AttitudeAnchor = true,
             PathSlackWeight = 1e3,
             // Position above speed, as the 6-DOF's (see Ksa6DofSetup.TryBuild): a squeezed burn should arrive a little fast rather than stop at rest above the pad, which a booster that cannot throttle below its weight cannot recover from.

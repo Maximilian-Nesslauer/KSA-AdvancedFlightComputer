@@ -9,6 +9,7 @@ using KSA;
 using System.Collections.Generic;
 using AdvancedFlightComputer.Features.AeroControl;
 using AdvancedFlightComputer.Features.RcsTorque;
+using AdvancedFlightComputer.Guidance.Conic;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 // The 6-DOF MPC guidance, built on the frame bridge. Its content on the LAND page is Ui/Gauges/SixDofGauge.cs.
@@ -120,18 +121,22 @@ public static partial class GuidanceWindow
     }
 
 
-    // A coarse cold start must account for the attitude slew during the 92 degree belly-flop entry, because coarse spacing can resolve translation while leaving the attitude part of the problem too stiff to follow.
-    //
-    // The cold count is now derived from the same spacing target as everything else, so there is one criterion rather than two, and it cannot drift away from what the ladder believes.
-    // Cheapness is not a property worth having on its own: a plan the vehicle cannot follow costs a cold restart, and the log shows three of them in ten seconds before it gave up entirely.
+    private static bool ScvxUsesClarabel => ScvxConic.Backend == ScvxConicBackend.Clarabel;
+
+    // Under Clarabel, touchdown uses a two-grid schedule (25 coast+burn, 15 burn-only). Under SCS, the cold count comes from the node spacing target on NodeRungs.
     private static int ColdNodesFor(double sigmaSeed)
     {
+        if (ScvxUsesClarabel)
+            return _s.SixDofCoastPending ? TwoGridCoastNodes : TwoGridBurnNodes;
         int ideal = (int)Math.Ceiling(sigmaSeed / Math.Max(_s.SixDofNodeDtTarget, 0.05)) + 1;
         int nodes = MaxNodes;
         for (int i = NodeRungs.Length - 1; i >= 0; i--)
             if (NodeRungs[i] >= ideal) { nodes = NodeRungs[i]; break; }
         return Math.Clamp(nodes, MinNodes, MaxNodes);
     }
+
+    private static double SixDofProximalForBackend()
+        => ScvxUsesClarabel ? _s.SixDofProximal : (_s.SixDofProximal > 0.0 ? _s.SixDofProximal : 0.05);
     // Tilt cone, in degrees from vertical.
     // 120 degrees suits a booster entry better than 60 degrees.
     // This vehicle arrives in a 92 degree belly-flop.
@@ -221,7 +226,20 @@ public static partial class GuidanceWindow
     /// than continuous because every change of N rebuilds the solver and throws away
     /// the ADMM warm start - a continuously tracked count would pay that every cycle.
     /// </summary>
-    private static readonly int[] NodeRungs = [50, 40, 30, 25, 20, 15, 10, 5];
+    private const int TwoGridCoastNodes = 25;
+    private const int TwoGridBurnNodes = 15;
+    private static readonly int[] TwoGridRungs = [TwoGridCoastNodes, TwoGridBurnNodes];
+    private static readonly int[] NodeRungs = [50, 40, 30, 25, 20, 15, 10];
+    private static int[] ActiveNodeRungs() => ScvxUsesClarabel ? TwoGridRungs : NodeRungs;
+
+    private static void ResetNodeLadderForBackend(bool clarabel)
+    {
+        _s.GateRungsClarabel = clarabel;
+        _s.GateIndex = -1;
+        _s.RungFloor = int.MaxValue;
+        _s.RungFloorSpeed = 0.0;
+        _s.BackedOffTo = -1;
+    }
 
     /// <summary>
     /// Target node SPACING, seconds. This is the quantity the ladder is really
@@ -270,14 +288,7 @@ public static partial class GuidanceWindow
     // The knee is sharp and it sits between 0.79 s and 0.65 s: above it the plan is at or over the 1 m gate and the loop refuses everything it produces, below it there is an order of magnitude of margin. 0.85 s was on the wrong side of that knee, which is why the ladder kept asking for counts whose plans could not be flown.
 
     /// <summary>
-    /// Hard bounds on node count, ladder or configured.
-    ///
-    /// The floor is 5 because the ladder now goes there. That is AGGRESSIVE: the
-    /// binding constraint at low node counts is not accuracy in the abstract but the
-    /// defect gate in Finish - collocation error grows with node SPACING, and a plan
-    /// that trips the gate is refused, which leaves the vehicle flying a stale
-    /// open-loop trajectory. Run `Scvx.Console --nodes` for the measured defect and
-    /// solve time against altitude before changing the ladder.
+    /// Hard bounds on manual and scheduled node counts. The automatic ladders stop at 15 nodes (Clarabel two-grid) or 10 nodes (SCS), while manual configuration keeps 5..50.
     /// </summary>
     private const int MinNodes = 5;
     private const int MaxNodes = 50;
@@ -343,6 +354,13 @@ public static partial class GuidanceWindow
         // Four flights hit it (6dof-faults.log, gate=0 rungFloor=-1 every time); 20260821-093905 died at 360 m on five consecutive refusals of 1.1-1.2x tolerance, RefusalsBeforeBackOff being exactly 5.
         //
         // The guard also protects RungFloor below: with finer = -1 it was set to -1, which as an index floor means no rung is permitted at all, and would have silently disabled the node ladder for the rest of the run had the throw ever been swallowed rather than ending the flight.
+        bool clarabel = ScvxUsesClarabel;
+        if (_s.GateRungsClarabel != clarabel)
+            ResetNodeLadderForBackend(clarabel);
+        int[] rungs = ActiveNodeRungs();
+        if (_s.GateIndex >= rungs.Length)
+            _s.GateIndex = -1;
+
         if (_s.RefusalRun >= RefusalsBeforeBackOff && _s.GateIndex > 0
             && _s.GateIndex > _s.BackedOffTo)
         {
@@ -354,7 +372,7 @@ public static partial class GuidanceWindow
             _s.RungFloorSpeed = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
             _s.RefusalRun = 0;
 
-            bool? backedOff = BeginRebuild(vehicle, parent, siteCci, x, now, NodeRungs[finer], finer, backOff: true);
+            bool? backedOff = BeginRebuild(vehicle, parent, siteCci, x, now, rungs[finer], finer, backOff: true);
             if (backedOff.HasValue)
                 EndBackOff(backedOff.Value, finer, x[2], now);
             return;
@@ -365,20 +383,24 @@ public static partial class GuidanceWindow
         double sigma = _s.Guidance.Sigma;
         if (sigma <= 0.0)
             return;
-        int ideal = (int)Math.Ceiling(sigma / Math.Max(_s.SixDofNodeDtTarget, 0.05)) + 1;
 
-        // Snap to a rung: the COARSEST count that still delivers at least the resolution asked for.
-        // Falls back to the FINEST rung, not the coarsest, when the burn is long enough that no rung reaches the target - wanting more resolution than is on offer must give the most available, and defaulting the other way would hand a 60-node problem 5 nodes.
-        int nodes = MaxNodes;
-        for (int i = NodeRungs.Length - 1; i >= 0; i--)
-            if (NodeRungs[i] >= ideal) { nodes = NodeRungs[i]; break; }
-        nodes = Math.Clamp(nodes, MinNodes, MaxNodes);
-
-        // One-way only: never step back up.
-        // Sigma wobbles cycle to cycle, and rebuilding the solver to add a node the problem does not really need costs a warm start for nothing.
-        int want0 = Array.IndexOf(NodeRungs, nodes);
-        if (want0 < 0)
-            return;
+        int want0;
+        if (clarabel)
+        {
+            // Under Clarabel, burn-only descent stays on TwoGridBurnNodes (15) because StepNodeGates runs only after ignition.
+            want0 = 1;
+        }
+        else
+        {
+            int ideal = (int)Math.Ceiling(sigma / Math.Max(_s.SixDofNodeDtTarget, 0.05)) + 1;
+            int snapped = MaxNodes;
+            for (int i = rungs.Length - 1; i >= 0; i--)
+                if (rungs[i] >= ideal) { snapped = rungs[i]; break; }
+            snapped = Math.Clamp(snapped, MinNodes, MaxNodes);
+            want0 = Array.IndexOf(rungs, snapped);
+            if (want0 < 0)
+                return;
+        }
         // EXPIRE THE FLOOR WHEN THE CONDITIONS THAT SET IT HAVE GONE.
         //
         // A refused rung is evidence about the state it was refused in, not a fact about the descent.
@@ -392,9 +414,10 @@ public static partial class GuidanceWindow
         double speedNow = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
         if (_s.RungFloor != int.MaxValue && speedNow < 0.67 * _s.RungFloorSpeed)
         {
+            int refusedIdx = Math.Clamp(_s.RungFloor + 1, 0, rungs.Length - 1);
             SixDofLog.Event(_s, now,
                 $"NODE FLOOR CLEARED at alt {x[2]:F0} m: speed {speedNow:F0} m/s is well below the "
-                + $"{_s.RungFloorSpeed:F0} m/s that refused {NodeRungs[Math.Min(_s.RungFloor + 1, NodeRungs.Length - 1)]} nodes");
+                + $"{_s.RungFloorSpeed:F0} m/s that refused {rungs[refusedIdx]} nodes");
             _s.RungFloor = int.MaxValue;
             _s.BackedOffTo = -1;
         }
@@ -403,7 +426,7 @@ public static partial class GuidanceWindow
         int want = Math.Min(want0, _s.RungFloor);
         if (want <= _s.GateIndex)
             return;
-        nodes = NodeRungs[want];
+        int nodes = rungs[want];
         if (nodes >= _s.Guidance.Nodes)
         {
             _s.GateIndex = want;   // already at or below this count, nothing to do
@@ -418,18 +441,21 @@ public static partial class GuidanceWindow
     /// <summary>The ladder after a back-off rebuild to rung <paramref name="finer"/>, done in place or landed from the worker.</summary>
     private static void EndBackOff(bool ok, int finer, double altM, double now)
     {
+        int[] rungs = ActiveNodeRungs();
+        int prevNodes = _s.GateIndex >= 0 && _s.GateIndex < rungs.Length ? rungs[_s.GateIndex] : _s.Guidance?.Nodes ?? 0;
+        int finerNodes = finer >= 0 && finer < rungs.Length ? rungs[finer] : _s.Guidance?.Nodes ?? 0;
         if (ok)
         {
             SixDofLog.Event(_s, now,
-                $"NODE BACK-OFF at alt {altM:F0} m: {NodeRungs[_s.GateIndex]} -> " +
-                $"{NodeRungs[finer]} nodes, and no coarser this run");
+                $"NODE BACK-OFF at alt {altM:F0} m: {prevNodes} -> " +
+                $"{finerNodes} nodes, and no coarser this run");
             _s.GateIndex = finer;
             _s.BackedOffTo = finer;
         }
         else
         {
             SixDofLog.Event(_s, now,
-                $"NODE BACK-OFF at alt {altM:F0} m to {NodeRungs[finer]} nodes FAILED; " +
+                $"NODE BACK-OFF at alt {altM:F0} m to {finerNodes} nodes FAILED; " +
                 "not retrying - the node count is not what is wrong");
         }
     }
@@ -456,7 +482,7 @@ public static partial class GuidanceWindow
     /// </summary>
     /// <param name="Why">Where the worker writes why a reseed was refused.</param>
     internal sealed record NodeRebuild(Ksa6DofGuidance Source, int Nodes, int NodesWas, double SigmaWas, int Want,
-                                       bool BackOff, double Speed, double AltM, string[] Why);
+                                       bool BackOff, double Speed, double AltM, string[] Why, bool Clarabel);
 
     /// <summary>Whether a node-count rebuild of the guidance flying now is running on the worker.</summary>
     private static bool NodeRebuildRunning
@@ -478,7 +504,7 @@ public static partial class GuidanceWindow
         if (!_s.Worker.TryDispatchRebuild((source, x0, t) => ApplyRebuild(req, source, x0, t, out why[0]), from, x, now))
             return RebuildAt(vehicle, parent, siteCci, x, now, nodes);
         _s.PendingNodeRebuild = new NodeRebuild(from, nodes, from.Nodes, from.Sigma, want, backOff,
-                                                Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]), x[2], why);
+                                                Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]), x[2], why, ScvxUsesClarabel);
         return null;
     }
 
@@ -498,6 +524,12 @@ public static partial class GuidanceWindow
         string why = result.Faulted ? result.Error : pending.Why[0] ?? result.Error;
         bool ok = AdoptRebuild(result.Ok && !result.Faulted ? result.Produced : null, why,
                                pending.Nodes, pending.NodesWas, pending.SigmaWas, pending.AltM, now);
+        bool clarabel = ScvxUsesClarabel;
+        if (pending.Clarabel != clarabel)
+        {
+            ResetNodeLadderForBackend(clarabel);
+            return;
+        }
         if (pending.BackOff)
             EndBackOff(ok, pending.Want, pending.AltM, now);
         else
@@ -533,7 +565,7 @@ public static partial class GuidanceWindow
         if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, nodes, _s.SixDofTiltDeg,
                                    _s.SixDofThrottleFloor, sigmaSeed,
                                    _s.SixDofRateDampShare, _s.SixDofControlSmooth,
-                                   _s.SixDofProximal,
+                                   SixDofProximalForBackend(),
                                    _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                    x, xf,
                                    out Scvx6DofConfig cfg,
@@ -1699,10 +1731,7 @@ public static partial class GuidanceWindow
             else if (_s.Guidance.NeedsMoreNodes && _s.Guidance.Nodes < MaxNodes)
             {
                 // Increase the node count when the cold solve stops improving above the warm-loop gate, because repeating the same node count repeats the same problem.
-                int finer = NodeRungs.Length - 1;
-                for (int i = NodeRungs.Length - 1; i >= 0; i--)
-                    if (NodeRungs[i] > _s.Guidance.Nodes) { finer = i; break; }
-                int nodes = Math.Clamp(NodeRungs[finer], MinNodes, MaxNodes);
+                int nodes = Math.Clamp(FinerNodeRung(_s.Guidance.Nodes), MinNodes, MaxNodes);
 
                 SixDofLog.Event(_s, now,
                     $"COLD SOLVE stalled at {_s.Guidance.DefectText} with {_s.Guidance.Nodes} nodes " +
@@ -2248,7 +2277,7 @@ public static partial class GuidanceWindow
         return Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, engageNodes, _s.SixDofTiltDeg,
                                       _s.SixDofThrottleFloor, _s.SixDofEntrySigmaSeed,
                                      _s.SixDofRateDampShare, _s.SixDofControlSmooth,
-                                     _s.SixDofProximal,
+                                     SixDofProximalForBackend(),
                                      _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                      x, xf, out cfg, out dyn, out error, LandingAccelLimitMs2,
                                      floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero, bodyAero: _s.SixDofBodyAero,
@@ -2379,10 +2408,8 @@ public static partial class GuidanceWindow
             _s.TouchdownArmed = false;
             _s.SixDofSeenDescending = _s.SixDofTookBurn;
             _s.SixDofToContact = false;
-            _s.GateIndex = -1;
+            ResetNodeLadderForBackend(ScvxUsesClarabel);
             _s.RefusalRun = 0;
-            _s.RungFloor = int.MaxValue;
-            _s.RungFloorSpeed = 0.0;
             _s.PrevV = null;
             _s.Bias = default;
             _s.LastReplan = now;
@@ -2428,13 +2455,10 @@ public static partial class GuidanceWindow
         _s.TouchdownArmed = false;
         _s.SixDofSeenDescending = _s.SixDofTookBurn;
         _s.SixDofToContact = false;
-        _s.GateIndex = -1;
+        ResetNodeLadderForBackend(ScvxUsesClarabel);
         _s.LastReplan = now;
         _s.PrevV = null;
         _s.RefusalRun = 0;
-        _s.RungFloor = int.MaxValue;
-        _s.RungFloorSpeed = 0.0;
-        _s.BackedOffTo = -1;
         _s.Bias = default;
 
         if (_s.SixDofLogging)

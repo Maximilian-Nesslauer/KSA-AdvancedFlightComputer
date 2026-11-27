@@ -73,6 +73,10 @@ public sealed class Scvx3DofSolver : IDisposable
     private double _anchorCos = -1.0;
     private readonly double[] _anchorRate = new double[3];
     private bool _anchorRateKnown;
+    private readonly double[] _alDual;
+    private readonly double[] _alDefects;
+    private double _alRho;
+    private double _alPrevDefect = double.PositiveInfinity;
 
     private readonly List<Scvx3DofIteration> _trace = [];
     public IReadOnlyList<Scvx3DofIteration> Trace => _trace;
@@ -107,6 +111,9 @@ public sealed class Scvx3DofSolver : IDisposable
         _thrustSlope = new double[_n];
         _lossConstant = new double[_n];
         _lossGradient = new double[_n * 3];
+        _alDual = new double[(_n - 1) * NX];
+        _alDefects = new double[(_n - 1) * NX];
+        _alRho = cfg.RhoVc;
     }
 
     /// <summary>
@@ -130,6 +137,9 @@ public sealed class Scvx3DofSolver : IDisposable
         IterationCount = 0;
         _trace.Clear();
         _sub.ResetWarmStart();
+        Array.Clear(_alDual);
+        _alRho = _cfg.RhoVc;
+        _alPrevDefect = double.PositiveInfinity;
         _jRef = TrueCost(_xbar, _ubar, _sigGBar, _sigBBar, out _, out _, out _);
     }
 
@@ -148,6 +158,10 @@ public sealed class Scvx3DofSolver : IDisposable
         if (trustRegion.HasValue) TrustRegion = trustRegion.Value;
         _trace.Clear();
         IterationCount = 0;
+        for (int i = 0; i < _alDual.Length; i++)
+            _alDual[i] *= 0.5;
+        _alRho = _cfg.RhoVc;
+        _alPrevDefect = double.PositiveInfinity;
         _jRef = TrueCost(_xbar, _ubar, _sigGBar, _sigBBar, out _, out _, out _);
     }
 
@@ -227,7 +241,8 @@ public sealed class Scvx3DofSolver : IDisposable
 
         _sub.Assemble(_x0, _xf, _xbar, _ubar, _sigGBar, _sigBBar, TrustRegion, _lin, _alphaRadius,
                       _anchor, _anchorCos, _anchorRateKnown ? _anchorRate : ReadOnlySpan<double>.Empty,
-                      AccelLimitTerms() ? _thrustSlope : null, _lossConstant, _lossGradient);
+                      AccelLimitTerms() ? _thrustSlope : null, _lossConstant, _lossGradient,
+                      _cfg.UseAugmentedLagrangian ? _alDual : null, _alRho);
         ScsStatus st = _sub.Run(WarmStart && _sub.HasWarmStart, MaxSubproblemIterations, SubproblemEps, SubproblemEps);
         if (_sub.HitIterationLimit && _sub.EffectiveIterationCap(EscalatedSubproblemIterations) > _sub.EffectiveIterationCap(MaxSubproblemIterations))
             st = _sub.Run(WarmStart && _sub.HasWarmStart, EscalatedSubproblemIterations, SubproblemEps, SubproblemEps);
@@ -249,8 +264,8 @@ public sealed class Scvx3DofSolver : IDisposable
 
         // Predicted reduction prices the defect by the virtual control, actual by the true nonlinear defect; both carry the same fuel, smoothing and slack terms or the ratio means nothing.
         double jLin = Fuel(x) + Smoothing(u) + _sub.TerminalSlackCost(z) + _sub.PathSlackCost(z)
-                    + _cfg.RhoVc * SumSquaresScaled(wv);
-        double jTrue = TrueCost(x, u, sigG, sigB, out double defectNorm, out int defectChannel, out int defectNode);
+                    + VirtualControlCost(wv);
+        double jTrue = TrueCost(x, u, sigG, sigB, out double defectNorm, out int defectChannel, out int defectNode, null);
 
         double predicted = _jRef - jLin;
         double actual = _jRef - jTrue;
@@ -270,8 +285,28 @@ public sealed class Scvx3DofSolver : IDisposable
             NormaliseAttitudes(_ubar);
             _sigGBar = sigG;
             _sigBBar = sigB;
-            _jRef = jTrue;
             step = Math.Max(dX, dSigma);
+            // Recompute post-normalization defects and merit before updating AL duals so _alDual and _jRef match _ubar.
+            _jRef = TrueCost(_xbar, _ubar, _sigGBar, _sigBBar, out defectNorm, out defectChannel, out defectNode,
+                             _cfg.UseAugmentedLagrangian ? _alDefects : null);
+            if (_cfg.UseAugmentedLagrangian && defectNorm < 0.05 && step <= _cfg.AlStepTrigger && defectNorm > 1e-6)
+            {
+                double yMax = _cfg.AlDualMax;
+                double oldVc = 0.0, newVc = 0.0;
+                double oldRho = _alRho;
+                if (defectNorm > 0.5 * _alPrevDefect && defectNorm > DefectTolerance * 0.5)
+                    _alRho = Math.Min(_alRho * _cfg.AlPenaltyGrow, _cfg.AlRhoMax);
+                for (int i = 0; i < _alDual.Length; i++)
+                {
+                    double d = _alDefects[i];
+                    oldVc += _alDual[i] * d + oldRho * d * d;
+                    double nextDual = Math.Clamp(_alDual[i] + 2.0 * oldRho * d, -yMax, yMax);
+                    _alDual[i] = nextDual;
+                    newVc += nextDual * d + _alRho * d * d;
+                }
+                _jRef += newVc - oldVc;
+                _alPrevDefect = defectNorm;
+            }
         }
 
         if (rho < RhoShrink)
@@ -364,10 +399,17 @@ public sealed class Scvx3DofSolver : IDisposable
     /// </summary>
     public double TrueCost(double[] x, double[] u, double sigG, double sigB,
                            out double defectNorm, out int worstChannel, out int worstNode)
+        => TrueCost(x, u, sigG, sigB, out defectNorm, out worstChannel, out worstNode, null);
+
+    private double TrueCost(double[] x, double[] u, double sigG, double sigB,
+                            out double defectNorm, out int worstChannel, out int worstNode,
+                            double[]? outScaledDefects)
     {
         Span<double> fk = stackalloc double[NX];
         Span<double> fk1 = stackalloc double[NX];
-        double sumSq = 0, worst = 0;
+        double vcCost = 0, worst = 0;
+        bool useAl = _cfg.UseAugmentedLagrangian;
+        double rhoVc = useAl ? _alRho : _cfg.RhoVc;
         worstChannel = -1;
         worstNode = -1;
 
@@ -381,7 +423,12 @@ public sealed class Scvx3DofSolver : IDisposable
             {
                 double d = x[(k + 1) * NX + i] - x[k * NX + i] - half * (fk[i] + fk1[i]);
                 double priced = d / _cfg.VirtualControlScaleOf(i);
-                sumSq += priced * priced;
+                int idx = k * NX + i;
+                if (outScaledDefects != null)
+                    outScaledDefects[idx] = priced;
+                vcCost += useAl
+                    ? _alDual[idx] * priced + rhoVc * priced * priced
+                    : rhoVc * priced * priced;
                 double scaled = d / _xs[i];
                 if (Math.Abs(scaled) > worst)
                 {
@@ -393,7 +440,7 @@ public sealed class Scvx3DofSolver : IDisposable
         }
 
         defectNorm = worst;
-        return Fuel(x) + Smoothing(u) + TerminalMissCost(x) + PathViolationCost(x, u, sigG, sigB) + _cfg.RhoVc * sumSq;
+        return Fuel(x) + Smoothing(u) + TerminalMissCost(x) + PathViolationCost(x, u, sigG, sigB) + vcCost;
     }
 
     /// <summary>
@@ -602,13 +649,15 @@ public sealed class Scvx3DofSolver : IDisposable
         return cost;
     }
 
-    private double SumSquaresScaled(double[] wv)
+    private double VirtualControlCost(double[] wv)
     {
         double s = 0;
+        bool useAl = _cfg.UseAugmentedLagrangian;
+        double rhoVc = useAl ? _alRho : _cfg.RhoVc;
         for (int i = 0; i < wv.Length; i++)
         {
             double d = wv[i] / _cfg.VirtualControlScaleOf(i % NX);
-            s += d * d;
+            s += useAl ? _alDual[i] * d + rhoVc * d * d : rhoVc * d * d;
         }
         return s;
     }
