@@ -28,6 +28,9 @@ public static partial class GuidanceWindow
         }
     }
 
+    /// <summary>The cut supervisor's target sink as a share of the plan's end sink at most (StepCutSupervisor).</summary>
+    private const double CutTargetShareOfPlanSink = 0.8;
+
     private static void StepCutSupervisor(Vehicle vehicle, VehicleAutopilotState s)
     {
         if (!s.CutSupervisorOn || !s.Active || s.Guidance == null
@@ -56,7 +59,9 @@ public static partial class GuidanceWindow
         ref ManualControlInputs manual = ref ManualInputs(vehicle);
         bool lit = manual.EngineOn && manual.EngineThrottle > 0f;
 
-        var settings = new CutSupervisorSettings(s.CutSupervisorSinkMs, s.CutSupervisorShortfallM, s.CutSupervisorMaxHeightM, s.CutSupervisorWatchHeightM);
+        // THE TARGET SINK NO FASTER THAN THE PLAN ENDS AT: a craft flying its plan's last metres at the plan's own end sink (SixDofTouchdownSinkMs) is not stalled. With the setting's 0.5 m/s above the plan's 0.3, the shortfall built on every plan followed to the end and cut the engine 0.2-0.5 m up (2026-11-27 headless: boosters and a lunar lander dropped from there at 1.2-3 m/s, one lander toppling after).
+        double targetSink = Math.Min(s.CutSupervisorSinkMs, CutTargetShareOfPlanSink * SixDofTouchdownSinkMs);
+        var settings = new CutSupervisorSettings(targetSink, s.CutSupervisorShortfallM, s.CutSupervisorMaxHeightM, s.CutSupervisorWatchHeightM);
         double before = s.CutSup.ShortfallM;
         // At the plan's end with no contact, touchdown guidance flies to contact (NoPlanNearGround); a cut since sets the same flag, but the engine is off then.
         CutSupervisorAction action = CutSupervisor.Step(ref s.CutSup, in settings, legs, vUp, dt, lit, contact, planEnded: s.SixDofToContact);
@@ -77,7 +82,7 @@ public static partial class GuidanceWindow
                 double3 horizontal = vSrf - vUp * up;
                 string why = FormattableString.Invariant(
                     $"CUT SUPERVISOR: ENGINE CUT, legs {legs:F2} m above the ground, {vUp:F2} m/s, ")
-                    + (s.CutSup.CutAtPlanEnd ? "at the plan's end, " : FormattableString.Invariant($"shortfall {s.CutSup.ShortfallM:F2} m of {settings.ShortfallToCutM(legs):F2} below {s.CutSupervisorSinkMs:F2} m/s, "))
+                    + (s.CutSup.CutAtPlanEnd ? "at the plan's end, " : FormattableString.Invariant($"shortfall {s.CutSup.ShortfallM:F2} m of {settings.ShortfallToCutM(legs):F2} below {targetSink:F2} m/s, "))
                     + FormattableString.Invariant($"{horizontal.Length():F1} m/s sideways, tilt {TiltFromUpDeg(vehicle, up):F1} deg; the drop lands at about {CutSupervisor.ImpactSpeedMs(legs, vUp, g):F1} m/s.");
                 SixDofLog.Event(s, now, why);
                 GuidanceLog.Info(vehicle, why);
