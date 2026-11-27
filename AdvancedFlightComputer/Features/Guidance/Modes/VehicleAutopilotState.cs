@@ -782,6 +782,9 @@ public sealed class VehicleAutopilotState
     public string VehicleHeightStatus = "";
 
     internal bool VehicleHeightStowed;
+
+    /// <summary>The colliders the touchdown height was measured from (KsaVehicleHeight.Footprint), as columns, for the contact height at any attitude (ContactDepth, LandingLegs.LegsHeightM); empty when the height is typed in.</summary>
+    internal double[] FootX = [], FootY = [], FootHalfX = [], FootHalfY = [], FootDepthM = [];
     internal string VehicleHeightCard = "";
     internal long VehicleHeightNextMs;
 

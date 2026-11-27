@@ -126,5 +126,30 @@ internal static partial class Program
         // The drop: from 2 m at rest, about 6.3 m/s; a climb rises first.
         Check("a free fall from 2 m at rest lands at about 6.3 m/s", Math.Abs(CutSupervisor.ImpactSpeedMs(2.0, 0.0, 9.81) - 6.26) < 0.01);
         Check("a climb rises before it falls", CutSupervisor.ImpactSpeedMs(1.0, 1.0, 9.81) > CutSupervisor.ImpactSpeedMs(1.0, 0.0, 9.81));
+
+        ContactDepthRules();
+    }
+
+    // The contact height at an attitude (#339): a Starship's skirt, four splayed legs, one collider on the axis.
+    private static void ContactDepthRules()
+    {
+        static (double s, double c) Tilt(double deg) => (Math.Sin(deg * Math.PI / 180.0), Math.Cos(deg * Math.PI / 180.0));
+        // A skirt: one round collider on the axis, 4.5 m out, its bottom 22 m under the centre of mass.
+        double[] sx = [0.0], sy = [0.0], shx = [4.5], shy = [4.5], sd = [22.0];
+        Check("upright, the skirt's contact depth is its measured depth", Math.Abs(ContactDepth.DepthM(sx, sy, shx, shy, sd, 0, 0, 1) - 22.0) < 1e-12);
+        var (s10, c10) = Tilt(10.0);
+        double e10 = ContactDepth.ExtraDepthM(sx, sy, shx, shy, sd, s10, 0, c10);
+        Check("tilted 10 deg the skirt's low edge is about 0.45 m deeper", Math.Abs(e10 - (22.0 * c10 + 4.5 * s10 - 22.0)) < 1e-9 && Math.Abs(e10 - 0.447) < 0.01, $"{e10:F3} m");
+        var (s25, c25) = Tilt(2.5);
+        double e25 = ContactDepth.ExtraDepthM(sx, sy, shx, shy, sd, s25 * Math.Sqrt(0.5), s25 * Math.Sqrt(0.5), c25);
+        Check("a round skirt tilts the same whichever way it leans", Math.Abs(e25 - ContactDepth.ExtraDepthM(sx, sy, shx, shy, sd, s25, 0, c25)) < 1e-6, $"{e25:F3} m");
+        // Four legs 5 m out, small feet: the low foot leads, as the skirt's edge does.
+        double[] lx = [5, -5, 0, 0], ly = [0, 0, 5, -5], lh = [0.3, 0.3, 0.3, 0.3], ld = [20, 20, 20, 20];
+        double el = ContactDepth.ExtraDepthM(lx, ly, lh, lh, ld, -s10, 0, c10);
+        Check("legs tilted 10 deg: the low foot is deeper by about R sin - D (1 - cos)", Math.Abs(el - (20.0 * c10 + 5.3 * s10 - 20.0)) < 1e-9, $"{el:F3} m");
+        // One collider on the axis with no width: tilting lifts its lowest point.
+        double[] ox = [0.0], oh = [0.0], od = [10.0];
+        Check("a point on the axis rises as the craft tilts", ContactDepth.ExtraDepthM(ox, ox, oh, oh, od, s10, 0, c10) < 0.0);
+        Check("no colliders: nothing to add", ContactDepth.ExtraDepthM([], [], [], [], [], s10, 0, c10) == 0.0);
     }
 }

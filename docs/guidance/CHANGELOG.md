@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **The contact height is a function of attitude** (#339). The legs' height (`LandingLegs.LegsHeightM`, which the cut supervisor, the cycle log and the fall-time estimates read) took the touchdown height measured upright. A Starship lands on its skirt about 4.5 m out, so tilted 2.5 deg its low edge is about 0.2 m nearer the ground, and at 10 deg about 0.45 m; contact came with the height still reading 0.2-0.5 m. The colliders measured for the vehicle height (offset, half-widths, depth) are now kept, and the lowest point is worked out at the current attitude, their bottoms taken as ellipses (`ContactDepth`). The plan still ends upright on the upright height. Typed-in heights are unchanged. Checked offline (UiLogic); not flown.
+
 - **Touchdown's engine lever arm follows the centre of mass** (#335). The arm from the centre of mass to the gimbal pivot was measured when a plan was built; it is now read each step and taken at every re-solve, as the inertia already was (`Ksa6DofInputs.LArm`). The Starship's centre of mass comes 1.1-1.4 m nearer the engine over the landing burn, so the plan's arm was about 6 % long by touchdown and the torque it asked for came with that much more side force. Not flown.
 
 - **Touchdown plans end where the legs touch, as the propellant drains** (#335). The plan's end height was set when a plan was built and kept by every re-solve after. On the Starship the nose header tank drains over the burn and the centre of mass comes 1.1-1.4 m nearer the legs, so the last plans ended 0.4-1.1 m above the ground: 15 landings on 2026-11-27 reached their plan's end with the legs 0.3-1.0 m up. Each warm re-solve now ends on the live height (`Ksa6DofGuidance.TargetAltM`). Not flown.

@@ -1551,6 +1551,7 @@ public static partial class GuidanceWindow
         if (!_s.VehicleHeightAuto)
         {
             _s.VehicleHeightStatus = "MANUAL";
+            _s.FootX = _s.FootY = _s.FootHalfX = _s.FootHalfY = _s.FootDepthM = [];
             _s.SiteEarlyContactM = 0.0;
             _s.SiteSlopeDeg = _s.SiteTipDeg = _s.SiteStandDeg = double.NaN;
             return;
@@ -1570,6 +1571,13 @@ public static partial class GuidanceWindow
             return;
         }
         _s.VehicleHeightM = h.DeployedM;
+        // The same colliders, for the contact height at the attitude the craft is in (LandingLegs.LegsHeightM).
+        KsaVehicleHeight.Footprint[] prints = h.Footprints ?? [];
+        _s.FootX = Array.ConvertAll(prints, f => f.X);
+        _s.FootY = Array.ConvertAll(prints, f => f.Y);
+        _s.FootHalfX = Array.ConvertAll(prints, f => f.HalfX);
+        _s.FootHalfY = Array.ConvertAll(prints, f => f.HalfY);
+        _s.FootDepthM = Array.ConvertAll(prints, f => f.DepthM);
         _s.SiteEarlyContactM = SiteEarlyContact(vehicle.Orbit.Parent, h.FootPoints);
         RefreshSiteSlope(vehicle, in h);
         _s.VehicleHeightStowed = h.Stowed > 0;
