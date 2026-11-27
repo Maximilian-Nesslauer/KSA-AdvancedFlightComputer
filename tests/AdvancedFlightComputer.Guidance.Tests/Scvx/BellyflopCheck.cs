@@ -79,7 +79,7 @@ internal static class BellyflopCheck
     static int FlightLike()
     {
         int bad = 0;
-        var cfg = new BellyflopConfig();
+        var cfg = AdvancedFlightComputer.Features.Guidance.BellyflopExperiment.Apply(new BellyflopConfig());
         if (double.TryParse(Environment.GetEnvironmentVariable("AFC_BF_CROSS"), System.Globalization.CultureInfo.InvariantCulture, out double cw)) cfg.CrossWeight = cw;
         Lateral(cfg);
         var model = Model();
@@ -149,7 +149,7 @@ internal static class BellyflopCheck
     /// </summary>
     static int BearingCheck()
     {
-        var cfg = new BellyflopConfig();
+        var cfg = AdvancedFlightComputer.Features.Guidance.BellyflopExperiment.Apply(new BellyflopConfig());
         double[] xa = HandOver(0, 0, 4.0, 32_000.0);
         double fall = new BellyflopPlanner().Solve(Model(spin: false), new BellyflopConfig { MissWeight = 0.0, ColdIterations = 1 }, xa, 0.0, 50 * Deg, 0, 0, null) is { Plan: { } pr } ? pr.X[pr.Nodes - 1, 0] : 40_000.0;
         double[] x = HandOver(fall + 3000.0, 6000.0, 4.0, 32_000.0);
@@ -176,7 +176,7 @@ internal static class BellyflopCheck
     {
         double[] HandOver(double d, double c) => BellyflopCheck.HandOver(d, c, mach, altitude);
         int bad = 0;
-        var cfg = new BellyflopConfig();
+        var cfg = AdvancedFlightComputer.Features.Guidance.BellyflopExperiment.Apply(new BellyflopConfig());
         Lateral(cfg);
         var model = Model();
         double alpha0 = 50 * Deg;

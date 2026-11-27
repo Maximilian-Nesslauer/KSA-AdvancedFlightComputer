@@ -131,6 +131,7 @@ public sealed class GuidanceSaveLandingTest : AfcTest
                     t.Info($"setting {kv[0].Trim()} = {kv[1].Trim()}: {(applied == 1 ? "applied" : "NOT TAKEN")}");
                 }
             }
+            MoveSite(t, craft, state, body, ambient);
             t.Info($"SCvx backend {(state.ScvxClarabel ? "Clarabel" : "SCS")}; site {state.SiteLatDeg:F5} {state.SiteLonDeg:F5}; vehicle height {state.VehicleHeightM:F2} m");
 
             if (mode == "execute")
@@ -199,6 +200,12 @@ public sealed class GuidanceSaveLandingTest : AfcTest
         double lastRate = 0.0;
         string endReason = "timeout";
         GuidanceWindow.OrbitalEntryPhase lastPhase = GuidanceWindow.OrbitalEntryPhase.Idle;
+        // BELLYFLOP AND HAND-OVER METRICS: the flop's angles step by step, the hand-over state, the ignition, the propellant.
+        var flop = new List<(double T, double Alt, double Pitch, double Bank, double Yaw)>();
+        double massFlopStart = double.NaN, massHandover = double.NaN, massContact = double.NaN;
+        double hPitch = double.NaN, hBank = double.NaN, hYaw = double.NaN, hVh = double.NaN, hVz = double.NaN, hRange = double.NaN, hTilt = double.NaN;
+        double ignAt = double.NaN, ignAlt = double.NaN, ignTilt = double.NaN, ignRange = double.NaN, ignVh = double.NaN;
+        double maxVhBurn = 0.0, vhAt100 = double.NaN, rangeAt100 = double.NaN;
 
         while (sim < timeoutS)
         {
@@ -255,6 +262,28 @@ public sealed class GuidanceSaveLandingTest : AfcTest
             bool contact = craft.Situation.HasAnyContact();
             ManualControlInputs inputs = Inputs(craft);
             bool engineOn = inputs.EngineOn && inputs.EngineThrottle > 0.0f;
+            if (st.Phase == GuidanceWindow.OrbitalEntryPhase.Bellyflop)
+            {
+                if (double.IsNaN(massFlopStart))
+                    massFlopStart = craft.TotalMass;
+                var bfs = st.Bellyflop;
+                flop.Add((sim, alt, bfs.PitchDeg, bfs.BankDeg, bfs.YawDeg));
+            }
+            if (touchdownFlies && double.IsNaN(massHandover))
+            {
+                massHandover = craft.TotalMass;
+                (hVh, hVz, hRange, hTilt) = (vh, vz, range, tilt);
+                if (flop.Count > 0)
+                    (hPitch, hBank, hYaw) = (flop[^1].Pitch, flop[^1].Bank, flop[^1].Yaw);
+            }
+            if (touchdownFlies && engineOn && double.IsNaN(ignAt))
+                (ignAt, ignAlt, ignTilt, ignRange, ignVh) = (sim, alt, tilt, range, vh);
+            if (!double.IsNaN(ignAt) && double.IsNaN(contactAt))
+            {
+                maxVhBurn = Math.Max(maxVhBurn, vh);
+                if (double.IsNaN(vhAt100) && height < 100.0)
+                    (vhAt100, rangeAt100) = (vh, range);
+            }
 
             if (st.Phase != lastPhase)
             {
@@ -290,6 +319,7 @@ public sealed class GuidanceSaveLandingTest : AfcTest
             if (contact && double.IsNaN(contactAt) && sim > 1.0)
             {
                 (contactAt, cSink, cSide, cMiss, cTilt, cRate) = (sim, -vz, vh, range, tilt, lastRate);
+                massContact = craft.TotalMass;
                 t.Info($"  t {sim,7:F2}  CONTACT at {-vz:F2} m/s down, {vh:F2} m/s sideways, {range:F2} m from the site, tilt {tilt:F2} deg, turning {lastRate:F1} deg/s the step before");
             }
             if (!double.IsNaN(contactAt))
@@ -324,6 +354,10 @@ public sealed class GuidanceSaveLandingTest : AfcTest
                $"sink={F(cSink)} side={F(cSide)} miss={F(cMiss)} tilt={F(cTilt)} rate={F(cRate)} cut_height={F(cutHeight)} climb_low={F(maxClimbLow)} " +
                $"max_tilt_after={F(maxTiltAfter)} end_tilt={F(endTilt)} standing={(standing ? 1 : 0)} parts={partsAtStart}->{partsAtEnd} sim={F(sim)} wall={F(wall.Elapsed.TotalSeconds)}");
 
+        t.Info("BELLYFLOP RESULT " + FlopSummary(flop, touchdownAt) + FormattableString.Invariant(
+            $" hand_pitch={F(hPitch)} hand_bank={F(hBank)} hand_yaw={F(hYaw)} hand_vh={F(hVh)} hand_vz={F(hVz)} hand_range={F(hRange)} hand_tilt={F(hTilt)}") +
+            FormattableString.Invariant($" coast_s={F(ignAt - touchdownAt)} ign_alt={F(ignAlt)} ign_tilt={F(ignTilt)} ign_range={F(ignRange)} ign_vh={F(ignVh)} burn_s={F(contactAt - ignAt)} max_vh_burn={F(maxVhBurn)} vh_at100={F(vhAt100)} range_at100={F(rangeAt100)}") +
+            FormattableString.Invariant($" flop_kg={F(massFlopStart - massHandover)} touchdown_kg={F(massHandover - massContact)}"));
         t.Check("touchdown guidance took over", !double.IsNaN(touchdownAt));
         if (!t.Check("the craft came down on the ground", contacted, endReason))
             return;
@@ -336,6 +370,94 @@ public sealed class GuidanceSaveLandingTest : AfcTest
         t.Check($"tilted under 3 deg at contact: {cTilt:F2}", cTilt < 3.0);
         t.Check($"engine not cut above 1 m: {(double.IsNaN(cutHeight) ? "lit to contact" : cutHeight.ToString("F2", CultureInfo.InvariantCulture))}", !(cutHeight > 1.0));
         t.Check($"no climb in the last 30 m: {maxClimbLow:F2} m/s up at most", maxClimbLow < 0.3);
+    }
+
+    /// <summary>The flop's angles in one line: over the whole flop and its last 20 s before the hand-over, the largest and the mean magnitude of bank and yaw, the pitch's mean, the bank's reversals past 3 deg; the time and altitude it flew.</summary>
+    private static string FlopSummary(List<(double T, double Alt, double Pitch, double Bank, double Yaw)> flop, double handoverAt)
+    {
+        string F(double x) => double.IsFinite(x) ? x.ToString("F2", CultureInfo.InvariantCulture) : "nan";
+        if (flop.Count == 0)
+            return "flop_s=0";
+        double end = double.IsFinite(handoverAt) ? handoverAt : flop[^1].T;
+        (double Max, double Mean) Stat(Func<(double T, double Alt, double Pitch, double Bank, double Yaw), double> f, double from)
+        {
+            double max = 0.0, sum = 0.0;
+            int n = 0;
+            foreach (var r in flop)
+            {
+                if (r.T < from) continue;
+                double v = f(r);
+                if (!double.IsFinite(v)) continue;
+                max = Math.Max(max, Math.Abs(v));
+                sum += Math.Abs(v);
+                n++;
+            }
+            return (max, n > 0 ? sum / n : double.NaN);
+        }
+        var bank = Stat(r => r.Bank, double.NegativeInfinity);
+        var yaw = Stat(r => r.Yaw, double.NegativeInfinity);
+        var bank20 = Stat(r => r.Bank, end - 20.0);
+        var yaw20 = Stat(r => r.Yaw, end - 20.0);
+        double pitchSum = 0.0;
+        int pn = 0;
+        foreach (var r in flop)
+            if (double.IsFinite(r.Pitch)) { pitchSum += r.Pitch; pn++; }
+        int reversals = 0, sign = 0;
+        foreach (var r in flop)
+        {
+            int sNow = r.Bank > 3.0 ? 1 : r.Bank < -3.0 ? -1 : 0;
+            if (sNow != 0 && sign != 0 && sNow != sign) reversals++;
+            if (sNow != 0) sign = sNow;
+        }
+        return FormattableString.Invariant(
+            $"flop_s={F(flop[^1].T - flop[0].T)} flop_from={F(flop[0].Alt)} pitch_mean={F(pn > 0 ? pitchSum / pn : double.NaN)} bank_max={F(bank.Max)} bank_mean={F(bank.Mean)} bank_last20={F(bank20.Mean)} bank_rev={reversals} yaw_max={F(yaw.Max)} yaw_mean={F(yaw.Mean)} yaw_last20={F(yaw20.Mean)}");
+    }
+
+    /// <summary>
+    /// AFC_SCENARIO_SITE_DOWN_M / AFC_SCENARIO_SITE_CROSS_M move the landing site that far along and across the craft's bearing to it (+ cross to the left), so one save flies a dispersed approach: crossrange for bellyflop to take out. The site's latitude and longitude come from a few least-squares steps on the site's own direction (SiteDirCciAt).
+    /// </summary>
+    private static void MoveSite(TestContext t, Vehicle craft, VehicleAutopilotState state, IParentBody body, FieldInfo ambient)
+    {
+        double down = Env("AFC_SCENARIO_SITE_DOWN_M", 0.0), cross = Env("AFC_SCENARIO_SITE_CROSS_M", 0.0);
+        if (down == 0.0 && cross == 0.0)
+            return;
+        object? before = ambient.GetValue(null);
+        ambient.SetValue(null, state);
+        try
+        {
+            double radius = body.MeanRadius;
+            double3 Site() => (double3)Method("SiteDirCciAt").Invoke(null, [body, 0.0])!;
+            double3 up = Site();
+            double3 r = craft.Orbit.StateVectors.PositionCci;
+            double3 toSite = up * radius - r;
+            double3 bearing = (toSite - up * double3.Dot(toSite, up)).NormalizeOrZero();
+            double3 left = double3.Cross(up, bearing);
+            double3 want = (up * radius + bearing * down + left * cross).NormalizeOrZero();
+            double lat0 = state.SiteLatDeg, lon0 = state.SiteLonDeg;
+            for (int it = 0; it < 3; it++)
+            {
+                double3 s0 = Site();
+                double3 e = want - s0;
+                const double h = 1e-4;
+                state.SiteLatDeg += h;
+                double3 dLat = (Site() - s0) / h;
+                state.SiteLatDeg -= h;
+                state.SiteLonDeg += h;
+                double3 dLon = (Site() - s0) / h;
+                state.SiteLonDeg -= h;
+                double a11 = double3.Dot(dLat, dLat), a12 = double3.Dot(dLat, dLon), a22 = double3.Dot(dLon, dLon);
+                double b1 = double3.Dot(dLat, e), b2 = double3.Dot(dLon, e), det = a11 * a22 - a12 * a12;
+                if (!(Math.Abs(det) > 1e-30)) break;
+                state.SiteLatDeg += (a22 * b1 - a12 * b2) / det;
+                state.SiteLonDeg += (a11 * b2 - a12 * b1) / det;
+            }
+            double moved = (Site() - up).Length() * radius;
+            t.Info(FormattableString.Invariant($"site moved {down:F0} m down the bearing and {cross:F0} m across it: {lat0:F5} {lon0:F5} -> {state.SiteLatDeg:F5} {state.SiteLonDeg:F5}, {moved:F0} m"));
+        }
+        finally
+        {
+            ambient.SetValue(null, before);
+        }
     }
 
     private static string Trim(string s) => s.Length > 110 ? s[..110] : s;

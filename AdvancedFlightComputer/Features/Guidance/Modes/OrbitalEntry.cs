@@ -577,6 +577,7 @@ public static partial class GuidanceWindow
         v.Add(st.Bellyflop.PitchDeg); v.Add(st.Bellyflop.BankDeg); v.Add(st.Bellyflop.YawDeg);
         v.Add(bfp?.MissM ?? double.NaN); v.Add(bfp != null ? bfp.EndTime - now : double.NaN); v.Add(st.Bellyflop.TerminalRangeM / 1000.0);
         v.Add(st.Bellyflop.ForceScale);
+        v.Add(st.Bellyflop.CmdAlpha * toDeg); v.Add(st.Bellyflop.CmdBeta * toDeg); v.Add(st.Bellyflop.CmdPsi * toDeg);
         v.Add(a.FinCommandDeg?.Length ?? 0);
         for (int i = 0; i < 4; i++) v.Add(a.FinCommandDeg != null && i < a.FinCommandDeg.Length ? a.FinCommandDeg[i] : double.NaN);
         for (int i = 0; i < 4; i++) v.Add(a.FinNowDeg != null && i < a.FinNowDeg.Length ? a.FinNowDeg[i] : double.NaN);

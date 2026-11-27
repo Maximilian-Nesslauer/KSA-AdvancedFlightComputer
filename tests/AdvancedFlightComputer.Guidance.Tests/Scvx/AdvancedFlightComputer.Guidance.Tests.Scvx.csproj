@@ -11,6 +11,7 @@
     <ProjectReference Include="../../../AdvancedFlightComputer/Features/Guidance/Gfold/AdvancedFlightComputer.Guidance.Gfold.csproj" />
     <Compile Include="../../../AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/Ksa6DofGfoldSeed.cs" Link="Ksa6DofGfoldSeed.cs" />
     <Compile Include="../../../AdvancedFlightComputer/Features/RcsTranslation/RcsLpSolver.cs" Link="RcsLpSolver.cs" />
+    <Compile Include="../../../AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/Bellyflop/BellyflopExperiment.cs" Link="BellyflopExperiment.cs" />
     <Compile Include="../../../AdvancedFlightComputer/Features/RcsTorque/RcsTorqueAllocator.cs" Link="RcsTorqueAllocator.cs" />
     <Compile Include="../../../AdvancedFlightComputer/Features/AeroControl/AeroTorqueAllocator.cs" Link="AeroTorqueAllocator.cs" />
     <Compile Include="../../../AdvancedFlightComputer/Features/RcsTorque/PhasePlaneRcs.cs" Link="PhasePlaneRcs.cs" />

@@ -41,6 +41,19 @@ public sealed class BellyflopConfig
     /// <summary>Price of pitch and bank, per deg^2 over the nodes (a mean): the plan flies as near belly-first as it can.</summary>
     public double EffortWeight { get; set; } = 0.01;
 
+    /// <summary>Price of bank alone, per deg^2 over the nodes (a mean); NaN prices it as pitch (EffortWeight). Bank is the airflow towards the span: the craft rolled about its long axis, held against the air by the flaps' roll trim. Priced above pitch, the plan steers as an aeroplane banks, turning its lift with yaw and pitch (BANK TO TURN), and keeps bank for what yaw cannot do quickly. Experiment, off by default (harness, 2026-11-27).</summary>
+    public double BankWeight { get; set; } = double.NaN;
+
+    /// <summary>Price of yaw, per deg^2 over the nodes (a mean), on top of the L1 price: with YawWeight lowered, a smooth price that keeps a free yaw from wandering. 0 off.</summary>
+    public double YawQuadWeight { get; set; } = 0.0;
+
+    /// <summary>
+    /// LEVEL BY THE END: over a plan's last EndLevelS seconds bank and yaw (and pitch at EndLevelPitchWeight) are priced EndLevelWeight per deg^2 more, rising from nothing EndLevelS before the plan's end to all of it at half that: the craft comes to the flip wings level and nose along the bearing, whatever it steered with on the way. 0 s off.
+    /// </summary>
+    public double EndLevelS { get; set; } = 0.0;
+    public double EndLevelWeight { get; set; } = 1.0;
+    public double EndLevelPitchWeight { get; set; } = 0.0;
+
     /// <summary>Price of yaw, per deg over the nodes (a mean, L1), near belly-first: far above bank's, so the plan turns the yaw only once bank is pinned at its limit. While the plan glides it is cheaper (YawGlideScale).</summary>
     public double YawWeight { get; set; } = 2.0;
 

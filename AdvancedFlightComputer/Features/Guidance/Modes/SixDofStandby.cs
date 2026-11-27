@@ -52,7 +52,7 @@ public static partial class GuidanceWindow
     /// </summary>
     internal static double SixDofTurnAwayDue(double[] state, double now)
         => _s.Guidance?.Published is { } plan
-            ? Ksa6DofGuidance.TurnAwayTime(plan, state, now, TurnAwayDeg * Math.PI / 180.0) - TurnAwayLeadS
+            ? Ksa6DofGuidance.TurnAwayTime(plan, state, now, BellyflopExperiment.Number("TurnAwayDeg", TurnAwayDeg) * Math.PI / 180.0) - TurnAwayLeadS
             : double.PositiveInfinity;
 
     // 15 deg since 2026-11-27 (was 5), the user's call, to leave the craft with bellyflop longer: at 5 the standby plan's first turn handed a Starship over at 1680-1950 m, 31-36 s before ignition (14:25, 16:37), where the other landings that day were handed over at the latest, about 5 s before it.
