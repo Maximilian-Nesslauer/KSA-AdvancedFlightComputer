@@ -44,7 +44,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
     // The coast before ignition (Scvx6DofConfig.CoastIntervals): its interval count, and each phase's share of normalised time per interval.
     private readonly int _nCoast;
     private readonly double _dtauC, _dtauB;
-    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nAc, _nRr, _nGf, _nSv;
+    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nAc, _nRr, _nGf, _nSv, _nAnchor;
     private readonly int _nEq, _lDim, _nCone;   // _nCone = total rows = nEq + lDim + sum(soc)
     private readonly int[] _socDims;
 
@@ -137,6 +137,8 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         _nVars += _nGf;
         // THE SIDEWAYS-SPEED CONE's slacks, one per node from node 1, after the funnel's (Scvx6DofConfig.SideSpeedPerM).
         _nSv = cfg.SideSpeedEnabled ? _n - 1 : 0;
+        // The first gimbal command's anchor (Scvx6DofConfig.FirstGimbalAnchor): four rows always, so the pattern never changes between fills; loose when there is no anchor. None in TorqueDemand, whose lateral thrust is pinned at zero.
+        _nAnchor = cfg.TorqueDemand ? 0 : 4;
         _oSv = _nVars;
         _nVars += _nSv;
 
@@ -152,7 +154,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         // + two rows per node for each fin's range, and two per interval for its rate, after the RCS's.
         _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm + 2 * _nAc + _nSlew
                 + 2 * _n * Dynamics6Dof.NRCS + 2 * _n * _cfg.FinCount + 2 * (_n - 1) * _cfg.FinCount
-                + _nPin + _nRr + (_nCoast > 0 ? 4 : 0) + 2 * _nGf + _nSv;
+                + _nPin + _nRr + (_nCoast > 0 ? 4 : 0) + 2 * _nGf + _nSv + _nAnchor;
         _socDims = new int[_n + _nGs + _n + _nRr + _nSv];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
@@ -811,6 +813,23 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             _b[row++] = 0.0;
             AddA(row, IGf(k), 1.0);
             _b[row++] = Math.Max(_cfg.CotGlideSlope * hRef - _cfg.GlideSlopeRadiusAt(hRef), 0.0);
+        }
+
+        // THE FIRST GIMBAL COMMAND, near the one being flown: |td_0 - anchor| <= band on each lateral axis (Scvx6DofConfig.FirstGimbalAnchor). Without an anchor the band is four times the largest thrust, which the gimbal cone already bounds well inside.
+        if (_nAnchor > 0)
+        {
+            double[]? anchor = _cfg.FirstGimbalAnchor;
+            bool anchored = anchor is { Length: 3 } && double.IsFinite(anchor[0]) && double.IsFinite(anchor[1]) && anchor[2] > 0.0;
+            double refX = anchored ? anchor![0] : 0.0, refY = anchored ? anchor![1] : 0.0;
+            double band = anchored ? anchor![2] : 4.0 * _cfg.Tmax;
+            AddA(row, IU(0, Dynamics6Dof.ITDX), 1.0);
+            _b[row++] = refX + band;
+            AddA(row, IU(0, Dynamics6Dof.ITDX), -1.0);
+            _b[row++] = band - refX;
+            AddA(row, IU(0, Dynamics6Dof.ITDY), 1.0);
+            _b[row++] = refY + band;
+            AddA(row, IU(0, Dynamics6Dof.ITDY), -1.0);
+            _b[row++] = band - refY;
         }
 
         // The sideways-speed slacks are non-negative.

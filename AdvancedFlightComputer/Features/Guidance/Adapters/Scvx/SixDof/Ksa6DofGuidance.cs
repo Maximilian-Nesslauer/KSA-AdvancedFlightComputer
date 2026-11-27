@@ -869,6 +869,7 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// </summary>
     public bool BeginWarmRestart(double[] x0, double[] xf, double sigmaSeed, double simNow)
     {
+        _cfg.FirstGimbalAnchor = null;
         if (!HasPlan)
             return false;
 
@@ -915,6 +916,7 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <param name="simNow">Sim time now, for the coast; NaN when there is no coast.</param>
     public void BeginCold(double[] x0, double[] xf, double sigmaSeed, double coastSeed = double.NaN, double simNow = double.NaN)
     {
+        _cfg.FirstGimbalAnchor = null;
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
 
@@ -1459,6 +1461,9 @@ public sealed class Ksa6DofGuidance : IDisposable
         }
 
         BuildShiftedSeed(x0, simNow, sigma, out double[] xs, out double[] us, out _, coast, fromWork);
+        // The first gimbal command carries on from the one being flown (FirstGimbalAnchor), for both attempts below.
+        //  None while node 0 is a coast node - a plan built with a coast keeps its coast intervals after ignition at zero length, and the coast rows pin node 0's gimbal at zero, so an anchor elsewhere would leave no plan (offline, the two-phase landings' re-solves were refused 83 times in 135).
+        _cfg.FirstGimbalAnchor = coast > 0.0 || _cfg.CoastIntervals > 0 ? null : FirstGimbalAnchorAt(simNow);
         // A cycle whose predecessor refused gets the larger budget, so it can take the second and third iterations that let SCvx shrink its way to an accepted step. A healthy cycle never reaches the deadline at all.
         double budget = _consecutiveFailures > 0 ? RecoveryCycleBudgetMs : CycleBudgetMs;
 
@@ -1505,6 +1510,26 @@ public sealed class Ksa6DofGuidance : IDisposable
         return false;
     }
 
+    /// <summary>The time a warm re-solve's first gimbal command may slew over from the one being flown, s: two re-solve cycles (RE-SOLVE EVERY 0.1 s and the solve), so a new plan steps the gimbal little faster than it moves. One cycle (0.15 s) was too tight offline: a lift case whose plans needed to turn the gimbal quickly lost most of its re-solves (17 kept against 37); 0.3 s keeps them all.</summary>
+    internal const double FirstGimbalAnchorS = 0.3;
+
+    /// <summary>
+    /// The anchor for a warm re-solve's first gimbal command (Scvx6DofConfig.FirstGimbalAnchor): the published plan's lateral thrust at <paramref name="simNow"/>, the command being flown, and a band of what the gimbal slews in <see cref="FirstGimbalAnchorS"/> at that thrust. Null when there is no published plan, it is in its coast, or the plan has no slew limit.
+    /// </summary>
+    private double[] FirstGimbalAnchorAt(double simNow)
+    {
+        Ksa6DofPlan plan = _published;
+        if (plan == null || !(_cfg.GimbalSlewPerS > 0.0) || _cfg.TorqueDemand)
+            return null;
+        double t = Math.Max(0.0, simNow - plan.SolveTime);
+        if (plan.InCoast(t))
+            return null;
+        (int k, double f) = plan.Locate(t);
+        double tdx = Lerp(plan.U, 0, k, f), tdy = Lerp(plan.U, 1, k, f), thrust = Lerp(plan.U, 2, k, f);
+        double band = _cfg.GimbalSlewPerS * FirstGimbalAnchorS * _cfg.TanGimbal * Math.Max(thrust, _cfg.Tmin);
+        return double.IsFinite(tdx) && double.IsFinite(tdy) && band > 0.0 ? [tdx, tdy, band] : null;
+    }
+
     /// <summary>Keeps a refused attempt's trajectory as the working one, for the next re-solve to carry on from (Update, Track).</summary>
     private void KeepAttempt(double simNow)
     {
@@ -1528,6 +1553,8 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// </summary>
     public bool Track(double[] x0, double simNow, int maxIterations = 2)
     {
+        // Another guidance flies the craft: nothing of this plan's is being flown to carry on from.
+        _cfg.FirstGimbalAnchor = null;
         if (!HasPlan)
             return false;
         // Fixed time counts a committed burn down; this is free-time only, and the standby never runs fixed time.

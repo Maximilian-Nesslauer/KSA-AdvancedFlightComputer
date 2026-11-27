@@ -526,6 +526,7 @@ internal static class SixDofRcsCheck
         onPlan?.Invoke(Sample(fu, NU, s.Sigma, n, 0.0));
         double fs = s.Sigma, f0 = 0.0;
         double[] x = (double[])x0.Clone();
+        double plantGx = double.NaN, plantGy = double.NaN;
         int refused = 0, kept = 0;
         var gates = new List<double>();
         var loopAdmm = new List<int>();
@@ -538,6 +539,7 @@ internal static class SixDofRcsCheck
                 Shift(fx, fu, fs, t - f0, n, out double[] sx, out double[] su, out double ss);
                 // As the game re-seeds a warm solve (Ksa6DofGuidance): the whole reference moved with the measured state, not node 0 alone, and the trust region opened to its warm start rather than left where the last solve shrank it.
                 ColdReferenceShift.Apply(sx, n, ss, x);
+                PathShaping.Anchor(cfg, su);
                 s.Reseed(x, sx, su, ss, trustRegion: Math.Clamp(s.TrustRegion, WarmTrustRegion, s.TrustRegionMax));
                 double ratio = double.PositiveInfinity;
                 for (int i = 0; i < 3; i++)
@@ -569,6 +571,7 @@ internal static class SixDofRcsCheck
             for (double h = 0; h < cycle - 1e-9; h += dt)
             {
                 double[] u = Sample(fu, NU, fs, n, t - f0);
+                PathShaping.SlewPlant(cfg, u, dt, ref plantGx, ref plantGy);
                 if (mix != null) u = mix(u);
                 Step(x, u, plant, dt);
                 maxOff = Math.Max(maxOff, OffAir(x) * 180.0 / Math.PI);

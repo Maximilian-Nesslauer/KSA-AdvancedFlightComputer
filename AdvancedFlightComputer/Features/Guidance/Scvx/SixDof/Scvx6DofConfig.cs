@@ -355,6 +355,12 @@ public sealed class Scvx6DofConfig
 
     public bool SideSpeedEnabled => SideSpeedPerM > 0.0;
 
+    /// <summary>
+    /// THE FIRST GIMBAL COMMAND'S ANCHOR, N, or null for none: (tdx, tdy, band) - node 0's lateral thrust may differ from (tdx, tdy) by at most band on each axis. Set by the flight for a warm re-solve to the command it is flying now, with band what the gimbal slews in two re-solve cycles (Ksa6DofGuidance.FirstGimbalAnchor), so a new plan carries on from where the gimbal is going rather than jumping. Settable between solves, as VirtualControlScale is.
+    ///  WHY (#335, 2026-11-27). Each re-solve started from the measured state but its first gimbal command was free, so every new plan, about every 0.15 s, stepped the feedforward by 1-5 deg - faster than the gimbal slews (about 20 deg/s). In the last 5 s of two Starship landings 15 of 22 and 23 of 35 too-fast steps came at a new plan; the gimbal lagged, the attitude fell 5-7 deg behind, re-solves were refused, and the attitude feedback's deflection pushed the craft sideways into a topple.
+    /// </summary>
+    public double[]? FirstGimbalAnchor { get; set; }
+
     public bool GlideSlopeProgressive => IsProgressive(GlideFunnelHeightsM, GlideFunnelHalfAngleDeg);
 
     /// <summary>The glideslope's horizontal run per metre of height at <paramref name="heightM"/> over the target.</summary>

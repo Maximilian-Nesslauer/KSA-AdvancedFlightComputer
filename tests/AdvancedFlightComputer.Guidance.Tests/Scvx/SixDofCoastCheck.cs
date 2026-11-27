@@ -330,6 +330,7 @@ internal static class SixDofCoastCheck
                 }
                 Shift(plan, t - plan.Start, n, c, out double[] sx, out double[] su, out double ss, out double sc);
                 ColdReferenceShift.Apply(sx, n, ss, x);
+                PathShaping.Anchor(cfg, su, coasting: sc > 0.0);
                 s.Reseed(x, sx, su, ss, trustRegion: Math.Clamp(s.TrustRegion, WarmTrustRegion, s.TrustRegionMax), coastSigma: sc);
                 double ratio = double.PositiveInfinity;
                 for (int i = 0; i < 3; i++)
