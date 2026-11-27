@@ -840,7 +840,7 @@ public static partial class GuidanceWindow
     ///   - a dt window, since the first cycle after engage has no previous sample and
     ///     a paused or warped frame produces a meaningless one.
     /// </summary>
-    private static void UpdateAccelBias(double[] x, double now, double thrustDelivered, double3? thrustDirModel = null)
+    private static void UpdateAccelBias(double[] x, double now, double thrustDelivered, double3? thrustDirModel = null, double3 rcsForceModel = default)
     {
         if (_s.Guidance == null)
             return;
@@ -881,9 +881,14 @@ public static partial class GuidanceWindow
         double3 g0 = _s.Guidance.BaseGravity;
 
         double3 aero = _s.Guidance.ModelAeroAccel(x);
-        double rx = ax - (thrustDelivered / m * zx + g0.X + aero.X);
-        double ry = ay - (thrustDelivered / m * zy + g0.Y + aero.Y);
-        double rz = az - (thrustDelivered / m * zz + g0.Z + aero.Z);
+        // THE RCS'S OWN FORCE, model body axes (KsaRcsTorqueControl.Report.ForceN), rotated into the site frame: the plan models it (Dynamics6Dof's RCS force per N m), so, like the gimbals' sideways thrust, the estimate must not learn it as a missing force (2026-11-27 review). AFC_X_BIAS_NO_RCS=1 leaves it out, for comparison.
+        double3 f = BiasNoRcs ? default : rcsForceModel;
+        double fx = (1.0 - 2.0 * (qy * qy + qz * qz)) * f.X + 2.0 * (qx * qy - qw * qz) * f.Y + 2.0 * (qx * qz + qw * qy) * f.Z;
+        double fy = 2.0 * (qx * qy + qw * qz) * f.X + (1.0 - 2.0 * (qx * qx + qz * qz)) * f.Y + 2.0 * (qy * qz - qw * qx) * f.Z;
+        double fz = 2.0 * (qx * qz - qw * qy) * f.X + 2.0 * (qy * qz + qw * qx) * f.Y + (1.0 - 2.0 * (qx * qx + qy * qy)) * f.Z;
+        double rx = ax - (thrustDelivered / m * zx + fx / m + g0.X + aero.X);
+        double ry = ay - (thrustDelivered / m * zy + fy / m + g0.Y + aero.Y);
+        double rz = az - (thrustDelivered / m * zz + fz / m + g0.Z + aero.Z);
 
         // ~2 s time constant at a 0.02 s step: slow enough to ignore per-frame noise, fast enough to follow drag falling away through the descent.
         double alpha = Math.Clamp(dt / 2.0, 0.0, 1.0);
@@ -1835,7 +1840,7 @@ public static partial class GuidanceWindow
             ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle,
                   KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]))
             : 0.0;
-        UpdateAccelBias(x, now, thrustDelivered, ThrustDirModel(vehicle, thrustDelivered));
+        UpdateAccelBias(x, now, thrustDelivered, ThrustDirModel(vehicle, thrustDelivered), RcsForceModel(vehicle));
         // NO LATER IGNITION holds for as long as touchdown has the craft, whatever guidance it flies now: a rebuild without a plan (RebuildUnplannedColdAt) or a direct engage starts a fresh guidance unarmed (2026-11-27 review).
         if (_s.Active && _s.Guidance != null && !_s.Guidance.IgnitionCapArmed)
             _s.Guidance.ArmIgnitionCap();
@@ -2174,6 +2179,16 @@ public static partial class GuidanceWindow
 
     /// <summary>AFC_X_BIAS_AXIAL=1: the acceleration estimate takes the thrust along the body axis, as it did before 2026-11-27, for comparison flights.</summary>
     private static readonly bool BiasAxialOnly = Environment.GetEnvironmentVariable("AFC_X_BIAS_AXIAL") == "1";
+
+    /// <summary>AFC_X_BIAS_NO_RCS=1: the acceleration estimate leaves the RCS's force out (before 2026-11-27 evening), for comparison flights.</summary>
+    private static readonly bool BiasNoRcs = Environment.GetEnvironmentVariable("AFC_X_BIAS_NO_RCS") == "1";
+
+    /// <summary>The force AFC's RCS gave on its last command, model body axes (KsaRcsTorqueControl.Report.ForceN, commanded in those axes), or zero when it did not fly the RCS.</summary>
+    private static double3 RcsForceModel(Vehicle vehicle)
+    {
+        KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Last(vehicle);
+        return rcs.Active && double.IsFinite(rcs.ForceN.X) && double.IsFinite(rcs.ForceN.Y) && double.IsFinite(rcs.ForceN.Z) ? rcs.ForceN : default;
+    }
 
     /// <summary>AFC_X_BIAS_RAWDIR=1: the estimate takes the gimbals' measured direction whole (e3701e9), for comparison flights.</summary>
     private static readonly bool BiasRawDirection = Environment.GetEnvironmentVariable("AFC_X_BIAS_RAWDIR") == "1";
