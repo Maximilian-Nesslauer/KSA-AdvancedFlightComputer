@@ -681,6 +681,13 @@ public sealed class Scvx6DofSolver : IDisposable
                 double over = Math.Sqrt(dvx * dvx + dvy * dvy) - (_cfg.SideSpeedPerM * height + _cfg.SideSpeedFloorMs);
                 gs += _cfg.SideSpeedWeight * Math.Max(0.0, over) / Scvx6DofConfig.SideSpeedPriceScaleMs;
             }
+        if (_cfg.DescentFloorEnabled)
+            for (int node = 1; node < _n; node++)
+            {
+                double height = x[node * NX + Dynamics6Dof.IR + 2] - _xf[Dynamics6Dof.IR + 2];
+                double shortOf = _cfg.DescentFloorAt(height) + x[node * NX + Dynamics6Dof.IV + 2];
+                gs += _cfg.DescentFloorWeight * Math.Max(0.0, shortOf) / Scvx6DofConfig.SideSpeedPriceScaleMs;
+            }
         if (_cfg.SinkFunnelEnabled)
             for (int node = 1; node < _n; node++)
             {

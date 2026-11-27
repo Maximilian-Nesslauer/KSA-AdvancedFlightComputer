@@ -469,6 +469,23 @@ public sealed class Scvx6DofConfig
     public bool SinkFunnelEnabled => SinkPerM > 0.0;
 
     /// <summary>
+    /// THE DESCENT FLOOR, m/s, or 0 for none: the plan's speed DOWN at each node from node 1 is at least min(this, <see cref="DescentFloorPerM"/> x its height over the target) - the last metres are flown descending, never hovering, as Apollo's P66 and MSL's constant-descent segment fly them. Soft, its slack at <see cref="DescentFloorWeight"/> per <see cref="SideSpeedPriceScaleMs"/> per node. Linear in the state, with the branch of the min taken at the reference (re-linearised every iteration).
+    ///  WHY (2026-11-27, the in-game lunar landing at 20:49). Nothing in the plan said not to hover near the ground, and a hover cost only a little fuel: a lander that drifted 0.3 m off its plan re-planned a 3 s hover at 5.4 m to move the 0.3-0.5 m back at 1-4 deg (leaning in the last 3 s is priced by LAST SECONDS SMOOTH), its end jumping from 5.1 to 8.2 s away; the cut supervisor read the stall and cut it 1.2 m up.
+    /// </summary>
+    public double DescentFloorMs { get; set; }
+
+    /// <summary>The descent floor's taper near the ground, 1/s: under DescentFloorMs / this metres over the target the floor is this times the height, so it meets the plan's end sink there.</summary>
+    public double DescentFloorPerM { get; set; } = 0.5;
+
+    /// <summary>The price of a descent short of the floor, per <see cref="SideSpeedPriceScaleMs"/> per node: 2000 makes a 0.5 m/s hover over five nodes cost 250, more than the 160 of a 0.4 m miss.</summary>
+    public double DescentFloorWeight { get; set; } = 2000.0;
+
+    public bool DescentFloorEnabled => DescentFloorMs > 0.0;
+
+    /// <summary>The descent floor at <paramref name="heightM"/> over the target, m/s down.</summary>
+    public double DescentFloorAt(double heightM) => Math.Min(DescentFloorMs, DescentFloorPerM * Math.Max(heightM, 0.0));
+
+    /// <summary>
     /// THE FIRST GIMBAL COMMAND'S ANCHOR, N, or null for none: (tdx, tdy, band) - node 0's lateral thrust may differ from (tdx, tdy) by at most band on each axis. Set by the flight for a warm re-solve to the command it is flying now, with band what the gimbal slews in two re-solve cycles (Ksa6DofGuidance.FirstGimbalAnchor), so a new plan carries on from where the gimbal is going rather than jumping. Settable between solves, as VirtualControlScale is.
     ///  WHY (#335, 2026-11-27). Each re-solve started from the measured state but its first gimbal command was free, so every new plan, about every 0.15 s, stepped the feedforward by 1-5 deg - faster than the gimbal slews (about 20 deg/s). In the last 5 s of two Starship landings 15 of 22 and 23 of 35 too-fast steps came at a new plan; the gimbal lagged, the attitude fell 5-7 deg behind, re-solves were refused, and the attitude feedback's deflection pushed the craft sideways into a topple.
     /// </summary>

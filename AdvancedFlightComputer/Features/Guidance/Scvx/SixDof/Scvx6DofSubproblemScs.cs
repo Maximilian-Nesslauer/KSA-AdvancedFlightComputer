@@ -39,12 +39,12 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
     private readonly double _dtau;
     private readonly double[] _xs, _us;
 
-    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _oAc, _oRr, _iSigC, _oGf, _oSv, _oTip, _oDz, _nVars;
+    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _oAc, _oRr, _iSigC, _oGf, _oSv, _oTip, _oDz, _oDf, _nVars;
 
     // The coast before ignition (Scvx6DofConfig.CoastIntervals): its interval count, and each phase's share of normalised time per interval.
     private readonly int _nCoast;
     private readonly double _dtauC, _dtauB;
-    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nTmAtt, _nTmRate, _nAc, _nRr, _nGf, _nSv, _nAnchor, _nTip, _nDz;
+    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nTmAtt, _nTmRate, _nAc, _nRr, _nGf, _nSv, _nAnchor, _nTip, _nDz, _nDf;
     private readonly int _nEq, _lDim, _nCone;   // _nCone = total rows = nEq + lDim + sum(soc)
     private readonly int[] _socDims;
 
@@ -89,6 +89,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
     public int IGf(int k) => _oGf + k;
     public int ISv(int k) => _oSv + k;
     public int IDz(int k) => _oDz + k;
+    public int IDf(int k) => _oDf + k;
     public int IVz(int k) => _oVz + k;
 
     public Scvx6DofSubproblemScs(Scvx6DofConfig cfg)
@@ -153,6 +154,10 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         _nDz = cfg.SinkFunnelEnabled ? _n - 1 : 0;
         _oDz = _nVars;
         _nVars += _nDz;
+        // THE DESCENT FLOOR's slacks, one per node from node 1, after everything else (Scvx6DofConfig.DescentFloorMs).
+        _nDf = cfg.DescentFloorEnabled ? _n - 1 : 0;
+        _oDf = _nVars;
+        _nVars += _nDf;
 
         // With the terminal roll free, three terminal rows go (qw, qz, wz) and the last node gets a tangent-plane row.
         _nEq = NX + (NX - 1) + (_n - 1) * NX + (_n - 2) - (cfg.TerminalRollFree ? 2 : 0);
@@ -166,7 +171,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         // + two rows per node for each fin's range, and two per interval for its rate, after the RCS's.
         _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm + 2 * _nAc + _nSlew
                 + 2 * _n * Dynamics6Dof.NRCS + 2 * _n * _cfg.FinCount + 2 * (_n - 1) * _cfg.FinCount
-                + _nPin + _nRr + (_nCoast > 0 ? 4 : 0) + 2 * _nGf + _nSv + _nAnchor + (_nTip > 0 ? 2 : 0) + 2 * _nDz;
+                + _nPin + _nRr + (_nCoast > 0 ? 4 : 0) + 2 * _nGf + _nSv + _nAnchor + (_nTip > 0 ? 2 : 0) + 2 * _nDz + 2 * _nDf;
         _socDims = new int[_n + _nGs + _n + _nRr + _nSv + (_nTip > 0 ? 3 : 0)];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
@@ -207,6 +212,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         }
         for (int k = 0; k < _nVz; k++) _colScale[IVz(k)] = _xs[Dynamics6Dof.IV];
         for (int k = 0; k < _nDz; k++) _colScale[IDz(k)] = _xs[Dynamics6Dof.IV];
+        for (int k = 0; k < _nDf; k++) _colScale[IDf(k)] = _xs[Dynamics6Dof.IV];
         for (int i = 0; i < _nTmPos; i++) _colScale[_oTm + i] = _xs[Dynamics6Dof.IR];
         for (int i = 0; i < _nTmVel; i++) _colScale[_oTm + _nTmPos + i] = _xs[Dynamics6Dof.IV];
         for (int i = 0; i < _nTmAtt; i++) _colScale[_oTm + _nTmPos + _nTmVel + i] = _xs[Dynamics6Dof.IQ + 1];
@@ -387,7 +393,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
     internal double RateSlackCost => SlackCost(_oRr, _nRr);
 
     /// <summary>The glideslope, climb-rate and terminal-miss slacks' cost in the last solution, as the objective pays it.</summary>
-    internal double PathSlackCost => SlackCost(_oGs, _nGs) + SlackCost(_oGf, _nGf) + SlackCost(_oSv, _nSv) + SlackCost(_oVz, _nVz) + SlackCost(_oTm, _nTm) + SlackCost(_oDz, _nDz);
+    internal double PathSlackCost => SlackCost(_oGs, _nGs) + SlackCost(_oGf, _nGf) + SlackCost(_oSv, _nSv) + SlackCost(_oVz, _nVz) + SlackCost(_oTm, _nTm) + SlackCost(_oDz, _nDz) + SlackCost(_oDf, _nDf);
 
     private double SlackCost(int offset, int count)
     {
@@ -496,6 +502,8 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             _c[ISv(k)] += _cfg.SideSpeedWeight * _colScale[ISv(k)] / Scvx6DofConfig.SideSpeedPriceScaleMs;
         for (int k = 0; k < _nDz; k++)
             _c[IDz(k)] += _cfg.SinkWeight * _colScale[IDz(k)] / Scvx6DofConfig.SideSpeedPriceScaleMs;
+        for (int k = 0; k < _nDf; k++)
+            _c[IDf(k)] += _cfg.DescentFloorWeight * _colScale[IDf(k)] / Scvx6DofConfig.SideSpeedPriceScaleMs;
         // The tip-over line's slack, a degree of it at TipWeight (Scvx6DofConfig.TipLimit).
         if (_nTip > 0)
             _c[_oTip + 3] += _cfg.TipWeight * _colScale[_oTip + 3] / (Math.PI / 180.0);
@@ -943,6 +951,21 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             _b[row++] = 0.0;
         }
 
+        // THE DESCENT FLOOR, from node 1 on: -v_z[k] >= min(DescentFloorMs, DescentFloorPerM (r_z[k] - target_z)) - f_k, f_k >= 0 (Scvx6DofConfig.DescentFloorMs), the branch of the min taken at the reference height. Both coefficients are always written, so the pattern does not change between fills.
+        for (int k = 0; k < _nDf; k++)
+        {
+            int node = k + 1;
+            double refHeight = xbar[node * NX + Dynamics6Dof.IR + 2] - xf[Dynamics6Dof.IR + 2];
+            bool taper = _cfg.DescentFloorPerM * refHeight < _cfg.DescentFloorMs;
+            // v_z + (taper ? PerM r_z : 0) - f <= (taper ? PerM target_z : -DescentFloorMs)
+            AddA(row, IX(node, Dynamics6Dof.IV + 2), 1.0);
+            AddA(row, IX(node, Dynamics6Dof.IR + 2), taper ? _cfg.DescentFloorPerM : 0.0);
+            AddA(row, IDf(k), -1.0);
+            _b[row++] = taper ? _cfg.DescentFloorPerM * xf[Dynamics6Dof.IR + 2] : -_cfg.DescentFloorMs;
+            AddA(row, IDf(k), -1.0);
+            _b[row++] = 0.0;
+        }
+
         // In TorqueDemand the same cone bounds the pitch and yaw torque as the mixer can give it together: ||(tau_x, tau_y)|| <= DemandTorquePerN T + the largest disc inside the RCS's box. The gimbals' share is a disc (they tilt one nozzle), so the box rows alone would promise up to 1.4 times the gimbals' torque at its corners.
         for (int k = 0; k < _n; k++)
         {
@@ -1216,6 +1239,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
 
     private string NameOf(int col)
     {
+        if (col >= _oDf && _nDf > 0) return $"descent-floor slack {col - _oDf}";
         if (col >= _oDz && _nDz > 0) return $"sink-rate slack {col - _oDz}";
         if (col >= _oSv && _nSv > 0) return $"sideways speed slack {col - _oSv}";
         if (col >= _oGf && _nGf > 0) return $"glide funnel slack {col - _oGf}";
