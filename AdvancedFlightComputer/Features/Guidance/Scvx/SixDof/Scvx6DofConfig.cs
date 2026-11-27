@@ -169,6 +169,12 @@ public sealed class Scvx6DofConfig
     public double CoastSigmaMax { get; set; } = 30.0;
 
     /// <summary>
+    /// NO LATER IGNITION, s, or negative for none: a warm re-solve's coast may be at most the coast left on the plan it starts from plus this, so a re-solve can light the engine earlier but never more than this later (Ksa6DofGuidance.CoastNow). A shrinking horizon on the ignition.
+    ///  WHY (2026-11-27 campaign). The coast stays free until the ignition locks, and each re-solve of a Starship's approach pushed the ignition a little later - the 17:29 landing planned to light 4.9 s after the hand-over and lit 7.7 s after, the plan's touchdown sliding 7 s later over the coast - so the burn began lower and faster and ended on its limits. The literature's receding-horizon fix: keep the time-to-go the plan promised.
+    /// </summary>
+    public double CoastGrowthCapS { get; set; } = -1.0;
+
+    /// <summary>
     /// THE IGNITION LOCK: the coast's duration pinned to this, s, or null to leave it free. A fuel-optimal plan always lights as late as it can, so a free ignition time slides later on every re-solve; locked a second or so out, the craft commits to it. After ignition the coast is pinned at zero: its nodes sit at the start, the problem keeps its shape, and the warm start carries on.
     /// </summary>
     public double? CoastSigmaFixed { get; set; }
@@ -423,18 +429,32 @@ public sealed class Scvx6DofConfig
     /// THE SIDEWAYS-SPEED CONE, 1/s, or 0 for none: the plan's horizontal speed at each node from node 1 is at most this times its height over the target, plus <see cref="SideSpeedFloorMs"/> - 0.3 allows 3.3 m/s at 10 m and 0.9 m/s at 2 m - so the sideways speed is gone before the last metres and the craft comes down them straight, as a booster that lands 0.2 m/s sideways does. Soft, with its own slack at <see cref="SideSpeedWeight"/>. Exactly convex: a second-order cone in the state, so it needs no linearisation.
     ///  WHY (#335, 2026-11-27). The position funnel limits how far off the craft may be, not how fast it moves, and the plans met it and left the sideways speed to the last second: two Starship landings passed over the target with their legs 7-9 m up at 2.9-3.8 m/s. The last plans then stopped it by leaning one way and pushing the other with the gimbal; one engine's gimbal could not both turn the craft and push it, the attitude feedback's corrections pushed the other way, and both touched down sliding at 3.3-4.2 m/s and toppled.
     /// </summary>
-    public double SideSpeedPerM { get; init; }
+    public double SideSpeedPerM { get; set; }
 
     /// <summary>The sideways speed the cone allows at the target's height, m/s.</summary>
-    public double SideSpeedFloorMs { get; init; } = 0.3;
+    public double SideSpeedFloorMs { get; set; } = 0.3;
 
     /// <summary>The price of sideways speed over the cone, per <see cref="SideSpeedPriceScaleMs"/> per node.</summary>
-    public double SideSpeedWeight { get; init; } = 10.0;
+    public double SideSpeedWeight { get; set; } = 10.0;
 
     /// <summary>The speed the sideways-speed cone's price is per, m/s: fixed, as the funnel's length is.</summary>
     public const double SideSpeedPriceScaleMs = 20.0;
 
     public bool SideSpeedEnabled => SideSpeedPerM > 0.0;
+
+    /// <summary>
+    /// THE SINK-RATE FUNNEL, 1/s, or 0 for none: the plan's speed down at each node from node 1 is at most this times its height over the target plus <see cref="SinkFloorMs"/> - 0.5 with a 2 m/s floor allows 12 m/s at 20 m and 3 m/s at 2 m. Soft, its slack at <see cref="SinkWeight"/> per <see cref="SideSpeedPriceScaleMs"/> per node. Linear in the state.
+    ///  WHY (2026-11-27 campaign). A propellant-best plan brakes as late as it can: every Starship landing of the day came down its last 20-30 m at 19-24 m/s on full throttle, leaving no time to stand the craft up and take out its sideways speed, and the re-solves slid the braking later still. This keeps the end of the burn gentle, so the last seconds have room.
+    /// </summary>
+    public double SinkPerM { get; set; }
+
+    /// <summary>The speed down the sink-rate funnel allows at the target's height, m/s.</summary>
+    public double SinkFloorMs { get; set; } = 2.0;
+
+    /// <summary>The price of speed down over the funnel, per <see cref="SideSpeedPriceScaleMs"/> per node.</summary>
+    public double SinkWeight { get; set; } = 200.0;
+
+    public bool SinkFunnelEnabled => SinkPerM > 0.0;
 
     /// <summary>
     /// THE FIRST GIMBAL COMMAND'S ANCHOR, N, or null for none: (tdx, tdy, band) - node 0's lateral thrust may differ from (tdx, tdy) by at most band on each axis. Set by the flight for a warm re-solve to the command it is flying now, with band what the gimbal slews in two re-solve cycles (Ksa6DofGuidance.FirstGimbalAnchor), so a new plan carries on from where the gimbal is going rather than jumping. Settable between solves, as VirtualControlScale is.

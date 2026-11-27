@@ -123,6 +123,9 @@ public sealed class Ksa6DofGuidance : IDisposable
 
     private double _lockedIgnition = double.NaN;
 
+    // The coast's upper bound as the setup built it, before NO LATER IGNITION lowered it (Scvx6DofConfig.CoastGrowthCapS).
+    private double _coastMaxBuilt = double.NaN;
+
     // The ignition the latest reference plans, sim time: where a cold or spread solve's coast is carried down from.
     private double _ignitionAt = double.NaN;
 
@@ -144,6 +147,12 @@ public sealed class Ksa6DofGuidance : IDisposable
         else if (known && coast < IgnitionLockS)
             _lockedIgnition = simNow + coast;
         _cfg.CoastSigmaFixed = EngineLit || double.IsFinite(_lockedIgnition) ? coast : null;
+        // NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS): the free coast at most what the plan left plus the cap; the setup's bound otherwise.
+        if (_cfg.CoastGrowthCapS >= 0.0 && known && _cfg.CoastSigmaFixed == null)
+        {
+            _coastMaxBuilt = double.IsNaN(_coastMaxBuilt) ? _cfg.CoastSigmaMax : _coastMaxBuilt;
+            _cfg.CoastSigmaMax = Math.Max(Math.Min(_coastMaxBuilt, coast + _cfg.CoastGrowthCapS), _cfg.CoastSigmaMin + 1e-3);
+        }
         return coast;
     }
 

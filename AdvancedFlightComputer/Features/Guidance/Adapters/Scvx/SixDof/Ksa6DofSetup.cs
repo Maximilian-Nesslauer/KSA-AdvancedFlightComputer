@@ -883,6 +883,8 @@ public static class Ksa6DofSetup
                 Math.Max(mass, 1.0),
             ],
         };
+        // Harness experiments (TouchdownExperiment): nothing unless an AFC_XCFG_ variable is set.
+        TouchdownExperiment.Apply(cfg);
         // Validate every derived value before handing the problem to the native solver because one non-finite value can make the complete matrix invalid.
         //  The realistic path is not exotic: `gScale = Mu / |siteCci|^2` is Infinity if the site has not resolved yet, and `Math.Max(NaN, x)` RETURNS NaN, so a single bad intermediate propagates silently through the scale chain.
         (string Name, double Value)[] mustBeFinitePositive =
