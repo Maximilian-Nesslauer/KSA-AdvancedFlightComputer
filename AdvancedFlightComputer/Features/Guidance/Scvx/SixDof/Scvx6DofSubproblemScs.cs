@@ -662,7 +662,8 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             AddA(row, IU(k, Dynamics6Dof.IT), -1.0);
             _b[row++] = coast ? 0.0 : -_cfg.Tmin;
             AddA(row, IU(k, Dynamics6Dof.IT), 1.0);
-            _b[row++] = coast ? 0.0 : _cfg.Tmax;
+            // The plan's ceiling: PlanThrustShare of full thrust (Scvx6DofConfig.PlanThrustShare), the rest left to the feedback.
+            _b[row++] = coast ? 0.0 : _cfg.Tmax * Math.Clamp(_cfg.PlanThrustShare, Math.Min(1.0, 1.05 * _cfg.ThrottleFloor), 1.0);
             // |tau_roll| <= TauRollMax, or <= (TauRollMax / Tmax) T when the roll comes from the gimbals; the thrust column is always present so the pattern does not depend on the mode.
             double rollPerNewton = _cfg.RollTorqueFollowsThrust && _cfg.Tmax > 0.0 ? _cfg.TauRollMax / _cfg.Tmax : 0.0;
             AddA(row, IU(k, Dynamics6Dof.ITAU), 1.0);

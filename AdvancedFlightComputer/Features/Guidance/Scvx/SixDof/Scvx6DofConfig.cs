@@ -17,6 +17,12 @@ public sealed class Scvx6DofConfig
 
     public double Tmax { get; init; } = 6.0e6;
     public double ThrottleFloor { get; init; } = 0.40;          // Tmin = floor * Tmax
+
+    /// <summary>
+    /// THE PLAN'S THRUST CEILING as a share of full thrust, 1 for all of it: the plan may ask for at most this, and the attitude and thrust feedback has the rest (tube MPC's constraint tightening). The throttle is still T / Tmax.
+    ///  WHY (2026-11-27 campaign). A propellant-best plan ends its burn on full thrust; the lunar lander came down its last 4.5 s at 100 % throttle from 18 m/s at 49 m, so nothing was left for the craft falling behind its plan, and the re-solves slid the braking later still.
+    /// </summary>
+    public double PlanThrustShare { get; set; } = 1.0;
     public double GimbalMaxDeg { get; init; } = 10.0;
 
     /// <summary>

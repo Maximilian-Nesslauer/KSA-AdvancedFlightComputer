@@ -183,6 +183,7 @@ public sealed class GuidanceSaveLandingTest : AfcTest
         double maxTiltAfter = 0.0, endTilt = double.NaN;
         bool engineWasOn = false, impact = false;
         double3 lastNose = default;
+        double lastRate = 0.0;
         string endReason = "timeout";
         GuidanceWindow.OrbitalEntryPhase lastPhase = GuidanceWindow.OrbitalEntryPhase.Idle;
 
@@ -236,6 +237,8 @@ public sealed class GuidanceSaveLandingTest : AfcTest
             double tilt = Math.Acos(Math.Clamp(double3.Dot(nose, up), -1.0, 1.0)) * 180.0 / Math.PI;
             double rate = sim > StepS ? Math.Acos(Math.Clamp(double3.Dot(nose, lastNose), -1.0, 1.0)) * 180.0 / Math.PI / StepS : 0.0;
             lastNose = nose;
+            if (double.IsNaN(contactAt) && !craft.Situation.HasAnyContact())
+                lastRate = rate;
             bool contact = craft.Situation.HasAnyContact();
             ManualControlInputs inputs = Inputs(craft);
             bool engineOn = inputs.EngineOn && inputs.EngineThrottle > 0.0f;
@@ -258,7 +261,7 @@ public sealed class GuidanceSaveLandingTest : AfcTest
                     (cutAt, cutHeight) = (sim, height);
                 if (engineOn && !double.IsNaN(cutAt))
                     (cutAt, cutHeight) = (double.NaN, double.NaN);
-                if (height < 30.0 && double.IsFinite(lastHeight) && vz > 0.0)
+                if (touchdownFlies && range < 300.0 && height < 30.0 && double.IsFinite(lastHeight) && vz > 0.0)
                     maxClimbLow = Math.Max(maxClimbLow, vz);
                 lastHeight = height;
             }
@@ -273,8 +276,8 @@ public sealed class GuidanceSaveLandingTest : AfcTest
 
             if (contact && double.IsNaN(contactAt) && sim > 1.0)
             {
-                (contactAt, cSink, cSide, cMiss, cTilt, cRate) = (sim, -vz, vh, range, tilt, rate);
-                t.Info($"  t {sim,7:F2}  CONTACT at {-vz:F2} m/s down, {vh:F2} m/s sideways, {range:F2} m from the site, tilt {tilt:F2} deg, turning {rate:F1} deg/s");
+                (contactAt, cSink, cSide, cMiss, cTilt, cRate) = (sim, -vz, vh, range, tilt, lastRate);
+                t.Info($"  t {sim,7:F2}  CONTACT at {-vz:F2} m/s down, {vh:F2} m/s sideways, {range:F2} m from the site, tilt {tilt:F2} deg, turning {lastRate:F1} deg/s the step before");
             }
             if (!double.IsNaN(contactAt))
             {
@@ -286,7 +289,7 @@ public sealed class GuidanceSaveLandingTest : AfcTest
                     break;
                 }
             }
-            else if (alt < -5.0)
+            else if (r.Length() - siteCci.Length() < -5.0 && range < 5000.0)
             {
                 endReason = "below the site with no contact";
                 break;
