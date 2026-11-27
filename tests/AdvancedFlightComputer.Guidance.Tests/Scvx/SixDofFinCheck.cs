@@ -269,7 +269,7 @@ internal static class SixDofFinCheck
             WW = 0.002 / (n * 3.0 * omegaScale * omegaScale),
             WDu = 0.05,
             ProximalWeight = 0.05,
-            GlideSlopeDeg = PathShaping.FarDeg(0.0), GlideFunnelHeightsM = PathShaping.FunnelHeightsM, GlideFunnelHalfAngleDeg = PathShaping.FunnelDeg, GlideFunnelWeight = PathShaping.FunnelWeight,
+            GlideSlopeDeg = PathShaping.FarDeg(0.0), GlideFunnelHeightsM = PathShaping.FunnelHeightsM, GlideFunnelHalfAngleDeg = PathShaping.FunnelDeg, GlideFunnelWeight = PathShaping.FunnelWeight, SideSpeedPerM = PathShaping.SideSpeedPerM,
             VzMax = 0.0,
             TerminalMissWeight = 1.0e5,
             TerminalSpeedWeight = 1.0e4,

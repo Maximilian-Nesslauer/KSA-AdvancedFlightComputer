@@ -578,7 +578,7 @@ public static partial class GuidanceWindow
                                    momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
                                    momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
                                    momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs,
-                                   glideFunnelDeg: GlideFunnelDeg()))
+                                   glideFunnelDeg: GlideFunnelDeg(), sideSpeedPerM: _s.SixDofSideSpeedPerM))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -2291,7 +2291,7 @@ public static partial class GuidanceWindow
                                      momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
                                      momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
                                      momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs,
-                                     glideFunnelDeg: GlideFunnelDeg());
+                                     glideFunnelDeg: GlideFunnelDeg(), sideSpeedPerM: _s.SixDofSideSpeedPerM);
     }
 
     /// <summary>

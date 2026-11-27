@@ -151,6 +151,9 @@ public static partial class GuidanceWindow
         if (cfg.GlideSlopeProgressive)
             GuidanceLog.Info(vehicle, FormattableString.Invariant(
                 $"Touchdown guidance glide funnel: {FunnelText(cfg)}; outer cone {cfg.GlideSlopeDeg:F0} deg above the horizon."));
+        if (cfg.SideSpeedEnabled)
+            GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                $"Touchdown guidance sideways speed: at most {cfg.SideSpeedPerM:F2} m/s per metre of height over the target plus {cfg.SideSpeedFloorMs:F1} m/s ({cfg.SideSpeedPerM * 10.0 + cfg.SideSpeedFloorMs:F1} m/s at 10 m)."));
         GuidanceLog.Debug(vehicle, FormattableString.Invariant($"Touchdown guidance model: air moment limiter {_s.MomentLimiterPerPa * 1e3:F3} per kPa (divides by {_s.MomentLimiterDivisor:F2} now), Tmax {cfg.Tmax:F0} N, floor {cfg.ThrottleFloor:F3}, gimbal {cfg.GimbalMaxDeg:F2} deg, roll torque {cfg.TauRollMax:F0} N m{(cfg.TerminalRollFree ? " (roll left free)" : "")}, engine arm {dyn.LArm:F2} m, inertia {dyn.Ixx:F0} {dyn.Iyy:F0} {dyn.Izz:F0} kg m2, Isp {dyn.Isp:F0} s, tilt limit {cfg.TiltMaxDeg:F0} deg, scales {cfg.XScale[0]:F0} m {cfg.XScale[3]:F0} m/s, plan ends {_s.SixDofTargetComAltM:F2} m over the site of which {_s.SiteEarlyContactM:F2} m for the ground under the footprint, which rises {(_s.SiteGround?.Within(_s.SiteGround.ReachM) ?? 0.0):F2} m within {(_s.SiteGround?.ReachM ?? 0.0):F0} m of the site."));
 
         // Dispatch after all cfg/dyn log reads complete so only the worker accesses them during cold init.

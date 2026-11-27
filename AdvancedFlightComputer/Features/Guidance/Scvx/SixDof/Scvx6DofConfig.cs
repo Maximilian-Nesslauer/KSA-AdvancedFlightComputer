@@ -338,6 +338,23 @@ public sealed class Scvx6DofConfig
     /// <summary>The length the funnel's price is per, m: fixed, as the terminal miss's is (TerminalMissScaleM), so a metre outside costs the same however far away the plan starts. On the position scale - the craft's distance at setup, about 240 m in the offline checks and 2 km for a Starship at standby - it would barely touch the Starship.</summary>
     public const double GlideFunnelPriceScaleM = 250.0;
 
+    /// <summary>
+    /// THE SIDEWAYS-SPEED CONE, 1/s, or 0 for none: the plan's horizontal speed at each node from node 1 is at most this times its height over the target, plus <see cref="SideSpeedFloorMs"/> - 0.3 allows 3.3 m/s at 10 m and 0.9 m/s at 2 m - so the sideways speed is gone before the last metres and the craft comes down them straight, as a booster that lands 0.2 m/s sideways does. Soft, with its own slack at <see cref="SideSpeedWeight"/>. Exactly convex: a second-order cone in the state, so it needs no linearisation.
+    ///  WHY (#335, 2026-11-27). The position funnel limits how far off the craft may be, not how fast it moves, and the plans met it and left the sideways speed to the last second: two Starship landings passed over the target with their legs 7-9 m up at 2.9-3.8 m/s. The last plans then stopped it by leaning one way and pushing the other with the gimbal; one engine's gimbal could not both turn the craft and push it, the attitude feedback's corrections pushed the other way, and both touched down sliding at 3.3-4.2 m/s and toppled.
+    /// </summary>
+    public double SideSpeedPerM { get; init; }
+
+    /// <summary>The sideways speed the cone allows at the target's height, m/s.</summary>
+    public double SideSpeedFloorMs { get; init; } = 0.3;
+
+    /// <summary>The price of sideways speed over the cone, per <see cref="SideSpeedPriceScaleMs"/> per node.</summary>
+    public double SideSpeedWeight { get; init; } = 10.0;
+
+    /// <summary>The speed the sideways-speed cone's price is per, m/s: fixed, as the funnel's length is.</summary>
+    public const double SideSpeedPriceScaleMs = 20.0;
+
+    public bool SideSpeedEnabled => SideSpeedPerM > 0.0;
+
     public bool GlideSlopeProgressive => IsProgressive(GlideFunnelHeightsM, GlideFunnelHalfAngleDeg);
 
     /// <summary>The glideslope's horizontal run per metre of height at <paramref name="heightM"/> over the target.</summary>

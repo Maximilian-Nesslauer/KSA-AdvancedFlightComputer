@@ -644,6 +644,15 @@ public sealed class Scvx6DofSolver : IDisposable
                 }
             }
         }
+        if (_cfg.SideSpeedEnabled)
+            for (int node = 1; node < _n; node++)
+            {
+                double dvx = x[node * NX + Dynamics6Dof.IV] - _xf[Dynamics6Dof.IV];
+                double dvy = x[node * NX + Dynamics6Dof.IV + 1] - _xf[Dynamics6Dof.IV + 1];
+                double height = x[node * NX + Dynamics6Dof.IR + 2] - _xf[Dynamics6Dof.IR + 2];
+                double over = Math.Sqrt(dvx * dvx + dvy * dvy) - (_cfg.SideSpeedPerM * height + _cfg.SideSpeedFloorMs);
+                gs += _cfg.SideSpeedWeight * Math.Max(0.0, over) / Scvx6DofConfig.SideSpeedPriceScaleMs;
+            }
         if (_cfg.VzLimitEnabled)
             for (int node = 1; node < _n; node++)
                 vz += _cfg.VzWeight * Math.Max(0.0, x[node * NX + Dynamics6Dof.IV + 2] - _cfg.VzMax) / _xs[Dynamics6Dof.IV];

@@ -39,12 +39,12 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
     private readonly double _dtau;
     private readonly double[] _xs, _us;
 
-    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _oAc, _oRr, _iSigC, _oGf, _nVars;
+    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _oAc, _oRr, _iSigC, _oGf, _oSv, _nVars;
 
     // The coast before ignition (Scvx6DofConfig.CoastIntervals): its interval count, and each phase's share of normalised time per interval.
     private readonly int _nCoast;
     private readonly double _dtauC, _dtauB;
-    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nAc, _nRr, _nGf;
+    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nAc, _nRr, _nGf, _nSv;
     private readonly int _nEq, _lDim, _nCone;   // _nCone = total rows = nEq + lDim + sum(soc)
     private readonly int[] _socDims;
 
@@ -87,6 +87,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
     /// <summary>Slack index for path node <paramref name="k"/>, which is TRAJECTORY node k+1.</summary>
     public int IGs(int k) => _oGs + k;
     public int IGf(int k) => _oGf + k;
+    public int ISv(int k) => _oSv + k;
     public int IVz(int k) => _oVz + k;
 
     public Scvx6DofSubproblemScs(Scvx6DofConfig cfg)
@@ -134,6 +135,10 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         _nGf = cfg.GlideSlopeProgressive ? _nGs : 0;
         _oGf = _nVars;
         _nVars += _nGf;
+        // THE SIDEWAYS-SPEED CONE's slacks, one per node from node 1, after the funnel's (Scvx6DofConfig.SideSpeedPerM).
+        _nSv = cfg.SideSpeedEnabled ? _n - 1 : 0;
+        _oSv = _nVars;
+        _nVars += _nSv;
 
         // With the terminal roll free, three terminal rows go (qw, qz, wz) and the last node gets a tangent-plane row.
         _nEq = NX + (NX - 1) + (_n - 1) * NX + (_n - 2) - (cfg.TerminalRollFree ? 2 : 0);
@@ -147,14 +152,16 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         // + two rows per node for each fin's range, and two per interval for its rate, after the RCS's.
         _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm + 2 * _nAc + _nSlew
                 + 2 * _n * Dynamics6Dof.NRCS + 2 * _n * _cfg.FinCount + 2 * (_n - 1) * _cfg.FinCount
-                + _nPin + _nRr + (_nCoast > 0 ? 4 : 0) + 2 * _nGf;
-        _socDims = new int[_n + _nGs + _n + _nRr];
+                + _nPin + _nRr + (_nCoast > 0 ? 4 : 0) + 2 * _nGf + _nSv;
+        _socDims = new int[_n + _nGs + _n + _nRr + _nSv];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
         // Tilt cones LAST, so adding them leaves every pre-existing block at the row offset it already had - anything reading a cone index keeps its meaning.
         for (int k = 0; k < _n; k++) _socDims[_n + _nGs + k] = 3; // tilt cone per node
         // ...and the turn-rate cones after them, for the same reason.
         for (int k = 0; k < _nRr; k++) _socDims[_n + _nGs + _n + k] = 1 + cfg.RateLimitComponents; // |w| (or its pitch and yaw) per node from node 1
+        // ...and the sideways-speed cones after those, for the same reason.
+        for (int k = 0; k < _nSv; k++) _socDims[_n + _nGs + _n + _nRr + k] = 3;
         _nCone = _nEq + _lDim + _socDims.Sum();
 
         _A = new CcsAssembler(_nCone, _nVars);
@@ -175,6 +182,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         // Slacks carry the units of what they relax, so they take the same scale as the quantity being violated: metres of horizontal miss, m/s of climb.
         for (int k = 0; k < _nGs; k++) _colScale[IGs(k)] = _xs[Dynamics6Dof.IR];
         for (int k = 0; k < _nGf; k++) _colScale[IGf(k)] = _xs[Dynamics6Dof.IR];
+        for (int k = 0; k < _nSv; k++) _colScale[ISv(k)] = _xs[Dynamics6Dof.IV];
         for (int k = 0; k < _nVz; k++) _colScale[IVz(k)] = _xs[Dynamics6Dof.IV];
         for (int i = 0; i < _nTmPos; i++) _colScale[_oTm + i] = _xs[Dynamics6Dof.IR];
         for (int i = 0; i < _nTmVel; i++) _colScale[_oTm + _nTmPos + i] = _xs[Dynamics6Dof.IV];
@@ -354,7 +362,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
     internal double RateSlackCost => SlackCost(_oRr, _nRr);
 
     /// <summary>The glideslope, climb-rate and terminal-miss slacks' cost in the last solution, as the objective pays it.</summary>
-    internal double PathSlackCost => SlackCost(_oGs, _nGs) + SlackCost(_oGf, _nGf) + SlackCost(_oVz, _nVz) + SlackCost(_oTm, _nTm);
+    internal double PathSlackCost => SlackCost(_oGs, _nGs) + SlackCost(_oGf, _nGf) + SlackCost(_oSv, _nSv) + SlackCost(_oVz, _nVz) + SlackCost(_oTm, _nTm);
 
     private double SlackCost(int offset, int count)
     {
@@ -458,6 +466,8 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             _c[IGs(k)] += _cfg.GlideSlopeWeight * _colScale[IGs(k)] / _xs[Dynamics6Dof.IR];
         for (int k = 0; k < _nGf; k++)
             _c[IGf(k)] += _cfg.GlideFunnelWeight * _colScale[IGf(k)] / Scvx6DofConfig.GlideFunnelPriceScaleM;
+        for (int k = 0; k < _nSv; k++)
+            _c[ISv(k)] += _cfg.SideSpeedWeight * _colScale[ISv(k)] / Scvx6DofConfig.SideSpeedPriceScaleMs;
         for (int k = 0; k < _nVz; k++)
             _c[IVz(k)] += _cfg.VzWeight * _colScale[IVz(k)] / _xs[Dynamics6Dof.IV];
         for (int i = 0; i < _nTmPos; i++)
@@ -803,6 +813,13 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             _b[row++] = Math.Max(_cfg.CotGlideSlope * hRef - _cfg.GlideSlopeRadiusAt(hRef), 0.0);
         }
 
+        // The sideways-speed slacks are non-negative.
+        for (int k = 0; k < _nSv; k++)
+        {
+            AddA(row, ISv(k), -1.0);
+            _b[row++] = 0.0;
+        }
+
         // In TorqueDemand the same cone bounds the pitch and yaw torque as the mixer can give it together: ||(tau_x, tau_y)|| <= DemandTorquePerN T + the largest disc inside the RCS's box. The gimbals' share is a disc (they tilt one nozzle), so the box rows alone would promise up to 1.4 times the gimbals' torque at its corners.
         for (int k = 0; k < _n; k++)
         {
@@ -915,6 +932,21 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
                 AddA(row, IX(k + 1, Dynamics6Dof.IW + i), -1.0);
                 _b[row++] = 0.0;
             }
+        }
+
+        // SIDEWAYS SPEED, from node 1 on: ||v_xy[k] - vf_xy|| <= SideSpeedPerM (r_z[k] - target_z) + SideSpeedFloorMs + s_k (Scvx6DofConfig.SideSpeedPerM). Exactly convex: a second-order cone in the state, no linearisation. Node 0 is the measured velocity.
+        for (int k = 0; k < _nSv; k++)
+        {
+            int node = k + 1;
+            AddA(row, IX(node, Dynamics6Dof.IR + 2), -_cfg.SideSpeedPerM);
+            AddA(row, ISv(k), -1.0);
+            _b[row++] = -_cfg.SideSpeedPerM * xf[Dynamics6Dof.IR + 2] + _cfg.SideSpeedFloorMs;
+
+            AddA(row, IX(node, Dynamics6Dof.IV + 0), -1.0);
+            _b[row++] = -xf[Dynamics6Dof.IV + 0];
+
+            AddA(row, IX(node, Dynamics6Dof.IV + 1), -1.0);
+            _b[row++] = -xf[Dynamics6Dof.IV + 1];
         }
 
         if (row != _nCone)
@@ -1045,6 +1077,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
 
     private string NameOf(int col)
     {
+        if (col >= _oSv && _nSv > 0) return $"sideways speed slack {col - _oSv}";
         if (col >= _oGf && _nGf > 0) return $"glide funnel slack {col - _oGf}";
         if (col >= _oVz && _nVz > 0) return $"vz slack {col - _oVz}";
         if (col >= _oGs && _nGs > 0) return $"glideslope slack {col - _oGs}";

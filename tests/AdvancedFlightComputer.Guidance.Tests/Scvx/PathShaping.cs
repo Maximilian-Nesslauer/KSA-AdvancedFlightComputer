@@ -2,7 +2,7 @@ using System.Globalization;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
-/// --gs-far deg: the touchdown checks' outer glideslope cone, deg above the horizon, in place of the one each check sets (most set none). --gs-funnel: the progressive glideslope as flight sets it (Ksa6DofSetup.GlideFunnelKnots), half-angles from vertical --gs-funnel-deg (default "20,30,60") at one craft length (--gs-len, 40 m for the checks' boosters), 300 m and 1000 m; --gs-weight its price (10).
+/// --gs-far deg: the touchdown checks' outer glideslope cone, deg above the horizon, in place of the one each check sets (most set none). --gs-funnel: the progressive glideslope as flight sets it (Ksa6DofSetup.GlideFunnelKnots), half-angles from vertical --gs-funnel-deg (default "20,30,60") at one craft length (--gs-len, 40 m for the checks' boosters), 300 m and 1000 m; --gs-weight its price (10). --gs-side the sideways-speed cone, 1/s (0, off).
 /// </summary>
 internal static class PathShaping
 {
@@ -20,6 +20,7 @@ internal static class PathShaping
 
     internal static double FarDeg(double own) => Arg("--gs-far", own);
     internal static double FunnelWeight => Arg("--gs-weight", 10.0);
+    internal static double SideSpeedPerM => Arg("--gs-side", 0.0);
 
     internal static double[]? FunnelHeightsM => On ? [Arg("--gs-len", 40.0), 300.0, 1000.0] : null;
 

@@ -152,6 +152,7 @@ public static partial class GuidanceWindow
             GaugeRow(Specs.SixDofFunnel300Deg, ref _s.SixDofFunnel300Deg);
             GaugeRow(Specs.SixDofFunnel1000Deg, ref _s.SixDofFunnel1000Deg);
         }
+        GaugeRow(Specs.SixDofSideSpeedPerM, ref _s.SixDofSideSpeedPerM);
 
         GaugeRowCheck(Specs.SixDofVzEnabled, ref _s.SixDofVzEnabled);
         using (new ImGuiDisabledScope(!_s.SixDofVzEnabled))

@@ -553,7 +553,7 @@ public static class Ksa6DofSetup
                                 double rateMaxDegS = 0.0, int coastIntervals = 0, double[] scaleFrom = null,
                                 double momentLimiterPerPa = 0.0, double torqueMargin = 0.0, bool fins = true, double surfaceShare = PlanSurfaceShare,
                                 double momentLimiterStiffnessPerPa = 0.0, double momentLimiterDampingPerPaMs = 0.0,
-                                double[] glideFunnelDeg = null)
+                                double[] glideFunnelDeg = null, double sideSpeedPerM = 0.0)
     {
         cfg = null!;
         dyn = null!;
@@ -842,6 +842,8 @@ public static class Ksa6DofSetup
             // The progressive glideslope: half-angles from vertical at one craft length, 300 m and 1000 m (GlideFunnelKnots).
             GlideFunnelHeightsM = funnelHeightsM,
             GlideFunnelHalfAngleDeg = funnelHalfAngleDeg,
+            // The sideways-speed cone (Scvx6DofConfig.SideSpeedPerM).
+            SideSpeedPerM = Math.Max(sideSpeedPerM, 0.0),
             VzMax = vzMaxMs,
             // Terminal position and speed are SOFT, heavily penalised. A hard terminal says "arrive exactly there, exactly at rest", and when that is not achievable the honest answer is a plan that misses rather than no plan at all - a descending booster cannot decline to land. The weights are high enough that both slacks sit at zero whenever the target is genuinely reachable, so this changes nothing on a normal descent.
             //  POSITION ABOVE SPEED. Both are normalised by the problem's scales (here ~250 m and ~100 m/s at a hand-over), so the weights alone do not say what trades for what. With speed at 1e5 and the miss at 1e3, 1 m/s cost as much as ~270 m of miss, and a squeezed plan stopped at rest 20-30 m over the pad - where a booster that cannot throttle below its weight floats and then climbs (2026-10-08, 17:42 and 17:53). At 1e5 and 1e4, 1 m of miss costs about as much as 4 m/s: a squeezed plan arrives a little fast rather than high, as Falcon 9 lands at ~2 m/s rather than stopping short.
