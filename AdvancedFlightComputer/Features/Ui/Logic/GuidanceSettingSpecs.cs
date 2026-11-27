@@ -209,8 +209,12 @@ internal static class GuidanceSettingSpecs
         "Burn times tried while FIXED BURN TIME is on.");
     public static readonly SettingSpec SixDofGlideSlopeDeg = new("SixDofGlideSlopeDeg", "GLIDE SLOPE", "deg", T, 10.0, 0.0, 90.0, "%.1f",
         "Smallest angle above the horizon of the approach. 0 switches it off.");
-    public static readonly SettingSpec SixDofGlideSlopeNearDeg = new("SixDofGlideSlopeNearDeg", "GLIDE SLOPE NEAR GROUND", "deg", T, 60.0, 0.0, 89.0, "%.1f",
-        "The glide slope's angle near the ground: steep below about the craft's length over the target, opening to GLIDE SLOPE above the height the craft falls while it flips upright, so the last stretch comes down nearly straight. 0, or no more than GLIDE SLOPE, keeps one cone.");
+    public static readonly SettingSpec SixDofFunnelNearDeg = new("SixDofFunnelNearDeg", "FUNNEL AT CRAFT LENGTH", "deg", T, 20.0, 0.0, 89.0, "%.1f",
+        "The landing funnel's half-angle from vertical, seen from the target, one craft length over it and below. The funnel narrows the approach so the last stretch comes down nearly straight; it shapes the plan rather than holding it to a corridor. 0 switches it off.");
+    public static readonly SettingSpec SixDofFunnel300Deg = new("SixDofFunnel300Deg", "FUNNEL AT 300 M", "deg", T, 30.0, 0.0, 89.0, "%.1f",
+        "The landing funnel's half-angle from vertical, seen from the target, 300 m over it. Between heights the offset allowed changes linearly. 0 leaves this height out.");
+    public static readonly SettingSpec SixDofFunnel1000Deg = new("SixDofFunnel1000Deg", "FUNNEL AT 1000 M", "deg", T, 60.0, 0.0, 89.0, "%.1f",
+        "The landing funnel's half-angle from vertical, seen from the target, 1000 m over it; above, it widens at least as fast, inside the GLIDE SLOPE cone. 0 leaves this height out.");
     public static readonly SettingSpec SixDofVzMaxMs = new("SixDofVzMaxMs", "MAX CLIMB RATE", "m/s", T, 0.0, -1e4, 1e4, "%.1f",
         "Largest climb rate while LIMIT CLIMB RATE is on.");
     public static readonly SettingSpec SixDofNodeDtTarget = new("SixDofNodeDtTarget", "POINT SPACING", "s", T, 0.60, 0.0, 60.0, "%.2f",
@@ -474,7 +478,7 @@ internal static class GuidanceSettingSpecs
 
     public static readonly SettingSpec[] TuningSixDof =
     {
-        SixDofNodes, SixDofTiltDeg, SixDofThrottleFloor, SixDofSigmaSeed, SixDofSigmaSamples, SixDofGlideSlopeDeg, SixDofGlideSlopeNearDeg,
+        SixDofNodes, SixDofTiltDeg, SixDofThrottleFloor, SixDofSigmaSeed, SixDofSigmaSamples, SixDofGlideSlopeDeg, SixDofFunnelNearDeg, SixDofFunnel300Deg, SixDofFunnel1000Deg,
         SixDofVzMaxMs, SixDofNodeDtTarget, SixDofColdIntervalS, SixDofReplanSec, SixDofRateDampShare,
         SixDofControlSmooth, SixDofProximal, SixDofTrackKp, SixDofTrackKd, LandingPlanFloorMargin, SixDofSurfaceShare,
         CutSupervisorSinkMs, CutSupervisorShortfallM, CutSupervisorMaxHeightM, CutSupervisorWatchHeightM,
@@ -485,7 +489,7 @@ internal static class GuidanceSettingSpecs
         SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ScvxClarabel, CutSupervisorOn,
     };
     public static readonly SettingSpec[] TuningSixDofLimits =
-        { SixDofTiltDeg, SixDofThrottleFloor, SixDofGlideSlopeDeg, SixDofGlideSlopeNearDeg, SixDofVzMaxMs, LandingPlanFloorMargin, SixDofSurfaceShare };
+        { SixDofTiltDeg, SixDofThrottleFloor, SixDofGlideSlopeDeg, SixDofFunnelNearDeg, SixDofFunnel300Deg, SixDofFunnel1000Deg, SixDofVzMaxMs, LandingPlanFloorMargin, SixDofSurfaceShare };
     public static readonly BoolSpec[] TuningSixDofLimitBools = { SixDofFloorAuto, SixDofVzEnabled };
     public static readonly SettingSpec[] TuningSixDofTracking = { SixDofTrackKp, SixDofTrackKd, SixDofReplanSec };
     public static readonly BoolSpec[] TuningSixDofTrackingBools = { SixDofTrack, SixDofBiasEnabled };
@@ -528,7 +532,7 @@ internal static class GuidanceSettingSpecs
         GfoldGlideSlopeDeg, GfoldPointingDeg, GfoldVMaxMs, GfoldThrottleMin, GfoldThrottleMax, GfoldSlewReg,
         GfoldIntervalS, GfoldNodes, GfoldKp, GfoldKd, GfoldSmoothTau, GfoldSolveTimeLimitS,
         SixDofNodes, SixDofTiltDeg, SixDofThrottleFloor, SixDofSigmaSeed,
-        SixDofSigmaSamples, SixDofGlideSlopeDeg, SixDofGlideSlopeNearDeg, SixDofVzMaxMs, SixDofNodeDtTarget, SixDofColdIntervalS,
+        SixDofSigmaSamples, SixDofGlideSlopeDeg, SixDofFunnelNearDeg, SixDofFunnel300Deg, SixDofFunnel1000Deg, SixDofVzMaxMs, SixDofNodeDtTarget, SixDofColdIntervalS,
         SixDofReplanSec, SixDofRateDampShare, SixDofControlSmooth, SixDofProximal, SixDofTrackKp, SixDofTrackKd,
         CutSupervisorSinkMs, CutSupervisorShortfallM, CutSupervisorMaxHeightM, CutSupervisorWatchHeightM,
         ThreeDofStandbyQkPa, ThreeDofEngageQkPa, ThreeDofEngageTgoS, ThreeDofSixDofTimeS, ThreeDofSmoothTau, ThreeDofTurnAccelDegS2, ThreeDofGlideCeiling,

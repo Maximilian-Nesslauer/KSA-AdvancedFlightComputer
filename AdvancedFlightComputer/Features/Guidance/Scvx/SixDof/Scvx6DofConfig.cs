@@ -320,69 +320,97 @@ public sealed class Scvx6DofConfig
     public double CotGlideSlope => 1.0 / Math.Tan(Math.Clamp(GlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
 
     /// <summary>
-    /// THE PROGRESSIVE GLIDESLOPE, deg above the horizon, or 0 for the plain cone: the glideslope steepens to this below <see cref="GlideSlopeNearHeightM"/> of height over the target, opening to <see cref="GlideSlopeDeg"/> by <see cref="GlideSlopeFarHeightM"/> - a funnel, so the last stretch comes down nearly straight over the pad and a divert is flown high up rather than in the last seconds.
+    /// THE PROGRESSIVE GLIDESLOPE: the heights over the target, m, ascending, at which the funnel's half-angle from vertical, seen from the target (as GLIDE SLOPE's angle is), is <see cref="GlideFunnelHalfAngleDeg"/>: the offset allowed there is h tan(half-angle). Null or empty for the plain cone. Between two heights the offset allowed changes linearly, below the first it is the first's cone, and above the last it widens at least at the last's half-angle. The plain cone of <see cref="GlideSlopeDeg"/> stays as the outer bound. Flight sets one craft length, 300 m and 1000 m (Ksa6DofSetup.GlideFunnelHeights).
     ///  WHY (#335, 2026-11-27). The plan's cost is mostly fuel, which is flat across many shapes, so the plain 10 deg cone - 5.7 m of offset per metre of height, 113 m at 20 m - left the shape to wherever SCvx's local optimum fell: one Starship landing lit 109 m out and swept in at 20 m/s sideways through 50 m, another lit 561 m out. Real landings come down the last stretch nearly vertical.
-    ///  NOT CONVEX: a funnel that narrows towards the ground is a trumpet. The subproblem takes its tangent at each node's reference height (an affine bound on the offset, a second-order cone as before), and the merit prices the true funnel, as SCvx linearises every non-convex limit. Soft, with the glideslope's slack and price.
+    ///  NOT CONVEX: a funnel that narrows towards the ground is a trumpet. The subproblem takes its tangent at each node's reference height (an affine bound on the offset, a second-order cone as before), and the merit prices the true funnel, as SCvx linearises every non-convex limit. Its slopes are made non-decreasing in height, so it is convex in height and every tangent lies inside it.
     /// </summary>
-    public double GlideSlopeNearDeg { get; init; }
+    public double[]? GlideFunnelHeightsM { get; init; }
+
+    /// <summary>The progressive glideslope's half-angles from vertical at <see cref="GlideFunnelHeightsM"/>, deg.</summary>
+    public double[]? GlideFunnelHalfAngleDeg { get; init; }
 
     /// <summary>
-    /// The price of the progressive glideslope's narrowing beyond the plain cone, per position scale of offset, as <see cref="GlideSlopeWeight"/> prices the cone: low, so the funnel SHAPES a plan that can follow it and gives way for one that cannot, rather than enforcing a corridor. Past the plain cone the glideslope's own price applies.
-    ///  Offline (2026-11-27), at the cone's own price the funnel took a gimbal-limited booster that ends 8-15 m off the pad (--6dof-lift) from 40 plans kept to none; at 3-30 it kept 31-39. A gimbal-only booster (--6dof-rcs) kept 12-26 against 55 without it, landing about the same.
+    /// The price of the progressive glideslope's narrowing beyond the plain cone, per <see cref="GlideFunnelPriceScaleM"/> of offset, as <see cref="GlideSlopeWeight"/> prices the cone: low, so the funnel SHAPES a plan that can follow it and gives way for one that cannot, rather than enforcing a corridor. Past the plain cone the glideslope's own price applies.
+    ///  Offline (2026-11-27), at the cone's own price the funnel took a gimbal-limited booster that ends 8-15 m off the pad (--6dof-lift) from 40 plans kept to none.
     /// </summary>
     public double GlideFunnelWeight { get; init; } = 10.0;
 
     /// <summary>The length the funnel's price is per, m: fixed, as the terminal miss's is (TerminalMissScaleM), so a metre outside costs the same however far away the plan starts. On the position scale - the craft's distance at setup, about 240 m in the offline checks and 2 km for a Starship at standby - it would barely touch the Starship.</summary>
     public const double GlideFunnelPriceScaleM = 250.0;
 
-    /// <summary>The height over the target below which the progressive glideslope holds <see cref="GlideSlopeNearDeg"/>, m.</summary>
-    public double GlideSlopeNearHeightM { get; init; }
+    public bool GlideSlopeProgressive => IsProgressive(GlideFunnelHeightsM, GlideFunnelHalfAngleDeg);
 
-    /// <summary>The height over the target above which it is back at <see cref="GlideSlopeDeg"/>, m; between the two its run per metre changes linearly with height.</summary>
-    public double GlideSlopeFarHeightM { get; init; }
-
-    public bool GlideSlopeProgressive => IsProgressive(GlideSlopeDeg, GlideSlopeNearDeg, GlideSlopeNearHeightM, GlideSlopeFarHeightM);
-
-    /// <summary>The glideslope's horizontal run per metre of height at <paramref name="heightM"/> over the target: the near cot below the near height, the far one above the far height, linear between.</summary>
-    public double GlideSlopeRunPerMAt(double heightM) => RunPerM(GlideSlopeDeg, GlideSlopeNearDeg, GlideSlopeNearHeightM, GlideSlopeFarHeightM, heightM);
+    /// <summary>The glideslope's horizontal run per metre of height at <paramref name="heightM"/> over the target.</summary>
+    public double GlideSlopeRunPerMAt(double heightM) => RunPerM(GlideSlopeDeg, GlideFunnelHeightsM, GlideFunnelHalfAngleDeg, heightM);
 
     /// <summary>The largest horizontal offset from the target the glideslope allows at <paramref name="heightM"/> over it, m: the integral of <see cref="GlideSlopeRunPerMAt"/> from 0, so the plain cone's cot x height when not progressive. Negative below the target, as the cone's is.</summary>
-    public double GlideSlopeRadiusAt(double heightM) => Radius(GlideSlopeDeg, GlideSlopeNearDeg, GlideSlopeNearHeightM, GlideSlopeFarHeightM, heightM);
+    public double GlideSlopeRadiusAt(double heightM) => Radius(GlideSlopeDeg, GlideFunnelHeightsM, GlideFunnelHalfAngleDeg, heightM);
 
-    /// <summary>Whether a glideslope of <paramref name="farDeg"/> steepening to <paramref name="nearDeg"/> between <paramref name="farHeightM"/> and <paramref name="nearHeightM"/> is progressive at all.</summary>
-    public static bool IsProgressive(double farDeg, double nearDeg, double nearHeightM, double farHeightM)
-        => nearDeg > farDeg && farHeightM > nearHeightM && nearHeightM >= 0.0;
+    /// <summary>Whether funnel knots are given at all: matching, non-empty, heights ascending and non-negative, half-angles between 0 and 90 deg.</summary>
+    public static bool IsProgressive(double[]? heightsM, double[]? halfAngleDeg)
+    {
+        if (heightsM is not { Length: > 0 } || halfAngleDeg is null || halfAngleDeg.Length != heightsM.Length)
+            return false;
+        for (int i = 0; i < heightsM.Length; i++)
+        {
+            if (!(heightsM[i] >= 0.0) || !(halfAngleDeg[i] > 0.0 && halfAngleDeg[i] < 90.0) || (i > 0 && !(heightsM[i] > heightsM[i - 1])))
+                return false;
+        }
+        return true;
+    }
 
     private static double Cot(double deg) => 1.0 / Math.Tan(Math.Clamp(deg, 1e-3, 89.999) * Math.PI / 180.0);
 
-    /// <summary>The run per metre of height of such a glideslope at <paramref name="heightM"/> (see <see cref="GlideSlopeRunPerMAt"/>), for the drawings and the log, which have no config.</summary>
-    public static double RunPerM(double farDeg, double nearDeg, double nearHeightM, double farHeightM, double heightM)
+    /// <summary>The funnel's slope on each stretch, m of offset per m of height: stretch 0 from the target to the first height, i from height i-1 to i, and the last above the last height. From the offsets at the heights, h tan(half-angle); made non-decreasing so the funnel stays convex (a stretch that would narrow upward is widened), and no wider than the plain cone.</summary>
+    private static double[] Slopes(double plainDeg, double[] heightsM, double[] halfAngleDeg)
     {
-        double far = Cot(farDeg);
-        if (!IsProgressive(farDeg, nearDeg, nearHeightM, farHeightM))
-            return far;
-        double near = Cot(nearDeg);
-        if (heightM <= nearHeightM)
-            return near;
-        if (heightM >= farHeightM)
-            return far;
-        return near + (far - near) * (heightM - nearHeightM) / (farHeightM - nearHeightM);
+        int n = heightsM.Length;
+        double cap = Cot(plainDeg);
+        var slope = new double[n + 1];
+        double prevH = 0.0, prevR = 0.0;
+        for (int i = 0; i < n; i++)
+        {
+            double r = heightsM[i] * Math.Tan(halfAngleDeg[i] * Math.PI / 180.0);
+            slope[i] = heightsM[i] > prevH ? (r - prevR) / (heightsM[i] - prevH) : Math.Tan(halfAngleDeg[i] * Math.PI / 180.0);
+            prevH = heightsM[i];
+            prevR = r;
+        }
+        slope[n] = Math.Max(slope[n - 1], Math.Tan(halfAngleDeg[n - 1] * Math.PI / 180.0));
+        for (int i = 0; i <= n; i++)
+            slope[i] = Math.Min(Math.Max(slope[i], i > 0 ? slope[i - 1] : 0.0), cap);
+        return slope;
     }
 
-    /// <summary>The radius of such a glideslope at <paramref name="heightM"/> (see <see cref="GlideSlopeRadiusAt"/>).</summary>
-    public static double Radius(double farDeg, double nearDeg, double nearHeightM, double farHeightM, double heightM)
+    /// <summary>The run per metre of height of a funnel at <paramref name="heightM"/> (see <see cref="GlideSlopeRunPerMAt"/>): its slope on that stretch. For the drawings and the log, which have no config.</summary>
+    public static double RunPerM(double plainDeg, double[]? heightsM, double[]? halfAngleDeg, double heightM)
     {
-        double far = Cot(farDeg);
-        if (!IsProgressive(farDeg, nearDeg, nearHeightM, farHeightM))
-            return far * heightM;
-        double near = Cot(nearDeg);
-        if (heightM <= nearHeightM)
-            return near * heightM;
-        double band = Math.Min(heightM, farHeightM) - nearHeightM;
-        double radius = near * nearHeightM + band * (near + RunPerM(farDeg, nearDeg, nearHeightM, farHeightM, nearHeightM + band)) / 2.0;
-        if (heightM > farHeightM)
-            radius += far * (heightM - farHeightM);
-        return radius;
+        if (!IsProgressive(heightsM, halfAngleDeg))
+            return Cot(plainDeg);
+        double[] slope = Slopes(plainDeg, heightsM!, halfAngleDeg!);
+        for (int i = 0; i < heightsM!.Length; i++)
+            if (heightM < heightsM[i])
+                return slope[i];
+        return slope[heightsM.Length];
+    }
+
+    /// <summary>The radius of a funnel at <paramref name="heightM"/> (see <see cref="GlideSlopeRadiusAt"/>): the offset allowed, the sum of its slopes over the stretches below.</summary>
+    public static double Radius(double plainDeg, double[]? heightsM, double[]? halfAngleDeg, double heightM)
+    {
+        if (!IsProgressive(heightsM, halfAngleDeg))
+            return Cot(plainDeg) * heightM;
+        double[] slope = Slopes(plainDeg, heightsM!, halfAngleDeg!);
+        if (heightM <= 0.0)
+            return slope[0] * heightM;
+        double radius = 0.0, below = 0.0;
+        for (int i = 0; i < heightsM!.Length; i++)
+        {
+            double top = Math.Min(heightM, heightsM[i]);
+            radius += slope[i] * (top - below);
+            if (heightM <= heightsM[i])
+                return radius;
+            below = heightsM[i];
+        }
+        return radius + slope[heightsM.Length] * (heightM - below);
     }
 
     public double Tmin => ThrottleFloor * Tmax;

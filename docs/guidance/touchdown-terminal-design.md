@@ -53,7 +53,7 @@ The commonest failure is simpler than the rest: the plan brings the craft to res
 
 Later, a learned supervisor could be trained on the logged inputs; the integrator comes first because a handful of landings is no training set and its decisions can be read.
 
-**Also built: the progressive glideslope** (see the changelog), which shapes the approach so the last stretch comes down nearly straight, from the craft's length and flip time rather than per-craft tuning. Ending the plan at a gate above the pad, with the terminal law below flying the last metres, is the next step.
+**Also built: the progressive glideslope** (see the changelog), which shapes the approach so the last stretch comes down nearly straight, with half-angles from vertical of 20 deg at one craft length, 30 deg at 300 m and 60 deg at 1000 m. Ending the plan at a gate above the pad, with the terminal law below flying the last metres, is the next step.
 
 The terminal law below is still to build.
 

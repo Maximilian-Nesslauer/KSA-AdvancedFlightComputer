@@ -405,7 +405,7 @@ internal static class SixDofRcsCheck
             WDu = ProbeWdu,
             ProximalWeight = ProbeProx,
             UScale = ProbeUScale(dyn),
-            GlideSlopeDeg = PathShaping.FarDeg(0.0), GlideSlopeNearDeg = PathShaping.NearDeg, GlideSlopeNearHeightM = PathShaping.NearHeightM, GlideSlopeFarHeightM = PathShaping.FarHeightM, GlideFunnelWeight = PathShaping.FunnelWeight,
+            GlideSlopeDeg = PathShaping.FarDeg(0.0), GlideFunnelHeightsM = PathShaping.FunnelHeightsM, GlideFunnelHalfAngleDeg = PathShaping.FunnelDeg, GlideFunnelWeight = PathShaping.FunnelWeight,
             VzMax = 0.0,
             TerminalMissWeight = 1.0e5,
             TerminalSpeedWeight = 1.0e4,

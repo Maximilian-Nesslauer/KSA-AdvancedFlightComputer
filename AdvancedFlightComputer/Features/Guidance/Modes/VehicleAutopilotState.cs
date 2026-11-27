@@ -929,8 +929,12 @@ public sealed class VehicleAutopilotState
     // ZERO/ZERO: the plan ends with the legs on the pad and the craft at rest, so it lands the craft itself rather than stopping above the pad for something else to finish. The plan flies the CoM, which sits VehicleHeightM above the legs, and on a slope the first leg meets the ground SiteEarlyContactM before the height of the site centre.
     public double SixDofTargetComAltM => VehicleHeightM + SiteEarlyContactM;
     public double SixDofGlideSlopeDeg = 10.0;
-    /// <summary>The progressive glideslope's angle near the ground, deg above the horizon, or 0 for the plain cone (Scvx6DofConfig.GlideSlopeNearDeg): steep below about the craft's length over the target, opening to GLIDE SLOPE above the height it falls while it flips upright (Ksa6DofSetup.GlideFunnelHeights). 60: an offset of at most 0.58 m per metre of height near the ground.</summary>
-    public double SixDofGlideSlopeNearDeg = 60.0;   // 0 = off; degrees above horizontal
+    /// <summary>
+    /// The progressive glideslope's half-angles from vertical seen from the target, deg (Scvx6DofConfig.GlideFunnelHeightsM, Ksa6DofSetup.GlideFunnelKnots): at one craft length over the target, at 300 m and at 1000 m, so the offset allowed there is the height times tan(half-angle); between them it changes linearly. The user's, 2026-11-27: 20 (0.36 m of offset per metre of height), 30 (173 m at 300 m) and 60 (1732 m at 1000 m). The near one at 0 switches the funnel off, leaving the plain GLIDE SLOPE cone.
+    /// </summary>
+    public double SixDofFunnelNearDeg = 20.0;
+    public double SixDofFunnel300Deg = 30.0;
+    public double SixDofFunnel1000Deg = 60.0;   // 0 = off; degrees above horizontal
     public bool SixDofVzEnabled = true;
     public double SixDofVzMaxMs;
 

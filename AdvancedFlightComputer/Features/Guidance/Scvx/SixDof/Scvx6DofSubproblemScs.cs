@@ -841,7 +841,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         // Excluded at node 0 for the same reason as the climb rate, and slackened by g_k for a sharper one: alone, either constraint is survivable, but a vehicle that is both outside the cone and too low can only get back inside by CLIMBING - which the climb-rate row forbids.
         // Hard versions of the two together can trap the vehicle in a region with no feasible exit at all.
         // Soft versions cannot, and the L1 penalty keeps the slack at exactly zero whenever the corridor is actually reachable.
-        // THE PROGRESSIVE GLIDESLOPE (Scvx6DofConfig.GlideSlopeNearDeg) at each node is its tangent at the reference's height h_ref there: radius R(h_ref) + R'(h_ref) (h - h_ref), an affine bound like the plain cone's cot x h, which it is when the glideslope is not progressive.
+        // THE PROGRESSIVE GLIDESLOPE (Scvx6DofConfig.GlideFunnelHeightsM) at each node is its tangent at the reference's height h_ref there: radius R(h_ref) + R'(h_ref) (h - h_ref), an affine bound like the plain cone's cot x h, which it is when the glideslope is not progressive.
         // ENTRY ALLOWANCE. A vehicle handed over outside the cone starts entry_0 metres outside it, measured from x0 on every solve.
         // entry_k = entry_0 * ((1-s)^2 + s*(1-s)^4) with s the node's fraction of the horizon: the full violation at the entry, zero at the target, and a quartic term that only widens the early nodes, so the corridor closes on the target without asking the first interval to jump inside.
         double entryAllowance = GlideSlopeEntryAllowance(_cfg, x0, xf);

@@ -578,7 +578,7 @@ public static partial class GuidanceWindow
                                    momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
                                    momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
                                    momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs,
-                                   glideSlopeNearDeg: _s.SixDofGlideSlopeNearDeg))
+                                   glideFunnelDeg: GlideFunnelDeg()))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -745,8 +745,8 @@ public static partial class GuidanceWindow
         // Signed distance outside the glideslope cone, same convention the solver enforces: positive means outside.
         double glideViol = 0.0;
         if (_s.SixDofGlideSlopeDeg > 0.0)
-            glideViol = Math.Sqrt(x[0] * x[0] + x[1] * x[1]) - Scvx6DofConfig.Radius(_s.SixDofGlideSlopeDeg, _s.SixDofGlideSlopeNearDeg,
-                Ksa6DofSetup.LastGlideNearHeightM, Ksa6DofSetup.LastGlideFarHeightM, x[2] - _s.SixDofTargetComAltM);
+            glideViol = Math.Sqrt(x[0] * x[0] + x[1] * x[1]) - Scvx6DofConfig.Radius(_s.SixDofGlideSlopeDeg,
+                Ksa6DofSetup.LastGlideFunnelHeightsM, Ksa6DofSetup.LastGlideFunnelHalfAngleDeg, x[2] - _s.SixDofTargetComAltM);
 
         double r22 = 1.0 - 2.0 * (x[7] * x[7] + x[8] * x[8]);
         TvcAllocationResult a = KsaGimbalControl.Diagnostics(vehicle)?.LastAllocation ?? default;
@@ -1210,6 +1210,9 @@ public static partial class GuidanceWindow
     private const double SixDofHoverMaxMinTwr = 0.9;
 
     /// <summary>The end state of every touchdown plan: the centre of mass at the first-contact height over the target, sinking at SixDofTouchdownSinkMs, upright with the current heading and no rates.</summary>
+    /// <summary>The progressive glideslope's half-angles from vertical for the setup: at one craft length, 300 m and 1000 m (Ksa6DofSetup.GlideFunnelKnots).</summary>
+    private static double[] GlideFunnelDeg() => [_s.SixDofFunnelNearDeg, _s.SixDofFunnel300Deg, _s.SixDofFunnel1000Deg];
+
     private static double[] PlanEndState(double[] x)
     {
         var xf = new double[14];
@@ -2288,7 +2291,7 @@ public static partial class GuidanceWindow
                                      momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
                                      momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
                                      momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs,
-                                     glideSlopeNearDeg: _s.SixDofGlideSlopeNearDeg);
+                                     glideFunnelDeg: GlideFunnelDeg());
     }
 
     /// <summary>
