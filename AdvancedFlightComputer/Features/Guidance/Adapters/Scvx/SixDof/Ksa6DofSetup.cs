@@ -859,8 +859,8 @@ public static class Ksa6DofSetup
             TerminalHeightMissFactor = 20.0,
             TerminalAttitudeWeight = 2.0e3,
             TerminalRateWeight = 2.0e3,
-            // SIDEWAYS END SPEED CHEAP: 100 a m/s, a quarter of a metre of miss, as before the end was repriced. The tip-over line below says how much the touchdown can carry, and inside it the plan does not chase the last of it with a lean it cannot finish (2026-11-27, 15:12).
-            TerminalSideSpeedFactor = 0.05,
+            // SIDEWAYS END SPEED: 500 a m/s, above a metre of miss (400), as the user's rule has it - speed costs more than position. It was 100 (0.05) to stop the plan chasing the last of it with a late lean; with tilt and turning priced and attitude virtual control tight, a cheap sideways speed became the easy way out instead, and a Starship (17:13) planned to arrive sliding 2.6 m/s and slid in at 2.2-4.8 m/s.
+            TerminalSideSpeedFactor = 0.25,
             // THE TIP-OVER LINE (2026-11-27, the user's): at most 80 % of the energy that tips the craft over its edge, the flight's numbers set each re-solve (Ksa6DofInputs.WithTipGeometry). A degree past the line costs 20000, fifty metres of miss.
             TipLimit = true,
             // THE LAST SECONDS FOR SMOOTHNESS (LAST SECONDS SMOOTH, VehicleAutopilotState.SixDofLastSecondsSmooth): over the last 3 s, ramped in, at 1 two degrees of tilt held a second cost 400 - a metre of miss - and 4 deg/s of pitch-yaw rate the same. Off by default: offline it cost the low-authority boosters 3-29 m of miss, even at 0.1.
