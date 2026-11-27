@@ -44,7 +44,7 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
     // The coast before ignition (Scvx6DofConfig.CoastIntervals): its interval count, and each phase's share of normalised time per interval.
     private readonly int _nCoast;
     private readonly double _dtauC, _dtauB;
-    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nAc, _nRr, _nGf, _nSv, _nAnchor;
+    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nTmAtt, _nTmRate, _nAc, _nRr, _nGf, _nSv, _nAnchor;
     private readonly int _nEq, _lDim, _nCone;   // _nCone = total rows = nEq + lDim + sum(soc)
     private readonly int[] _socDims;
 
@@ -121,7 +121,10 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         // Six per softened block: a positive and a negative slack per axis, so the miss may go either way while both stay non-negative and the penalty linear.
         _nTmPos = cfg.TerminalMissWeight > 0.0 ? 6 : 0;
         _nTmVel = cfg.TerminalSpeedWeight > 0.0 ? 6 : 0;
-        _nTm = _nTmPos + _nTmVel;
+        // The end attitude (qx, qy) and pitch and yaw rate (wx, wy), soft when priced (Scvx6DofConfig.TerminalAttitudeWeight): a positive and a negative slack each, after the speed's.
+        _nTmAtt = cfg.TerminalAttitudeWeight > 0.0 ? 4 : 0;
+        _nTmRate = cfg.TerminalRateWeight > 0.0 ? 4 : 0;
+        _nTm = _nTmPos + _nTmVel + _nTmAtt + _nTmRate;
         // The acceleration limit's slacks, one per node and LAST, so every earlier block keeps its offset.
         _nAc = cfg.AccelLimitEnabled ? _n : 0;
         _oAc = _oTm + _nTm;
@@ -188,6 +191,8 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
         for (int k = 0; k < _nVz; k++) _colScale[IVz(k)] = _xs[Dynamics6Dof.IV];
         for (int i = 0; i < _nTmPos; i++) _colScale[_oTm + i] = _xs[Dynamics6Dof.IR];
         for (int i = 0; i < _nTmVel; i++) _colScale[_oTm + _nTmPos + i] = _xs[Dynamics6Dof.IV];
+        for (int i = 0; i < _nTmAtt; i++) _colScale[_oTm + _nTmPos + _nTmVel + i] = _xs[Dynamics6Dof.IQ + 1];
+        for (int i = 0; i < _nTmRate; i++) _colScale[_oTm + _nTmPos + _nTmVel + _nTmAtt + i] = _xs[Dynamics6Dof.IW];
         for (int k = 0; k < _nAc; k++) _colScale[_oAc + k] = _us[Dynamics6Dof.IT];
         for (int k = 0; k < _nRr; k++) _colScale[_oRr + k] = _xs[Dynamics6Dof.IW];
         if (_iSigC >= 0) _colScale[_iSigC] = cfg.SigmaScale;
@@ -473,8 +478,13 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
             _c[ISv(k)] += _cfg.SideSpeedWeight * _colScale[ISv(k)] / Scvx6DofConfig.SideSpeedPriceScaleMs;
         for (int k = 0; k < _nVz; k++)
             _c[IVz(k)] += _cfg.VzWeight * _colScale[IVz(k)] / _xs[Dynamics6Dof.IV];
+        // The height axis (slacks 4 and 5) at TerminalHeightMissFactor times the miss across.
         for (int i = 0; i < _nTmPos; i++)
-            _c[_oTm + i] += _cfg.TerminalMissWeight * _colScale[_oTm + i] / _cfg.TerminalMissPriceScale;
+            _c[_oTm + i] += _cfg.TerminalMissWeight * (i >= 4 ? _cfg.TerminalHeightMissFactor : 1.0) * _colScale[_oTm + i] / _cfg.TerminalMissPriceScale;
+        for (int i = 0; i < _nTmAtt; i++)
+            _c[_oTm + _nTmPos + _nTmVel + i] += _cfg.TerminalAttitudeWeight * _colScale[_oTm + _nTmPos + _nTmVel + i] / Scvx6DofConfig.TerminalAttitudePriceQuat;
+        for (int i = 0; i < _nTmRate; i++)
+            _c[_oTm + _nTmPos + _nTmVel + _nTmAtt + i] += _cfg.TerminalRateWeight * _colScale[_oTm + _nTmPos + _nTmVel + _nTmAtt + i] / Scvx6DofConfig.TerminalRatePriceRadS;
         for (int i = 0; i < _nTmVel; i++)
             _c[_oTm + _nTmPos + i] +=
                 _cfg.TerminalSpeedWeight * _colScale[_oTm + _nTmPos + i] / _cfg.TerminalSpeedPriceScale;
@@ -528,6 +538,19 @@ public sealed class Scvx6DofSubproblemScs : IDisposable
                 int axis = i - Dynamics6Dof.IV;
                 AddA(row, _oTm + _nTmPos + 2 * axis, -1.0);
                 AddA(row, _oTm + _nTmPos + 2 * axis + 1, 1.0);
+            }
+            // The end's tilt and pitch and yaw rate may miss too, when priced (Scvx6DofConfig.TerminalAttitudeWeight).
+            else if (_nTmAtt > 0 && (i == Dynamics6Dof.IQ + 1 || i == Dynamics6Dof.IQ + 2))
+            {
+                int axis = i - Dynamics6Dof.IQ - 1;
+                AddA(row, _oTm + _nTmPos + _nTmVel + 2 * axis, -1.0);
+                AddA(row, _oTm + _nTmPos + _nTmVel + 2 * axis + 1, 1.0);
+            }
+            else if (_nTmRate > 0 && (i == Dynamics6Dof.IW || i == Dynamics6Dof.IW + 1))
+            {
+                int axis = i - Dynamics6Dof.IW;
+                AddA(row, _oTm + _nTmPos + _nTmVel + _nTmAtt + 2 * axis, -1.0);
+                AddA(row, _oTm + _nTmPos + _nTmVel + _nTmAtt + 2 * axis + 1, 1.0);
             }
             _b[row++] = xf[i];
         }

@@ -97,7 +97,7 @@ internal static class SixDofRcsCheck
                 mixer.Frozen = args.Contains("--freeze");
                 mixer.Reset(ddyn);
                 Console.WriteLine("    " + Loop(ddyn, dplant, x0, st.sigma, false, mixer.Mix, u => mixer.UpdateEffective(ddyn, u))
-                                  + $"; RCS gave up to {mixer.PeakRcs / 1e3:F0} kN m, gimbals {mixer.PeakGimbal / 1e3:F0}");
+                                  + $"; RCS gave up to {mixer.PeakRcs / 1e3:F0} kN m, gimbals {mixer.PeakGimbal / 1e3:F0}{PathShaping.DriftSummary()}");
                 return 0;
             }
             Console.WriteLine("    " + Loop(Params(MomentPerDeg(1.0), m), Params(MomentPerDeg(PlantMomentFactor), m), x0, st.sigma, false));
@@ -225,7 +225,7 @@ internal static class SixDofRcsCheck
                 string cold = Cold(dyn, x0, sigma, verbose);
                 string loop = Loop(dyn, plant, x0, sigma, verbose);
                 Console.WriteLine($"    {label,-16} cold: {cold}");
-                Console.WriteLine($"    {"",-16} loop: {loop}");
+                Console.WriteLine($"    {"",-16} loop: {loop}{PathShaping.DriftSummary()}");
             }
             {
                 (Dynamics6Dof.Params dyn, Dynamics6Dof.Params plant, Mixer mixer) = DemandSetup(rcs);
@@ -380,7 +380,7 @@ internal static class SixDofRcsCheck
         double speed = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
         double velocity = Math.Max(Math.Max(speed, Math.Sqrt(length * Gravity)), 1.0);
         double omegaScale = 60.0 * Math.PI / 180.0 / (sigma * 0.5);
-        return new Scvx6DofConfig
+        return PathShaping.SoftEnd(new Scvx6DofConfig
         {
             Nodes = n,
             CoastIntervals = coastIntervals,
@@ -424,7 +424,7 @@ internal static class SixDofRcsCheck
             DemandRollPerN = Demand ? RollTorquePerN : 0.0,
             VirtualControlScale = [0, 0, 0, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0],
             XScale = [length, length, length, velocity, velocity, velocity, 1, 1, 1, 1, RateScale, RateScale, RateScale, x0[13]],
-        };
+        });
     }
 
     /// <summary>The control scales as Scvx6DofConfig.ResolvedUScale would make them, with the RCS controls' times --uscale-rcs; null (the default) when that is 1.</summary>
@@ -557,6 +557,7 @@ internal static class SixDofRcsCheck
                 gates.Add(ratio);
                 if (ratio <= 1.0)
                 {
+                    PathShaping.NoteDrift(s, n, ss);
                     fx = (double[])s.ReferenceX.Clone();
                     fu = (double[])s.ReferenceU.Clone();
                     onPlan?.Invoke(Sample(fu, NU, s.Sigma, n, 0.0));

@@ -55,7 +55,7 @@ internal static class SixDofLiftCheck
                 string cold = Cold(dyn, x0, sigma, verbose);
                 string loop = Loop(dyn, plant, x0, sigma, verbose);
                 Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"  {aname,-20} (drag {drag,4:F1}, lift {lift,4:F2})  cold: {cold}"));
-                Console.WriteLine($"  {"",-20}                          loop: {loop}");
+                Console.WriteLine($"  {"",-20}                          loop: {loop}{PathShaping.DriftSummary()}");
             }
         }
         return 0;
@@ -115,7 +115,7 @@ internal static class SixDofLiftCheck
         double speed = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
         double velocity = Math.Max(Math.Max(speed, Math.Sqrt(length * Gravity)), 1.0);
         double omegaScale = 60.0 * Math.PI / 180.0 / (sigma * 0.5);
-        return new Scvx6DofConfig
+        return PathShaping.SoftEnd(new Scvx6DofConfig
         {
             Nodes = n,
             Tmax = Tmax,
@@ -139,7 +139,7 @@ internal static class SixDofLiftCheck
             SigmaScale = sigma,
             VirtualControlScale = [0, 0, 0, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0],
             XScale = [length, length, length, velocity, velocity, velocity, 1, 1, 1, 1, 1, 1, 1, x0[13]],
-        };
+        });
     }
 
     private static Scvx6DofSolver Solver(Scvx6DofConfig cfg, Dynamics6Dof.Params dyn)
@@ -237,6 +237,7 @@ internal static class SixDofLiftCheck
                 gates.Add(ratio);
                 if (ratio <= 1.0)
                 {
+                    PathShaping.NoteDrift(s, n, left);
                     fx = (double[])s.ReferenceX.Clone();
                     fu = (double[])s.ReferenceU.Clone();
                     fs = s.Sigma;

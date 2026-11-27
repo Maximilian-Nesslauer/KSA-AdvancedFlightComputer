@@ -667,9 +667,17 @@ public sealed class Scvx6DofSolver : IDisposable
         for (int a = 0; a < 3; a++)
         {
             if (_cfg.TerminalMissWeight > 0.0)
-                tmPos += _cfg.TerminalMissWeight * Math.Abs(x[last + Dynamics6Dof.IR + a] - _xf[Dynamics6Dof.IR + a]) / _cfg.TerminalMissPriceScale;
+                tmPos += _cfg.TerminalMissWeight * (a == 2 ? _cfg.TerminalHeightMissFactor : 1.0) * Math.Abs(x[last + Dynamics6Dof.IR + a] - _xf[Dynamics6Dof.IR + a]) / _cfg.TerminalMissPriceScale;
             if (_cfg.TerminalSpeedWeight > 0.0)
                 tmVel += _cfg.TerminalSpeedWeight * Math.Abs(x[last + Dynamics6Dof.IV + a] - _xf[Dynamics6Dof.IV + a]) / _cfg.TerminalSpeedPriceScale;
+        }
+        // The end's tilt and pitch and yaw rate, when soft (Scvx6DofConfig.TerminalAttitudeWeight).
+        for (int a = 0; a < 2; a++)
+        {
+            if (_cfg.TerminalAttitudeWeight > 0.0)
+                tmVel += _cfg.TerminalAttitudeWeight * Math.Abs(x[last + Dynamics6Dof.IQ + 1 + a] - _xf[Dynamics6Dof.IQ + 1 + a]) / Scvx6DofConfig.TerminalAttitudePriceQuat;
+            if (_cfg.TerminalRateWeight > 0.0)
+                tmVel += _cfg.TerminalRateWeight * Math.Abs(x[last + Dynamics6Dof.IW + a] - _xf[Dynamics6Dof.IW + a]) / Scvx6DofConfig.TerminalRatePriceRadS;
         }
         return gs + vz + tmPos + tmVel;
     }

@@ -290,9 +290,27 @@ public sealed class Scvx6DofConfig
     /// last thing to give up, and it should only open when the alternative is a plan
     /// that claims a touchdown speed the vehicle cannot achieve.
     /// </summary>
-    public double TerminalSpeedWeight { get; init; }
+    public double TerminalSpeedWeight { get; set; }
 
-    public bool SoftTerminal => TerminalMissWeight > 0.0 || TerminalSpeedWeight > 0.0;
+    /// <summary>The terminal miss's price on the HEIGHT axis, as a multiple of TerminalMissWeight's (1: the same as across). Raised with the speed's price, so a squeezed plan still arrives a little fast rather than stopping high, where a craft that cannot throttle below its weight floats and climbs (2026-10-08).</summary>
+    public double TerminalHeightMissFactor { get; set; } = 1.0;
+
+    /// <summary>
+    /// THE END ATTITUDE, SOFT: the price per degree of tilt left at the end (the end quaternion's x and y components, TerminalAttitudePriceQuat each), or 0 to keep it hard. With <see cref="TerminalRateWeight"/>, per deg/s of pitch and yaw rate left at the end.
+    ///  WHY (2026-11-27). Upright with no pitch or yaw rate at the end was hard. In the last second or two of the Starship landings the plans already swung the gimbal at its planned slew on 12-14 of 14 intervals and could not stop an 8 deg/s turn in time; the only slack left was virtual control, so the plans' attitudes ran 5-12 deg off their own rates, and the craft, following physics, touched down at 5-10 deg still turning. Soft, a plan that cannot end upright says so, and the flight is not asked to fly attitudes nothing produces. Priced above the position miss (the user's call: there is margin in where it lands, none in how it lands) and with the speed.
+    /// </summary>
+    public double TerminalAttitudeWeight { get; set; }
+
+    /// <summary>The end's pitch and yaw rate, soft: the price per deg/s left at the end, or 0 to keep it hard. See TerminalAttitudeWeight.</summary>
+    public double TerminalRateWeight { get; set; }
+
+    /// <summary>A degree of tilt as an end quaternion component, sin(0.5 deg): what TerminalAttitudeWeight is priced on.</summary>
+    public static readonly double TerminalAttitudePriceQuat = Math.Sin(0.5 * Math.PI / 180.0);
+
+    /// <summary>A degree a second in rad/s: what TerminalRateWeight is priced on.</summary>
+    public const double TerminalRatePriceRadS = Math.PI / 180.0;
+
+    public bool SoftTerminal => TerminalMissWeight > 0.0 || TerminalSpeedWeight > 0.0 || TerminalAttitudeWeight > 0.0 || TerminalRateWeight > 0.0;
 
     public bool GlideSlopeEnabled => GlideSlopeDeg > 0.0;
     public bool VzLimitEnabled => VzMax >= 0.0;

@@ -91,7 +91,7 @@ internal static class SixDofCoastCheck
             ok &= solved;
             Console.WriteLine($"    two-phase   cold: {cold}");
             if (coldOnly) continue;
-            Console.WriteLine($"    two-phase   loop: {Loop(dyn, plant, x0, lead, BurnSeed, n, c, verbose)}");
+            Console.WriteLine($"    two-phase   loop: {Loop(dyn, plant, x0, lead, BurnSeed, n, c, verbose)}{PathShaping.DriftSummary()}");
 
             // Today's way: hold the rates through the glide to the forecast ignition, then a burn-only plan from there.
             double[] x = (double[])x0.Clone();
@@ -103,7 +103,7 @@ internal static class SixDofCoastCheck
             }
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"    today's way: coasted {lead:F1} s holding the rates to {x[2]:F0} m, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from the target ({x[1]:F1} m across), {SixDofRcsCheck.OffAir(x) * 180.0 / Math.PI:F1} deg off the air"));
-            Console.WriteLine($"    burn only  loop: {Loop(dyn, plant, x, 0.0, BurnSeed, n - c, 0, verbose)}");
+            Console.WriteLine($"    burn only  loop: {Loop(dyn, plant, x, 0.0, BurnSeed, n - c, 0, verbose)}{PathShaping.DriftSummary()}");
         }
         Console.WriteLine();
         Console.WriteLine(ok ? "PASS - the two-phase plans converge (landings reported above)" : "FAIL - a two-phase cold solve did not reach the gate");
@@ -346,6 +346,7 @@ internal static class SixDofCoastCheck
                 gates.Add(ratio);
                 if (ratio <= 1.0)
                 {
+                    PathShaping.NoteDrift(s, n, sc > 0.0 ? double.PositiveInfinity : ss);
                     plan = new Plan(s.ReferenceX, s.ReferenceU, s.Sigma, s.CoastSigma, t);
                     kept++;
                 }

@@ -848,7 +848,11 @@ public static class Ksa6DofSetup
             // Terminal position and speed are SOFT, heavily penalised. A hard terminal says "arrive exactly there, exactly at rest", and when that is not achievable the honest answer is a plan that misses rather than no plan at all - a descending booster cannot decline to land. The weights are high enough that both slacks sit at zero whenever the target is genuinely reachable, so this changes nothing on a normal descent.
             //  POSITION ABOVE SPEED. Both are normalised by the problem's scales (here ~250 m and ~100 m/s at a hand-over), so the weights alone do not say what trades for what. With speed at 1e5 and the miss at 1e3, 1 m/s cost as much as ~270 m of miss, and a squeezed plan stopped at rest 20-30 m over the pad - where a booster that cannot throttle below its weight floats and then climbs (2026-10-08, 17:42 and 17:53). At 1e5 and 1e4, 1 m of miss costs about as much as 4 m/s: a squeezed plan arrives a little fast rather than high, as Falcon 9 lands at ~2 m/s rather than stopping short.
             TerminalMissWeight = 1.0e5,
-            TerminalSpeedWeight = 1.0e4,
+            // ATTITUDE, RATE AND SPEED ABOVE POSITION (2026-11-27, the user's call: there is margin in where the craft lands, none in how). Per unit, a metre of miss across costs 400; a m/s of end speed 2000, a degree of tilt 2000 and a deg/s of pitch or yaw rate 2000 - five metres each. The height miss goes up with the speed, 8000 a metre, so a squeezed plan still prefers arriving 4 m/s fast to stopping a metre high, as it did at 400 and 100.
+            TerminalSpeedWeight = 2.0e5,
+            TerminalHeightMissFactor = 20.0,
+            TerminalAttitudeWeight = 2.0e3,
+            TerminalRateWeight = 2.0e3,
             // Priced per fixed metre and m/s - the ~250 m and ~100 m/s scales of the hand-over these weights were tuned at - so a metre of miss costs the same however far away the plan starts (Scvx6DofConfig.TerminalMissScaleM).
             TerminalMissScaleM = TerminalMissPriceM,
             TerminalSpeedScaleMs = TerminalSpeedPriceMs,

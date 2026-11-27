@@ -65,6 +65,65 @@ internal static class PathShaping
     /// <summary>--late-its k: a re-solve of a plan with under 2 s left gets k SCvx iterations (3, as the others), as flight gives a short plan a larger budget (Ksa6DofGuidance.LateCycleBudgetMs).</summary>
     internal static int Iterations(double planLeftS) => planLeftS < 2.0 ? (int)Arg("--late-its", 3.0) : 3;
 
+    /// <summary>--soft-end: the check's end attitude, pitch and yaw rate soft and its end speed and height priced as flight prices them against the miss across (Ksa6DofSetup, 2026-11-27): a m/s, a degree and a deg/s at five metres each, a metre of height at twenty.</summary>
+    internal static Scvx6DofConfig SoftEnd(Scvx6DofConfig cfg)
+    {
+        if (!Environment.GetCommandLineArgs().Contains("--soft-end") || !(cfg.TerminalMissWeight > 0.0))
+            return cfg;
+        double perM = cfg.TerminalMissWeight / cfg.TerminalMissPriceScale;
+        cfg.TerminalSpeedWeight = Arg("--end-speed", 5.0) * perM * cfg.TerminalSpeedPriceScale;
+        cfg.TerminalHeightMissFactor = Arg("--end-height", 20.0);
+        cfg.TerminalAttitudeWeight = Arg("--end-att", 5.0) * perM;
+        cfg.TerminalRateWeight = Arg("--end-rate", 5.0) * perM;
+        return cfg;
+    }
+
+    static readonly List<double> Drifts = [];
+
+    /// <summary>How far a kept plan's attitudes stray from its own rates (fly its rates from node 0; the worst miss over the plan, degrees), noted for plans with under 2.5 s left: what the 2026-11-27 Starship landings showed at 5-12 deg.</summary>
+    internal static void NoteDrift(Scvx6DofSolver s, int n, double planLeftS)
+    {
+        if (!(planLeftS < 2.5))
+            return;
+        double[] x = s.ReferenceX;
+        const int NX = Dynamics6Dof.NX, Q = Dynamics6Dof.IQ, W = Dynamics6Dof.IW;
+        double qw = x[Q], qx = x[Q + 1], qy = x[Q + 2], qz = x[Q + 3], worst = 0.0;
+        for (int k = 0; k < n - 1; k++)
+        {
+            double dt = s.NodeTime(k + 1) - s.NodeTime(k);
+            const int sub = 40;
+            for (int i = 0; i < sub; i++)
+            {
+                double f = (i + 0.5) / sub;
+                double wx = x[k * NX + W] * (1 - f) + x[(k + 1) * NX + W] * f;
+                double wy = x[k * NX + W + 1] * (1 - f) + x[(k + 1) * NX + W + 1] * f;
+                double wz = x[k * NX + W + 2] * (1 - f) + x[(k + 1) * NX + W + 2] * f;
+                double h = 0.5 * dt / sub;
+                double nw = qw + h * (-qx * wx - qy * wy - qz * wz);
+                double nx = qx + h * (qw * wx + qy * wz - qz * wy);
+                double ny = qy + h * (qw * wy - qx * wz + qz * wx);
+                double nz = qz + h * (qw * wz + qx * wy - qy * wx);
+                double norm = Math.Sqrt(nw * nw + nx * nx + ny * ny + nz * nz);
+                qw = nw / norm; qx = nx / norm; qy = ny / norm; qz = nz / norm;
+            }
+            int b = (k + 1) * NX + Q;
+            double dot = Math.Abs(qw * x[b] + qx * x[b + 1] + qy * x[b + 2] + qz * x[b + 3]);
+            worst = Math.Max(worst, 2.0 * Math.Acos(Math.Min(1.0, dot)) * 180.0 / Math.PI);
+        }
+        Drifts.Add(worst);
+    }
+
+    /// <summary>The late plans' drift noted since the last call, for the loop's line, and forgets it.</summary>
+    internal static string DriftSummary()
+    {
+        if (Drifts.Count == 0)
+            return "";
+        Drifts.Sort();
+        string text = FormattableString.Invariant($"; late plans off their own rates median {Drifts[Drifts.Count / 2]:F1} max {Drifts[^1]:F1} deg ({Drifts.Count})");
+        Drifts.Clear();
+        return text;
+    }
+
     internal static double[]? FunnelHeightsM => On ? [Arg("--gs-len", 40.0), 300.0, 1000.0] : null;
 
     internal static double[]? FunnelDeg => On
