@@ -55,7 +55,8 @@ public static partial class GuidanceWindow
             ? Ksa6DofGuidance.TurnAwayTime(plan, state, now, TurnAwayDeg * Math.PI / 180.0) - TurnAwayLeadS
             : double.PositiveInfinity;
 
-    private const double TurnAwayDeg = 5.0;
+    // 15 deg since 2026-11-27 (was 5), the user's call, to leave the craft with bellyflop longer: at 5 the standby plan's first turn handed a Starship over at 1680-1950 m, 31-36 s before ignition (14:25, 16:37), where the other landings that day were handed over at the latest, about 5 s before it.
+    private const double TurnAwayDeg = 15.0;
     private const double TurnAwayLeadS = 1.0;
     private const double BrakingHandoffRateRadS = 3.0 * Math.PI / 180.0;
 
@@ -70,6 +71,16 @@ public static partial class GuidanceWindow
                && _s.Guidance.MeasureDrift(brakingState, now) <= SixDofRestartDriftLimit(brakingState[2])));
 
     /// <summary>The burn-time floor for restarts and node rebuilds: the configured seed, or the entry seed when this engagement started from a shorter burn (the 3-DOF hand-over). Restarting a 3 s burn on a 20 s seed would pin sigma at a minimum longer than the burn.</summary>
+    /// <summary>The progressive glideslope's knots for the log: each height, its half-angle from vertical, and the offset it allows there.</summary>
+    private static string FunnelText(Scvx6DofConfig cfg)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < cfg.GlideFunnelHeightsM.Length; i++)
+            sb.Append(i > 0 ? ", " : "").Append(FormattableString.Invariant(
+                $"{cfg.GlideFunnelHalfAngleDeg[i]:F0} deg from vertical at {cfg.GlideFunnelHeightsM[i]:F0} m over the target ({cfg.GlideSlopeRadiusAt(cfg.GlideFunnelHeightsM[i]):F0} m of offset)"));
+        return sb.ToString();
+    }
+
     private static double SixDofSeedFloor => Math.Min(_s.SixDofSigmaSeed, _s.SixDofEntrySigmaSeed);
 
     /// <summary>
@@ -138,6 +149,12 @@ public static partial class GuidanceWindow
         double rad = 180.0 / Math.PI;
         GuidanceLog.Info(vehicle, FormattableString.Invariant(
             $"Touchdown guidance thrust moment {dyn.ThrustMomentX:F3} {dyn.ThrustMomentY:F3} {dyn.ThrustMomentZ:F3} m (N m per N): gimbal cone centred on a {Math.Atan(cfg.GimbalTrim) * rad:F2} deg trim, {cfg.GimbalMaxDeg:F2} deg around it."));
+        if (cfg.GlideSlopeProgressive)
+            GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                $"Touchdown guidance glide funnel: {FunnelText(cfg)}; outer cone {cfg.GlideSlopeDeg:F0} deg above the horizon."));
+        if (cfg.SideSpeedEnabled)
+            GuidanceLog.Info(vehicle, FormattableString.Invariant(
+                $"Touchdown guidance sideways speed: at most {cfg.SideSpeedPerM:F2} m/s per metre of height over the target plus {cfg.SideSpeedFloorMs:F1} m/s ({cfg.SideSpeedPerM * 10.0 + cfg.SideSpeedFloorMs:F1} m/s at 10 m)."));
         GuidanceLog.Debug(vehicle, FormattableString.Invariant($"Touchdown guidance model: air moment limiter {_s.MomentLimiterPerPa * 1e3:F3} per kPa (divides by {_s.MomentLimiterDivisor:F2} now), Tmax {cfg.Tmax:F0} N, floor {cfg.ThrottleFloor:F3}, gimbal {cfg.GimbalMaxDeg:F2} deg, roll torque {cfg.TauRollMax:F0} N m{(cfg.TerminalRollFree ? " (roll left free)" : "")}, engine arm {dyn.LArm:F2} m, inertia {dyn.Ixx:F0} {dyn.Iyy:F0} {dyn.Izz:F0} kg m2, Isp {dyn.Isp:F0} s, tilt limit {cfg.TiltMaxDeg:F0} deg, scales {cfg.XScale[0]:F0} m {cfg.XScale[3]:F0} m/s, plan ends {_s.SixDofTargetComAltM:F2} m over the site of which {_s.SiteEarlyContactM:F2} m for the ground under the footprint, which rises {(_s.SiteGround?.Within(_s.SiteGround.ReachM) ?? 0.0):F2} m within {(_s.SiteGround?.ReachM ?? 0.0):F0} m of the site."));
 
         // Dispatch after all cfg/dyn log reads complete so only the worker accesses them during cold init.
@@ -365,7 +382,10 @@ public static partial class GuidanceWindow
         // Off the engines' curve, as Step6DofCore reads it: throttle x full thrust overstates low throttle by tens of kN.
         // Not on a predicted state (SixDofStandbyPredicted): its velocity is a forecast that stands still, and differencing it would read as an acceleration the model lacks.
         if (!_s.SixDofStandbyPredicted)
-            UpdateAccelBias(x, now, _s.LastThrottle > 0.0 ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle, ambientPa) : 0.0);
+        {
+            double standbyThrust = _s.LastThrottle > 0.0 ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle, ambientPa) : 0.0;
+            UpdateAccelBias(x, now, standbyThrust, ThrustDirModel(vehicle, standbyThrust), default, FlownFinDeg(vehicle));
+        }
 
         // The node ladder too, so the guidance handed over is already at the count 6-DOF would fly. Only off a fresh plan: a rebuild reseeds from the published plan, on the worker (BeginRebuild).
         if (_s.SixDofNodeGates && age <= SixDofStandbyMaxPlanAgeS && !_s.SixDofCoastPending)
@@ -374,6 +394,8 @@ public static partial class GuidanceWindow
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
         UpdateMomentLimiter(vehicle, now);
         _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz)
+            .WithArm(Ksa6DofSetup.EngineArm(vehicle))
+            .WithTipGeometry(TipRadiusM(_s), _s.VehicleHeightM)
             .WithMomentLimiterExact(_s.MomentLimiterPerPa, _s.MomentLimiterStiffnessPerPa, _s.MomentLimiterDampingPerPaMs)
             .WithMomentBias(_s.SixDofStandbyPredicted ? _s.MomentBiasPerPa : UpdateMomentBias(vehicle, x, now));
         if (!_s.SixDofStandbyPredicted)
@@ -441,6 +463,10 @@ public static partial class GuidanceWindow
         Ksa6DofPlan plan = _s.Guidance.Published;
         _s.SixDofStandby = false;
         _s.Active = true;
+        _s.Guidance.ArmIgnitionCap(plan != null && plan.HasCoast ? plan.IgnitionTime : double.NaN, plan != null ? plan.SolveTime + plan.Duration : double.NaN);
+        // The standby's sideways bias stays behind: the flying mode steers through stock TVC, whose gimbal angles the estimate cannot see (no Lsq pass, KsaGimbalControl.Slot.ThrustDirKnown), so their sideways thrust was learnt as a missing force; touchdown learns its own from here, through the gimbals it measures.
+        if (!KeepStandbyBias && KsaGimbalControl.Diagnostics(vehicle) is { ThrustDirKnown: true })
+            _s.Bias = new Brutal.Numerics.double3(0.0, 0.0, _s.Bias.Z);
         _s.RefusalRun = 0;
         _s.TouchdownArmed = false;
         _s.SixDofSeenDescending = _s.SixDofTookBurn;

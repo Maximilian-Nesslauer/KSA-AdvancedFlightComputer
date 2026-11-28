@@ -124,6 +124,7 @@ public static partial class GuidanceWindow
     {
         DrawTuningGroup("LIMITS", "SixDofLimits", true, Specs.TuningSixDofLimits, Specs.TuningSixDofLimitBools, Draw6DofLimitRows, PageText.TouchdownLimitsTip);
         DrawTuningGroup("TRACKING", "SixDofTracking", true, Specs.TuningSixDofTracking, Specs.TuningSixDofTrackingBools, Draw6DofTrackingRows, PageText.TouchdownTrackingTip);
+        DrawTuningGroup("CUT SUPERVISOR", "SixDofCut", true, Specs.TuningSixDofCut, Specs.TuningSixDofCutBools, Draw6DofCutRows, PageText.TouchdownCutTip);
         DrawTuningGroup("SOLVER", "SixDofSolver", false, Specs.TuningSixDofSolver, Specs.TuningSixDofSolverBools, Draw6DofSolverRows, PageText.TouchdownSolverTip);
     }
 
@@ -145,10 +146,30 @@ public static partial class GuidanceWindow
         GaugeRow(Specs.SixDofSurfaceShare, ref _s.SixDofSurfaceShare);
 
         GaugeRow(Specs.SixDofGlideSlopeDeg, ref _s.SixDofGlideSlopeDeg);
+        GaugeRow(Specs.SixDofFunnelNearDeg, ref _s.SixDofFunnelNearDeg);
+        using (new ImGuiDisabledScope(!(_s.SixDofFunnelNearDeg > 0.0)))
+        {
+            GaugeRow(Specs.SixDofFunnel300Deg, ref _s.SixDofFunnel300Deg);
+            GaugeRow(Specs.SixDofFunnel1000Deg, ref _s.SixDofFunnel1000Deg);
+        }
+        GaugeRow(Specs.SixDofSideSpeedPerM, ref _s.SixDofSideSpeedPerM);
+        GaugeRow(Specs.SixDofLastSecondsSmooth, ref _s.SixDofLastSecondsSmooth);
 
         GaugeRowCheck(Specs.SixDofVzEnabled, ref _s.SixDofVzEnabled);
         using (new ImGuiDisabledScope(!_s.SixDofVzEnabled))
             GaugeRow(Specs.SixDofVzMaxMs, ref _s.SixDofVzMaxMs);
+    }
+
+    private static void Draw6DofCutRows()
+    {
+        GaugeRowCheck(Specs.CutSupervisorOn, ref _s.CutSupervisorOn);
+        using (new ImGuiDisabledScope(!_s.CutSupervisorOn))
+        {
+            GaugeRow(Specs.CutSupervisorSinkMs, ref _s.CutSupervisorSinkMs);
+            GaugeRow(Specs.CutSupervisorShortfallM, ref _s.CutSupervisorShortfallM);
+            GaugeRow(Specs.CutSupervisorMaxHeightM, ref _s.CutSupervisorMaxHeightM);
+            GaugeRow(Specs.CutSupervisorWatchHeightM, ref _s.CutSupervisorWatchHeightM);
+        }
     }
 
     private static void Draw6DofTrackingRows()

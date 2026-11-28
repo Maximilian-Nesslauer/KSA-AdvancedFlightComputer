@@ -21,8 +21,18 @@ using Brutal.Numerics;
 /// <param name="MomentBiasPerPa">The air moment's measured error per pascal of dynamic pressure, model body axes, N m/Pa (BodyAero6Dof.MomentBias*PerPa; SixDof's moment-error integrator); zero for none.</param>
 public sealed record Ksa6DofInputs(double3 AccelBias, double Ixx, double Iyy, double Izz,
                                    double MomentLimiterPerPa = double.NaN, double3 MomentBiasPerPa = default,
-                                   double MomentLimiterStiffnessPerPa = double.NaN, double MomentLimiterDampingPerPaMs = double.NaN)
+                                   double MomentLimiterStiffnessPerPa = double.NaN, double MomentLimiterDampingPerPaMs = double.NaN,
+                                   double LArm = double.NaN, double TipRadiusM = double.NaN, double TipHeightM = double.NaN)
 {
+    /// <summary>What the craft stands on for the tip-over line (Scvx6DofConfig.TipLimit): the edge's distance from the thrust axis and the centre of mass's height over the contact plane, m; NaN leaves the line loose.</summary>
+    public Ksa6DofInputs WithTipGeometry(double radiusM, double heightM) => this with { TipRadiusM = radiusM, TipHeightM = heightM };
+
+    /// <summary>
+    /// The engine's lever arm now, m: centre of mass to the dominant gimbal's pivot along the thrust axis (Ksa6DofSetup.EngineArm); NaN or 0 keeps the model's. Live, as the inertia is: the centre of mass moves as the propellant drains.
+    ///  WHY (2026-11-27). It was measured when a plan was built and kept. The Starship's nose header tank drains over the landing burn and its centre of mass comes 1.1-1.4 m nearer the engine, so by touchdown the plan's arm was about 6 % long, and the torque the allocator delivered came with that much more side force than the plan had.
+    /// </summary>
+    public Ksa6DofInputs WithArm(double armM) => this with { LArm = armM };
+
     public Ksa6DofInputs WithMomentLimiter(double perPa) => this with { MomentLimiterPerPa = perPa };
 
     public Ksa6DofInputs WithMomentLimiterExact(double perPa, double stiffPerPa, double dampPerPaMs)

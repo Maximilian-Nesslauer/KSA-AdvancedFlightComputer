@@ -18,7 +18,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 ///   mdot = -(mdot_0 + alpha * T)
 ///
 /// RCS (see <see cref="RcsModel"/>): a signed torque about each body axis, between what the thrusters give one way and the other, and the side force that comes with it, K tau_rcs: on a booster whose thrusters sit at the top every pitch or yaw torque pushes it sideways. Both from the allocator's own measurement of the layout (RcsTorqueAllocator.Characterise).
-///  ONE SIGNED CONTROL PER AXIS, NOT A PAIR. The first version split each axis into a + and a - control so that the propellant, |tau| times a flow, could be linear. The two had exactly opposite columns, and SCS took 5-20 times the iterations on the warm re-solves, hitting its cap (2026-11-19: 2,668 a solve at 5 nodes against 347 without RCS; freeing only the + halves brought it back to ~500). The RCS propellant (16-50 kg against ~480 of the main engine) is left out of the mass instead; Scvx6DofConfig.RcsWeight prices the torque.
+///  ONE SIGNED CONTROL PER AXIS, NOT A PAIR. The first version split each axis into a + and a - control so that the propellant, |tau| times a flow, could be linear. The two had exactly opposite columns, and SCS took 5-20 times the iterations on the warm re-solves, hitting its cap (2026-11-19: 2,668 a solve at 5 nodes against 347 without RCS; freeing only the + halves brought it back to ~500). The RCS propellant is left out of the mass instead (16-50 kg a landing on cold gas; the Starship's hot-gas RCS burns ~0.6 t, still under 0.1 m/s^2 of error); Scvx6DofConfig.RcsWeight prices the torque.
 ///
 /// Small-angle gimbal: the engine sits at r_T = [0,0,-L] below the CoM, so
 /// tau_gimbal = r_T x T_body = [L*tdy, -L*tdx, 0], linear in the controls.

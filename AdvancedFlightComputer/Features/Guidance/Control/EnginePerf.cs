@@ -31,6 +31,16 @@ internal static class KsaEnginePerf
 
     internal static double VacuumThrust(Vehicle vehicle) => Vacuum(vehicle).thrust;
 
+    /// <summary>The vacuum thrust of the ACTIVE engines only, N: the engines a landing group or staging left off push nothing, unlike in VacuumThrust's configuration total.</summary>
+    internal static double ActiveVacuumThrust(Vehicle vehicle)
+    {
+        double thrust = 0.0;
+        foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
+            if (engine.IsActive)
+                thrust += engine.VacuumData.ThrustMax.Length();
+        return thrust;
+    }
+
     /// <summary>
     /// The thrust the craft's engines (EngineController) give now, N, summed over their nozzles: the main engines only. Not Vehicle.ComputeLiveThrust, which sums every rocket nozzle on the craft, the RCS thrusters' among them, so any RCS pulse reads as an engine burning (2026-11-20: the first pulse in the boostback glide handed the attitude back to the stock flight computer for the rest of the glide).
     /// </summary>
@@ -298,7 +308,8 @@ internal static class KsaEnginePerf
     /// The throttle a landing plan's floor sits at (VehicleAutopilotState.LandingPlanFloorMargin): the engines' minimum plus <paramref name="margin"/> of the THRUST range above it, at <paramref name="ambientPressure"/>, so the tracker has thrust to take off. Held under LandingFloorHoverTwr of <paramref name="weightN"/> when the engines' minimum is, so a craft that can hover is planned as one that can.
     ///  WHY IN THRUST. The margin was throttle points, and under back pressure the thrust is steepest at the bottom of the range: the nozzle loses the same newtons at any throttle. On the 2026-11-21 stock booster, 10 % throttle gave 149 kN at the pad and 15 % gave 249 kN, so five points made the plan's minimum 1.24 of the weight against the engines' 0.85. A plan whose minimum lifts the craft cannot sink near the ground, has to end its braking exactly at the plan end, and stopped 2.3 m above it, rising, which the stop-short rule cut.
     /// </summary>
-    internal static double LandingPlanFloorThrottle(Vehicle vehicle, double minimumThrottle, double margin, double ambientPressure, double weightN)
+    /// <param name="hoverWeightN">The weight the plan flies, N, for the hover line (gravity less the plan's acceleration bias, at its end mass); NaN takes <paramref name="weightN"/>. Whether the craft can throttle under its weight - the branch - is always judged on <paramref name="weightN"/>, so a bias moving the line never flips a craft whose minimum is near its weight into the whole margin: on the 2026-11-28 booster the minimum sat 7 kN under the biased weight, and past it the floor would have jumped from 136 to about 225 kN (review of 40ed8b6).</param>
+    internal static double LandingPlanFloorThrottle(Vehicle vehicle, double minimumThrottle, double margin, double ambientPressure, double weightN, double hoverWeightN = double.NaN)
     {
         if (!(margin > 0.0))
             return minimumThrottle;
@@ -309,8 +320,9 @@ internal static class KsaEnginePerf
             return Math.Clamp(minimumThrottle + margin, minimumThrottle, ceiling);
         double target = floorThrust + margin * (fullThrust - floorThrust);
         // A craft whose minimum is under its weight keeps a margin only up to the hover line, and none past its own minimum when that is already above the line; one that cannot throttle under its weight keeps the whole margin, which is what it is for.
+        double lineN = double.IsFinite(hoverWeightN) && hoverWeightN > 0.0 ? hoverWeightN : weightN;
         if (weightN > 0.0 && floorThrust < weightN)
-            target = Math.Min(target, Math.Max(floorThrust, LandingFloorHoverTwr * weightN));
+            target = Math.Min(target, Math.Max(floorThrust, LandingFloorHoverTwr * lineN));
         if (!(target > floorThrust))
             return minimumThrottle;
         ThrustCommand command = CommandForThrust(vehicle, target, ambientPressure);

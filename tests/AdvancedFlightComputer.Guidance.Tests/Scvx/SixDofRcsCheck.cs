@@ -97,7 +97,7 @@ internal static class SixDofRcsCheck
                 mixer.Frozen = args.Contains("--freeze");
                 mixer.Reset(ddyn);
                 Console.WriteLine("    " + Loop(ddyn, dplant, x0, st.sigma, false, mixer.Mix, u => mixer.UpdateEffective(ddyn, u))
-                                  + $"; RCS gave up to {mixer.PeakRcs / 1e3:F0} kN m, gimbals {mixer.PeakGimbal / 1e3:F0}");
+                                  + $"; RCS gave up to {mixer.PeakRcs / 1e3:F0} kN m, gimbals {mixer.PeakGimbal / 1e3:F0}{PathShaping.DriftSummary()}");
                 return 0;
             }
             Console.WriteLine("    " + Loop(Params(MomentPerDeg(1.0), m), Params(MomentPerDeg(PlantMomentFactor), m), x0, st.sigma, false));
@@ -225,7 +225,7 @@ internal static class SixDofRcsCheck
                 string cold = Cold(dyn, x0, sigma, verbose);
                 string loop = Loop(dyn, plant, x0, sigma, verbose);
                 Console.WriteLine($"    {label,-16} cold: {cold}");
-                Console.WriteLine($"    {"",-16} loop: {loop}");
+                Console.WriteLine($"    {"",-16} loop: {loop}{PathShaping.DriftSummary()}");
             }
             {
                 (Dynamics6Dof.Params dyn, Dynamics6Dof.Params plant, Mixer mixer) = DemandSetup(rcs);
@@ -380,7 +380,7 @@ internal static class SixDofRcsCheck
         double speed = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
         double velocity = Math.Max(Math.Max(speed, Math.Sqrt(length * Gravity)), 1.0);
         double omegaScale = 60.0 * Math.PI / 180.0 / (sigma * 0.5);
-        return new Scvx6DofConfig
+        return PathShaping.SoftEnd(new Scvx6DofConfig
         {
             Nodes = n,
             CoastIntervals = coastIntervals,
@@ -389,7 +389,7 @@ internal static class SixDofRcsCheck
             // --no-gimbal: a craft that points its thrust with the RCS alone, as Ksa6DofSetup plans one (a zero cone and no arm).
             GimbalMaxDeg = NoGimbal ? 0.0 : GimbalDeg,
             GimbalArm = Environment.GetCommandLineArgs().Contains("--old-scale") || NoGimbal ? 0.0 : Arm,
-            GimbalSlewPerS = Environment.GetCommandLineArgs().Contains("--noslew") ? 0.0 : SlewPerS,
+            GimbalSlewPerS = Environment.GetCommandLineArgs().Contains("--noslew") ? 0.0 : SlewPerS * PathShaping.SlewShare,
             // --roll-pinned (coast check): as the 12:20-12:53 boosters flew - their engine gives 88.8 kN m of roll at full thrust, so the plan holds the heading to the end (Ksa6DofSetup.RollModel).
             TauRollMax = RollPinned ? 88_833.0 : 1.0e4,
             RollTorqueFollowsThrust = RollPinned,
@@ -405,7 +405,7 @@ internal static class SixDofRcsCheck
             WDu = ProbeWdu,
             ProximalWeight = ProbeProx,
             UScale = ProbeUScale(dyn),
-            GlideSlopeDeg = 0.0,
+            GlideSlopeDeg = PathShaping.FarDeg(0.0), GlideFunnelHeightsM = PathShaping.FunnelHeightsM, GlideFunnelHalfAngleDeg = PathShaping.FunnelDeg, GlideFunnelWeight = PathShaping.FunnelWeight, SideSpeedPerM = PathShaping.SideSpeedPerM,
             VzMax = 0.0,
             TerminalMissWeight = 1.0e5,
             TerminalSpeedWeight = 1.0e4,
@@ -424,7 +424,7 @@ internal static class SixDofRcsCheck
             DemandRollPerN = Demand ? RollTorquePerN : 0.0,
             VirtualControlScale = [0, 0, 0, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0],
             XScale = [length, length, length, velocity, velocity, velocity, 1, 1, 1, 1, RateScale, RateScale, RateScale, x0[13]],
-        };
+        });
     }
 
     /// <summary>The control scales as Scvx6DofConfig.ResolvedUScale would make them, with the RCS controls' times --uscale-rcs; null (the default) when that is 1.</summary>
@@ -526,6 +526,7 @@ internal static class SixDofRcsCheck
         onPlan?.Invoke(Sample(fu, NU, s.Sigma, n, 0.0));
         double fs = s.Sigma, f0 = 0.0;
         double[] x = (double[])x0.Clone();
+        double plantGx = double.NaN, plantGy = double.NaN;
         int refused = 0, kept = 0;
         var gates = new List<double>();
         var loopAdmm = new List<int>();
@@ -538,20 +539,25 @@ internal static class SixDofRcsCheck
                 Shift(fx, fu, fs, t - f0, n, out double[] sx, out double[] su, out double ss);
                 // As the game re-seeds a warm solve (Ksa6DofGuidance): the whole reference moved with the measured state, not node 0 alone, and the trust region opened to its warm start rather than left where the last solve shrank it.
                 ColdReferenceShift.Apply(sx, n, ss, x);
+                PathShaping.Anchor(cfg, su, gx: plantGx, gy: plantGy);
                 s.Reseed(x, sx, su, ss, trustRegion: Math.Clamp(s.TrustRegion, WarmTrustRegion, s.TrustRegionMax));
                 double ratio = double.PositiveInfinity;
-                for (int i = 0; i < 3; i++)
+                for (int i = 0; i < PathShaping.Iterations(ss); i++)
                 {
                     ScvxIteration it = s.Iterate();
                     loopAdmm.Add(it.SolverIterations);
                     if (Diag && gates.Count < 6)
                         Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"      t {t:F1} it {i}: solved {it.Solved} accepted {it.Accepted} scs {it.SolverIterations} trust {it.TrustRegion:G3} {(it.Solved ? "" : s.LastFailureReason)}"));
-                    ratio = it.Accepted ? s.WeightedDefect(tol, n - 2, 1.0, out _, out _, out _) : double.PositiveInfinity;
+                    int gch = -1, gnode = -1; double graw = double.NaN;
+                    ratio = it.Accepted ? s.WeightedDefect(tol, n - 2, 1.0, out gch, out gnode, out graw, refIntervalS: PathShaping.GateRefS) : double.PositiveInfinity;
+                    if (it.Accepted && ratio > 1.0 && Environment.GetCommandLineArgs().Contains("--gate-diag"))
+                        Console.WriteLine(FormattableString.Invariant($"      gate {ratio:F2}x on {Scvx6DofSolver.ChannelName(gch)} at interval {gnode} of {n - 1}, raw {graw:G3}, dt {s.NodeTime(gnode + 1) - s.NodeTime(gnode):F3} s, burn {ss:F2} s"));
                     if (ratio <= 0.05) break;
                 }
                 gates.Add(ratio);
                 if (ratio <= 1.0)
                 {
+                    PathShaping.NoteDrift(s, n, ss);
                     fx = (double[])s.ReferenceX.Clone();
                     fu = (double[])s.ReferenceU.Clone();
                     onPlan?.Invoke(Sample(fu, NU, s.Sigma, n, 0.0));
@@ -569,6 +575,7 @@ internal static class SixDofRcsCheck
             for (double h = 0; h < cycle - 1e-9; h += dt)
             {
                 double[] u = Sample(fu, NU, fs, n, t - f0);
+                PathShaping.SlewPlant(cfg, u, dt, ref plantGx, ref plantGy);
                 if (mix != null) u = mix(u);
                 Step(x, u, plant, dt);
                 maxOff = Math.Max(maxOff, OffAir(x) * 180.0 / Math.PI);

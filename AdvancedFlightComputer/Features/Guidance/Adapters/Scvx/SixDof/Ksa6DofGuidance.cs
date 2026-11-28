@@ -69,6 +69,21 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <summary>The plan currently being flown, or null before the first solve lands.</summary>
     public Ksa6DofPlan Published => _published;
 
+    /// <summary>The plan published before <see cref="Published"/>, flown while a delay-compensated plan's start (its SolveTime, a lead ahead of its dispatch) is still to come (FlyingPlanAt).</summary>
+    private Ksa6DofPlan _publishedBefore;
+
+    /// <summary>AFC_X_SOLVE_LEAD=1 (SixDof's delay compensation): a plan stamped ahead of the sim clock waits behind the plan before it. Off, a plan is flown from its node 0 as soon as it lands, as before - the predicted standby stamps its plans at a forecast ignition time and is left as it was.</summary>
+    internal static readonly bool SolveLeadOn = Environment.GetEnvironmentVariable("AFC_X_SOLVE_LEAD") == "1";
+
+    /// <summary>The plan being flown at <paramref name="simNow"/>: <paramref name="newest"/>, or with the delay compensation on, the plan before it while the newest's start is still to come and the one before has not run out.</summary>
+    private Ksa6DofPlan FlyingPlanAt(Ksa6DofPlan newest, double simNow)
+    {
+        if (SolveLeadOn && newest != null && simNow < newest.SolveTime && _publishedBefore is { } before
+            && !ReferenceEquals(before, newest) && simNow >= before.SolveTime && simNow - before.SolveTime <= before.Duration)
+            return before;
+        return newest;
+    }
+
     private double[] _planX = [];
     private double[] _planU = [];
     private double _planSigma;
@@ -123,6 +138,43 @@ public sealed class Ksa6DofGuidance : IDisposable
 
     private double _lockedIgnition = double.NaN;
 
+    // The coast's upper bound as the setup built it, before NO LATER IGNITION lowered it (Scvx6DofConfig.CoastGrowthCapS); the earliest ignition promised since the cap was armed, sim time; and whether it is (ArmIgnitionCap).
+    private double _coastMaxBuilt = double.NaN;
+    private double _earliestIgnitionAt = double.NaN;
+    private bool _ignitionCapArmed;
+    // NO LATER TOUCHDOWN (Scvx6DofConfig.EndGrowthCapS): the earliest end a published plan has promised since the cap was armed, sim time, and the burn time's upper bound as the setup built it.
+    private double _earliestEndAt = double.NaN;
+    private double _sigmaMaxBuilt = double.NaN;
+
+    /// <summary>
+    /// NO LATER TOUCHDOWN (Scvx6DofConfig.EndGrowthCapS): the burn time's upper bound so the plan ends no later than its anchor plus the cap, from <paramref name="simNow"/> with <paramref name="coast"/> s still to coast; the setup's bound while it is off or unarmed. Called where a warm re-solve or a rebuild sets its free burn time, after KeepSigmaMinUnder.
+    /// </summary>
+    private void KeepEndNoLater(double simNow, double coast)
+    {
+        if (double.IsNaN(_sigmaMaxBuilt))
+            _sigmaMaxBuilt = _cfg.SigmaMax;
+        if (_cfg.EndGrowthCapS >= 0.0 && _ignitionCapArmed && double.IsFinite(_earliestEndAt) && double.IsFinite(simNow))
+        {
+            double most = _earliestEndAt + _cfg.EndGrowthCapS - simNow - Math.Max(coast, 0.0);
+            _cfg.SigmaMax = Math.Max(Math.Min(_sigmaMaxBuilt, most), _cfg.SigmaMin + 1e-3);
+        }
+        else
+            _cfg.SigmaMax = _sigmaMaxBuilt;
+    }
+
+    /// <summary>Arms NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS) from now on: touchdown has the craft. Before, on the standby, the ignition follows the glide's changes freely. <paramref name="promisedIgnitionAt"/> is the ignition of the plan in hand, sim time, the first anchor (NaN for none).</summary>
+    public void ArmIgnitionCap(double promisedIgnitionAt = double.NaN, double promisedEndAt = double.NaN)
+    {
+        _ignitionCapArmed = true;
+        if (!EngineLit && double.IsFinite(promisedIgnitionAt) && !(promisedIgnitionAt >= _earliestIgnitionAt))
+            _earliestIgnitionAt = promisedIgnitionAt;
+        if (double.IsFinite(promisedEndAt) && !(promisedEndAt >= _earliestEndAt))
+            _earliestEndAt = promisedEndAt;
+    }
+
+    /// <summary>NO LATER IGNITION is armed (ArmIgnitionCap).</summary>
+    public bool IgnitionCapArmed => _ignitionCapArmed;
+
     // The ignition the latest reference plans, sim time: where a cold or spread solve's coast is carried down from.
     private double _ignitionAt = double.NaN;
 
@@ -144,6 +196,18 @@ public sealed class Ksa6DofGuidance : IDisposable
         else if (known && coast < IgnitionLockS)
             _lockedIgnition = simNow + coast;
         _cfg.CoastSigmaFixed = EngineLit || double.IsFinite(_lockedIgnition) ? coast : null;
+        // NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS), once touchdown has the craft (ArmIgnitionCap): the ignition no later than the earliest any plan since has promised, plus the cap - an absolute anchor, as a bound relative to each plan's coast moved with every re-solve and never bound. The setup's bound otherwise.
+        if (double.IsNaN(_coastMaxBuilt))
+            _coastMaxBuilt = _cfg.CoastSigmaMax;
+        if (_cfg.CoastGrowthCapS >= 0.0 && _ignitionCapArmed && known && _cfg.CoastSigmaFixed == null)
+        {
+            // The anchor moves only with a published plan (the end of a successful finish), never with an iterate of a cold or spread solve; none yet, no cap.
+            double cap = double.IsFinite(_earliestIgnitionAt) ? Math.Max(_earliestIgnitionAt + _cfg.CoastGrowthCapS - simNow, 0.0) : _coastMaxBuilt;
+            _cfg.CoastSigmaMax = Math.Max(Math.Min(_coastMaxBuilt, cap), _cfg.CoastSigmaMin + 1e-3);
+            coast = Math.Min(coast, _cfg.CoastSigmaMax);
+        }
+        else
+            _cfg.CoastSigmaMax = _coastMaxBuilt;
         return coast;
     }
 
@@ -239,6 +303,17 @@ public sealed class Ksa6DofGuidance : IDisposable
             _dyn.BodyAero.MomentBiasZPerPa = inputs.MomentBiasPerPa.Z;
         }
         if (inputs.Iyy > 0.0) _dyn.Iyy = inputs.Iyy;
+        // The engine's arm, live (Ksa6DofInputs.LArm); not for a plan built without a gimbal, whose arm is a placeholder.
+        if (inputs.LArm > 0.0 && double.IsFinite(inputs.LArm) && _dyn.LArm > 0.0 && !_cfg.TorqueDemand)
+            _dyn.LArm = inputs.LArm;
+        // The tip-over line's numbers (Scvx6DofConfig.TipLimit): what the craft stands on, its pitch-yaw inertia and the gravity, live.
+        if (_cfg.TipLimit)
+        {
+            _cfg.TipRadiusM = double.IsFinite(inputs.TipRadiusM) ? inputs.TipRadiusM : 0.0;
+            _cfg.TipHeightM = double.IsFinite(inputs.TipHeightM) ? inputs.TipHeightM : 0.0;
+            _cfg.TipInertiaKgM2 = 0.5 * (_dyn.Ixx + _dyn.Iyy);
+            _cfg.TipGravity = Math.Sqrt(_baseGravity.X * _baseGravity.X + _baseGravity.Y * _baseGravity.Y + _baseGravity.Z * _baseGravity.Z);
+        }
         if (inputs.Izz > 0.0) _dyn.Izz = inputs.Izz;
 
         double3 accelBias = inputs.AccelBias;
@@ -262,13 +337,25 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <summary>
     /// The model's aerodynamic acceleration at state x (model frame), m/s^2 - zero with no aero model. What the bias estimator takes off the measured acceleration before calling the rest unmodelled.
     /// </summary>
-    public double3 ModelAeroAccel(double[] x)
+    public double3 ModelAeroAccel(double[] x) => ModelAeroAccel(x, default);
+
+    /// <summary>
+    /// As ModelAeroAccel, with the fins at <paramref name="finDeg"/> (the deflections flown now): the plan models each fin's force at its deflection (Dynamics6Dof), so the estimate must take it out where the fins are, not at rest. Empty for the body at rest, as before.
+    ///  WHY (2026-11-28 audit). Taken at rest, the Starship's flaps' 50-66 kN through the flip was learnt into the gravity bias and planned a second time by every node: a phantom pull of 0.2-0.6 m/s^2 on the ignition and the first braking.
+    /// </summary>
+    public double3 ModelAeroAccel(double[] x, ReadOnlySpan<double> finDeg)
     {
         Dynamics6Dof.Params dyn = _snapshot.Dyn;
         if ((dyn.Aero == null && dyn.BodyAero == null) || x == null || x.Length < NX || !(x[Dynamics6Dof.IM] > 0.0))
             return default;
-        Dynamics6Dof.AeroForce(x, dyn, out double fx, out double fy, out double fz);
         double m = x[Dynamics6Dof.IM];
+        if (finDeg.Length > 0 && dyn.FinCount > 0)
+        {
+            Span<double> w = stackalloc double[6];
+            if (Dynamics6Dof.AeroWrenchAt(x, dyn, finDeg, w))
+                return new double3(w[0] / m, w[1] / m, w[2] / m);
+        }
+        Dynamics6Dof.AeroForce(x, dyn, out double fx, out double fy, out double fz);
         return new double3(fx / m, fy / m, fz / m);
     }
 
@@ -401,6 +488,27 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// </summary>
     public double HorizonFarSlack { get; set; } = 25.0;
 
+    /// <summary>
+    /// How far ahead, seconds of plan, the defect allowance reaches <see cref="HorizonFarSlack"/> (Scvx6DofSolver.WeightedDefect): 1 up to <see cref="CommitHorizonS"/>, linear between. It was reached at the plan's last interval, however soon that was, which suited the plans it was sized on (flight 20260820-150038, about 18 s long, whose flare was re-solved some hundred times before it was flown). Near touchdown a plan is a second or two long and its last interval is flown within it: on 2026-11-27 the Starship landings' final plans let their last intervals carry up to 25x the gate a quarter of a second ahead. 10 s keeps the long plans' flare allowance and holds a short plan nearly to the full gate.
+    /// </summary>
+    ///  OFF BY DEFAULT (0: the old interval count) until flown: offline it was not tested, the closed-loop checks judging with no tail slack at all.
+    public double HorizonFarS { get; set; } = 0.0;
+
+    /// <summary>
+    /// THE TOLERANCES ARE RATES (Scvx6DofSolver.WeightedDefect): an interval of this length or longer gets the whole per-channel tolerance below, a shorter one its share dt / this. 0.35 s is about the interval they were sized on (flight 20260820-150038, 50 nodes over about 18 s), so they mean what they did then - 1 deg of attitude in 0.35 s is about 2.9 deg/s, 0.01 rad/s is 0.029 rad/s^2, 0.5 m/s is 1.4 m/s^2 - and a long interval is never judged more loosely than before.
+    ///  WHY (2026-11-27). Fixed per interval, the gate let a plan carry its tolerance on every interval however short. The last Starship plans (15 nodes over 1.2 s, then 25 over 0.35 s: 85 ms and 15 ms intervals) turned their attitude 3-40 deg/s faster or slower than their own rates, 5-12 deg over a plan, and the attitude feedback was asked to make up the difference with the one gimbal: 6-10 deg of deflection, a side force, and a topple.
+    /// </summary>
+    ///  OFF BY DEFAULT (0: the whole tolerance per interval). Offline (2026-11-27, --gate-per-s) it refused far more re-solves in the hard lift and coast cases - their plans carry position and mass virtual control the solver cannot remove - and those landings missed further, while the cases that land well were unchanged. Pricing the virtual control per second (Scvx6DofConfig.VirtualControlRefIntervalS) fixes the cause instead; this stays for the gate to be tightened once flights show the plans physical.
+    public double GateReferenceIntervalS { get; set; } = 0.0;
+
+    /// <summary>A plan shorter than this, seconds of burn, is one the craft is about to fly to its end: its warm re-solves get <see cref="LateCycleBudgetMs"/>.</summary>
+    public double LateSigmaS { get; set; } = 2.0;
+
+    /// <summary>
+    /// The wall-clock budget for a warm re-solve of a short plan (<see cref="LateSigmaS"/>), ms. The 25 ms cycle stopped the last Starship plans at 2-4 SCvx iterations, short of converged (IterationLimit on every one in the last 3 s), and what was left unconverged is what the per-second gate now refuses. The re-solve runs on the solve worker, so the sim thread does not wait for it; 60 ms is under the 0.1 s cadence.
+    /// </summary>
+    public double LateCycleBudgetMs { get; set; } = 60.0;
+
     // ------------------------------------------------------------------------ PER-CHANNEL DEFECT TOLERANCES, each in its own SI units.
     //  The state has four physically unrelated groups in it, and one number cannot express a tolerance for all of them. Previously it tried: every channel was divided by its XScale and multiplied by the POSITION scale, so the effective tolerance on a body rate was MaxDefectM / rangeToTarget - 0.026 deg/s at 2 km, twenty times looser at 100 m, and never a quantity anyone chose. These are chosen, they are readable, and they do not move with range.
     //  The near field stays strict while the flare can satisfy the collocation residual.
@@ -531,9 +639,11 @@ public sealed class Ksa6DofGuidance : IDisposable
         get
         {
             int ch = LastDefectChannel;
-            if (!double.IsFinite(LastDefect) || ch < 0 || ch >= NX)
+            double defect = LastDefect;
+            double[] scale = _cfg?.XScale;
+            if (!double.IsFinite(defect) || scale == null || ch < 0 || ch >= Math.Min(NX, scale.Length))
                 return "no step accepted";
-            double raw = LastDefect * _cfg.XScale[ch];
+            double raw = defect * scale[ch];
             string units = Scvx6DofSolver.ChannelGroup(ch) switch
             {
                 "position" => "m", "velocity" => "m/s", "attitude" => "(quat)", "rate" => "rad/s", "mass" => "kg", _ => "",
@@ -551,9 +661,16 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <summary>
     /// The worst defect in ITS OWN units - scaled error times that channel's scale - which is the number that can actually be interpreted. Metres for a position, m/s for a velocity, rad/s for a body rate, dimensionless for a quaternion.
     /// </summary>
-    public double LastDefectRaw => LastDefectChannel >= 0 && LastDefectChannel < _cfg.XScale.Length
-        ? LastDefect * _cfg.XScale[LastDefectChannel]
-        : double.NaN;
+    ///  ONE READ of the channel and the scales: a threaded solve's Finish resets the channel to -1 before it scans its trace, so a check and an index read apart could index -1 (2026-11-27/28: two touchdowns faulted in the air at 54 m from the cycle log, and were finished by the hover fallback).
+    public double LastDefectRaw
+    {
+        get
+        {
+            int ch = LastDefectChannel;
+            double[] scale = _cfg?.XScale;
+            return scale != null && ch >= 0 && ch < scale.Length ? LastDefect * scale[ch] : double.NaN;
+        }
+    }
 
     public string LastDefectUnits => Scvx6DofSolver.ChannelGroup(LastDefectChannel) switch
     {
@@ -869,6 +986,7 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// </summary>
     public bool BeginWarmRestart(double[] x0, double[] xf, double sigmaSeed, double simNow)
     {
+        _cfg.FirstGimbalAnchor = null;
         if (!HasPlan)
             return false;
 
@@ -915,6 +1033,7 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <param name="simNow">Sim time now, for the coast; NaN when there is no coast.</param>
     public void BeginCold(double[] x0, double[] xf, double sigmaSeed, double coastSeed = double.NaN, double simNow = double.NaN)
     {
+        _cfg.FirstGimbalAnchor = null;
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
 
@@ -1166,6 +1285,8 @@ public sealed class Ksa6DofGuidance : IDisposable
         // The PUBLISHED plan, not the solve's working fields: this is called from the sim thread every frame, including while a solve is in flight. Reading _planSigma and _solveTime separately would pair a new burn time with an old anchor and report drift that is an artefact of the read, not of the vehicle.
         Ksa6DofPlan plan = _published;
         if (plan == null) return double.PositiveInfinity;
+        // The plan Command flies: a delay-compensated plan that has landed early starts at its SolveTime.
+        plan = FlyingPlanAt(plan, simNow);
         double t = Math.Max(0.0, simNow - plan.SolveTime);
         (int k, double f) = plan.Locate(t);
         double dt = plan.IntervalDt(k);
@@ -1274,11 +1395,17 @@ public sealed class Ksa6DofGuidance : IDisposable
         // The coast and its lock carry across; a plan rebuilt without a coast (once lit) takes the burn alone.
         EngineLit = prev.EngineLit;
         _lockedIgnition = prev._lockedIgnition;
+        _ignitionCapArmed = prev._ignitionCapArmed;
+        _earliestIgnitionAt = prev._earliestIgnitionAt;
+        _earliestEndAt = prev._earliestEndAt;
         double intoBurn = Math.Max(elapsed - prev._planCoast, 0.0);
         double coast = _cfg.HasCoast ? CoastNow(simNow, prev._planCoast - elapsed) : 0.0;
         if (!FixedTime)
+        {
             KeepSigmaMinUnder(prev._planSigma - intoBurn);
-        double sigma = Math.Max(_cfg.SigmaMin, prev._planSigma - intoBurn);
+            KeepEndNoLater(simNow, coast);
+        }
+        double sigma = Math.Min(Math.Max(_cfg.SigmaMin, prev._planSigma - intoBurn), _cfg.SigmaMax);
         // A rebuild without a coast reads the old plan from its burn on.
         double from = _cfg.HasCoast ? elapsed : Math.Max(elapsed, prev._planCoast);
         ResamplePlan(prev._planX, prev._planU, prev._n, prev._cfg.CoastIntervals, prev._planSigma, prev._planCoast, from,
@@ -1455,12 +1582,18 @@ public sealed class Ksa6DofGuidance : IDisposable
         else
         {
             KeepSigmaMinUnder(burnLeft);
-            sigma = Math.Max(_cfg.SigmaMin, burnLeft);
+            KeepEndNoLater(simNow, coast);
+            sigma = Math.Min(Math.Max(_cfg.SigmaMin, burnLeft), _cfg.SigmaMax);
         }
 
         BuildShiftedSeed(x0, simNow, sigma, out double[] xs, out double[] us, out _, coast, fromWork);
+        FollowTargetHeight(xs);
+        // The first gimbal command carries on from the one being flown (FirstGimbalAnchor), for both attempts below.
+        //  None while node 0 is a coast node - a plan built with a coast keeps its coast intervals after ignition at zero length, and the coast rows pin node 0's gimbal at zero, so an anchor elsewhere would leave no plan (offline, the two-phase landings' re-solves were refused 83 times in 135).
+        _cfg.FirstGimbalAnchor = coast > 0.0 || _cfg.CoastIntervals > 0 ? null : FirstGimbalAnchorAt(simNow);
         // A cycle whose predecessor refused gets the larger budget, so it can take the second and third iterations that let SCvx shrink its way to an accepted step. A healthy cycle never reaches the deadline at all.
-        double budget = _consecutiveFailures > 0 ? RecoveryCycleBudgetMs : CycleBudgetMs;
+        double budget = _consecutiveFailures > 0 ? RecoveryCycleBudgetMs
+                      : sigma < LateSigmaS ? Math.Max(CycleBudgetMs, LateCycleBudgetMs) : CycleBudgetMs;
 
         FellBack = false;
         // Carrying on, in the trust region the last attempt reached; a fresh cycle in the warm one.
@@ -1505,6 +1638,32 @@ public sealed class Ksa6DofGuidance : IDisposable
         return false;
     }
 
+    /// <summary>The time a warm re-solve's first gimbal command may slew over from the one being flown, s: two re-solve cycles (RE-SOLVE EVERY 0.1 s and the solve), so a new plan steps the gimbal little faster than it moves. One cycle (0.15 s) was too tight offline: a lift case whose plans needed to turn the gimbal quickly lost most of its re-solves (17 kept against 37); 0.3 s keeps them all.</summary>
+    internal const double FirstGimbalAnchorS = 0.3;
+
+    /// <summary>
+    /// The anchor for a warm re-solve's first gimbal command (Scvx6DofConfig.FirstGimbalAnchor): WHERE THE GIMBALS ARE - the lateral thrust of the torque last asked for, plan and feedback, plus the gimbals' lag behind it (NoteGimbalLag) - and a band of what the gimbal slews in <see cref="FirstGimbalAnchorS"/> at the plan's thrust. Without a measured lag, the published plan's lateral thrust at <paramref name="simNow"/>. Null when there is no published plan, it is in its coast, or the plan has no slew limit.
+    ///  WHY WHERE THEY ARE (2026-11-27). Anchored to the plan's own command, the anchor never bound in flight: new plans already carried the command on within 1-5 deg. What they did not carry on from was the gimbal, which sat 2-10 deg behind its command, rate-limited, in the last seconds of the Starship landings.
+    /// </summary>
+    private double[] FirstGimbalAnchorAt(double simNow)
+    {
+        Ksa6DofPlan plan = _published;
+        if (plan == null || !(_cfg.GimbalSlewPerS > 0.0) || _cfg.TorqueDemand)
+            return null;
+        double t = Math.Max(0.0, simNow - plan.SolveTime);
+        if (plan.InCoast(t))
+            return null;
+        (int k, double f) = plan.Locate(t);
+        double tdx = Lerp(plan.U, 0, k, f), tdy = Lerp(plan.U, 1, k, f), thrust = Lerp(plan.U, 2, k, f);
+        if (_gimbalAt is { Length: 2 } at)
+        {
+            tdx = at[0];
+            tdy = at[1];
+        }
+        double band = _cfg.GimbalSlewPerS * FirstGimbalAnchorS * _cfg.TanGimbal * Math.Max(thrust, _cfg.Tmin);
+        return double.IsFinite(tdx) && double.IsFinite(tdy) && band > 0.0 ? [tdx, tdy, band] : null;
+    }
+
     /// <summary>Keeps a refused attempt's trajectory as the working one, for the next re-solve to carry on from (Update, Track).</summary>
     private void KeepAttempt(double simNow)
     {
@@ -1528,6 +1687,8 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// </summary>
     public bool Track(double[] x0, double simNow, int maxIterations = 2)
     {
+        // Another guidance flies the craft: nothing of this plan's is being flown to carry on from.
+        _cfg.FirstGimbalAnchor = null;
         if (!HasPlan)
             return false;
         // Fixed time counts a committed burn down; this is free-time only, and the standby never runs fixed time.
@@ -1694,7 +1855,8 @@ public sealed class Ksa6DofGuidance : IDisposable
 
         double[] tol = DefectTolerances(cold);
         LastGatedRatio = _solver.WeightedDefect(flightState, tol, commit, HorizonFarSlack,
-                                                out int gCh, out int gNode, out double gRaw);
+                                                out int gCh, out int gNode, out double gRaw,
+                                                GateReferenceIntervalS, CommitHorizonS, HorizonFarS);
         LastGatedDefectChannel = gCh;
         LastGatedDefectNode = gNode;
         LastGatedRaw = gRaw;
@@ -1723,8 +1885,17 @@ public sealed class Ksa6DofGuidance : IDisposable
         _planCoast = _solver.CoastSigma;
         _solveTime = simNow;
         if (_cfg.HasCoast)
+        {
             _ignitionAt = simNow + _planCoast;
+            // NO LATER IGNITION's anchor: the earliest ignition a published plan has promised since the cap was armed (CoastNow). A lit engine's plan has no coast to promise.
+            if (_ignitionCapArmed && !EngineLit && !(_ignitionAt >= _earliestIgnitionAt))
+                _earliestIgnitionAt = _ignitionAt;
+        }
+        // NO LATER TOUCHDOWN's anchor: the earliest end a published plan has promised since the cap was armed (KeepEndNoLater).
+        if (_ignitionCapArmed && !(simNow + _planCoast + _planSigma >= _earliestEndAt))
+            _earliestEndAt = simNow + _planCoast + _planSigma;
         // LAST, after every array is fully built. The reference assignment is what makes the new plan visible to the sim thread, so nothing may still be half-written when it happens.
+        _publishedBefore = _published;
         _published = new Ksa6DofPlan(_planX, _planU, _planSigma, simNow, _n, _planCoast, _cfg.CoastIntervals);
         Error = "";
         return true;
@@ -1743,6 +1914,61 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <summary>The plan's RCS torque at the last <see cref="Command"/>, N m, model body axes. Zero for a plan without RCS.</summary>
     public double3 RcsTorqueModel { get; private set; }
 
+    /// <summary>
+    /// The state <paramref name="leadS"/> seconds from <paramref name="x"/> at <paramref name="simNow"/>, flying the published plan's controls through the model the last solve used (Dynamics6Dof, RK4 at 10 ms or finer), into <paramref name="xOut"/>: where a re-solve dispatched now should start, when its answer is flown that much later (SixDof's delay compensation). The coast flies no thrust. False without a published plan, or for a lead that is not positive or a state that comes out not finite. Main thread, with the worker idle: it reads the snapshot the worker replaces at a solve's entry.
+    /// </summary>
+    public bool PredictAlongPlan(double[] x, double simNow, double leadS, double[] xOut)
+    {
+        Ksa6DofPlan newest = _published;
+        Dynamics6Dof.Params p = _snapshot?.Dyn;
+        if (newest == null || p == null || x == null || x.Length < NX || xOut == null || xOut.Length < NX || !(leadS > 0.0))
+            return false;
+        Array.Copy(x, xOut, NX);
+        int steps = Math.Max(1, (int)Math.Ceiling(leadS / 0.01));
+        double h = leadS / steps;
+        double[] u = new double[NU];
+        double[] tmp = new double[NX];
+        Span<double> k1 = stackalloc double[NX], k2 = stackalloc double[NX], k3 = stackalloc double[NX], k4 = stackalloc double[NX];
+        for (int s = 0; s < steps; s++)
+        {
+            // The plan flown at each step's time, as Command will choose it (FlyingPlanAt): a plan still waiting for its start is not flown yet.
+            double at = simNow + (s + 0.5) * h;
+            Ksa6DofPlan plan = FlyingPlanAt(newest, at);
+            if (plan.U.Length < plan.Nodes * NU)
+                return false;
+            double t = Math.Max(at - plan.SolveTime, 0.0);
+            (int k, double f) = plan.Locate(t);
+            int k1n = Math.Min(k + 1, plan.Nodes - 1);
+            for (int j = 0; j < NU; j++)
+                u[j] = plan.U[k * NU + j] * (1.0 - f) + plan.U[k1n * NU + j] * f;
+            if (plan.InCoast(t))
+                u[0] = u[1] = u[2] = 0.0;
+            Dynamics6Dof.Eval(xOut, u, p, k1);
+            for (int i = 0; i < NX; i++) tmp[i] = xOut[i] + 0.5 * h * k1[i];
+            Dynamics6Dof.Eval(tmp, u, p, k2);
+            for (int i = 0; i < NX; i++) tmp[i] = xOut[i] + 0.5 * h * k2[i];
+            Dynamics6Dof.Eval(tmp, u, p, k3);
+            for (int i = 0; i < NX; i++) tmp[i] = xOut[i] + h * k3[i];
+            Dynamics6Dof.Eval(tmp, u, p, k4);
+            for (int i = 0; i < NX; i++) xOut[i] += h / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]);
+            int q = Dynamics6Dof.IQ;
+            double norm = Math.Sqrt(xOut[q] * xOut[q] + xOut[q + 1] * xOut[q + 1] + xOut[q + 2] * xOut[q + 2] + xOut[q + 3] * xOut[q + 3]);
+            if (!(norm > 0.0))
+                return false;
+            for (int i = q; i < q + 4; i++) xOut[i] /= norm;
+        }
+        for (int i = 0; i < NX; i++)
+            if (!double.IsFinite(xOut[i]))
+                return false;
+        return true;
+    }
+
+    /// <summary>AFC_X_FIN_LEAD=1: the fins are commanded at the gimbals' lead (before 2026-11-28). They have no lag - a KSAero surface sits where it is told - so led, they flew about 0.11 s ahead of their plan, 2.5 deg on a 24 deg/s slew (audit).</summary>
+    private static readonly bool FinsAtLead = Environment.GetEnvironmentVariable("AFC_X_FIN_LEAD") == "1";
+
+    /// <summary>The force the plan's own RCS control gives in the plan's model at the last Command, N, model body axes (ForcePerNm times the plan's RCS torque, before the attitude feedback's): the RCS force the plan models, which the acceleration estimate must not learn again.</summary>
+    public double3 PlanRcsForceModel { get; private set; }
+
     /// <summary>The fins' deflections the plan flies now, degrees, one per fin in the plan's order (Ksa6DofSetup.FinsFor), led by the gimbals' lead: a fin travels at its rate, as a nozzle does. Empty for a plan without fins.</summary>
     public double[] FinDeflectionDeg { get; private set; } = [];
 
@@ -1755,6 +1981,45 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <summary>What the attitude feedback added on the last command - default when there was none.</summary>
     public AttitudeFeedback6Dof.Result AttitudeCorrection { get; private set; }
 
+    /// <summary>The gimbal torque the last <see cref="Command"/> asked for, plan and feedback, model body axes; null in the coast or before the first.</summary>
+    private double3? _lastGimbalTorque;
+
+    /// <summary>
+    /// THE END HEIGHT THE FLIGHT WANTS NOW, m: the centre of mass's height over the target at first contact (VehicleAutopilotState.SixDofTargetComAltM), set by the flight each step, NaN for none. Each warm re-solve ends on it (FollowTargetHeight).
+    ///  WHY (2026-11-27). The end height was set when a plan was built and kept by every re-solve after, while the Starship's nose header tank drained and its centre of mass came down 1.1-1.4 m nearer the legs over the burn: the last plans ended 0.4-1.1 m above the ground, and the landings reached their plans' ends with the legs that far up ("TOUCHDOWN AT PLAN END WITHOUT CONTACT, 0.3-1.0 m OVER IT", 15 times that day).
+    /// </summary>
+    public double TargetAltM
+    {
+        get => BitConverter.Int64BitsToDouble(Interlocked.Read(ref _targetAltBits));
+        set => Interlocked.Exchange(ref _targetAltBits, BitConverter.DoubleToInt64Bits(value));
+    }
+    private long _targetAltBits = BitConverter.DoubleToInt64Bits(double.NaN);
+
+    /// <summary>Moves the plan's end to <see cref="TargetAltM"/> when it has moved more than a centimetre: the solver's terminal height, and the seed's nodes by their share of the plan, as SeedFrom does at a node step, so the seed still ends where the solver pins it.</summary>
+    private void FollowTargetHeight(double[] xs)
+    {
+        double target = TargetAltM;
+        if (!double.IsFinite(target) || _xf.Length <= 2 || Math.Abs(target - _xf[2]) <= 0.01)
+            return;
+        double shift = target - _xf[2];
+        for (int k = 1; k < _n; k++)
+            xs[k * NX + 2] += shift * k / (_n - 1);
+        _xf[2] = target;
+        _solver.SetTargetHeight(target);
+    }
+
+    /// <summary>Where the gimbals are, as the plan's lateral thrust (tdx, tdy), N, or null: noted by the flight each step (NoteGimbalLag) and read by a re-solve, which may run on the worker, so it is published whole.</summary>
+    private volatile double[] _gimbalAt;
+
+    /// <summary>
+    /// THE GIMBALS' LAG, N m, model body axes: the torque the gimbals give where they are, less what they were told by the last <see cref="Command"/> (KsaGimbalControl.Slot.LagTorqueNm), or null when not measured. The flight notes it each step before a re-solve, on the sim thread, while the last command is still the one the gimbals were given; with it, the lateral thrust the gimbals give now, tdy = tau_x / L, tdx = -tau_y / L, is what a re-solve's first gimbal command starts from (FirstGimbalAnchorAt).
+    /// </summary>
+    public void NoteGimbalLag(double3? lagModel)
+    {
+        double3 at = _lastGimbalTorque is { } told && lagModel is { } lag ? told + lag : new double3(double.NaN, double.NaN, double.NaN);
+        _gimbalAt = _dyn.LArm > 0.0 && double.IsFinite(at.X) && double.IsFinite(at.Y) ? [-at.Y / _dyn.LArm, at.X / _dyn.LArm] : null;
+    }
+
     /// <summary>The roll the last command's lateral gimbal torque brings with it, model body z, N m (Dynamics6Dof.Params.GimbalRollPerTdx/Tdy): already in the command's roll, and the part the allocator solves with pitch and yaw (KsaTvcAllocator.Solve's coupled). Zero for a balanced cluster.</summary>
     public double CoupledRollNm { get; private set; }
 
@@ -1765,8 +2030,11 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <param name="x">The measured state, model frame, for the tracker; null flies the plan open loop.</param>
     /// <param name="tracker">The feedback to fly the plan through, or null.</param>
     /// <param name="attitude">The feedback that holds the plan's attitude from the torque margin, or null.</param>
+    /// <param name="engineOff">The engine is not burning though the plan says it is (flying to contact after a cut): the gimbals get no torque and the feedback puts all of its correction on the RCS, as in the coast.</param>
+    /// <param name="flownThrustN">The axial thrust actually flown, N, when it is not the plan's (flying to contact on a post-plan law's throttle); NaN for the plan's. The plan's lateral gimbal torque - its trim against the engines' own moment among it - and the gimbals' room and cone centre scale with it: the engines' moment goes with the thrust they give, not the plan's.</param>
     public bool Command(double simNow, out double3 torqueModel, out double thrustN,
-                        double[] x = null, Tracker6Dof tracker = null, AttitudeFeedback6Dof attitude = null)
+                        double[] x = null, Tracker6Dof tracker = null, AttitudeFeedback6Dof attitude = null, bool engineOff = false,
+                        double flownThrustN = double.NaN)
     {
         torqueModel = default;
         thrustN = 0.0;
@@ -1778,6 +2046,8 @@ public sealed class Ksa6DofGuidance : IDisposable
         Ksa6DofPlan plan = _published;
         if (plan == null)
             return false;
+        // A DELAY-COMPENSATED PLAN THAT HAS LANDED EARLY (SixDof's AFC_X_SOLVE_LEAD): it starts at its SolveTime, so until then the plan before it is flown, where the prediction it was solved from assumed the craft would be.
+        plan = FlyingPlanAt(plan, simNow);
 
         double t = Math.Max(0.0, simNow - plan.SolveTime);
         PlanElapsed = t;
@@ -1810,20 +2080,35 @@ public sealed class Ksa6DofGuidance : IDisposable
         double leadTdx = InCoast ? 0.0 : Lerp(plan.U, 0, leadNode, leadFraction);
         double leadTdy = InCoast ? 0.0 : Lerp(plan.U, 1, leadNode, leadFraction);
         torqueModel = new double3(_dyn.LArm * leadTdy, -_dyn.LArm * leadTdx, tauRoll);
+        bool noThrust = InCoast || engineOff;
+        if (engineOff)
+            torqueModel = default;
+        // THE THRUST FLOWN, past the plan: its trim at the plan's end thrust, flown at 40 % throttle, held a Starship's gimbals 400 kN m off and pinned its RCS at the limit against them (2026-11-28).
+        double thrustShare = !noThrust && double.IsFinite(flownThrustN) && flownThrustN >= 0.0 && thrust > 0.0 ? flownThrustN / thrust : 1.0;
+        if (thrustShare != 1.0)
+            torqueModel = new double3(torqueModel.X * thrustShare, torqueModel.Y * thrustShare, torqueModel.Z);
 
         // The fins, led as the gimbals are: in the coast as in the burn, a fin works in the air whether the engine burns or not.
         int fins = _dyn.FinCount;
         if (FinDeflectionDeg.Length != fins)
             FinDeflectionDeg = new double[fins];
         for (int i = 0; i < fins; i++)
-            FinDeflectionDeg[i] = Lerp(plan.U, Dynamics6Dof.IFIN + i, leadNode, leadFraction);
+            FinDeflectionDeg[i] = FinsAtLead ? Lerp(plan.U, Dynamics6Dof.IFIN + i, leadNode, leadFraction) : Lerp(plan.U, Dynamics6Dof.IFIN + i, k, f);
 
         // The RCS torque at the current step: thrusters answer within a pulse, so there is no lag to lead.
         if (_dyn.Rcs != null)
         {
             int r = Dynamics6Dof.IRCS;
             RcsTorqueModel = new double3(Lerp(plan.U, r, k, f), Lerp(plan.U, r + 1, k, f), Lerp(plan.U, r + 2, k, f));
+            // The force the plan's own RCS control gives in its model (Dynamics6Dof's ForcePerNm), before the feedback adds its part: what the acceleration estimate takes out (SixDof.RcsForceModel).
+            double3 rcsTau = RcsTorqueModel;
+            double[] fpn = _dyn.Rcs.ForcePerNm;
+            PlanRcsForceModel = new double3(fpn[0] * rcsTau.X + fpn[3] * rcsTau.Y + fpn[6] * rcsTau.Z,
+                                            fpn[1] * rcsTau.X + fpn[4] * rcsTau.Y + fpn[7] * rcsTau.Z,
+                                            fpn[2] * rcsTau.X + fpn[5] * rcsTau.Y + fpn[8] * rcsTau.Z);
         }
+        else
+            PlanRcsForceModel = default;
 
         // AXIAL THRUST IN NEWTONS, not a throttle fraction.
         //  This previously return thrust / _cfg.Tmax, and that was the systematic error behind the descend-until-it-loops behaviour. Tmax is fixed when the plan is built, so the moment the vehicle's real capability differs from it - a different ambient pressure, an engine out, propellant starvation - every commanded thrust is wrong by exactly that ratio. It is invisible to the MPC too: re-solving corrects the STATE, but the error is in the actuator mapping, so each new plan is executed just as wrongly as the last.
@@ -1841,9 +2126,9 @@ public sealed class Ksa6DofGuidance : IDisposable
         if (attitude != null && x != null && x.Length >= NX && plan.X.Length >= plan.Nodes * NX)
         {
             double share = _cfg.PlanTorqueShare > 0.0 ? _cfg.PlanTorqueShare : 1.0;
-            double axial = Math.Max(thrust, 0.0);
-            double lateralNm = InCoast ? 0.0 : _dyn.LArm * axial * _cfg.TanGimbal / share;
-            double rollNm = InCoast && _cfg.RollTorqueFollowsThrust ? 0.0
+            double axial = Math.Max(thrust * thrustShare, 0.0);
+            double lateralNm = noThrust ? 0.0 : _dyn.LArm * axial * _cfg.TanGimbal / share;
+            double rollNm = noThrust && _cfg.RollTorqueFollowsThrust ? 0.0
                 : _cfg.TauRollMax / share * (_cfg.RollTorqueFollowsThrust && _cfg.Tmax > 0.0 ? axial / _cfg.Tmax : 1.0);
             double[] rcsPos = null, rcsNeg = null;
             if (_dyn.Rcs != null)
@@ -1859,20 +2144,23 @@ public sealed class Ksa6DofGuidance : IDisposable
                 }
             }
             // The gimbals' cone is centred where the plan's is (Scvx6DofConfig.GimbalTrimX/Y): the torque of the deflection that holds the engines' own moment, (L y T, -L x T).
-            var gimbalCentre = InCoast ? default
+            var gimbalCentre = noThrust ? default
                 : new double3(_dyn.LArm * _cfg.GimbalTrimY * axial, -_dyn.LArm * _cfg.GimbalTrimX * axial, 0.0);
             double3 inertia = _snapshot.Inertia;
             AttitudeFeedback6Dof.Result fb = attitude.Correct(plan, k, f, x, inertia.X, inertia.Y, inertia.Z,
                                                               torqueModel, RcsTorqueModel, lateralNm, rollNm, rcsPos, rcsNeg, simNow, gimbalCentre);
-            torqueModel += fb.Gimbal;
+            if (!noThrust)
+                torqueModel += fb.Gimbal;
             if (_dyn.Rcs != null)
                 RcsTorqueModel += fb.Rcs;
             AttitudeCorrection = fb;
         }
 
         // THE ROLL THAT COMES WITH THE LATERAL TORQUE, plan and feedback together, as the dynamics have it: the deflection makes it whether asked or not, so it is asked for, and the allocator solves it with pitch and yaw rather than holding it at zero with the verniers (KsaTvcAllocator.Solve's coupled).
-        CoupledRollNm = InCoast ? 0.0 : RollWith(torqueModel.X, torqueModel.Y);
+        CoupledRollNm = noThrust ? 0.0 : RollWith(torqueModel.X, torqueModel.Y);
         torqueModel = new double3(torqueModel.X, torqueModel.Y, torqueModel.Z + CoupledRollNm);
+        // What the gimbals are told, plan and feedback, for the next re-solve's anchor (FirstGimbalAnchorAt).
+        _lastGimbalTorque = noThrust ? null : torqueModel;
 
         // THE TRACKER, when there is one: the axial thrust corrected for where the vehicle is against the plan. The torques, and the lateral thrust they come from, are the plan's. Not in the coast, where there is no thrust to correct.
         if (!InCoast && tracker != null && x != null && x.Length >= NX && plan.X.Length >= plan.Nodes * NX)

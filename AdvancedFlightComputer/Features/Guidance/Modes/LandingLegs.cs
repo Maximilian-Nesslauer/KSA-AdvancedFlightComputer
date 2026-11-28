@@ -130,7 +130,7 @@ public static partial class GuidanceWindow
         return LegsRules.FallSeconds(legsHeightM, sink, parent.Mu / (radius * radius));
     }
 
-    /// <summary>The height of the legs over the terrain under the craft, the height of the head and of TerminalHeight, with the vehicle height of <paramref name="s"/>.</summary>
+    /// <summary>The height of the lowest point over the terrain under the craft, the height of the head and of TerminalHeight, with the vehicle height of <paramref name="s"/>: AT THE ATTITUDE THE CRAFT IS IN (#339). The vehicle height is measured upright; with the measured colliders (VehicleAutopilotState.FootX...) the lowest point at the current attitude is that much deeper (ContactDepth.ExtraDepthM), so a tilted skirt's low edge is not taken for the axis's height.</summary>
     internal static double LegsHeightM(Vehicle vehicle, VehicleAutopilotState s)
     {
         Orbit orbit = vehicle.Orbit;
@@ -140,6 +140,21 @@ public static partial class GuidanceWindow
         double3 r = orbit.StateVectors.PositionCci;
         double3 dirCcf = double3.Normalize(r).Transform(parent.GetCci2Ccf());
         double terrain = LandingSiteRegistry.TryFixedHeight(parent, dirCcf, out double deckM) ? deckM : KsaSurfaceHeight.At(parent, dirCcf);
-        return r.Length() - (parent.MeanRadius + terrain) - s.VehicleHeightM;
+        return r.Length() - (parent.MeanRadius + terrain) - s.VehicleHeightM - TiltExtraDepthM(vehicle, s, double3.Normalize(r));
+    }
+
+    /// <summary>How much deeper the craft's lowest point sits at its attitude than upright, m (ContactDepth.ExtraDepthM), with <paramref name="upCci"/> the local up; 0 with no measured colliders.</summary>
+    internal static double TiltExtraDepthM(Vehicle vehicle, VehicleAutopilotState s, double3 upCci)
+    {
+        if (s.FootDepthM.Length == 0)
+            return 0.0;
+        // The up direction in the model axes the colliders were measured in: KSA body axes from BodyAxes, into CCI.
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        doubleQuat bodyToCci = KsaFrameBridge.BodyToCci(vehicle);
+        double ux = double3.Dot(mx.Transform(bodyToCci), upCci);
+        double uy = double3.Dot(my.Transform(bodyToCci), upCci);
+        double uz = double3.Dot(mz.Transform(bodyToCci), upCci);
+        double extra = ContactDepth.ExtraDepthM(s.FootX, s.FootY, s.FootHalfX, s.FootHalfY, s.FootDepthM, ux, uy, uz);
+        return double.IsFinite(extra) ? extra : 0.0;
     }
 }

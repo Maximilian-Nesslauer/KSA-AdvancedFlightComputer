@@ -442,6 +442,7 @@ internal static class PageText
     public const string TouchdownLimitsTip = "Limits of the TOUCHDOWN plan. A change applies at the next solve.";
 
     public const string TouchdownTrackingTip = "Tracking of the TOUCHDOWN plan. A change applies at once.";
+    public const string TouchdownCutTip = "The cut supervisor, beside the TOUCHDOWN plan: it cuts the engine when the craft stops coming down just above the ground. A change applies at once.";
 
     public const string TouchdownSolverTip = "Solver settings of TOUCHDOWN. Change only when a solve takes too long or fails.";
 

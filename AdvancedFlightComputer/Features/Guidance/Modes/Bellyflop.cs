@@ -311,7 +311,7 @@ public static partial class GuidanceWindow
     /// </summary>
     private const double BellyflopHandoverPlanAgeS = 2.5;
 
-    /// <summary>The flip's share of touchdown's burn-time seed, s: 90 deg at about 15 deg/s.</summary>
+    /// <summary>The flip's share of touchdown's burn-time seed, s: 90 deg at the gimbal's few deg/s^2 at the landing burn's throttle, rest to rest (a Starship's 8 deg/s^2 takes 6.7 s). Only a seed; the plan chooses its own.</summary>
     private const double BellyflopFlipSeedS = 6.0;
 
     /// <summary>
@@ -443,7 +443,7 @@ public static partial class GuidanceWindow
         }
         _s.SixDofCoastSeedS = coast;
         StepSixDofStandby(vehicle, parent, siteCci, x14, now, burn);
-        // DUE BEFORE TOUCHDOWN'S PLAN TURNS AWAY from the attitude bellyflop flies (SixDofTurnAwayDue: 1 s before it is 5 deg off), or at the latest THREE-DOF TAKEOVER BEFORE IGNITION before touchdown's ignition or THREE-DOF TAKEOVER BEFORE IMPACT before bellyflop's ground. With the craft's whole-sphere aero, touchdown's plans turn the craft for the flip early, on the air and the flaps; held to the ignition rule alone, its re-solves from the craft bellyflop held belly first drifted off and were refused from 750 m, and it never took the craft (harness, Starship, 2026-11-24). Before that, handed the craft at its first plan with no air moment in its model, it lost the belly-first attitude in the coast (harness, 2026-11-24).
+        // DUE BEFORE TOUCHDOWN'S PLAN TURNS AWAY from the attitude bellyflop flies (SixDofTurnAwayDue: 1 s before it is 15 deg off), or at the latest THREE-DOF TAKEOVER BEFORE IGNITION before touchdown's ignition or THREE-DOF TAKEOVER BEFORE IMPACT before bellyflop's ground. With the craft's whole-sphere aero, touchdown's plans turn the craft for the flip early, on the air and the flaps; held to the ignition rule alone, its re-solves from the craft bellyflop held belly first drifted off and were refused from 750 m, and it never took the craft (harness, Starship, 2026-11-24). Before that, handed the craft at its first plan with no air moment in its model, it lost the belly-first attitude in the coast (harness, 2026-11-24).
         if (bf.TouchdownHandoff == null && SixDofStandbyReady(now, BellyflopHandoverPlanAgeS) && _s.Guidance?.Published is { } td)
         {
             double ignition = td.HasCoast ? td.IgnitionTime : now;
