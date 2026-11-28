@@ -956,6 +956,9 @@ public sealed class VehicleAutopilotState
     /// <summary>The cycle log has faulted once this touchdown and gone to the fault log (SixDof.LogCycle); later faults drop their rows quietly.</summary>
     public bool SixDofLogFaulted;
 
+    /// <summary>The torque the plan-end attitude hold asked for this step, model body axes, N m; default under the stock hold (SixDof.HoldPlanEndAttitude). For the contact cycle row.</summary>
+    public double3 SixDofContactHoldTorque;
+
     /// <summary>How many times the engine has been relit while flying to contact after the plan (GuidanceWindow.LimitContactRelights), and whether it was lit on the last step.</summary>
     internal int SixDofContactRelights;
     internal bool SixDofContactEngineLit;

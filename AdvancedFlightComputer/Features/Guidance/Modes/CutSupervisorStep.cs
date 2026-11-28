@@ -116,7 +116,7 @@ public static partial class GuidanceWindow
         return Math.Acos(Math.Clamp(double3.Dot(axis, up), -1.0, 1.0)) * 180.0 / Math.PI;
     }
 
-    /// <summary>A cycle row for a craft flying to contact after its plan: the state, the throttle flown and no planned torque. Binds _s to <paramref name="s"/>, as the step it follows did.</summary>
+    /// <summary>A cycle row for a craft flying to contact after its plan: the state, the throttle flown and the torque the plan-end attitude hold asked for (none under the stock hold). Binds _s to <paramref name="s"/>, as the step it follows did.</summary>
     private static void LogContactCycle(Vehicle vehicle, VehicleAutopilotState s, IParentBody parent)
     {
         _s = s;
@@ -128,6 +128,6 @@ public static partial class GuidanceWindow
         double throttle = manual.EngineOn ? manual.EngineThrottle : 0.0;
         double capability = KsaEnginePerf.ThrustAtThrottle(vehicle, 1.0, pressure);
         double thrustN = throttle > 0.0 ? KsaEnginePerf.ThrustAtThrottle(vehicle, throttle, pressure) : 0.0;
-        LogCycle(vehicle, parent, siteCci, x, SimNow(), thrustN, capability, throttle, default, pressure);
+        LogCycle(vehicle, parent, siteCci, x, SimNow(), thrustN, capability, throttle, s.SixDofContactHoldTorque, pressure);
     }
 }

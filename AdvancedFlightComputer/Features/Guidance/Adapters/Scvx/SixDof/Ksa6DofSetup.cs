@@ -593,17 +593,20 @@ public static class Ksa6DofSetup
         //  The weight is the one at the end of the burn, where hovering matters: no lighter than dry, and no heavier than now less the burn's seed time at the floor's flow.
         //  THE WEIGHT THE PLAN FLIES (2026-11-28 audit): the site's gravity less the acceleration bias it is planned with (accelBiasUpMs2, up, held to +-2 so a glitch cannot collapse the floor), at the end mass the last plan reached (endMassHint) where there is one. Drawn on raw gravity and the heaviest end mass, the booster's floor sat at 1.09 of the weight its plan flew - 0.72 m/s^2 of forced climb - and its last plans closed 0.1 m of descent with virtual control, ending above the ground. AFC_X_FLOOR_RAW=1 draws it as before.
         double siteGravity = parent.Mu / siteCci.LengthSquared();
+        //  Whether the engines can throttle under the weight at all is still judged on raw gravity and the heaviest end mass (LandingPlanFloorThrottle's hoverWeightN): only the line moves.
         double endMass = Math.Max(vehicle.TotalMass - vehicle.PropellantMass, vehicle.TotalMass - Math.Max(sigmaSeed, 0.0) * Math.Max(floorFlow, 0.0));
-        double hoverGravity = siteGravity;
+        double rawWeightN = endMass * siteGravity;
+        double hoverWeightN = double.NaN;
         if (!FloorRaw)
         {
-            if (double.IsFinite(endMassHint) && endMassHint > 0.0)
-                endMass = Math.Clamp(endMassHint, vehicle.TotalMass - vehicle.PropellantMass, vehicle.TotalMass);
-            hoverGravity = Math.Max(siteGravity - Math.Clamp(accelBiasUpMs2, -2.0, 2.0), 0.5 * siteGravity);
+            double planEndMass = double.IsFinite(endMassHint) && endMassHint > 0.0
+                ? Math.Clamp(endMassHint, vehicle.TotalMass - vehicle.PropellantMass, vehicle.TotalMass)
+                : endMass;
+            hoverWeightN = planEndMass * Math.Max(siteGravity - Math.Clamp(accelBiasUpMs2, -2.0, 2.0), 0.5 * siteGravity);
         }
         double planFloorThrust = floorMargin > 0.0
             ? KsaEnginePerf.ThrustAtThrottle(vehicle,
-                KsaEnginePerf.LandingPlanFloorThrottle(vehicle, throttleFloor, floorMargin, LastAmbientPressurePa, endMass * hoverGravity),
+                KsaEnginePerf.LandingPlanFloorThrottle(vehicle, throttleFloor, floorMargin, LastAmbientPressurePa, rawWeightN, hoverWeightN),
                 LastAmbientPressurePa)
             : floorThrust;
         double realFloorFraction = floorThrust > 0.0 && floorThrust < thrust ? floorThrust / thrust : throttleFloor;

@@ -1376,6 +1376,7 @@ public static partial class GuidanceWindow
     {
         if (!StockHoldToContact && HoldPlanEndAttitude(vehicle, parent))
             return;
+        _s.SixDofContactHoldTorque = default;
         // The plan has ended. Let stock TVC and RCS damp the turn until first contact.
         KsaGimbalControl.Disengage(vehicle);
         KsaRcsTorqueControl.Release(vehicle);
@@ -1406,6 +1407,9 @@ public static partial class GuidanceWindow
         double now = SimNow();
         ref ManualControlInputs manual = ref ManualInputs(vehicle);
         bool lit = manual.EngineOn && manual.EngineThrottle > 0f;
+        // NOTHING TO HOLD WITH: the engine off and no RCS in the plan leaves the gimbals and the plan's RCS nothing to give, so the stock hold keeps the stock RCS (review of 94415f8).
+        if (!lit && !g.HasRcs)
+            return false;
         if (!g.Command(now, out double3 torqueModel, out _, x, null, attitude, engineOff: !lit))
             return false;
         HoldManualAttitude(vehicle);
@@ -1414,8 +1418,8 @@ public static partial class GuidanceWindow
         KsaGimbalControl.SetLsq(vehicle, torqueKsa, g.CoupledRollNm * mz);
         FlyPlanRcs(vehicle, mx, my, mz);
         ReleaseTouchdownFins(vehicle);
-        double ambientPa = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
-        LogCycle(vehicle, parent, siteCci, x, now, 0.0, KsaEnginePerf.ActiveThrustCapability(vehicle, ambientPa), _s.LastThrottle, torqueModel, ambientPa);
+        // The cut supervisor's contact row logs it (CutSupervisorStep.LogContactCycle), one row a step.
+        _s.SixDofContactHoldTorque = torqueModel;
         return true;
     }
 
