@@ -128,7 +128,7 @@ One cap on the whole vector starved the pointing: a booster 73 deg off in roll a
 The integral learns the part of the air's moment that the feed-forward misses (17 % on one flight), so the error settles instead of standing at a degree.
 
 - The pointing error is integrated only while $|\boldsymbol{\theta}_\text{point}| < \theta_\text{int}$, and the roll error only while $|\boldsymbol{\theta}_\text{roll}| < \theta_\text{int}$ (`IntegralWithinDeg`, 3 deg).
-- **Conditional anti-windup:** Integration runs only on axes where the actuators are not saturated ($|\tau_{\text{achieved},a} - \tau_{\text{demand},a}| < \varepsilon$).
+- **Conditional anti-windup:** Per model axis, integration stops while the last step's shortfall on that axis exceeds 15 % of its demand (at least $10^{-3}$ N m, `SaturatedShare`, `MinSaturationTorqueNm`) and has the sign of the error, and resumes, unwinding, once the error reverses (`AttitudeControlMath.StepIntegralAxis`). All modes.
 - The integral's length is capped at 8 deg s (`IntegralMaxDegS`).
 - Its gain is $k_i\,\omega_n^2$ with $k_i$ = `IntegralPerS`, 0.1 /s.
 
@@ -147,7 +147,8 @@ $$
 - The denominator is KSA's exact closed-form 2-term moment limiter (`KsaAeroSweep.TryComputeMomentLimiterClosedForm`, zero filter lag), matching the live integrator as propellant mass changes.
 
 With $\hat{\mathbf u}$ the craft's velocity through the air in **KSA body axes** ($+x$ along nose/thrust, $-x$ engine first), engine-first flight reads the body tables at $\alpha = \operatorname{atan2}(u_z, -u_x)$ and $\beta = \operatorname{atan2}(u_y, -u_x)$ up to `KsaAeroSweep.BodyAngleMaxDeg` (20 deg). When the sweep provides nose-first tables (`NoseBodyAero` and `NoseBodyMoment`), nose-first flight ($u_x > 0$) reads them at $\alpha = \operatorname{atan2}(u_z, u_x)$ and $\beta = \operatorname{atan2}(u_y, u_x)$ up to `KsaAeroSweep.NoseAngleMaxDeg` (20 deg).
-There is no feed-forward below 50 Pa, below 1 m/s, nose first without nose-first tables, or outside $|\alpha|, |\beta| \le 20^\circ$, the edge of the tables.
+A craft whose sweep has them (a belly-flopper's, since #304) has more tables, and `KsaAeroSweep.TryPickTables` takes the first that covers the airflow, in this order: belly first (inside its angle-of-attack and sideslip range), nose first (20 deg), engine first (20 deg), the fine flip band (`TableSet.Band`), then the whole sphere. The fin allocator reads the same pick.
+There is no feed-forward below 50 Pa, below 1 m/s, or where no table covers the airflow: for a plain sweep, nose first without nose-first tables or outside $|\alpha|, |\beta| \le 20^\circ$.
 The report's `AirKnown` says which.
 
 The feed-forward cancels the air's moment before any error builds.
@@ -177,7 +178,7 @@ It is off because each return of the feedback kicked: in the harness a 0.5 deg d
 | `RateDeadbandDegS` | 0.5 | the rate side of the deadband |
 | `IntegralPerS` | 0.1 | $k_i$ |
 | `CaptureRateDegS` | 5.0 | $\omega_\text{max}$ |
-| `RateFilterS` | 0.2 | $T_f$ |
+| `RateFilterS` | 0 (unfiltered; KSA's body rates are noiseless) | $T_f$ |
 | `IntegralWithinDeg` | 3.0 | $\theta_\text{int}$ |
 | `IntegralMaxDegS` | 8.0 | the integral's cap, deg s |
 | `UseSurfaces` | `true` | allow control surfaces (fins) in the joint allocation |
@@ -186,7 +187,7 @@ It is off because each return of the feedback kicked: in the harness a 0.5 deg d
 | `RollCaptureRateDegS` | `NaN` | separate roll capture cap $\omega_{\text{roll,max}}$ (ascent uses `AscentRollRateDegS = 30`) |
 | `RollBandwidthRadS` | `NaN` | separate roll bandwidth (ascent uses `AscentRollBandwidthRadS = 1.0`) |
 
-Ascent overrides the defaults with `AscentAttitudeBandwidthRadS = 2.0`, `AscentAttitudeDamping = 1.0`, `AscentRateFilterS = 0.05`, `AscentRollRateDegS = 30.0`, `AscentRollBandwidthRadS = 1.0`, `UseGimbals = true`, and `UseSurfaces = AscentAeroControl` (`false` by default).
+Ascent overrides the defaults with `AscentAttitudeBandwidthRadS = 2.0`, `AscentAttitudeDamping = 1.0`, `AscentRateFilterS = 0`, `AscentRollRateDegS = 30.0`, `AscentRollBandwidthRadS = 1.0`, `UseGimbals = true`, and `UseSurfaces = AscentAeroControl` (`false` by default).
 
 <!-- viz: attitude-controller 620 -->
 *Start the craft 73 deg off in roll and 5 deg off in pointing, switch the split capture cap on and off, and change the feed-forward's error to watch the integral take up the rest.*
@@ -195,7 +196,7 @@ Ascent overrides the defaults with `AscentAttitudeBandwidthRadS = 2.0`, `AscentA
 
 - A large error closes at a steady 5 deg/s, pointing and roll at the same time, rather than with a burst of RCS.
 - On a glide the craft holds within a fraction of a degree after a few seconds, once the integral has learned what the tables miss.
-- When the feed-forward has no table (too little air, or more than 20 deg off engine first), the craft holds on feedback alone and sits with a small standing error until the integral catches up.
+- When the feed-forward has no table (too little air, or, without belly-first or whole-sphere tables, more than 20 deg off engine first), the craft holds on feedback alone and sits with a small standing error until the integral catches up.
 
 ## The common torque-allocation problem
 
@@ -275,7 +276,7 @@ They use a regularised minimum-norm solve with a saturation cascade, which has a
 ### How families are combined
 
 - **Fins and RCS share one programme.** The attitude controller gives the fins' programme the RCS thrusters as extra **backup columns**: each thruster's full-duty torque, bounded 0...1, priced by its propellant. A degree of fin costs about a thousandth of a newton metre of shortfall, the best thruster 0.02 per newton metre. So the fins take every axis they can, the RCS takes what they cannot, and only then does any demand go unmet. Roll included: a fixed "fins first, roll last" order had left roll to the RCS where the fins could have taken it.
-- **The RCS is then solved again on its own** for what the fins will really give short of the demand, $\boldsymbol\tau - \boldsymbol\tau_\text{fins}$. The joint programme's duties are not flown; they only shape what the fins take.
+- **The joint programme's thruster duties are flown** (`KsaRcsTorqueControl.CommandDuties`) when it solved and the phase-plane RCS is off. Otherwise the RCS is solved again on its own for what the fins will really give short of the demand, $\boldsymbol\tau - \boldsymbol\tau_\text{fins}$.
 - **Gimbals take torque first when `UseGimbals` is set.** During ascent (`AscentOwnAttitude`), `AttitudeController` commands the gimbals first and subtracts the **1-step rate-reachable gimbal torque** ($\lVert\mathbf u_{\text{achieved}} - \mathbf u_{\text{prev}}\rVert \le \dot u_{\max}\Delta t$) rather than steady-state `PredictLsq` when forming the residual torque for downstream fins (if `AscentAeroControl` is on) and RCS, consuming `AeroTorqueAllocator`'s joint Fin+RCS allocation without duplicate RCS allocation. Glides with the engine off leave `UseGimbals = false`. Touchdown guidance commands gimbals and RCS each with the plan's own torque, and its attitude feedback ([`AttitudeFeedback6Dof`](#where-the-controller-is-used)) shares its correction between them in proportion to the room each has left.
 
 ### Characterise: reach per axis each way

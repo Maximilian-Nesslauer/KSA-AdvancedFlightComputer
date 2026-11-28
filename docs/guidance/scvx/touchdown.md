@@ -547,9 +547,10 @@ There is no planned hand-off to a hover controller: the plan itself ends at firs
     \text{cut} \iff \big(\text{minTwr} > \texttt{SixDofHoverMaxMinTwr} \land v_z \ge 0\big) \;\lor\; \big(\text{noLivePlan} \land v_z > \texttt{SixDofClimbCutMs}\big),
     $$
 
-    with `SixDofHoverMaxMinTwr` in $[0.90, 0.95]$ and `noLivePlan` true when the last published plan is absent or expired. Hoverable landers flying an active plan therefore absorb brief upward gusts via throttle modulation instead of cutting and relighting.
+    with `SixDofHoverMaxMinTwr` = 0.9, `SixDofClimbCutMs` = 0.1 m/s, and `noLivePlan` true when the last published plan is absent or expired. Hoverable landers flying an active plan therefore absorb brief upward gusts via throttle modulation instead of cutting and relighting.
 - **Plan end without contact.** Within 1 m of the plan's end height with no contact, a craft that can hover sinks to contact on its engine. One that cannot drops with the engine off when the drop ends below 3 m/s, and otherwise flies the no-plan law. One relight is allowed.
-- **Unpowered-impact emergency backstop.** Whenever 3-DOF or 6-DOF drops its active plan and altitude reaches $h \le h_{\text{stop,margin}}$, an emergency `TerminalBraking` / G-FOLD suicide-burn backstop engages so propellant-bearing craft never impact unpowered. Below `SixDofLostPlanGateM` (50-120 m), a hoverable craft hands over to terminal hover while higher-altitude plan loss is caught by G-FOLD / `TerminalBraking`.
+- **Lost plan.** Above `SixDofLostPlanGateM` (100 m of legs height) touchdown guidance with no live plan flies the no-plan law along a stopping curve while it re-solves. Below it a craft that can hover (min TWR at most 0.9) hands over to terminal hover; a burn taken with no plan yet flies the no-plan law.
+- **Entry guidance's emergency brake.** Before touchdown guidance has the craft, the 3-DOF glide with no live plan, engine propellant and more than 5 m/s of sink lights at once when its legs' height falls to $1.35\,v^2/(2a_{\text{net}}) + 0.5\ \text{s}\cdot v$, $a_{\text{net}} = T_{\max}/m - g$ (or $10\ \text{s}\cdot v$ when $a_{\text{net}} \le 0.5$ m/s²), steers against the airflow and brakes on a stopping curve (`GuidanceModeGuards.ShouldTriggerEmergencyBrake`, `ComputeEmergencyBrakeDemandN`), then hands over to touchdown.
 
 ## Code map
 

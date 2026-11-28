@@ -179,17 +179,17 @@ The attitude controller passes the RCS thrusters into the fins' programme as **b
 Column $k$ is thruster $k$'s full-duty torque $\mathbf t_k$, bounded $0 \le d_k \le 1$, at a cost
 
 $$
-c_k = 0.02\,\frac{\dot m_k}{\min_l\,(\dot m_l/|\mathbf t_l|)}
+c_k = \dot m_k\,\max\!\Big(\frac{0.004}{b},\ \min\Big(\frac{0.02}{b},\ \frac{0.25\,p_{\min}}{w}\Big)\Big),
 $$
 
-so the best thruster costs 0.02 per newton metre (`BackupPricePerNm`) and the others more, by their propellant.
+with $b$ and $w$ the least and most propellant per newton metre among the thrusters and $p_{\min}$ the lowest axis priority (0.3, roll) (`AttitudeControlMath.BackupPricePerKgS`). So the best thruster costs 0.02 per newton metre (`BackupPricePerNm`) and the others more, by their propellant, but the dearest never more than a quarter of the cheapest shortfall (`BackupShortfallCapShare`) and none under 0.004 (`MinBackupPricePerNm`).
 The prices then line up as: a fin about $10^{-3}$ per newton metre, a thruster 0.02 or more, and a shortfall 1 (0.3 in roll).
 
 - The fins take every axis they can, whichever it is; the RCS takes the axes the fins cannot reach or find dear.
 - A demand beyond the fins goes to the RCS before any of it goes unmet.
 
-The programme's duties are not flown.
-The controller reads what the fins will give and fires the RCS through [RCS mixing](rcs.md) for the rest.
+The programme's thruster duties are flown as they are (`KsaRcsTorqueControl.CommandDuties`) when it solved and the phase-plane RCS is off.
+Otherwise the controller reads what the fins will give and fires the RCS through [RCS mixing](rcs.md) for the rest.
 
 ## What the fins can reach
 

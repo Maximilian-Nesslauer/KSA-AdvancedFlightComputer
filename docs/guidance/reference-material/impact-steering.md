@@ -457,7 +457,7 @@ The difference is not academic. On the reference arc the impulsive correction po
 
 `AdvancedFlightComputer/Features/Guidance/Modes/Boostback.cs` flies the plan on a **receding horizon**: re-solve from the live state every 2 s and fly the head of the freshest plan.
 
-**Terminal re-solve and lock.** In the final five seconds (`BoostbackTerminalS = 5.0` s), instead of handing back to the impulsive law, `Boostback.cs` re-solves the `BoostbackShooter` plan itself at **5 Hz** (`BoostbackTerminalIntervalS = 0.2` s). Inside the last second (`BoostbackLockTgo = 1.0` s), re-solving stops and the standing linear tangent law flies to cutoff on the plan's own clock. Re-solving the finite-burn plan faster beat the older T-5 s impulsive handover on `--shoot` (182 m vs 549 m against -3% thrust, and 91 m vs 410 m against 25% drag bias).
+**Terminal re-solve and lock.** In the final five seconds (`BoostbackTerminalS = 5.0` s), instead of handing back to the impulsive law, `Boostback.cs` re-solves the `BoostbackShooter` plan itself at **2 Hz** (`BoostbackTerminalIntervalS = 0.5` s; it was 5 Hz, 0.2 s, when the benchmark below was run). Inside the last second (`BoostbackLockTgo = 1.0` s), re-solving stops and the standing linear tangent law flies to cutoff on the plan's own clock. Re-solving the finite-burn plan faster beat the older T-5 s impulsive handover on `--shoot` (182 m vs 549 m against -3% thrust, and 91 m vs 410 m against 25% drag bias).
 
 So the impulsive law (`ImpactSteering.Correction`) no longer flies the end of the burn. It answers a question the shot does not - *is there anything worth lighting an engine for, and is there anything left to correct* - and draws the steering arrow on the overlay.
 

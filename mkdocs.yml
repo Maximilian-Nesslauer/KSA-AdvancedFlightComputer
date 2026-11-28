@@ -138,7 +138,7 @@ nav:
           - Releasing: releasing.md
       - History:
           - Guidance changelog: guidance/CHANGELOG.md
-          - Orbital entry branch (PR #304): guidance/orbital-entry-branch.md
+          - "Orbital entry branch (PR #304)": guidance/orbital-entry-branch.md
 
 validation:
   links:
