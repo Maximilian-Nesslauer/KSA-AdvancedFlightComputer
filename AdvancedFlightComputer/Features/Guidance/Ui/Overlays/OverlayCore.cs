@@ -17,6 +17,7 @@ public static partial class GuidanceWindow
     private static double3 _ovBodyEcl;     // the parent body's position in ECL
     private static doubleQuat _ovCci2Ccf;  // body inertial -> body fixed
     private static doubleQuat _ovCcf2Ecl;  // body fixed -> ECL
+    private static float2 _ovOrigin;       // the game viewport's top-left in ImGui coordinates
     private static readonly float2[] _ovSeg = new float2[2];
 
     // Scratch for batched polylines; grown on demand, never shrunk.
@@ -28,10 +29,11 @@ public static partial class GuidanceWindow
         ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoInputs |
         ImGuiWindowFlags.NoBackground;
 
-    // Open a full-screen, click-through overlay window and hand back its draw list. The caller holds a WindowEnd for the rest of its draw, so the window ends however that draw exits.
+    // Open a click-through overlay window over the game viewport and hand back its draw list. The caller holds a WindowEnd for the rest of its draw, so the window ends however that draw exits.
+    //  ImGui runs with multiple viewports, so its coordinates are DESKTOP pixels: the main window's client area starts at vp.Position, which is (0, 0) only when the game fills the screen from its top-left corner. A window pinned at (0, 0) sits off the game in windowed mode.
     private static ImDrawListPtr BeginOverlayWindow(IGameViewport vp, string name)
     {
-        ImGui.SetNextWindowPos(new float2(0f, 0f));
+        ImGui.SetNextWindowPos(vp.Position);
         ImGui.SetNextWindowSize(new float2(vp.Width, vp.Height));
         ImGui.Begin(name, OverlayFlags);
         return ImGui.GetWindowDrawList();
@@ -43,8 +45,8 @@ public static partial class GuidanceWindow
         public void Dispose() => ImGui.End();
     }
 
-    // Set the per-frame projection context (camera + body transforms) used by TryProjectCci. False if there's no camera or the parent isn't a Celestial.
-    private static bool SetupProjection(IParentBody parent)
+    // Set the per-frame projection context (camera + body transforms, viewport origin) used by TryProjectCci. False if there's no camera or the parent isn't a Celestial.
+    private static bool SetupProjection(IGameViewport vp, IParentBody parent)
     {
         if (parent is not Celestial body)
             return false;
@@ -52,19 +54,21 @@ public static partial class GuidanceWindow
         if (cam == null)
             return false;
         _ovCam = cam;
+        _ovOrigin = vp.Position;
         _ovBodyEcl = body.GetPositionEcl();
         _ovCci2Ccf = parent.GetCci2Ccf();
         _ovCcf2Ecl = body.GetBodyFixed2Ecl();
         return true;
     }
 
-    // Project a CCI point to screen pixels; false if it is behind the camera. The chain is CCI -> body-fixed -> ECL (+ body ECL position) -> screen.
+    // Project a CCI point to ImGui screen coordinates; false if it is behind the camera. The chain is CCI -> body-fixed -> ECL (+ body ECL position) -> viewport pixels -> + viewport origin.
+    //  Camera.EclToScreen answers in pixels from the viewport's own top-left, so the origin goes on top, as stock does (BurnContextMenu, OrbitHoverReadout). Without it everything drawn lands offset by the window's position in windowed mode.
     private static bool TryProjectCci(double3 cci, out float2 screen)
     {
         double3 ecl = _ovBodyEcl + cci.Transform(_ovCci2Ccf).Transform(_ovCcf2Ecl);
         float4 clip = _ovCam.EgoToClip(_ovCam.EclToEgo(ecl));
         if (clip.W <= 0.001f) { screen = default; return false; } // behind the camera
-        screen = _ovCam.EclToScreen(ecl, false);
+        screen = _ovOrigin + _ovCam.EclToScreen(ecl, false);
         return true;
     }
 
@@ -74,7 +78,7 @@ public static partial class GuidanceWindow
         double3 ecl = _ovBodyEcl + ccf.Transform(_ovCcf2Ecl);
         float4 clip = _ovCam.EgoToClip(_ovCam.EclToEgo(ecl));
         if (clip.W <= 0.001f) { screen = default; return false; } // behind the camera
-        screen = _ovCam.EclToScreen(ecl, false);
+        screen = _ovOrigin + _ovCam.EclToScreen(ecl, false);
         return true;
     }
 
