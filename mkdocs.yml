@@ -118,6 +118,7 @@ nav:
           - Runtime: guidance/runtime.md
           - UPFG and ascent hand-over: guidance/upfg.md
           - Boostback and reserve: guidance/boostback.md
+          - Bellyflop design: guidance/bellyflop-design.md
           - G-FOLD: guidance/gfold.md
           - Impact steering: guidance/reference-material/impact-steering.md
       - Successive convexification:
@@ -137,6 +138,7 @@ nav:
           - Releasing: releasing.md
       - History:
           - Guidance changelog: guidance/CHANGELOG.md
+          - Orbital entry branch (PR #304): guidance/orbital-entry-branch.md
 
 validation:
   links:
