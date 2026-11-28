@@ -27,7 +27,7 @@ public static partial class GuidanceWindow
         Ksa6DofPlan plan = g?.Published;
         if (plan == null || plan.Nodes < 2)
             return;
-        if (!SetupProjection(parent))
+        if (!SetupProjection(vp, parent))
             return;
 
         // Rebuild the site frame live rather than caching it from solve time: the plan is flown against the rotating body, so a stale frame slides off the ground as the world turns. Same reasoning as the G-FOLD overlay.

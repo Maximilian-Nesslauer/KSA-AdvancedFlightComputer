@@ -96,7 +96,7 @@ public static partial class GuidanceWindow
                 break;
             case CutSupervisorAction.Building when before <= 0.0:
                 SixDofLog.Event(s, now, FormattableString.Invariant(
-                    $"CUT SUPERVISOR: legs {legs:F2} m above the ground at {vUp:F2} m/s, slower than {s.CutSupervisorSinkMs:F2} m/s down: shortfall building toward {settings.ShortfallToCutM(Math.Min(legs, s.CutSupervisorMaxHeightM)):F2} m."));
+                    $"CUT SUPERVISOR: legs {legs:F2} m above the ground at {vUp:F2} m/s, slower than {targetSink:F2} m/s down: shortfall building toward {settings.ShortfallToCutM(Math.Min(legs, s.CutSupervisorMaxHeightM)):F2} m."));
                 break;
         }
 
@@ -105,11 +105,18 @@ public static partial class GuidanceWindow
             LogContactCycle(vehicle, s, parent);
     }
 
-    /// <summary>The thrust axis's angle from <paramref name="up"/>, deg.</summary>
+    /// <summary>
+    /// The body's long axis's angle from <paramref name="up"/>, deg: the model's +Z (KsaFrameBridge.BodyAxes) through the body's attitude, as the contact height takes it.
+    ///  WHY (2026-11-28 audit). It took the thrust frame (ThrustAxisCci), which a trimmed off-axis engine tilts: about 2.8 deg read against a body tilt of 0.06-0.35, so the logged tilt and tip share (TipText) overstated a touchdown by 1.4-1.7x.
+    /// </summary>
     private static double TiltFromUpDeg(Vehicle vehicle, double3 up)
-        => Math.Acos(Math.Clamp(double3.Dot(KsaFrameBridge.ThrustAxisCci(vehicle), up), -1.0, 1.0)) * 180.0 / Math.PI;
+    {
+        KsaFrameBridge.BodyAxes(vehicle, out _, out _, out double3 mz);
+        double3 axis = double3.Normalize(mz.Transform(KsaFrameBridge.BodyToCci(vehicle)));
+        return Math.Acos(Math.Clamp(double3.Dot(axis, up), -1.0, 1.0)) * 180.0 / Math.PI;
+    }
 
-    /// <summary>A cycle row for a craft flying to contact after its plan: the state, the throttle flown and no planned torque. Binds _s to <paramref name="s"/>, as the step it follows did.</summary>
+    /// <summary>A cycle row for a craft flying to contact after its plan: the state, the throttle flown and the torque the plan-end attitude hold asked for (none under the stock hold). Binds _s to <paramref name="s"/>, as the step it follows did.</summary>
     private static void LogContactCycle(Vehicle vehicle, VehicleAutopilotState s, IParentBody parent)
     {
         _s = s;
@@ -121,6 +128,6 @@ public static partial class GuidanceWindow
         double throttle = manual.EngineOn ? manual.EngineThrottle : 0.0;
         double capability = KsaEnginePerf.ThrustAtThrottle(vehicle, 1.0, pressure);
         double thrustN = throttle > 0.0 ? KsaEnginePerf.ThrustAtThrottle(vehicle, throttle, pressure) : 0.0;
-        LogCycle(vehicle, parent, siteCci, x, SimNow(), thrustN, capability, throttle, default, pressure);
+        LogCycle(vehicle, parent, siteCci, x, SimNow(), thrustN, capability, throttle, s.SixDofContactHoldTorque, pressure);
     }
 }

@@ -314,6 +314,7 @@ public static class Ksa6DofSetup
             model.MaxPosNm[axis] = p ? plus.MaxTorqueNm : 0.0;
             model.MaxNegNm[axis] = m ? minus.MaxTorqueNm : 0.0;
             // Force for a torque tau: f+ tau one way, f- |tau| the other; the odd line through both is (f+ - f-) / 2, or the one side measured.
+            //  It drops the even part, (f+ + f-) / 2 |tau|: the force that pushes the same way whichever way the torque goes. On a layout whose thrusters fire mostly one way (the Starship's hot-gas RCS) that part is as large as this one, 0.1-0.2 m/s^2 and mostly axial (2026-11-28 audit). The acceleration bias learns what the plan leaves out of it; a model of it needs one-way controls, which SCS solves badly (Dynamics6Dof).
             double w = p && m ? 0.5 : 1.0;
             model.ForcePerNm[3 * axis] = w * ((p ? plus.ForcePerNmX : 0.0) - (m ? minus.ForcePerNmX : 0.0));
             model.ForcePerNm[3 * axis + 1] = w * ((p ? plus.ForcePerNmY : 0.0) - (m ? minus.ForcePerNmY : 0.0));
@@ -545,6 +546,9 @@ public static class Ksa6DofSetup
     /// </summary>
     internal static double RateScaleRadS = 1.0;
 
+    /// <summary>AFC_X_FLOOR_RAW=1: the plan floor's hover line on raw gravity and the heaviest end mass (before 2026-11-28), for comparison flights.</summary>
+    internal static readonly bool FloorRaw = Environment.GetEnvironmentVariable("AFC_X_FLOOR_RAW") == "1";
+
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                 int nodes, double tiltMaxDeg, double throttleFloor,
                                 double sigmaSeed,
@@ -559,7 +563,8 @@ public static class Ksa6DofSetup
                                 double rateMaxDegS = 0.0, int coastIntervals = 0, double[] scaleFrom = null,
                                 double momentLimiterPerPa = 0.0, double torqueMargin = 0.0, bool fins = true, double surfaceShare = PlanSurfaceShare,
                                 double momentLimiterStiffnessPerPa = 0.0, double momentLimiterDampingPerPaMs = 0.0,
-                                double[] glideFunnelDeg = null, double sideSpeedPerM = 0.0, double lastSecondsSmooth = 0.0)
+                                double[] glideFunnelDeg = null, double sideSpeedPerM = 0.0, double lastSecondsSmooth = 0.0,
+                                double accelBiasUpMs2 = 0.0, double endMassHint = double.NaN)
     {
         cfg = null!;
         dyn = null!;
@@ -586,11 +591,22 @@ public static class Ksa6DofSetup
         (double floorThrust, double floorFlow) = KsaEnginePerf.AtThrottle(vehicle, throttleFloor, LastAmbientPressurePa);
         // THE PLAN'S FLOOR sits above the engines' by floorMargin of the thrust range, so the tracker has thrust to take off, and under the hover line when the engines can go under it (KsaEnginePerf.LandingPlanFloorThrottle); the real floor stays what the flow is fitted through and what the over-powered check falls back to.
         //  The weight is the one at the end of the burn, where hovering matters: no lighter than dry, and no heavier than now less the burn's seed time at the floor's flow.
+        //  THE WEIGHT THE PLAN FLIES (2026-11-28 audit): the site's gravity less the acceleration bias it is planned with (accelBiasUpMs2, up, held to +-2 so a glitch cannot collapse the floor), at the end mass the last plan reached (endMassHint) where there is one. Drawn on raw gravity and the heaviest end mass, the booster's floor sat at 1.09 of the weight its plan flew - 0.72 m/s^2 of forced climb - and its last plans closed 0.1 m of descent with virtual control, ending above the ground. AFC_X_FLOOR_RAW=1 draws it as before.
         double siteGravity = parent.Mu / siteCci.LengthSquared();
+        //  Whether the engines can throttle under the weight at all is still judged on raw gravity and the heaviest end mass (LandingPlanFloorThrottle's hoverWeightN): only the line moves.
         double endMass = Math.Max(vehicle.TotalMass - vehicle.PropellantMass, vehicle.TotalMass - Math.Max(sigmaSeed, 0.0) * Math.Max(floorFlow, 0.0));
+        double rawWeightN = endMass * siteGravity;
+        double hoverWeightN = double.NaN;
+        if (!FloorRaw)
+        {
+            double planEndMass = double.IsFinite(endMassHint) && endMassHint > 0.0
+                ? Math.Clamp(endMassHint, vehicle.TotalMass - vehicle.PropellantMass, vehicle.TotalMass)
+                : endMass;
+            hoverWeightN = planEndMass * Math.Max(siteGravity - Math.Clamp(accelBiasUpMs2, -2.0, 2.0), 0.5 * siteGravity);
+        }
         double planFloorThrust = floorMargin > 0.0
             ? KsaEnginePerf.ThrustAtThrottle(vehicle,
-                KsaEnginePerf.LandingPlanFloorThrottle(vehicle, throttleFloor, floorMargin, LastAmbientPressurePa, endMass * siteGravity),
+                KsaEnginePerf.LandingPlanFloorThrottle(vehicle, throttleFloor, floorMargin, LastAmbientPressurePa, rawWeightN, hoverWeightN),
                 LastAmbientPressurePa)
             : floorThrust;
         double realFloorFraction = floorThrust > 0.0 && floorThrust < thrust ? floorThrust / thrust : throttleFloor;
@@ -867,6 +883,8 @@ public static class Ksa6DofSetup
             TerminalPhaseS = lastSecondsSmooth > 0.0 ? 3.0 : 0.0,
             // NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS), 0.2 s: after a low bellyflop hand-over the re-solves pushed the Starship's ignition 2.8 s past what the plan had promised, and the late burn could not take out the divert (12 m/s sideways at contact). Headless 2026-11-27: Starship 8 of 8 standing with it, 1 of 4 without.
             CoastGrowthCapS = 0.2,
+            // THE DESCENT FLOOR (Scvx6DofConfig.DescentFloorMs), 0.5 m/s tapering to the plan's end sink: the last metres flown descending, never hovering. Headless 2026-11-27: the lunar lander 13 of 13 with every leg (it hovered at 1-5 m to take out a 0.4 m miss and the stall cut dropped it, 6 of 8 without), the booster 8 of 8 and the Starship 4 of 4 unchanged.
+            DescentFloorMs = 0.5,
             TerminalPhaseTiltWeight = 100.0 * Math.Max(lastSecondsSmooth, 0.0),
             TerminalPhaseRateWeight = 25.0 * Math.Max(lastSecondsSmooth, 0.0),
             // Priced per fixed metre and m/s - the ~250 m and ~100 m/s scales of the hand-over these weights were tuned at - so a metre of miss costs the same however far away the plan starts (Scvx6DofConfig.TerminalMissScaleM).

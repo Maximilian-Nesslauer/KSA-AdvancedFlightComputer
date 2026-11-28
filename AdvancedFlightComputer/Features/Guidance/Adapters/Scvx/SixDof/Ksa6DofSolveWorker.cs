@@ -53,6 +53,9 @@ public sealed class Ksa6DofSolveWorker : IDisposable
         _thread.Start();
     }
 
+    /// <summary>AFC_X_SOLVE_DELAY_MS: a wait before each warm re-solve, ms, for harness experiments; 0 (unset) in the game.</summary>
+    private static readonly int SolveDelayMs = int.TryParse(Environment.GetEnvironmentVariable("AFC_X_SOLVE_DELAY_MS"), out int ms) ? Math.Clamp(ms, 0, 1000) : 0;
+
     public bool IsBusy { get { lock (_gate) return _busy; } }
     public bool IsIdle { get { lock (_gate) return !_busy && _result == null; } }
     public int Dispatched { get { lock (_gate) return _dispatched; } }
@@ -145,6 +148,9 @@ public sealed class Ksa6DofSolveWorker : IDisposable
                     request = _request;
                 }
 
+                // AFC_X_SOLVE_DELAY_MS (harness experiments only): every warm re-solve waits this long before it starts, as a loaded machine's scheduling does, so the delay compensation can be tried at a latency of the A/B's choosing.
+                if (SolveDelayMs > 0 && request.Job == Ksa6DofJob.Update)
+                    Thread.Sleep(SolveDelayMs);
                 bool ok = false;
                 bool faulted = false;
                 string error = "";

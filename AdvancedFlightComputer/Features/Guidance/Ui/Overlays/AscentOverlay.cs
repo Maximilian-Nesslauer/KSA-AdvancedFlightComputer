@@ -88,7 +88,7 @@ public static partial class GuidanceWindow
         // MAP VIEW ONLY. The target orbit is a full ellipse tens of thousands of km across and the trace is the whole flown arc: from the flight camera they project to lines sweeping across the screen, over the vehicle you are trying to fly. There is one camera, not a separate map camera, so the mode is the only thing distinguishing the two.
         // The target orbit, the plan and the trace are all the CAT-S / UPFG ascent's.
         if (vp.Mode != CameraMode.Map || !_showAscentOverlay || _s.AscentMethod != AscentMethod.CatsUpfg
-            || !SetupProjection(parent))
+            || !SetupProjection(vp, parent))
             return;
 
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##ascent_overlay");

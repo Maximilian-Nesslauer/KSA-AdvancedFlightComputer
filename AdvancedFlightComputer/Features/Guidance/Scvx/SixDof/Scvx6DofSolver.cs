@@ -516,7 +516,7 @@ public sealed class Scvx6DofSolver : IDisposable
         //  offline the ratio test then accepted steps that raised the whole merit (444 of 1134 on the roll-free landing) on a predicted reduction that was often negative.
         //  NOT THE TRUE VIOLATIONS. SCS meets those rows only to its tolerance: a terminal slack priced 0.11 sat beside a true miss of 0.7 m priced 293, and with that in the actual merit the ratio test refused most steps and the trust region shrank on nearly every one.
         double convexSlack = _sub.AccelerationSlackCost + _sub.RateSlackCost + _sub.PathSlackCost;
-        double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * VirtualControlSumSquares(wv) + convexSlack + PhaseCost(x);
+        double jLin = Fuel(x) + _cfg.TimeWeight * sigma + Smoothing(x, u) + _cfg.RhoVc * VirtualControlSumSquares(wv) + convexSlack + PhaseCost(x);
         (double jTrue, double defectNorm) = TrueCost(x, u, sigma, coastSigma,
                                                      out int defectChannel, out int defectNode);
         jTrue += convexSlack - SoftLimitCost(x, u);
@@ -617,7 +617,7 @@ public sealed class Scvx6DofSolver : IDisposable
             fk1.CopyTo(fk);
         }
 
-        return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq + SoftLimitCost(x, u) + PhaseCost(x), worst);
+        return (Fuel(x) + _cfg.TimeWeight * sigma + Smoothing(x, u) + _cfg.RhoVc * sumSq + SoftLimitCost(x, u) + PhaseCost(x), worst);
     }
 
     /// <summary>
@@ -680,6 +680,13 @@ public sealed class Scvx6DofSolver : IDisposable
                 double height = x[node * NX + Dynamics6Dof.IR + 2] - _xf[Dynamics6Dof.IR + 2];
                 double over = Math.Sqrt(dvx * dvx + dvy * dvy) - (_cfg.SideSpeedPerM * height + _cfg.SideSpeedFloorMs);
                 gs += _cfg.SideSpeedWeight * Math.Max(0.0, over) / Scvx6DofConfig.SideSpeedPriceScaleMs;
+            }
+        if (_cfg.DescentFloorEnabled)
+            for (int node = 1; node < _n; node++)
+            {
+                double height = x[node * NX + Dynamics6Dof.IR + 2] - _xf[Dynamics6Dof.IR + 2];
+                double shortOf = _cfg.DescentFloorAt(height, -_xf[Dynamics6Dof.IV + 2]) + x[node * NX + Dynamics6Dof.IV + 2];
+                gs += _cfg.DescentFloorWeight * Math.Max(0.0, shortOf) / Scvx6DofConfig.SideSpeedPriceScaleMs;
             }
         if (_cfg.SinkFunnelEnabled)
             for (int node = 1; node < _n; node++)

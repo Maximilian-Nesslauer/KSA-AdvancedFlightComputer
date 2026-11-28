@@ -384,7 +384,7 @@ public static partial class GuidanceWindow
         if (!_s.SixDofStandbyPredicted)
         {
             double standbyThrust = _s.LastThrottle > 0.0 ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle, ambientPa) : 0.0;
-            UpdateAccelBias(x, now, standbyThrust, ThrustDirModel(vehicle, standbyThrust));
+            UpdateAccelBias(x, now, standbyThrust, ThrustDirModel(vehicle, standbyThrust), default, FlownFinDeg(vehicle));
         }
 
         // The node ladder too, so the guidance handed over is already at the count 6-DOF would fly. Only off a fresh plan: a rebuild reseeds from the published plan, on the worker (BeginRebuild).
