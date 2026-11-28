@@ -624,9 +624,11 @@ public sealed class Ksa6DofGuidance : IDisposable
         get
         {
             int ch = LastDefectChannel;
-            if (!double.IsFinite(LastDefect) || ch < 0 || ch >= NX)
+            double defect = LastDefect;
+            double[] scale = _cfg?.XScale;
+            if (!double.IsFinite(defect) || scale == null || ch < 0 || ch >= Math.Min(NX, scale.Length))
                 return "no step accepted";
-            double raw = LastDefect * _cfg.XScale[ch];
+            double raw = defect * scale[ch];
             string units = Scvx6DofSolver.ChannelGroup(ch) switch
             {
                 "position" => "m", "velocity" => "m/s", "attitude" => "(quat)", "rate" => "rad/s", "mass" => "kg", _ => "",
@@ -644,9 +646,16 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <summary>
     /// The worst defect in ITS OWN units - scaled error times that channel's scale - which is the number that can actually be interpreted. Metres for a position, m/s for a velocity, rad/s for a body rate, dimensionless for a quaternion.
     /// </summary>
-    public double LastDefectRaw => LastDefectChannel >= 0 && LastDefectChannel < _cfg.XScale.Length
-        ? LastDefect * _cfg.XScale[LastDefectChannel]
-        : double.NaN;
+    ///  ONE READ of the channel and the scales: a threaded solve's Finish resets the channel to -1 before it scans its trace, so a check and an index read apart could index -1 (2026-11-27/28: two touchdowns faulted in the air at 54 m from the cycle log, and were finished by the hover fallback).
+    public double LastDefectRaw
+    {
+        get
+        {
+            int ch = LastDefectChannel;
+            double[] scale = _cfg?.XScale;
+            return scale != null && ch >= 0 && ch < scale.Length ? LastDefect * scale[ch] : double.NaN;
+        }
+    }
 
     public string LastDefectUnits => Scvx6DofSolver.ChannelGroup(LastDefectChannel) switch
     {

@@ -732,6 +732,25 @@ public static partial class GuidanceWindow
     {
         if (!SixDofLog.Enabled)
             return;
+        // A LOG NEVER FAULTS THE FLIGHT: an exception in a readout reached Step6Dof's fault handler, which restarted touchdown guidance 54 m up with no plan (2026-11-28, LastDefectRaw). It goes to the fault log once a touchdown and the row is dropped.
+        try
+        {
+            LogCycleRow(vehicle, parent, siteCci, x, now, thrustN, capability, throttle, torqueModel, ambientPa);
+        }
+        catch (Exception e)
+        {
+            if (!_s.SixDofLogFaulted)
+            {
+                _s.SixDofLogFaulted = true;
+                LogSixDofFault(vehicle, e);
+            }
+        }
+    }
+
+    private static void LogCycleRow(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                    double[] x, double now, double thrustN, double capability,
+                                    double throttle, double3 torqueModel, double ambientPa)
+    {
 
         double g = parent.Mu / (siteCci.Length() * siteCci.Length());
         double mass = vehicle.TotalMass;
@@ -2600,6 +2619,7 @@ public static partial class GuidanceWindow
             _s.TouchdownArmed = false;
             _s.SixDofSeenDescending = _s.SixDofTookBurn;
             _s.SixDofToContact = false;
+            _s.SixDofLogFaulted = false;
             ResetNodeLadderForBackend(ScvxUsesClarabel);
             _s.RefusalRun = 0;
             _s.PrevV = null;
@@ -2647,6 +2667,7 @@ public static partial class GuidanceWindow
         _s.TouchdownArmed = false;
         _s.SixDofSeenDescending = _s.SixDofTookBurn;
         _s.SixDofToContact = false;
+        _s.SixDofLogFaulted = false;
         ResetNodeLadderForBackend(ScvxUsesClarabel);
         _s.LastReplan = now;
         _s.PrevV = null;

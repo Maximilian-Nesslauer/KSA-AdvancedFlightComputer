@@ -953,6 +953,9 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool SixDofSeenDescending, SixDofToContact, SixDofTookBurn;
 
+    /// <summary>The cycle log has faulted once this touchdown and gone to the fault log (SixDof.LogCycle); later faults drop their rows quietly.</summary>
+    public bool SixDofLogFaulted;
+
     /// <summary>How many times the engine has been relit while flying to contact after the plan (GuidanceWindow.LimitContactRelights), and whether it was lit on the last step.</summary>
     internal int SixDofContactRelights;
     internal bool SixDofContactEngineLit;
