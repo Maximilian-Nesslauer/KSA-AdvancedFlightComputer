@@ -179,6 +179,8 @@ internal static class GuidanceFeature
             GuidanceWindow.DrainRequests(vehicle);
             GuidanceWindow.ApplyAutopilot(vehicle);
             GuidanceWindow.StepSucceeded(vehicle);
+            // THE CUT SUPERVISOR after the modes, so it sees and can override the engine command touchdown guidance left this step (#335).
+            GuidanceWindow.StepCutSupervisor(vehicle);
             // HAND FLYING after the modes, so a mode that took the craft this step has it, and the keys are read before stock copies them to the worker.
             HandFlying.Step(vehicle);
             // After the modes stepped, so it reads the claim and the phase this step left. It catches its own faults, which never count as a failed step.

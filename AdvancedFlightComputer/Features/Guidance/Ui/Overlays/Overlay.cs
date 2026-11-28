@@ -86,13 +86,13 @@ public static partial class GuidanceWindow
         if (parent is not Celestial body)
             return false;
 
-        // Cursor pixel -> NDC. Normalize by ImGui's display size (the space the mouse is in). Vulkan NDC has y pointing DOWN, so screen y maps straight through (no flip).
-        float2 mp = ImGui.GetMousePos();
-        float2 disp = ImGui.GetIO().DisplaySize;
-        if (disp.X < 1f || disp.Y < 1f)
+        // Cursor pixel -> NDC. ImGui's mouse is in DESKTOP pixels (multiple viewports are on), so take it relative to the game viewport's top-left first, as stock's Cursor.GetPosition does, then normalize by the camera's own screen size - the exact inverse of Camera.NdcToScreen behind EclToScreen. The old normalization by DisplaySize from the desktop origin held only in fullscreen; in a window it put the pick off by the window's position. Vulkan NDC has y pointing DOWN, so screen y maps straight through (no flip).
+        float2 mp = ImGui.GetMousePos() - vp.Position;
+        float2 size = cam.ScreenSize;
+        if (size.X < 1f || size.Y < 1f)
             return false;
-        double nx = 2.0 * mp.X / disp.X - 1.0;
-        double ny = 2.0 * mp.Y / disp.Y - 1.0;
+        double nx = 2.0 * mp.X / size.X - 1.0;
+        double ny = 2.0 * mp.Y / size.Y - 1.0;
 
         // Ray through the cursor. Vulkan reverse-Z: the near plane is z=1, far is z=0, so the origin (camera side) is the z=1 unprojection and the ray runs toward z=0. Getting this backwards makes the near sphere root land on the BACK of the body (which still projects under the cursor, hence the camera-dependent, antipodal lat/lon).
         double3 origin = cam.EgoToEcl(cam.NdcToEgo(new double3(nx, ny, 1.0)));
@@ -149,7 +149,7 @@ public static partial class GuidanceWindow
         var col = Ui.Canvas.Palette.Target.Solid;
         if (hit)
         {
-            float2 s = cam.EclToScreen(hitEcl, false);
+            float2 s = vp.Position + cam.EclToScreen(hitEcl, false);
             dl.AddCircleFilled(s, 6f, col);
             dl.AddText(s + new float2(10f, 6f), col, FormattableString.Invariant($"RETARGET  LAT {latDeg:F3}  LON {lonDeg:F3}"));
             dl.AddText(m + new float2(12f, -16f), new ImColor8(150, 150, 150), "CURSOR");
@@ -247,7 +247,7 @@ public static partial class GuidanceWindow
         GfoldTrajectory plan = _s.GfoldPlan;
         if (plan == null || _s.LandingPhase != LandingPhase.GfoldDescent)
             return;
-        if (!SetupProjection(parent))
+        if (!SetupProjection(vp, parent))
             return;
 
         // Rebuild the site frame live (the plan is flown in the body-fixed, rotating pad frame, not the solve-time one), so the overlay sits on the real ground instead of drifting off it as the body turns.
@@ -367,7 +367,7 @@ public static partial class GuidanceWindow
             FormattableString.Invariant($"LAND ERR{plan.LandingErrorNorm,6:F1} m"),
             $"NODES {plan.Nodes}  ITERS {plan.Iterations}",
         };
-        float hx = vp.Width - 300f, hy = 70f, lh = 16f;
+        float hx = vp.Position.X + vp.Width - 300f, hy = vp.Position.Y + 70f, lh = 16f;
         dl.AddRectFilled(new float2(hx - 8f, hy - 6f),
             new float2(hx + 292f, hy + hud.Length * lh + 6f), new ImColor8(10, 14, 20), 4f);
         for (int i = 0; i < hud.Length; i++)
@@ -377,7 +377,7 @@ public static partial class GuidanceWindow
     // The landing-site marker, drawn in the world whenever a landing or a boostback is watched or flown (independent of G-FOLD), so the target is visible for deorbit/UPFG planning too.
     private static void DrawLandingSiteMarker(IGameViewport vp, IParentBody parent)
     {
-        if (!SetupProjection(parent))
+        if (!SetupProjection(vp, parent))
             return;
         double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         if (!TryProjectCci(siteCci, out float2 s))

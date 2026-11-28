@@ -37,6 +37,42 @@ public static class Ksa6DofSetup
     public const double VirtualControlPositionScaleM = 5.0;
 
     /// <summary>
+    /// The scales the ATTITUDE's and the BODY RATES' virtual control are priced on once a plan is refined: a quaternion component of 0.005 (about 0.57 deg) and 0.01 rad/s (about 0.57 deg/s) an interval, where they were XScale's 1 and 1 rad/s.
+    ///  WHY (2026-11-27). On scales of 1, faking ten degrees of turn across a late landing plan cost one or two units against 20000 for ending that tilted honestly (Scvx6DofConfig.TerminalAttitudeWeight). So the plans kept ending upright and still to the hundredth - 0.00 deg from a node 0 10.6 deg over and 0.27 s out (16:35) - while their attitudes ran 7-11 deg off their own rates, and the craft, following physics, pitched hard in the last second and touched down 5.6-8 deg over. Priced here a degree of faked turn costs tens of times the degree of honest end tilt, so a plan that cannot come upright says so, and the flight is not chased after an attitude nothing makes. A morning's try at this (2026-11-27) made things worse: the end was hard then, so a plan that could not cheat could only be refused.
+    /// </summary>
+    public const double VirtualControlAttitudeScale = 0.005, VirtualControlRateScaleRadS = 0.01;
+
+    /// <summary>The progressive glideslope's first height, at least, m: a craft shorter than this still comes down its last 20 m in the narrowest part.</summary>
+    internal const double GlideFunnelMinNearM = 20.0;
+
+    /// <summary>The progressive glideslope's two upper heights, m (the user's, 2026-11-27): its half-angles from vertical are set at one craft length, here, and here.</summary>
+    internal const double GlideFunnelMidM = 300.0, GlideFunnelTopM = 1000.0;
+
+    /// <summary>The progressive glideslope's heights and half-angles the last build used. For the log and the drawings.</summary>
+    public static double[] LastGlideFunnelHeightsM { get; private set; }
+    public static double[] LastGlideFunnelHalfAngleDeg { get; private set; }
+
+    /// <summary>
+    /// THE PROGRESSIVE GLIDESLOPE'S HEIGHTS (Scvx6DofConfig.GlideFunnelHeightsM): one craft length over the target - its bounding box's longest side, at least GlideFunnelMinNearM - then GlideFunnelMidM and GlideFunnelTopM, with the half-angles from vertical the craft's settings give for each. A length at or above the next height drops that height. Null when the first half-angle is 0 (off).
+    /// </summary>
+    internal static void GlideFunnelKnots(Vehicle vehicle, double nearDeg, double midDeg, double topDeg, out double[] heightsM, out double[] halfAngleDeg)
+    {
+        heightsM = null;
+        halfAngleDeg = null;
+        if (!(nearDeg > 0.0))
+            return;
+        float3 half = vehicle.BoundingBoxHalfExtentsAsmb;
+        double length = 2.0 * Math.Max(half.X, Math.Max(half.Y, half.Z));
+        double near = Math.Max(GlideFunnelMinNearM, double.IsFinite(length) ? length : 0.0);
+        var h = new List<double> { near };
+        var a = new List<double> { nearDeg };
+        if (midDeg > 0.0 && GlideFunnelMidM > near) { h.Add(GlideFunnelMidM); a.Add(midDeg); }
+        if (topDeg > 0.0 && GlideFunnelTopM > h[^1]) { h.Add(GlideFunnelTopM); a.Add(topDeg); }
+        heightsM = h.ToArray();
+        halfAngleDeg = a.ToArray();
+    }
+
+    /// <summary>
     /// The roll acceleration at full thrust, rad/s^2, under which the gimbals count as giving no roll torque and the plan leaves the roll free (Scvx6DofConfig.TerminalRollFree). 0.002 rad/s^2 takes 40 s at full thrust to remove a roll rate of 0.08 rad/s, so a craft under it cannot stop the roll it enters with during a touchdown burn. One gimballed engine on the thrust line gives a thousandth of this or less, engines on a ring a hundred times more.
     /// </summary>
     public const double RollAuthorityFloorRadS2 = 0.002;
@@ -278,6 +314,7 @@ public static class Ksa6DofSetup
             model.MaxPosNm[axis] = p ? plus.MaxTorqueNm : 0.0;
             model.MaxNegNm[axis] = m ? minus.MaxTorqueNm : 0.0;
             // Force for a torque tau: f+ tau one way, f- |tau| the other; the odd line through both is (f+ - f-) / 2, or the one side measured.
+            //  It drops the even part, (f+ + f-) / 2 |tau|: the force that pushes the same way whichever way the torque goes. On a layout whose thrusters fire mostly one way (the Starship's hot-gas RCS) that part is as large as this one, 0.1-0.2 m/s^2 and mostly axial (2026-11-28 audit). The acceleration bias learns what the plan leaves out of it; a model of it needs one-way controls, which SCS solves badly (Dynamics6Dof).
             double w = p && m ? 0.5 : 1.0;
             model.ForcePerNm[3 * axis] = w * ((p ? plus.ForcePerNmX : 0.0) - (m ? minus.ForcePerNmX : 0.0));
             model.ForcePerNm[3 * axis + 1] = w * ((p ? plus.ForcePerNmY : 0.0) - (m ? minus.ForcePerNmY : 0.0));
@@ -509,6 +546,9 @@ public static class Ksa6DofSetup
     /// </summary>
     internal static double RateScaleRadS = 1.0;
 
+    /// <summary>AFC_X_FLOOR_RAW=1: the plan floor's hover line on raw gravity and the heaviest end mass (before 2026-11-28), for comparison flights.</summary>
+    internal static readonly bool FloorRaw = Environment.GetEnvironmentVariable("AFC_X_FLOOR_RAW") == "1";
+
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                 int nodes, double tiltMaxDeg, double throttleFloor,
                                 double sigmaSeed,
@@ -522,7 +562,9 @@ public static class Ksa6DofSetup
                                 bool gimbalRateLimit = true, Dynamics6Dof.RcsModel rcs = null, double rcsWeight = 0.0,
                                 double rateMaxDegS = 0.0, int coastIntervals = 0, double[] scaleFrom = null,
                                 double momentLimiterPerPa = 0.0, double torqueMargin = 0.0, bool fins = true, double surfaceShare = PlanSurfaceShare,
-                                double momentLimiterStiffnessPerPa = 0.0, double momentLimiterDampingPerPaMs = 0.0)
+                                double momentLimiterStiffnessPerPa = 0.0, double momentLimiterDampingPerPaMs = 0.0,
+                                double[] glideFunnelDeg = null, double sideSpeedPerM = 0.0, double lastSecondsSmooth = 0.0,
+                                double accelBiasUpMs2 = 0.0, double endMassHint = double.NaN)
     {
         cfg = null!;
         dyn = null!;
@@ -549,11 +591,22 @@ public static class Ksa6DofSetup
         (double floorThrust, double floorFlow) = KsaEnginePerf.AtThrottle(vehicle, throttleFloor, LastAmbientPressurePa);
         // THE PLAN'S FLOOR sits above the engines' by floorMargin of the thrust range, so the tracker has thrust to take off, and under the hover line when the engines can go under it (KsaEnginePerf.LandingPlanFloorThrottle); the real floor stays what the flow is fitted through and what the over-powered check falls back to.
         //  The weight is the one at the end of the burn, where hovering matters: no lighter than dry, and no heavier than now less the burn's seed time at the floor's flow.
+        //  THE WEIGHT THE PLAN FLIES (2026-11-28 audit): the site's gravity less the acceleration bias it is planned with (accelBiasUpMs2, up, held to +-2 so a glitch cannot collapse the floor), at the end mass the last plan reached (endMassHint) where there is one. Drawn on raw gravity and the heaviest end mass, the booster's floor sat at 1.09 of the weight its plan flew - 0.72 m/s^2 of forced climb - and its last plans closed 0.1 m of descent with virtual control, ending above the ground. AFC_X_FLOOR_RAW=1 draws it as before.
         double siteGravity = parent.Mu / siteCci.LengthSquared();
+        //  Whether the engines can throttle under the weight at all is still judged on raw gravity and the heaviest end mass (LandingPlanFloorThrottle's hoverWeightN): only the line moves.
         double endMass = Math.Max(vehicle.TotalMass - vehicle.PropellantMass, vehicle.TotalMass - Math.Max(sigmaSeed, 0.0) * Math.Max(floorFlow, 0.0));
+        double rawWeightN = endMass * siteGravity;
+        double hoverWeightN = double.NaN;
+        if (!FloorRaw)
+        {
+            double planEndMass = double.IsFinite(endMassHint) && endMassHint > 0.0
+                ? Math.Clamp(endMassHint, vehicle.TotalMass - vehicle.PropellantMass, vehicle.TotalMass)
+                : endMass;
+            hoverWeightN = planEndMass * Math.Max(siteGravity - Math.Clamp(accelBiasUpMs2, -2.0, 2.0), 0.5 * siteGravity);
+        }
         double planFloorThrust = floorMargin > 0.0
             ? KsaEnginePerf.ThrustAtThrottle(vehicle,
-                KsaEnginePerf.LandingPlanFloorThrottle(vehicle, throttleFloor, floorMargin, LastAmbientPressurePa, endMass * siteGravity),
+                KsaEnginePerf.LandingPlanFloorThrottle(vehicle, throttleFloor, floorMargin, LastAmbientPressurePa, rawWeightN, hoverWeightN),
                 LastAmbientPressurePa)
             : floorThrust;
         double realFloorFraction = floorThrust > 0.0 && floorThrust < thrust ? floorThrust / thrust : throttleFloor;
@@ -632,7 +685,7 @@ public static class Ksa6DofSetup
         }
         RollModel(tauRoll, izz, keptRollFree, out bool rollFree, out tauRoll, RcsRollNm(rcs));
 
-        // THE TORQUE MARGIN (Scvx6DofConfig.PlanTorqueShare): the plan gets this share of the gimbals' torque, their roll and the RCS's, and the attitude feedback the rest (AttitudeFeedback6Dof). The cone is shrunk in torque, through its tangent; the gimbals' slew, in full deflections a second, is widened by as much so it stays the hardware's rate in degrees. After the roll model, so a margin cannot by itself decide the roll is left free.
+        // THE TORQUE MARGIN (Scvx6DofConfig.PlanTorqueShare): the plan gets this share of the gimbals' torque, their roll and the RCS's, and the attitude feedback the rest (AttitudeFeedback6Dof). The cone is shrunk in torque, through its tangent; the gimbals' slew stays the hardware's full deflections a second of that smaller cone, so the plan slews at the same share of the hardware's rate in degrees and the feedback has the rest. It was widened by the share to keep the hardware's whole rate until 2026-11-27: the last plans of two Starship landings then swung the gimbal at its full 20 deg/s on nearly every interval, the feedback's deflection came on top, and the gimbal sat on its rate cap in 35-46 % of the last 4 s, 175 ms behind its command. After the roll model, so a margin cannot by itself decide the roll is left free.
         double torqueShare = Math.Clamp(1.0 - (double.IsFinite(torqueMargin) ? torqueMargin : 0.0), 0.5, 1.0);
         gimbalDeg = Math.Atan(Math.Tan(gimbalDeg * Math.PI / 180.0) * torqueShare) * 180.0 / Math.PI;
         tauRoll *= torqueShare;
@@ -743,6 +796,12 @@ public static class Ksa6DofSetup
         double omegaScale = Math.Max(tiltMaxDeg * Math.PI / 180.0 / Math.Max(sigma * 0.5, 1.0), 1e-3);
         double wW = Math.Max(rateDampShare, 0.0) / (nodes * 3.0 * omegaScale * omegaScale);
 
+        double[] funnelHeightsM = null, funnelHalfAngleDeg = null;
+        if (glideSlopeDeg > 0.0 && glideFunnelDeg is { Length: 3 })
+            GlideFunnelKnots(vehicle, glideFunnelDeg[0], glideFunnelDeg[1], glideFunnelDeg[2], out funnelHeightsM, out funnelHalfAngleDeg);
+        LastGlideFunnelHeightsM = funnelHeightsM;
+        LastGlideFunnelHalfAngleDeg = funnelHalfAngleDeg;
+
         BodyAero6Dof.FinTable[] finTables = dyn.BodyAero?.Fins ?? [];
         cfg = new Scvx6DofConfig
         {
@@ -758,7 +817,7 @@ public static class Ksa6DofSetup
             GimbalTrimY = !noGimbal && arm > 0.0 ? -dyn.ThrustMomentX / arm : 0.0,
             // The RCS controls are scaled on each axis's whole control torque (Scvx6DofConfig.ResolvedUScale).
             GimbalArm = arm,
-            GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) / torqueShare : 0.0,
+            GimbalSlewPerS = gimbalRateLimit ? GimbalSlewPerS(vehicle) : 0.0,
             PlanTorqueShare = torqueShare,
             PlanRcsShare = surfaceShare,
             TauRollMax = tauRoll,
@@ -787,8 +846,8 @@ public static class Ksa6DofSetup
             [
                 VirtualControlPositionScaleM, VirtualControlPositionScaleM, VirtualControlPositionScaleM,
                 VirtualControlVelocityScaleMs, VirtualControlVelocityScaleMs, VirtualControlVelocityScaleMs,
-                0, 0, 0, 0,
-                0, 0, 0,
+                VirtualControlAttitudeScale, VirtualControlAttitudeScale, VirtualControlAttitudeScale, VirtualControlAttitudeScale,
+                VirtualControlRateScaleRadS, VirtualControlRateScaleRadS, VirtualControlRateScaleRadS,
                 0,
             ],
 
@@ -802,11 +861,32 @@ public static class Ksa6DofSetup
             // Restores the conditioning the regularisers previously provide, without the bias. Measured on the reference problem at low weights: 91650 ADMM iterations / 4907 ms at 0, versus 23675 / 1295 ms at 0.05 - 3.8x faster for a burn time within 1.2% and a merit within 0.03%. Do NOT raise this chasing more speed: at 0.2 it is 7x faster but shifts burn time 6% and worsens merit 1%, because SCvx stops at a tolerance rather than exactly at X = Xbar, so a large proximal term leaves a residual pull and starts acting as a second trust region.
             ProximalWeight = Math.Max(proximalWeight, 0.0),
             GlideSlopeDeg = glideSlopeDeg,
+            // The progressive glideslope: half-angles from vertical at one craft length, 300 m and 1000 m (GlideFunnelKnots).
+            GlideFunnelHeightsM = funnelHeightsM,
+            GlideFunnelHalfAngleDeg = funnelHalfAngleDeg,
+            // The sideways-speed cone (Scvx6DofConfig.SideSpeedPerM).
+            SideSpeedPerM = Math.Max(sideSpeedPerM, 0.0),
             VzMax = vzMaxMs,
             // Terminal position and speed are SOFT, heavily penalised. A hard terminal says "arrive exactly there, exactly at rest", and when that is not achievable the honest answer is a plan that misses rather than no plan at all - a descending booster cannot decline to land. The weights are high enough that both slacks sit at zero whenever the target is genuinely reachable, so this changes nothing on a normal descent.
             //  POSITION ABOVE SPEED. Both are normalised by the problem's scales (here ~250 m and ~100 m/s at a hand-over), so the weights alone do not say what trades for what. With speed at 1e5 and the miss at 1e3, 1 m/s cost as much as ~270 m of miss, and a squeezed plan stopped at rest 20-30 m over the pad - where a booster that cannot throttle below its weight floats and then climbs (2026-10-08, 17:42 and 17:53). At 1e5 and 1e4, 1 m of miss costs about as much as 4 m/s: a squeezed plan arrives a little fast rather than high, as Falcon 9 lands at ~2 m/s rather than stopping short.
             TerminalMissWeight = 1.0e5,
-            TerminalSpeedWeight = 1.0e4,
+            // ATTITUDE, RATE AND SPEED ABOVE POSITION (2026-11-27, the user's call: there is margin in where the craft lands, none in how). Per unit, a metre of miss across costs 400; a m/s of end speed 2000, a degree of tilt 2000 and a deg/s of pitch or yaw rate 2000 - five metres each. The height miss goes up with the speed, 8000 a metre, so a squeezed plan still prefers arriving 4 m/s fast to stopping a metre high, as it did at 400 and 100.
+            TerminalSpeedWeight = 2.0e5,
+            TerminalHeightMissFactor = 20.0,
+            TerminalAttitudeWeight = 2.0e3,
+            TerminalRateWeight = 2.0e3,
+            // SIDEWAYS END SPEED: 500 a m/s, above a metre of miss (400), as the user's rule has it - speed costs more than position. It was 100 (0.05) to stop the plan chasing the last of it with a late lean; with tilt and turning priced and attitude virtual control tight, a cheap sideways speed became the easy way out instead, and a Starship (17:13) planned to arrive sliding 2.6 m/s and slid in at 2.2-4.8 m/s.
+            TerminalSideSpeedFactor = 0.25,
+            // THE TIP-OVER LINE (2026-11-27, the user's): at most 80 % of the energy that tips the craft over its edge, the flight's numbers set each re-solve (Ksa6DofInputs.WithTipGeometry). A degree past the line costs 20000, fifty metres of miss.
+            TipLimit = true,
+            // THE LAST SECONDS FOR SMOOTHNESS (LAST SECONDS SMOOTH, VehicleAutopilotState.SixDofLastSecondsSmooth): over the last 3 s, ramped in, at 1 two degrees of tilt held a second cost 400 - a metre of miss - and 4 deg/s of pitch-yaw rate the same. 0.3 by default since 2026-11-27 (the setting's default): headless the booster then stood upright at contact; offline it had cost the low-authority boosters 3-29 m of miss, which those flights did not show.
+            TerminalPhaseS = lastSecondsSmooth > 0.0 ? 3.0 : 0.0,
+            // NO LATER IGNITION (Scvx6DofConfig.CoastGrowthCapS), 0.2 s: after a low bellyflop hand-over the re-solves pushed the Starship's ignition 2.8 s past what the plan had promised, and the late burn could not take out the divert (12 m/s sideways at contact). Headless 2026-11-27: Starship 8 of 8 standing with it, 1 of 4 without.
+            CoastGrowthCapS = 0.2,
+            // THE DESCENT FLOOR (Scvx6DofConfig.DescentFloorMs), 0.5 m/s tapering to the plan's end sink: the last metres flown descending, never hovering. Headless 2026-11-27: the lunar lander 13 of 13 with every leg (it hovered at 1-5 m to take out a 0.4 m miss and the stall cut dropped it, 6 of 8 without), the booster 8 of 8 and the Starship 4 of 4 unchanged.
+            DescentFloorMs = 0.5,
+            TerminalPhaseTiltWeight = 100.0 * Math.Max(lastSecondsSmooth, 0.0),
+            TerminalPhaseRateWeight = 25.0 * Math.Max(lastSecondsSmooth, 0.0),
             // Priced per fixed metre and m/s - the ~250 m and ~100 m/s scales of the hand-over these weights were tuned at - so a metre of miss costs the same however far away the plan starts (Scvx6DofConfig.TerminalMissScaleM).
             TerminalMissScaleM = TerminalMissPriceM,
             TerminalSpeedScaleMs = TerminalSpeedPriceMs,
@@ -823,6 +903,8 @@ public static class Ksa6DofSetup
                 Math.Max(mass, 1.0),
             ],
         };
+        // Harness experiments (TouchdownExperiment): nothing unless an AFC_XCFG_ variable is set.
+        TouchdownExperiment.Apply(cfg);
         // Validate every derived value before handing the problem to the native solver because one non-finite value can make the complete matrix invalid.
         //  The realistic path is not exotic: `gScale = Mu / |siteCci|^2` is Infinity if the site has not resolved yet, and `Math.Max(NaN, x)` RETURNS NaN, so a single bad intermediate propagates silently through the scale chain.
         (string Name, double Value)[] mustBeFinitePositive =

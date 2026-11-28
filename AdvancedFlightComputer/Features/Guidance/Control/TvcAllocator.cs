@@ -57,6 +57,13 @@ public static class KsaTvcAllocator
         return GimbalPivot(gc) + new double3(offF.X, offF.Y, offF.Z).Transform(deflect).Transform(gimbalToVehicle);
     }
 
+    /// <summary>The torque about <paramref name="comAsmb"/> one gimbal's thrust gives at a normalized deflection, N m, VEHICLE assembly frame: the thrust's point and direction swung as FillColumns differentiates them.</summary>
+    internal static double3 Torque(GimbalController gc, float3 comAsmb, double thrust, double commandY, double commandZ)
+    {
+        var com = new double3(comAsmb.X, comAsmb.Y, comAsmb.Z);
+        return double3.Cross(ThrustLocation(gc, commandY, commandZ) - com, ThrustDirection(gc, commandY, commandZ) * thrust);
+    }
+
     /// <summary>The gimbal's pivot, VEHICLE assembly frame (Data.PivotPosVehicleAsmb).</summary>
     public static double3 GimbalPivot(GimbalController gc)
     {

@@ -577,7 +577,9 @@ public static partial class GuidanceWindow
                                    scaleFrom: _s.SixDofCoastPending ? _s.SixDofCoastScaleState : null,
                                    momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
                                    momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
-                                   momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs))
+                                   momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs,
+                                   glideFunnelDeg: GlideFunnelDeg(), sideSpeedPerM: _s.SixDofSideSpeedPerM, lastSecondsSmooth: _s.SixDofLastSecondsSmooth,
+                                   accelBiasUpMs2: PlanBiasUp(), endMassHint: PublishedEndMass()))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -730,6 +732,25 @@ public static partial class GuidanceWindow
     {
         if (!SixDofLog.Enabled)
             return;
+        // A LOG NEVER FAULTS THE FLIGHT: an exception in a readout reached Step6Dof's fault handler, which restarted touchdown guidance 54 m up with no plan (2026-11-28, LastDefectRaw). It goes to the fault log once a touchdown and the row is dropped.
+        try
+        {
+            LogCycleRow(vehicle, parent, siteCci, x, now, thrustN, capability, throttle, torqueModel, ambientPa);
+        }
+        catch (Exception e)
+        {
+            if (!_s.SixDofLogFaulted)
+            {
+                _s.SixDofLogFaulted = true;
+                LogSixDofFault(vehicle, e);
+            }
+        }
+    }
+
+    private static void LogCycleRow(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                    double[] x, double now, double thrustN, double capability,
+                                    double throttle, double3 torqueModel, double ambientPa)
+    {
 
         double g = parent.Mu / (siteCci.Length() * siteCci.Length());
         double mass = vehicle.TotalMass;
@@ -744,10 +765,8 @@ public static partial class GuidanceWindow
         // Signed distance outside the glideslope cone, same convention the solver enforces: positive means outside.
         double glideViol = 0.0;
         if (_s.SixDofGlideSlopeDeg > 0.0)
-        {
-            double cot = 1.0 / Math.Tan(Math.Clamp(_s.SixDofGlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
-            glideViol = Math.Sqrt(x[0] * x[0] + x[1] * x[1]) - cot * (x[2] - _s.SixDofTargetComAltM);
-        }
+            glideViol = Math.Sqrt(x[0] * x[0] + x[1] * x[1]) - Scvx6DofConfig.Radius(_s.SixDofGlideSlopeDeg,
+                Ksa6DofSetup.LastGlideFunnelHeightsM, Ksa6DofSetup.LastGlideFunnelHalfAngleDeg, x[2] - _s.SixDofTargetComAltM);
 
         double r22 = 1.0 - 2.0 * (x[7] * x[7] + x[8] * x[8]);
         TvcAllocationResult a = KsaGimbalControl.Diagnostics(vehicle)?.LastAllocation ?? default;
@@ -813,6 +832,8 @@ public static partial class GuidanceWindow
             FbWantX = fb.Wanted.X, FbWantY = fb.Wanted.Y, FbWantZ = fb.Wanted.Z,
             FbGimX = fb.Gimbal.X, FbGimY = fb.Gimbal.Y, FbGimZ = fb.Gimbal.Z,
             FbRcsX = fb.Rcs.X, FbRcsY = fb.Rcs.Y, FbRcsZ = fb.Rcs.Z, FbShortNm = fb.ShortNm,
+            ToContact = _s.SixDofToContact, LegsM = LegsHeightM(vehicle, _s), CutShortM = _s.CutSup.ShortfallM, CutAction = _s.CutSupAction.ToString(),
+            LatencyS = _s.SolveLatencyLastS, LeadS = _s.SolveDispatchLeadS,
             Error = _s.Error,
         };
         SixDofLog.Cycle(_s, row);
@@ -840,7 +861,7 @@ public static partial class GuidanceWindow
     ///   - a dt window, since the first cycle after engage has no previous sample and
     ///     a paused or warped frame produces a meaningless one.
     /// </summary>
-    private static void UpdateAccelBias(double[] x, double now, double thrustDelivered)
+    private static void UpdateAccelBias(double[] x, double now, double thrustDelivered, double3? thrustDirModel = null, double3 rcsForceModel = default, double[] flownFinDeg = null)
     {
         if (_s.Guidance == null)
             return;
@@ -870,13 +891,26 @@ public static partial class GuidanceWindow
         double zx = 2.0 * (qx * qz + qw * qy);
         double zy = 2.0 * (qy * qz - qw * qx);
         double zz = 1.0 - 2.0 * (qx * qx + qy * qy);
+        // ALONG WHERE THE GIMBALS POINT THE THRUST, model body axes (KsaGimbalControl.Slot.ThrustDirAsmb), rotated into the site frame: the plan models the gimbal's sideways thrust (tdx, tdy), so the estimate must not learn it as a missing force. Along the body axis it did, and on the 2026-11-27 Starship landings 1.6-2.0 m/s^2 of the gimbal's own push to stand the ship up went into every late plan's gravity, 2 s late - phantom sideways braking the plans relied on. AFC_X_BIAS_AXIAL=1 takes the body axis again, for comparison.
+        if (thrustDirModel is double3 d && !BiasAxialOnly)
+        {
+            zx = (1.0 - 2.0 * (qy * qy + qz * qz)) * d.X + 2.0 * (qx * qy - qw * qz) * d.Y + 2.0 * (qx * qz + qw * qy) * d.Z;
+            zy = 2.0 * (qx * qy + qw * qz) * d.X + (1.0 - 2.0 * (qx * qx + qz * qz)) * d.Y + 2.0 * (qy * qz - qw * qx) * d.Z;
+            zz = 2.0 * (qx * qz - qw * qy) * d.X + 2.0 * (qy * qz + qw * qx) * d.Y + (1.0 - 2.0 * (qx * qx + qy * qy)) * d.Z;
+        }
         double m = Math.Max(x[13], 1.0);
         double3 g0 = _s.Guidance.BaseGravity;
 
-        double3 aero = _s.Guidance.ModelAeroAccel(x);
-        double rx = ax - (thrustDelivered / m * zx + g0.X + aero.X);
-        double ry = ay - (thrustDelivered / m * zy + g0.Y + aero.Y);
-        double rz = az - (thrustDelivered / m * zz + g0.Z + aero.Z);
+        // THE AIR FORCE WITH THE FINS WHERE THEY ARE (FlownFinDeg): the plan models each fin's force at its deflection, so taken at rest the flaps' force was learnt again (2026-11-28 audit). AFC_X_BIAS_FINS_REST=1 takes it at rest, for comparison.
+        double3 aero = _s.Guidance.ModelAeroAccel(x, BiasFinsRest || flownFinDeg == null ? default : flownFinDeg);
+        // THE RCS FORCE THE PLAN MODELS, model body axes (RcsForceModel), rotated into the site frame: the plan carries it (Dynamics6Dof's RCS force per N m), so, like the gimbals' sideways thrust, the estimate must not learn it as a missing force (2026-11-27 review). AFC_X_BIAS_NO_RCS=1 leaves it out, for comparison.
+        double3 f = BiasNoRcs ? default : rcsForceModel;
+        double fx = (1.0 - 2.0 * (qy * qy + qz * qz)) * f.X + 2.0 * (qx * qy - qw * qz) * f.Y + 2.0 * (qx * qz + qw * qy) * f.Z;
+        double fy = 2.0 * (qx * qy + qw * qz) * f.X + (1.0 - 2.0 * (qx * qx + qz * qz)) * f.Y + 2.0 * (qy * qz - qw * qx) * f.Z;
+        double fz = 2.0 * (qx * qz - qw * qy) * f.X + 2.0 * (qy * qz + qw * qx) * f.Y + (1.0 - 2.0 * (qx * qx + qy * qy)) * f.Z;
+        double rx = ax - (thrustDelivered / m * zx + fx / m + g0.X + aero.X);
+        double ry = ay - (thrustDelivered / m * zy + fy / m + g0.Y + aero.Y);
+        double rz = az - (thrustDelivered / m * zz + fz / m + g0.Z + aero.Z);
 
         // ~2 s time constant at a 0.02 s step: slow enough to ignore per-frame noise, fast enough to follow drag falling away through the descent.
         double alpha = Math.Clamp(dt / 2.0, 0.0, 1.0);
@@ -1210,6 +1244,9 @@ public static partial class GuidanceWindow
     private const double SixDofHoverMaxMinTwr = 0.9;
 
     /// <summary>The end state of every touchdown plan: the centre of mass at the first-contact height over the target, sinking at SixDofTouchdownSinkMs, upright with the current heading and no rates.</summary>
+    /// <summary>The progressive glideslope's half-angles from vertical for the setup: at one craft length, 300 m and 1000 m (Ksa6DofSetup.GlideFunnelKnots).</summary>
+    private static double[] GlideFunnelDeg() => [_s.SixDofFunnelNearDeg, _s.SixDofFunnel300Deg, _s.SixDofFunnel1000Deg];
+
     private static double[] PlanEndState(double[] x)
     {
         var xf = new double[14];
@@ -1231,16 +1268,19 @@ public static partial class GuidanceWindow
     {
         if (_s.SixDofLastPublishedPlan != null && !_s.SixDofToContact)
             KsaGimbalControl.SetLsq(vehicle, default);
-        // Nothing plans an RCS torque either.
-        KsaRcsTorqueControl.Release(vehicle);
-        ReleaseTouchdownFins(vehicle);
+        // Nothing plans an RCS torque either. Flying to contact, the attitude hold after this step owns the RCS and the fins (HoldTouchdownAttitude).
+        if (!_s.SixDofToContact)
+        {
+            KsaRcsTorqueControl.Release(vehicle);
+            ReleaseTouchdownFins(vehicle);
+        }
 
         double3 position = vehicle.Orbit.StateVectors.PositionCci;
         double3 up = double3.Normalize(position);
         double vertical = Math.Max(double3.Dot(KsaFrameBridge.ThrustAxisCci(vehicle), up), 0.5);
         double legs = Math.Max(x[2] - _s.SixDofTargetComAltM, 0.1);
         double sink = Math.Max(-x[5], 0.0);
-        double gravity = parent.Mu / position.LengthSquared();
+        double gravity = parent.Mu / position.LengthSquared() - PostPlanBiasUp();
         double demand = sink > 0.0 ? vehicle.TotalMass * (sink * sink / (2.0 * legs) + gravity) / vertical : 0.0;
 
         double pressure = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
@@ -1335,6 +1375,9 @@ public static partial class GuidanceWindow
 
     private static void HoldTouchdownAttitude(Vehicle vehicle, IParentBody parent)
     {
+        if (!StockHoldToContact && HoldPlanEndAttitude(vehicle, parent))
+            return;
+        _s.SixDofContactHoldTorque = default;
         // The plan has ended. Let stock TVC and RCS damp the turn until first contact.
         KsaGimbalControl.Disengage(vehicle);
         KsaRcsTorqueControl.Release(vehicle);
@@ -1345,6 +1388,42 @@ public static partial class GuidanceWindow
         double3 heading = double3.UnitY.Transform(KsaFrameBridge.BodyToCci(vehicle));
         CommandAttitude(vehicle, parent, up, !_s.WasEngaged, heading, FlightComputerRollMode.Decoupled);
         _s.WasEngaged = true;
+    }
+
+    /// <summary>AFC_X_STOCK_TO_CONTACT=1: flying to contact, the stock flight computer, TVC and RCS hold the craft upright (before 2026-11-28), for comparison flights.</summary>
+    private static readonly bool StockHoldToContact = Environment.GetEnvironmentVariable("AFC_X_STOCK_TO_CONTACT") == "1";
+
+    /// <summary>
+    /// HOLD THE PLAN END'S ATTITUDE TO CONTACT: after the plan, the last published plan's command past its end - its last node's attitude, zero rates and its own trim torque - flown through the attitude feedback (AttitudeFeedback6Dof) on the gimbals and the RCS, as in the plan. The engine's throttle stays the post-plan law's (SinkToContact, FlyWithoutPlan); with the engine off the RCS takes all of the correction. False, for the stock hold, without a plan or the feedback.
+    ///  WHY (2026-11-28). The stock hold (below) let a Starship whose plan ended 0.5 m short pitch at 1.7 deg/s, its gimbals left where the plan last put them and its RCS handed to the stock computer: the tilt grew 0.2 to 1.2 deg and its off-axis thrust took it from 0.1 to 0.8 m/s sideways in the 1.1 s to the cut. The plan's own feedback holds the trim the engine choice needs (its integral is the moment it found), which the stock computer does not know.
+    /// </summary>
+    private static bool HoldPlanEndAttitude(Vehicle vehicle, IParentBody parent)
+    {
+        Ksa6DofGuidance g = _s.Guidance;
+        AttitudeFeedback6Dof attitude = SixDofAttitude();
+        if (g?.Published == null || attitude == null)
+            return false;
+        double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+        double[] x = KsaFrameBridge.ToModelState(vehicle, KsaFrameBridge.BuildSiteFrame(siteCci));
+        double now = SimNow();
+        ref ManualControlInputs manual = ref ManualInputs(vehicle);
+        bool lit = manual.EngineOn && manual.EngineThrottle > 0f;
+        // NOTHING TO HOLD WITH: the engine off and no RCS in the plan leaves the gimbals and the plan's RCS nothing to give, so the stock hold keeps the stock RCS (review of 94415f8).
+        if (!lit && !g.HasRcs)
+            return false;
+        double pressure = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
+        double flownN = lit ? KsaEnginePerf.ThrustAtThrottle(vehicle, manual.EngineThrottle, pressure) : 0.0;
+        if (!g.Command(now, out double3 torqueModel, out _, x, null, attitude, engineOff: !lit, flownThrustN: flownN))
+            return false;
+        HoldManualAttitude(vehicle);
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        double3 torqueKsa = torqueModel.X * mx + torqueModel.Y * my + torqueModel.Z * mz;
+        KsaGimbalControl.SetLsq(vehicle, torqueKsa, g.CoupledRollNm * mz);
+        FlyPlanRcs(vehicle, mx, my, mz);
+        ReleaseTouchdownFins(vehicle);
+        // The cut supervisor's contact row logs it (CutSupervisorStep.LogContactCycle), one row a step.
+        _s.SixDofContactHoldTorque = torqueModel;
+        return true;
     }
 
     /// <summary>
@@ -1360,7 +1439,8 @@ public static partial class GuidanceWindow
             manual.EngineOn = false;
             manual.EngineThrottle = 0f;
             _s.LastThrottle = 0.0;
-            string what = FormattableString.Invariant($"TOUCHDOWN AFTER PLAN END, {-x[5]:F1} m/s, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m FROM TARGET");
+            string what = FormattableString.Invariant($"TOUCHDOWN AFTER PLAN END, {-x[5]:F1} m/s down, {Math.Sqrt(x[3] * x[3] + x[4] * x[4]):F1} m/s sideways, ")
+                        + FormattableString.Invariant($"tilt {TiltFromUpDeg(vehicle, double3.Normalize(vehicle.Orbit.StateVectors.PositionCci)):F1} deg, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m FROM TARGET") + TipText(vehicle, x);
             SixDofLog.Event(_s, now, what);
             GuidanceLog.Info(vehicle, "Touchdown guidance: " + what + ".");
             ReportLogStop(SixDofLog.Stop(_s));
@@ -1428,7 +1508,7 @@ public static partial class GuidanceWindow
         double3 up = double3.Normalize(position);
         double vertical = Math.Max(double3.Dot(KsaFrameBridge.ThrustAxisCci(vehicle), up), 0.5);
         double rate = Math.Min(SixDofTouchdownSinkMs + SixDofSinkPerM * Math.Max(x[2] - _s.SixDofTargetComAltM, 0.0), SixDofSinkMaxMs);
-        double gravity = parent.Mu / position.LengthSquared();
+        double gravity = parent.Mu / position.LengthSquared() - PostPlanBiasUp();
         double demand = vehicle.TotalMass * (gravity + SixDofSinkGain * (-rate - x[5])) / vertical;
         double pressure = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
         KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(vehicle, demand, pressure);
@@ -1590,7 +1670,7 @@ public static partial class GuidanceWindow
             else if (_s.TouchdownArmed)
             {
                 SixDofLog.Event(_s, now, $"TOUCHDOWN at alt {x[2]:F1} m (plan end {_s.SixDofTargetComAltM:F1} m), vz {x[5]:F2} m/s, " +
-                                     $"lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from target");
+                                     $"lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from target, {Math.Sqrt(x[3] * x[3] + x[4] * x[4]):F1} m/s sideways" + TipText(vehicle, x));
                 // In the game log too: without it a landing reads the same there as an abort.
                 GuidanceLog.Info(vehicle, $"Touchdown guidance: touchdown at {-x[5]:F1} m/s down and {Math.Sqrt(x[3] * x[3] + x[4] * x[4]):F1} m/s sideways, " +
                                           $"{Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from the target - engine cut.");
@@ -1824,7 +1904,10 @@ public static partial class GuidanceWindow
             ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle,
                   KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]))
             : 0.0;
-        UpdateAccelBias(x, now, thrustDelivered);
+        UpdateAccelBias(x, now, thrustDelivered, ThrustDirModel(vehicle, thrustDelivered), RcsForceModel(vehicle), FlownFinDeg(vehicle));
+        // NO LATER IGNITION holds for as long as touchdown has the craft, whatever guidance it flies now: a rebuild without a plan (RebuildUnplannedColdAt) or a direct engage starts a fresh guidance unarmed (2026-11-27 review).
+        if (_s.Active && _s.Guidance != null && !_s.Guidance.IgnitionCapArmed)
+            _s.Guidance.ArmIgnitionCap();
 
         // NODE SCHEDULE: drop node count at fixed altitude GATES.
         //
@@ -1856,15 +1939,34 @@ public static partial class GuidanceWindow
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
         UpdateMomentLimiter(vehicle, now);
         _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz)
+            .WithArm(Ksa6DofSetup.EngineArm(vehicle))
+            .WithTipGeometry(TipRadiusM(_s), _s.VehicleHeightM)
             .WithMomentLimiterExact(_s.MomentLimiterPerPa, _s.MomentLimiterStiffnessPerPa, _s.MomentLimiterDampingPerPaMs)
             .WithMomentBias(UpdateMomentBias(vehicle, x, now));
         LogAeroCheck(vehicle, x, now, "flying");
+        // Where the gimbals are, for a re-solve's first gimbal command to start from (Ksa6DofGuidance.NoteGimbalLag).
+        NoteGimbalLag(vehicle);
+        // The end height for the next re-solve, as the propellant moves the centre of mass (Ksa6DofGuidance.TargetAltM).
+        _s.Guidance.TargetAltM = _s.SixDofTargetComAltM;
 
         // The first command after braking handover uses the plan the braking mode checked.
         if (!firstBrakingCommand && now - _s.LastReplan >= cadence)
         {
             if (_s.Worker != null)
-                _s.Worker.TryDispatchUpdate(_s.Guidance, x, now, 5);
+            {
+                // DELAY COMPENSATION (AFC_X_SOLVE_LEAD=1): the re-solve is posed where the craft will be when its answer is flown (SolveLeadS), not where it is now.
+                double lead = !_s.Worker.IsBusy ? SolveLeadS(now) : 0.0;
+                double[] from = x;
+                if (lead > 0.0 && _s.Guidance.PredictAlongPlan(x, now, lead, _s.SolveLeadState))
+                    from = _s.SolveLeadState;
+                else
+                    lead = 0.0;
+                if (_s.Worker.TryDispatchUpdate(_s.Guidance, from, now + lead, 5))
+                {
+                    _s.SolveDispatchAt = now;
+                    _s.SolveDispatchLeadS = lead;
+                }
+            }
             else
             {
                 _s.DidSolve = true;
@@ -1883,10 +1985,56 @@ public static partial class GuidanceWindow
             return;
         }
 
+        NoteSolveLatency(now);
         if (!_s.Guidance.Command(now, out double3 torqueModel, out double thrustN, x, SixDofTracker(), SixDofAttitude()))
             return;
 
         ApplyPlanCommand(vehicle, parent, siteCci, x, now, torqueModel, thrustN);
+    }
+
+    /// <summary>AFC_X_SOLVE_LEAD=1: warm re-solves are delay-compensated (SolveLeadS). Off by default for now.</summary>
+    private static bool SolveLead => Ksa6DofGuidance.SolveLeadOn;
+
+    /// <summary>The longest lead a re-solve is posed ahead by, s.</summary>
+    private const double SolveLeadMaxS = 0.3;
+
+    /// <summary>
+    /// THE SOLVE'S LATENCY, measured: from a warm re-solve's dispatch to the step its plan is first flown, the last few (VehicleAutopilotState.SolveLatencies), whether or not the lead is on.
+    /// </summary>
+    private static void NoteSolveLatency(double now)
+    {
+        Ksa6DofPlan plan = _s.Guidance?.Published;
+        if (plan == null || ReferenceEquals(plan, _s.SolveLatencyPlan))
+            return;
+        _s.SolveLatencyPlan = plan;
+        // Only the plan the last warm dispatch produced: it carries that dispatch's stamp. A cold or restart plan, or one from a refused dispatch's successor, is not its latency.
+        if (!double.IsFinite(_s.SolveDispatchAt) || Math.Abs(plan.SolveTime - (_s.SolveDispatchAt + _s.SolveDispatchLeadS)) > 1e-6)
+            return;
+        double latency = now - _s.SolveDispatchAt;
+        _s.SolveDispatchAt = double.NaN;
+        if (!(latency >= 0.0 && latency < 2.0))
+            return;
+        _s.SolveLatencyLastS = latency;
+        _s.SolveLatencies[_s.SolveLatencyNext++ % _s.SolveLatencies.Length] = latency;
+    }
+
+    /// <summary>
+    /// HOW FAR AHEAD A WARM RE-SOLVE IS POSED, s: the longest of the last four measured latencies (NoteSolveLatency), at most SolveLeadMaxS and 0.4 of the burn left, while the engine burns the plan; 0 with the switch off, before any measurement, in the coast, or with no plan.
+    ///  WHY (2026-11-28). A warm re-solve started from the state at its dispatch and was stamped with its dispatch time, so the first L seconds of every plan - where it puts its correction for the craft having run behind - had passed by the time it was flown. Late in a booster's burn, with plans arriving 0.13-0.29 s old, only each plan's floor-thrust middle was ever flown: the craft fell at 2.6-4.5 m/s past 2 m and, once in four, met the ground at 1.4 m/s before the brake every plan promised (design review of the 070814 run). Real-time MPC's delay compensation: solve from the state predicted at the time the answer applies.
+    /// </summary>
+    private static double SolveLeadS(double now)
+    {
+        Ksa6DofPlan plan = _s.Guidance?.Published;
+        if (!SolveLead || plan == null || _s.Guidance.InCoast)
+            return 0.0;
+        double worst = 0.0;
+        int n = Math.Min(_s.SolveLatencyNext, _s.SolveLatencies.Length);
+        for (int i = 0; i < n; i++)
+            worst = Math.Max(worst, _s.SolveLatencies[i]);
+        double left = plan.Duration - (now - plan.SolveTime);
+        if (!(left > 0.0))
+            return 0.0;
+        return Math.Clamp(Math.Min(worst, 0.4 * left), 0.0, SolveLeadMaxS);
     }
 
     /// <summary>How often the game's moment limiter is measured, s (UpdateMomentLimiter).</summary>
@@ -2134,6 +2282,133 @@ public static partial class GuidanceWindow
     /// <summary>
     /// Turns one plan command into the throttle and the gimbal torque, and logs the cycle.
     /// </summary>
+    /// <summary>The radius of what the craft stands on, m, for the tip-over line: its NARROWEST reach from the thrust axis over all directions, among the colliders whose lowest point is within half a metre of the deepest (ContactDepth.NarrowestStanceM) - a skirt's rim, or the feet's inscribed circle; NaN with none measured. Not the widest: the Starship's aft flaps reach 3 m past its skirt port and starboard only.</summary>
+    internal static double TipRadiusM(VehicleAutopilotState s)
+        => Features.Ui.Logic.ContactDepth.NarrowestStanceM(s.FootX, s.FootY, s.FootHalfX, s.FootHalfY, s.FootDepthM);
+
+    /// <summary>The touchdown's share of the energy that tips the craft over (TipOver.Share), worst case, for the log: "tip 63 % of what tips it", or empty with nothing measured.</summary>
+    private static string TipText(Vehicle vehicle, double[] x)
+    {
+        double radius = TipRadiusM(_s);
+        Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out _);
+        double3 r = vehicle.Orbit.StateVectors.PositionCci;
+        double g = vehicle.Orbit.Parent.Mu / r.LengthSquared();
+        double side = Math.Sqrt(x[3] * x[3] + x[4] * x[4]);
+        double rate = Math.Sqrt(x[10] * x[10] + x[11] * x[11]);
+        double tilt = TiltFromUpDeg(vehicle, double3.Normalize(r)) * Math.PI / 180.0;
+        double share = Features.Ui.Logic.TipOver.Share(vehicle.TotalMass, 0.5 * (ixx + iyy), radius, _s.VehicleHeightM, g, side, rate, tilt);
+        return double.IsNaN(radius) ? "" : FormattableString.Invariant($", tip {share * 100.0:F0} % of what tips it (line {Features.Ui.Logic.TipOver.AcceptShare * 100.0:F0} %; stance {radius:F1} m, centre of mass {_s.VehicleHeightM:F1} m up, inertia {0.5 * (ixx + iyy):E2} kg m^2, tilt {tilt * 180.0 / Math.PI:F1} deg, {rate * 180.0 / Math.PI:F1} deg/s)");
+    }
+
+    /// <summary>AFC_X_BIAS_AXIAL=1: the acceleration estimate takes the thrust along the body axis, as it did before 2026-11-27, for comparison flights.</summary>
+    private static readonly bool BiasAxialOnly = Environment.GetEnvironmentVariable("AFC_X_BIAS_AXIAL") == "1";
+
+    /// <summary>The acceleration bias the next plan is built with, up (site frame), m/s^2: the filtered estimate when the bias is on, else none. Ksa6DofSetup.TryBuild draws the floor's hover line on gravity less this.</summary>
+    private static double PlanBiasUp() => _s.SixDofBiasEnabled ? _s.Bias.Z : 0.0;
+
+    /// <summary>The mass at the end of the last published plan, kg, or NaN with none: the weight the next plan's floor must sit under at its end.</summary>
+    private static double PublishedEndMass()
+    {
+        Ksa6DofPlan plan = _s.Guidance?.Published;
+        if (plan == null || plan.Nodes < 1 || plan.X == null || plan.X.Length < plan.Nodes * Dynamics6Dof.NX)
+            return double.NaN;
+        return plan.X[(plan.Nodes - 1) * Dynamics6Dof.NX + Dynamics6Dof.IM];
+    }
+
+    /// <summary>
+    /// The acceleration bias, up, that the post-plan laws (SinkToContact, FlyWithoutPlan) take off gravity, m/s^2: the same estimate the plan flew with, held to +-2. The thrust-to-weight gates that choose between those laws stay on raw gravity, so the route after the plan does not change, only the thrust each law asks for.
+    ///  WHY (2026-11-28 audit). On raw gravity the booster's sink law asked a net 0.54 m/s^2 down and got 0.57 up - its bias of 1.19 - and settled to a hover or a slight climb instead of its sink. AFC_X_SINK_RAW_G=1 flies raw gravity, as before.
+    /// </summary>
+    private static double PostPlanBiasUp() => SinkRawGravity || !_s.SixDofBiasEnabled ? 0.0 : Math.Clamp(_s.Bias.Z, -2.0, 2.0);
+
+    private static readonly bool SinkRawGravity = Environment.GetEnvironmentVariable("AFC_X_SINK_RAW_G") == "1";
+
+    /// <summary>AFC_X_BIAS_FINS_REST=1: the acceleration estimate takes the model's air force with the fins at rest (before 2026-11-28), for comparison flights.</summary>
+    private static readonly bool BiasFinsRest = Environment.GetEnvironmentVariable("AFC_X_BIAS_FINS_REST") == "1";
+
+    // FlownFinDeg's buffers, reused every step: FinsFor fills the list in the plan's fin order.
+    private static readonly List<ControlSurface> FlownFinSurfaces = new();
+    private static double[] _flownFinDeg = [];
+
+    /// <summary>The deflections the plan's fins are flown at now, deg, in the plan's fin order (Ksa6DofSetup.FinsFor), or null with no fins in the plan.</summary>
+    internal static double[] FlownFinDeg(Vehicle vehicle)
+    {
+        Ksa6DofGuidance g = _s.Guidance;
+        if (g == null || g.FinCount == 0)
+            return null;
+        Ksa6DofSetup.FinsFor(vehicle, _s.Aero, FlownFinSurfaces);
+        if (_flownFinDeg.Length != g.FinCount)
+            _flownFinDeg = new double[g.FinCount];
+        for (int i = 0; i < _flownFinDeg.Length; i++)
+            _flownFinDeg[i] = i < FlownFinSurfaces.Count ? FlownFinSurfaces[i].DeflectionDeg : 0.0;
+        return _flownFinDeg;
+    }
+
+    /// <summary>AFC_X_BIAS_NO_RCS=1: the acceleration estimate leaves the RCS's force out (before 2026-11-27 evening), for comparison flights.</summary>
+    private static readonly bool BiasNoRcs = Environment.GetEnvironmentVariable("AFC_X_BIAS_NO_RCS") == "1";
+
+    /// <summary>
+    /// The RCS force the PLAN models, model body axes (Ksa6DofGuidance.PlanRcsForceModel: ForcePerNm times the plan's own RCS torque), while AFC's RCS flies; zero otherwise. Not the force of the whole command: the attitude feedback's part and the allocator's departure from ForcePerNm are not in the plan's model, so the estimate must go on learning them (2026-11-27 evening review; the delivered force had been taken out whole).
+    /// </summary>
+    private static double3 RcsForceModel(Vehicle vehicle)
+    {
+        KsaRcsTorqueControl.Report rcs = KsaRcsTorqueControl.Last(vehicle);
+        if (!rcs.Active || _s.Guidance == null)
+            return default;
+        double3 f = _s.Guidance.PlanRcsForceModel;
+        return double.IsFinite(f.X) && double.IsFinite(f.Y) && double.IsFinite(f.Z) ? f : default;
+    }
+
+    /// <summary>AFC_X_BIAS_RAWDIR=1: the estimate takes the gimbals' measured direction whole (e3701e9), for comparison flights.</summary>
+    private static readonly bool BiasRawDirection = Environment.GetEnvironmentVariable("AFC_X_BIAS_RAWDIR") == "1";
+
+    /// <summary>AFC_X_KEEP_STANDBY_BIAS=1: touchdown keeps the standby's sideways bias at promotion (before fda30fb), for comparison flights.</summary>
+    internal static readonly bool KeepStandbyBias = Environment.GetEnvironmentVariable("AFC_X_KEEP_STANDBY_BIAS") == "1";
+
+    /// <summary>
+    /// Where the thrust points, model body axes, as far as the plan models it: the thrust axis plus the lit gimbals' deflection (KsaGimbalControl.Slot.ThrustDirAsmb less ThrustRestDirAsmb), that deflection scaled by the gimbals' share of <paramref name="thrustDelivered"/> - engines without a gimbal push along their own axis whatever the gimbals do. A cluster's cant at rest is left to the estimate, which learns it as before. Null when the last pass did not measure it.
+    /// </summary>
+    private static double3? ThrustDirModel(Vehicle vehicle, double thrustDelivered)
+    {
+        KsaGimbalControl.Slot slot = KsaGimbalControl.Diagnostics(vehicle);
+        if (slot == null || !slot.ThrustDirKnown || !(thrustDelivered > 0.0))
+            return null;
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        // AFC_X_BIAS_RAWDIR=1: the measured direction whole, as e3701e9 took it (no rest subtracted, no thrust share), for comparison flights.
+        if (BiasRawDirection)
+        {
+            double3 d = slot.ThrustDirAsmb;
+            var raw = new double3(double3.Dot(d, mx), double3.Dot(d, my), double3.Dot(d, mz));
+            return raw.Z > Math.Cos(20.0 * Math.PI / 180.0) ? raw : null;
+        }
+        double3 deflect = slot.ThrustDirAsmb - slot.ThrustRestDirAsmb;
+        // The gimbals' share of the thrust from rated thrusts, theirs against every active engine's: the live gimbal thrust against the delivered estimate lags through a throttle change, and on the 2026-11-27 booster that cut the deflection the estimate took and left part of the phantom force in (1 of 4 landed, against 4 of 4 with the whole deflection).
+        // Active engines only: VacuumThrust totals every engine on the craft, and a Starship landing on one engine of six read a share of a sixth (2026-11-27 review).
+        double allRated = KsaEnginePerf.ActiveVacuumThrust(vehicle);
+        double share = allRated > 0.0 ? Math.Clamp(slot.GimbalRatedThrustN / allRated, 0.0, 1.0) : 1.0;
+        // Above 0.85 it is all gimbals: the gimbals' rated thrust and the engines' vacuum thrust need not be read at the same pressure, and a craft with fixed engines beside the gimballed ones sits well under this.
+        if (share > 0.85)
+            share = 1.0;
+        var model = new double3(share * double3.Dot(deflect, mx), share * double3.Dot(deflect, my), 1.0 + share * double3.Dot(deflect, mz));
+        // A deflection within 20 deg (the gimbals' travel), else not believed: a stale or mis-framed reading must not turn the estimate's thrust.
+        double length = model.Length();
+        return length > 0.0 && model.Z / length > Math.Cos(20.0 * Math.PI / 180.0) ? model / length : null;
+    }
+
+    /// <summary>Hands touchdown guidance the gimbals' lag behind their last command, model body axes (KsaGimbalControl.Slot.LagTorqueNm), or null when the last pass did not measure it.</summary>
+    private static void NoteGimbalLag(Vehicle vehicle)
+    {
+        KsaGimbalControl.Slot slot = KsaGimbalControl.Diagnostics(vehicle);
+        if (slot == null || !slot.LagKnown)
+        {
+            _s.Guidance.NoteGimbalLag(null);
+            return;
+        }
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        double3 lag = slot.LagTorqueNm;
+        _s.Guidance.NoteGimbalLag(new double3(double3.Dot(lag, mx), double3.Dot(lag, my), double3.Dot(lag, mz)));
+    }
+
     private static void ApplyPlanCommand(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x,
                                          double now, double3 torqueModel, double thrustN)
     {
@@ -2286,7 +2561,9 @@ public static partial class GuidanceWindow
                                      scaleFrom: _s.SixDofCoastPending ? _s.SixDofCoastScaleState : null,
                                      momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
                                      momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
-                                     momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs);
+                                     momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs,
+                                     glideFunnelDeg: GlideFunnelDeg(), sideSpeedPerM: _s.SixDofSideSpeedPerM, lastSecondsSmooth: _s.SixDofLastSecondsSmooth,
+                                     accelBiasUpMs2: PlanBiasUp());
     }
 
     /// <summary>
@@ -2408,6 +2685,7 @@ public static partial class GuidanceWindow
             _s.TouchdownArmed = false;
             _s.SixDofSeenDescending = _s.SixDofTookBurn;
             _s.SixDofToContact = false;
+            _s.SixDofLogFaulted = false;
             ResetNodeLadderForBackend(ScvxUsesClarabel);
             _s.RefusalRun = 0;
             _s.PrevV = null;
@@ -2455,6 +2733,7 @@ public static partial class GuidanceWindow
         _s.TouchdownArmed = false;
         _s.SixDofSeenDescending = _s.SixDofTookBurn;
         _s.SixDofToContact = false;
+        _s.SixDofLogFaulted = false;
         ResetNodeLadderForBackend(ScvxUsesClarabel);
         _s.LastReplan = now;
         _s.PrevV = null;

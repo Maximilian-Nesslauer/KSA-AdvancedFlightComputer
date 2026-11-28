@@ -92,6 +92,16 @@ Choose which engines fire for landing without changing launch or boostback stagi
 
 Use the console nudge buttons to shift the hover aim. Numpad nudges are off by default because KSA uses numpad digits for HUD layouts; enable **NUMPAD NUDGES THE HOVER** on **TUNE > PREFERENCES** to nudge with the numpad while hovering regardless of the active console page.
 
+## Touchdown guidance's last metres
+
+Touchdown guidance's settings are on **TUNE > LANDING > TOUCHDOWN**. The ones that shape the end of a landing:
+
+- **Landing funnel (LIMITS):** The plan comes down inside a funnel over the site, as well as the **GLIDE SLOPE** cone: at most **FUNNEL AT CRAFT LENGTH** (`20 deg` from vertical) below the craft's length, **FUNNEL AT 300 M** (`30 deg`) at 300 m and **FUNNEL AT 1000 M** (`60 deg`) at 1000 m. It shapes the approach rather than refusing a plan: a craft handed over wide of it comes in along it. Set **FUNNEL AT CRAFT LENGTH** to `0` to switch it off.
+- **LAST SECONDS SMOOTH (LIMITS, `0.3`):** Prices tilt and pitch and yaw rate over the last 3 s of the burn, so the craft arrives already upright and still instead of squaring up at the last moment. `0` switches it off.
+- **The end of the plan:** The plan aims to end upright, with no pitch or yaw rate, at `0.3 m/s` of sink, on the site. Each of these is priced rather than forced, so a plan that cannot meet one exactly still lands. It also keeps a sideways speed, turn rate and tilt at the end that would not tip the craft over its narrowest stance, keeps sinking at least `0.5 m/s` until the last metre, plans its turns at up to `40 deg/s`, and does not let its ignition slip more than `0.2 s` later than it promised.
+- **CUT SUPERVISOR (on):** A watchdog over the last metres, beside the plan. With the legs within **CUT HEIGHT** (`2 m`) of the ground, it cuts the engine once the craft has failed by **CUT SHORTFALL** (`0.3 m`, less lower down) to sink at its target (**CUT SINK**, but never more than `0.24 m/s`), so a craft that stalls just above the ground drops the rest. When the plan ends with the legs within `0.1 m` of the ground, it cuts at once. **CUT WATCH HEIGHT** (`5 m`) is where it starts watching. After a cut the engine stays off. The game log says why it cut and how fast the drop lands. The legs' height is taken at the attitude flown, so a tilted craft's lowest leg counts.
+- **After bellyflop or a glide:** Touchdown guidance takes the craft a second before its standby plan turns 15 deg away from the attitude flown (or 5 s before its ignition at the latest).
+
 ## Control, aborts and saved settings
 
 - **Limits:** Guidance plans respect both the configured g-limit and KSA's structural load throttle limit.

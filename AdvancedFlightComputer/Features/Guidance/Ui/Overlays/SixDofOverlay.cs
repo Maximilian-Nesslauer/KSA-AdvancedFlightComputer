@@ -27,7 +27,7 @@ public static partial class GuidanceWindow
         Ksa6DofPlan plan = g?.Published;
         if (plan == null || plan.Nodes < 2)
             return;
-        if (!SetupProjection(parent))
+        if (!SetupProjection(vp, parent))
             return;
 
         // Rebuild the site frame live rather than caching it from solve time: the plan is flown against the rotating body, so a stale frame slides off the ground as the world turns. Same reasoning as the G-FOLD overlay.
@@ -72,7 +72,9 @@ public static partial class GuidanceWindow
             for (int ring = 1; ring <= rings; ring++)
             {
                 double dz = (topZ - apexZ) * ring / rings;
-                double rad = cot * dz, z = apexZ + dz;
+                // The progressive glideslope's funnel where the planner has one (Scvx6DofConfig.Radius), the plain cone's cot x height where not.
+                double rad = AdvancedFlightComputer.Guidance.Scvx.SixDof.Scvx6DofConfig.Radius(_s.SixDofGlideSlopeDeg,
+                    Ksa6DofSetup.LastGlideFunnelHeightsM, Ksa6DofSetup.LastGlideFunnelHalfAngleDeg, dz), z = apexZ + dz;
                 double3 prev = default;
                 for (int j = 0; j <= seg; j++)
                 {

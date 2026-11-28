@@ -73,6 +73,9 @@ if (args.Contains("--handover"))
 if (args.Contains("--hermite"))
     return PlanStateInterpolationCheck.Run();
 
+if (args.Contains("--glide-funnel"))
+    return PathShaping.Check();
+
 if (args.Contains("--touchdown"))
     return TouchdownContactCheck.Run();
 

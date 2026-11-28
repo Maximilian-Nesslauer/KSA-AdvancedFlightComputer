@@ -127,6 +127,7 @@ nav:
           - Convex ascent: guidance/scvx/ascent.md
           - Entry (3-DOF): guidance/scvx/entry.md
           - Touchdown (6-DOF): guidance/scvx/touchdown.md
+          - Touchdown terminal phase (design): guidance/touchdown-terminal-design.md
           - Touchdown on the craft: guidance/scvx-bridge.md
           - Dev notes: guidance/scvx-bridge-devnotes.md
       - Attitude control:

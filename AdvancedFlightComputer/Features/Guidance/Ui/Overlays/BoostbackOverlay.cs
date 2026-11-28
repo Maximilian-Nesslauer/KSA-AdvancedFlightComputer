@@ -405,7 +405,7 @@ public static partial class GuidanceWindow
             st.ImpactShownValid = false;
             return;
         }
-        if (!SetupProjection(parent))
+        if (!SetupProjection(vp, parent))
             return;
 
         // Blend the DRAWN point toward the latest prediction. The prediction itself steps at the recompute rate; without this the marker teleports sixteen times a second by however far the answer moved, which reads as noise even when every step is a correct answer. Large moves snap - see ImpactSnapDistanceM.

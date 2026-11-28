@@ -17,6 +17,12 @@ public sealed class Scvx6DofConfig
 
     public double Tmax { get; init; } = 6.0e6;
     public double ThrottleFloor { get; init; } = 0.40;          // Tmin = floor * Tmax
+
+    /// <summary>
+    /// THE PLAN'S THRUST CEILING as a share of full thrust, 1 for all of it: the plan may ask for at most this, and the attitude and thrust feedback has the rest (tube MPC's constraint tightening). The throttle is still T / Tmax.
+    ///  WHY (2026-11-27 campaign). A propellant-best plan ends its burn on full thrust; the lunar lander came down its last 4.5 s at 100 % throttle from 18 m/s at 49 m, so nothing was left for the craft falling behind its plan, and the re-solves slid the braking later still.
+    /// </summary>
+    public double PlanThrustShare { get; set; } = 1.0;
     public double GimbalMaxDeg { get; init; } = 10.0;
 
     /// <summary>
@@ -28,7 +34,7 @@ public sealed class Scvx6DofConfig
     public double GimbalTrim => Math.Sqrt(GimbalTrimX * GimbalTrimX + GimbalTrimY * GimbalTrimY);
 
     /// <summary>
-    /// How fast the gimbal can move, as full deflections (GimbalMaxDeg) per second; 0 for no limit. KSA 5901's gimbals slew at Gimbal's rate cap, NaturalFrequency / (5 e) of their range a second - 2 a second for the stock engines, zero to full deflection in half a second - where the plan took the lateral thrust as free to jump between nodes: at 50 nodes it could swing ten times faster than the gimbal follows. The lateral thrust may change between neighbouring nodes by no more than this rate times the interval times the cone's width at the thrust there.
+    /// How fast the gimbal can move, as full deflections (GimbalMaxDeg) per second; 0 for no limit. KSA 5901's gimbals slew at Gimbal's rate cap, NaturalFrequency / (5 e) of their range a second - 2 a second for the stock engines, zero to full deflection in half a second - where the plan took the lateral thrust as free to jump between nodes: at 50 nodes it could swing ten times faster than the gimbal follows. The gimbal's angle - each lateral thrust over the axial, td/T - may change between neighbouring nodes by no more than this rate times the interval times the cone's tangent, linearised about the reference (Scvx6DofSubproblemScs). WHY THE ANGLE (2026-11-27): the limit was on the lateral thrust itself, |td_{k+1} - td_k| against the cone at the mean thrust, which is the angle's rate only while the thrust holds. The last plans of the Starship landings swung the thrust between 0.9 and 2.4 MN in a few tenths of a second, so with the lateral thrust inside its limit the angle moved at 30-120 deg/s against the gimbal's 20.
     /// </summary>
     public double GimbalSlewPerS { get; init; }
     public double TauRollMax { get; init; } = 1.0e5;
@@ -47,6 +53,20 @@ public sealed class Scvx6DofConfig
     public double GroundFloor { get; init; } = -1.0;            // X[n,2] >= this
 
     public double RhoVc { get; init; } = 1e5;                   // virtual-control penalty
+
+    /// <summary>
+    /// VIRTUAL CONTROL PRICED PER SECOND, s, or 0 for per interval: an interval shorter than this has its virtual control priced up by this over its length (at most <see cref="VirtualControlShortCap"/> times), so the penalty is RhoVc * sum (w / scale)^2 * max(1, this / dt) - the integral of the squared rate, against the interval it was sized on. Longer intervals keep their price.
+    ///  WHY (2026-11-27). Priced per interval, a plan that moves its state at some rate its dynamics do not make pays c^2 T^2 / N over T seconds in N intervals: as a 15-node landing plan shrank from 4.5 s to 1.2 s, the same cheating got 14 times cheaper, and the last plans of the Starship landings turned their attitude 3-40 deg/s faster or slower than their own rates rather than pay the soft limits' L1 prices. 0.35 s is the interval the per-channel tolerances were sized on (Ksa6DofGuidance.GateReferenceIntervalS).
+    /// </summary>
+    ///  Briefly switched off on 2026-11-27 (91be2da), blamed for a lunar lander that padded its late plans with a hover at the contact height. Wrongly: those plans were padded with 0.96 s intervals too, where this adds nothing; the sideways-speed cone held them to 0.3 m/s at the ground with a metre still to go (VehicleAutopilotState.SixDofSideSpeedPerM, now off by default).
+    public double VirtualControlRefIntervalS { get; set; } = 0.35;
+
+    /// <summary>The most an interval's virtual control is priced up for being short (VirtualControlRefIntervalS): a fiftieth of it, 7 ms, and under.</summary>
+    public const double VirtualControlShortCap = 50.0;
+
+    /// <summary>The factor on an interval's virtual-control price for its length <paramref name="dt"/>, s: 1 at VirtualControlRefIntervalS or longer, for a zero-length interval (a coast after ignition) and when off.</summary>
+    public double VirtualControlIntervalWeight(double dt)
+        => VirtualControlRefIntervalS > 0.0 && dt > 1e-9 ? Math.Clamp(VirtualControlRefIntervalS / dt, 1.0, VirtualControlShortCap) : 1.0;
 
     /// <summary>
     /// The scale each state channel's virtual control is priced on, NX long, or null for <see cref="XScale"/>: the dynamics penalty is RhoVc * sum (w / scale)^2, in the subproblem and in the merit alike. An entry of 0 or less keeps that channel on XScale.
@@ -153,6 +173,18 @@ public sealed class Scvx6DofConfig
     /// <summary>The coast's duration bounds, s. SETTABLE like sigma's.</summary>
     public double CoastSigmaMin { get; set; }
     public double CoastSigmaMax { get; set; } = 30.0;
+
+    /// <summary>
+    /// NO LATER IGNITION, s, or negative for none: once touchdown has the craft (Ksa6DofGuidance.ArmIgnitionCap), the ignition no later than the earliest a published plan - or the plan in hand at the hand-over - has promised, plus this (Ksa6DofGuidance.CoastNow): a re-solve can light the engine earlier but not later. A shrinking horizon on the ignition. 0.2 s by default (Ksa6DofSetup).
+    ///  WHY (2026-11-27 campaign). The coast stays free until the ignition locks, and each re-solve of a Starship's approach pushed the ignition a little later - the 17:29 landing planned to light 4.9 s after the hand-over and lit 7.7 s after, the plan's touchdown sliding 7 s later over the coast - so the burn began lower and faster and ended on its limits. The literature's receding-horizon fix: keep the time-to-go the plan promised.
+    /// </summary>
+    public double CoastGrowthCapS { get; set; } = -1.0;
+
+    /// <summary>
+    /// NO LATER TOUCHDOWN, s, or negative for none: once touchdown has the craft (Ksa6DofGuidance.ArmIgnitionCap), a re-solve's burn ends no later than the earliest end a published plan - or the plan in hand at the hand-over - has promised, plus this (Ksa6DofGuidance.KeepEndNoLater). A re-solve can land sooner but not later: the burn time's own shrinking horizon, as NO LATER IGNITION is the coast's.
+    ///  WHY (2026-11-27 in-game Moon landing, 20:49). The burn time is free on every re-solve, and the lander's plans stretched their end from 4.6 s to go at 8.5 m over the legs to 9 s at 2.6 m and still 7.8 s at 1.2 m, creeping at 0-0.1 m/s rather than taking out the last 0.7 m of miss with a lean; the cut supervisor read it as the stall it was, cut at 1.2 m, and the lander fell to the ground at 1.8 m/s.
+    /// </summary>
+    public double EndGrowthCapS { get; set; } = -1.0;
 
     /// <summary>
     /// THE IGNITION LOCK: the coast's duration pinned to this, s, or null to leave it free. A fuel-optimal plan always lights as late as it can, so a free ignition time slides later on every re-solve; locked a second or so out, the craft commits to it. After ignition the coast is pinned at zero: its nodes sit at the start, the problem keeps its shape, and the warm start carries on.
@@ -277,9 +309,76 @@ public sealed class Scvx6DofConfig
     /// last thing to give up, and it should only open when the alternative is a plan
     /// that claims a touchdown speed the vehicle cannot achieve.
     /// </summary>
-    public double TerminalSpeedWeight { get; init; }
+    public double TerminalSpeedWeight { get; set; }
 
-    public bool SoftTerminal => TerminalMissWeight > 0.0 || TerminalSpeedWeight > 0.0;
+    /// <summary>The terminal miss's price on the HEIGHT axis, as a multiple of TerminalMissWeight's (1: the same as across). Raised with the speed's price, so a squeezed plan still arrives a little fast rather than stopping high, where a craft that cannot throttle below its weight floats and climbs (2026-10-08).</summary>
+    public double TerminalHeightMissFactor { get; set; } = 1.0;
+
+    /// <summary>
+    /// THE END ATTITUDE, SOFT: the price per degree of tilt left at the end (the end quaternion's x and y components, TerminalAttitudePriceQuat each), or 0 to keep it hard. With <see cref="TerminalRateWeight"/>, per deg/s of pitch and yaw rate left at the end.
+    ///  WHY (2026-11-27). Upright with no pitch or yaw rate at the end was hard. In the last second or two of the Starship landings the plans already swung the gimbal at its planned slew on 12-14 of 14 intervals and could not stop an 8 deg/s turn in time; the only slack left was virtual control, so the plans' attitudes ran 5-12 deg off their own rates, and the craft, following physics, touched down at 5-10 deg still turning. Soft, a plan that cannot end upright says so, and the flight is not asked to fly attitudes nothing produces. Priced above the position miss (the user's call: there is margin in where it lands, none in how it lands) and with the speed.
+    /// </summary>
+    public double TerminalAttitudeWeight { get; set; }
+
+    /// <summary>The end's pitch and yaw rate, soft: the price per deg/s left at the end, or 0 to keep it hard. See TerminalAttitudeWeight.</summary>
+    public double TerminalRateWeight { get; set; }
+
+    /// <summary>A degree of tilt as an end quaternion component, sin(0.5 deg): what TerminalAttitudeWeight is priced on.</summary>
+    public static readonly double TerminalAttitudePriceQuat = Math.Sin(0.5 * Math.PI / 180.0);
+
+    /// <summary>A degree a second in rad/s: what TerminalRateWeight is priced on.</summary>
+    public const double TerminalRatePriceRadS = Math.PI / 180.0;
+
+    public bool SoftTerminal => TerminalMissWeight > 0.0 || TerminalSpeedWeight > 0.0 || TerminalAttitudeWeight > 0.0 || TerminalRateWeight > 0.0;
+
+    /// <summary>The end speed's price ACROSS (x, y), as a multiple of TerminalSpeedWeight's; the height axis keeps the whole. Low, so a plan does not chase the last of the sideways speed with a lean and a turn it cannot finish: the tip-over line (TipLimit) says how much sideways speed the touchdown can carry.</summary>
+    public double TerminalSideSpeedFactor { get; set; } = 1.0;
+
+    /// <summary>
+    /// THE TIP-OVER LINE at the end (2026-11-27, the user's): the touchdown may carry at most TipShare (80 %) of the energy that tips the craft over its skirt's or feet's edge. With R the edge's distance from the axis, H the centre of mass's height over the contact plane, I the pitch-yaw inertia, m the end mass, d = sqrt(R^2 + H^2), alpha = atan(R / H) and K = sqrt(TipShare (I + m d^2) m g d), that is, for tilts short of alpha,
+    /// <c>(m H |v_xy| + I |w_xy|) / K + 2 |q_xy| &lt;= alpha</c>
+    /// at the last node (the barrier is m g d (alpha - theta)^2 / 2 to within a percent there, so the line is straight). Three cones and one row, soft with its own slack in radians of the line, priced TipWeight a degree. On from the build (the pattern is fixed then); the numbers - TipRadiusM, TipHeightM, TipInertiaKgM2, TipGravity - are the flight's, set each re-solve, and the line is loose until they are.
+    /// </summary>
+    public bool TipLimit { get; set; }
+    public double TipRadiusM { get; set; }
+    public double TipHeightM { get; set; }
+    public double TipInertiaKgM2 { get; set; }
+    public double TipGravity { get; set; } = 9.81;
+    public double TipShare { get; set; } = 0.8;
+    public double TipWeight { get; set; } = 2.0e4;
+
+    /// <summary>The line's gain K, N m s a radian, and alpha, rad, at end mass <paramref name="massKg"/>; false while the numbers are missing (the line is then loose).</summary>
+    public bool TipLine(double massKg, out double k, out double alpha)
+    {
+        double r = TipRadiusM, h = TipHeightM, d = Math.Sqrt(r * r + h * h);
+        alpha = Math.Atan2(Math.Max(r, 0.0), Math.Max(h, 1e-6));
+        k = Math.Sqrt(Math.Max(TipShare, 0.0) * (TipInertiaKgM2 + massKg * d * d) * massKg * TipGravity * d);
+        return TipLimit && r > 0.0 && h > 0.0 && TipInertiaKgM2 > 0.0 && massKg > 0.0 && TipGravity > 0.0 && double.IsFinite(k) && k > 0.0;
+    }
+
+    /// <summary>
+    /// THE LAST SECONDS PRICED FOR SMOOTHNESS (2026-11-27, the user's idea): from TerminalPhaseS to go, each node's tilt and pitch-yaw rate cost TerminalPhaseTiltWeight a degree squared second and TerminalPhaseRateWeight a (deg/s) squared second, ramped in as the square of how far into those seconds it is. Far out the plan flies for propellant; near the end, leaning and turning are dear, so it kills the sideways speed early or lands with a little drift rather than leaning late and swinging back through upright. 0 for none.
+    /// </summary>
+    public double TerminalPhaseS { get; set; }
+    public double TerminalPhaseTiltWeight { get; set; }
+    public double TerminalPhaseRateWeight { get; set; }
+
+    /// <summary>Node <paramref name="k"/>'s share of the last-seconds price, s: the ramp at its time to go, times the plan time it stands for. 0 in the coast and outside TerminalPhaseS.</summary>
+    public double TerminalPhaseShare(int k, int n, int coastIntervals, double sigma, double coastSigma)
+    {
+        if (!(TerminalPhaseS > 0.0) || k < coastIntervals || !(sigma > 0.0))
+            return 0.0;
+        double end = Scvx6DofSolver.NodeTime(n - 1, n, coastIntervals, sigma, coastSigma);
+        double toGo = end - Scvx6DofSolver.NodeTime(k, n, coastIntervals, sigma, coastSigma);
+        double ramp = Math.Clamp(1.0 - toGo / TerminalPhaseS, 0.0, 1.0);
+        double dt = sigma / Math.Max(n - 1 - coastIntervals, 1);
+        double span = k == coastIntervals || k == n - 1 ? 0.5 * dt : dt;
+        return ramp * ramp * span;
+    }
+
+    /// <summary>A degree of tilt as the quaternion's x or y component and a degree a second in rad/s: what the last-seconds prices are per.</summary>
+    public static readonly double PhaseTiltScaleQuat = Math.Sin(0.5 * Math.PI / 180.0);
+    public const double PhaseRateScaleRadS = Math.PI / 180.0;
 
     public bool GlideSlopeEnabled => GlideSlopeDeg > 0.0;
     public bool VzLimitEnabled => VzMax >= 0.0;
@@ -318,6 +417,164 @@ public sealed class Scvx6DofConfig
 
     /// <summary>cot of the glideslope half-angle: the cone's horizontal run per unit of height.</summary>
     public double CotGlideSlope => 1.0 / Math.Tan(Math.Clamp(GlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
+
+    /// <summary>
+    /// THE PROGRESSIVE GLIDESLOPE: the heights over the target, m, ascending, at which the funnel's half-angle from vertical, seen from the target (as GLIDE SLOPE's angle is), is <see cref="GlideFunnelHalfAngleDeg"/>: the offset allowed there is h tan(half-angle). Null or empty for the plain cone. Between two heights the offset allowed changes linearly, below the first it is the first's cone, and above the last it widens at least at the last's half-angle. The plain cone of <see cref="GlideSlopeDeg"/> stays as the outer bound. Flight sets one craft length, 300 m and 1000 m (Ksa6DofSetup.GlideFunnelHeights).
+    ///  WHY (#335, 2026-11-27). The plan's cost is mostly fuel, which is flat across many shapes, so the plain 10 deg cone - 5.7 m of offset per metre of height, 113 m at 20 m - left the shape to wherever SCvx's local optimum fell: one Starship landing lit 109 m out and swept in at 20 m/s sideways through 50 m, another lit 561 m out. Real landings come down the last stretch nearly vertical.
+    ///  NOT CONVEX: a funnel that narrows towards the ground is a trumpet. The subproblem takes its tangent at each node's reference height (an affine bound on the offset, a second-order cone as before), and the merit prices the true funnel, as SCvx linearises every non-convex limit. Its slopes are made non-decreasing in height, so it is convex in height and every tangent lies inside it.
+    /// </summary>
+    public double[]? GlideFunnelHeightsM { get; init; }
+
+    /// <summary>The progressive glideslope's half-angles from vertical at <see cref="GlideFunnelHeightsM"/>, deg.</summary>
+    public double[]? GlideFunnelHalfAngleDeg { get; init; }
+
+    /// <summary>
+    /// The price of the progressive glideslope's narrowing beyond the plain cone, per <see cref="GlideFunnelPriceScaleM"/> of offset, as <see cref="GlideSlopeWeight"/> prices the cone: low, so the funnel SHAPES a plan that can follow it and gives way for one that cannot, rather than enforcing a corridor. Past the plain cone the glideslope's own price applies.
+    ///  Offline (2026-11-27), at the cone's own price the funnel took a gimbal-limited booster that ends 8-15 m off the pad (--6dof-lift) from 40 plans kept to none.
+    /// </summary>
+    public double GlideFunnelWeight { get; init; } = 10.0;
+
+    /// <summary>The length the funnel's price is per, m: fixed, as the terminal miss's is (TerminalMissScaleM), so a metre outside costs the same however far away the plan starts. On the position scale - the craft's distance at setup, about 240 m in the offline checks and 2 km for a Starship at standby - it would barely touch the Starship.</summary>
+    public const double GlideFunnelPriceScaleM = 250.0;
+
+    /// <summary>
+    /// THE SIDEWAYS-SPEED CONE, 1/s, or 0 for none: the plan's horizontal speed at each node from node 1 is at most this times its height over the target, plus <see cref="SideSpeedFloorMs"/> - 0.3 allows 3.3 m/s at 10 m and 0.9 m/s at 2 m - so the sideways speed is gone before the last metres and the craft comes down them straight, as a booster that lands 0.2 m/s sideways does. Soft, with its own slack at <see cref="SideSpeedWeight"/>. Exactly convex: a second-order cone in the state, so it needs no linearisation.
+    ///  WHY (#335, 2026-11-27). The position funnel limits how far off the craft may be, not how fast it moves, and the plans met it and left the sideways speed to the last second: two Starship landings passed over the target with their legs 7-9 m up at 2.9-3.8 m/s. The last plans then stopped it by leaning one way and pushing the other with the gimbal; one engine's gimbal could not both turn the craft and push it, the attitude feedback's corrections pushed the other way, and both touched down sliding at 3.3-4.2 m/s and toppled.
+    /// </summary>
+    public double SideSpeedPerM { get; set; }
+
+    /// <summary>The sideways speed the cone allows at the target's height, m/s.</summary>
+    public double SideSpeedFloorMs { get; set; } = 0.3;
+
+    /// <summary>The price of sideways speed over the cone, per <see cref="SideSpeedPriceScaleMs"/> per node.</summary>
+    public double SideSpeedWeight { get; set; } = 10.0;
+
+    /// <summary>The speed the sideways-speed cone's price is per, m/s: fixed, as the funnel's length is.</summary>
+    public const double SideSpeedPriceScaleMs = 20.0;
+
+    public bool SideSpeedEnabled => SideSpeedPerM > 0.0;
+
+    /// <summary>
+    /// THE SINK-RATE FUNNEL, 1/s, or 0 for none: the plan's speed down at each node from node 1 is at most this times its height over the target plus <see cref="SinkFloorMs"/> - 0.5 with a 2 m/s floor allows 12 m/s at 20 m and 3 m/s at 2 m. Soft, its slack at <see cref="SinkWeight"/> per <see cref="SideSpeedPriceScaleMs"/> per node. Linear in the state.
+    ///  WHY (2026-11-27 campaign). A propellant-best plan brakes as late as it can: every Starship landing of the day came down its last 20-30 m at 19-24 m/s on full throttle, leaving no time to stand the craft up and take out its sideways speed, and the re-solves slid the braking later still. This keeps the end of the burn gentle, so the last seconds have room.
+    /// </summary>
+    public double SinkPerM { get; set; }
+
+    /// <summary>The speed down the sink-rate funnel allows at the target's height, m/s.</summary>
+    public double SinkFloorMs { get; set; } = 2.0;
+
+    /// <summary>The price of speed down over the funnel, per <see cref="SideSpeedPriceScaleMs"/> per node.</summary>
+    public double SinkWeight { get; set; } = 200.0;
+
+    public bool SinkFunnelEnabled => SinkPerM > 0.0;
+
+    /// <summary>
+    /// THE DESCENT FLOOR, m/s, or 0 for none: the plan's speed DOWN at each node from node 1 is at least min(this, max(the plan's end sink, <see cref="DescentFloorPerM"/> x its height over the target)) (<see cref="DescentFloorAt"/>) - 0.5 by default (Ksa6DofSetup) - the last metres are flown descending, never hovering, as Apollo's P66 and MSL's constant-descent segment fly them. Soft, its slack at <see cref="DescentFloorWeight"/> per <see cref="SideSpeedPriceScaleMs"/> per node. Linear in the state, with the branch of the min taken at the reference (re-linearised every iteration).
+    ///  WHY (2026-11-27, the in-game lunar landing at 20:49). Nothing in the plan said not to hover near the ground, and a hover cost only a little fuel: a lander that drifted 0.3 m off its plan re-planned a 3 s hover at 5.4 m to move the 0.3-0.5 m back at 1-4 deg (leaning in the last 3 s is priced by LAST SECONDS SMOOTH), its end jumping from 5.1 to 8.2 s away; the cut supervisor read the stall and cut it 1.2 m up.
+    /// </summary>
+    public double DescentFloorMs { get; set; }
+
+    /// <summary>The descent floor's taper near the ground, 1/s: under DescentFloorMs / this metres over the target the floor is this times the height, so it meets the plan's end sink there.</summary>
+    public double DescentFloorPerM { get; set; } = 0.5;
+
+    /// <summary>The price of a descent short of the floor, per <see cref="SideSpeedPriceScaleMs"/> per node: 2000 makes a 0.5 m/s hover over five nodes cost 250, more than the 160 of a 0.4 m miss.</summary>
+    public double DescentFloorWeight { get; set; } = 2000.0;
+
+    public bool DescentFloorEnabled => DescentFloorMs > 0.0;
+
+    /// <summary>
+    /// THE PRICE OF TIME, per second of burn, or 0 for none: a linear cost on the burn time (sigma) in the subproblem and in the merit alike, exact and convex.
+    ///  WHY (2026-11-27 review of the in-game lunar landing). The objective's fuel term is the share of the mass burned - hundredths - against 400 a metre of miss, so on a light craft that can hover, seconds of hover were all but free: its plans hovered 3 s at 5 m to take out a 0.4 m miss rather than lean or land a little off.
+    /// </summary>
+    public double TimeWeight { get; set; }
+
+    /// <summary>
+    /// The descent floor at <paramref name="heightM"/> over the target, m/s down: min(DescentFloorMs, max(<paramref name="endSinkMs"/>, DescentFloorPerM x height)) - never under the plan's own end sink, so a craft flying its plan always comes down faster than the cut supervisor's target (0.8 of that sink).
+    ///  WHY (2026-11-27 headless). Tapered to zero, the floor let a lunar lander sink at 0.14 m/s with its legs 0.41 m up; the supervisor read it as a stall below its 0.24 m/s, cut, and the drop broke the legs.
+    /// </summary>
+    public double DescentFloorAt(double heightM, double endSinkMs)
+        => Math.Min(DescentFloorMs, Math.Max(Math.Max(endSinkMs, 0.0), DescentFloorPerM * Math.Max(heightM, 0.0)));
+
+    /// <summary>
+    /// THE FIRST GIMBAL COMMAND'S ANCHOR, N, or null for none: (tdx, tdy, band) - node 0's lateral thrust may differ from (tdx, tdy) by at most band on each axis. Set by the flight for a warm re-solve to the command it is flying now, with band what the gimbal slews in two re-solve cycles (Ksa6DofGuidance.FirstGimbalAnchor), so a new plan carries on from where the gimbal is going rather than jumping. Settable between solves, as VirtualControlScale is.
+    ///  WHY (#335, 2026-11-27). Each re-solve started from the measured state but its first gimbal command was free, so every new plan, about every 0.15 s, stepped the feedforward by 1-5 deg - faster than the gimbal slews (about 20 deg/s). In the last 5 s of two Starship landings 15 of 22 and 23 of 35 too-fast steps came at a new plan; the gimbal lagged, the attitude fell 5-7 deg behind, re-solves were refused, and the attitude feedback's deflection pushed the craft sideways into a topple.
+    /// </summary>
+    public double[]? FirstGimbalAnchor { get; set; }
+
+    public bool GlideSlopeProgressive => IsProgressive(GlideFunnelHeightsM, GlideFunnelHalfAngleDeg);
+
+    /// <summary>The glideslope's horizontal run per metre of height at <paramref name="heightM"/> over the target.</summary>
+    public double GlideSlopeRunPerMAt(double heightM) => RunPerM(GlideSlopeDeg, GlideFunnelHeightsM, GlideFunnelHalfAngleDeg, heightM);
+
+    /// <summary>The largest horizontal offset from the target the glideslope allows at <paramref name="heightM"/> over it, m: the integral of <see cref="GlideSlopeRunPerMAt"/> from 0, so the plain cone's cot x height when not progressive. Negative below the target, as the cone's is.</summary>
+    public double GlideSlopeRadiusAt(double heightM) => Radius(GlideSlopeDeg, GlideFunnelHeightsM, GlideFunnelHalfAngleDeg, heightM);
+
+    /// <summary>Whether funnel knots are given at all: matching, non-empty, heights ascending and non-negative, half-angles between 0 and 90 deg.</summary>
+    public static bool IsProgressive(double[]? heightsM, double[]? halfAngleDeg)
+    {
+        if (heightsM is not { Length: > 0 } || halfAngleDeg is null || halfAngleDeg.Length != heightsM.Length)
+            return false;
+        for (int i = 0; i < heightsM.Length; i++)
+        {
+            if (!(heightsM[i] >= 0.0) || !(halfAngleDeg[i] > 0.0 && halfAngleDeg[i] < 90.0) || (i > 0 && !(heightsM[i] > heightsM[i - 1])))
+                return false;
+        }
+        return true;
+    }
+
+    private static double Cot(double deg) => 1.0 / Math.Tan(Math.Clamp(deg, 1e-3, 89.999) * Math.PI / 180.0);
+
+    /// <summary>The funnel's slope on each stretch, m of offset per m of height: stretch 0 from the target to the first height, i from height i-1 to i, and the last above the last height. From the offsets at the heights, h tan(half-angle); made non-decreasing so the funnel stays convex (a stretch that would narrow upward is widened), and no wider than the plain cone.</summary>
+    private static double[] Slopes(double plainDeg, double[] heightsM, double[] halfAngleDeg)
+    {
+        int n = heightsM.Length;
+        double cap = Cot(plainDeg);
+        var slope = new double[n + 1];
+        double prevH = 0.0, prevR = 0.0;
+        for (int i = 0; i < n; i++)
+        {
+            double r = heightsM[i] * Math.Tan(halfAngleDeg[i] * Math.PI / 180.0);
+            slope[i] = heightsM[i] > prevH ? (r - prevR) / (heightsM[i] - prevH) : Math.Tan(halfAngleDeg[i] * Math.PI / 180.0);
+            prevH = heightsM[i];
+            prevR = r;
+        }
+        slope[n] = Math.Max(slope[n - 1], Math.Tan(halfAngleDeg[n - 1] * Math.PI / 180.0));
+        for (int i = 0; i <= n; i++)
+            slope[i] = Math.Min(Math.Max(slope[i], i > 0 ? slope[i - 1] : 0.0), cap);
+        return slope;
+    }
+
+    /// <summary>The run per metre of height of a funnel at <paramref name="heightM"/> (see <see cref="GlideSlopeRunPerMAt"/>): its slope on that stretch. For the drawings and the log, which have no config.</summary>
+    public static double RunPerM(double plainDeg, double[]? heightsM, double[]? halfAngleDeg, double heightM)
+    {
+        if (!IsProgressive(heightsM, halfAngleDeg))
+            return Cot(plainDeg);
+        double[] slope = Slopes(plainDeg, heightsM!, halfAngleDeg!);
+        for (int i = 0; i < heightsM!.Length; i++)
+            if (heightM < heightsM[i])
+                return slope[i];
+        return slope[heightsM.Length];
+    }
+
+    /// <summary>The radius of a funnel at <paramref name="heightM"/> (see <see cref="GlideSlopeRadiusAt"/>): the offset allowed, the sum of its slopes over the stretches below.</summary>
+    public static double Radius(double plainDeg, double[]? heightsM, double[]? halfAngleDeg, double heightM)
+    {
+        if (!IsProgressive(heightsM, halfAngleDeg))
+            return Cot(plainDeg) * heightM;
+        double[] slope = Slopes(plainDeg, heightsM!, halfAngleDeg!);
+        if (heightM <= 0.0)
+            return slope[0] * heightM;
+        double radius = 0.0, below = 0.0;
+        for (int i = 0; i < heightsM!.Length; i++)
+        {
+            double top = Math.Min(heightM, heightsM[i]);
+            radius += slope[i] * (top - below);
+            if (heightM <= heightsM[i])
+                return radius;
+            below = heightsM[i];
+        }
+        return radius + slope[heightsM.Length] * (heightM - below);
+    }
 
     public double Tmin => ThrottleFloor * Tmax;
     public double TanGimbal => Math.Tan(GimbalMaxDeg * Math.PI / 180.0);

@@ -55,7 +55,7 @@ internal static class SixDofLiftCheck
                 string cold = Cold(dyn, x0, sigma, verbose);
                 string loop = Loop(dyn, plant, x0, sigma, verbose);
                 Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"  {aname,-20} (drag {drag,4:F1}, lift {lift,4:F2})  cold: {cold}"));
-                Console.WriteLine($"  {"",-20}                          loop: {loop}");
+                Console.WriteLine($"  {"",-20}                          loop: {loop}{PathShaping.DriftSummary()}");
             }
         }
         return 0;
@@ -115,13 +115,13 @@ internal static class SixDofLiftCheck
         double speed = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
         double velocity = Math.Max(Math.Max(speed, Math.Sqrt(length * Gravity)), 1.0);
         double omegaScale = 60.0 * Math.PI / 180.0 / (sigma * 0.5);
-        return new Scvx6DofConfig
+        return PathShaping.SoftEnd(new Scvx6DofConfig
         {
             Nodes = n,
             Tmax = Tmax,
             ThrottleFloor = Floor,
             GimbalMaxDeg = GimbalDeg,
-            GimbalSlewPerS = SlewPerS,
+            GimbalSlewPerS = SlewPerS * PathShaping.SlewShare,
             TauRollMax = 1.0e4,
             TerminalRollFree = true,
             TiltMaxDeg = 60.0,
@@ -130,7 +130,7 @@ internal static class SixDofLiftCheck
             WW = 0.002 / (n * 3.0 * omegaScale * omegaScale),
             WDu = 0.05,
             ProximalWeight = 0.05,
-            GlideSlopeDeg = 0.0,
+            GlideSlopeDeg = PathShaping.FarDeg(0.0), GlideFunnelHeightsM = PathShaping.FunnelHeightsM, GlideFunnelHalfAngleDeg = PathShaping.FunnelDeg, GlideFunnelWeight = PathShaping.FunnelWeight, SideSpeedPerM = PathShaping.SideSpeedPerM,
             VzMax = 0.0,
             TerminalMissWeight = 1.0e5,
             TerminalSpeedWeight = 1.0e4,
@@ -139,7 +139,7 @@ internal static class SixDofLiftCheck
             SigmaScale = sigma,
             VirtualControlScale = [0, 0, 0, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0],
             XScale = [length, length, length, velocity, velocity, velocity, 1, 1, 1, 1, 1, 1, 1, x0[13]],
-        };
+        });
     }
 
     private static Scvx6DofSolver Solver(Scvx6DofConfig cfg, Dynamics6Dof.Params dyn)
@@ -210,6 +210,7 @@ internal static class SixDofLiftCheck
         double[] fx = (double[])s.ReferenceX.Clone(), fu = (double[])s.ReferenceU.Clone();
         double fs = s.Sigma, f0 = 0.0;
         double[] x = (double[])x0.Clone();
+        double plantGx = double.NaN, plantGy = double.NaN;
         int refused = 0, kept = 0;
         var gates = new List<double>();
         double t = 0.0;
@@ -221,17 +222,22 @@ internal static class SixDofLiftCheck
                 Shift(fx, fu, fs, t - f0, n, out double[] sx, out double[] su, out double ss);
                 // As the game re-seeds a warm solve (Ksa6DofGuidance): the whole reference moved with the measured state, not node 0 alone, and the trust region opened to its warm start rather than left where the last solve shrank it.
                 ColdReferenceShift.Apply(sx, n, ss, x);
+                PathShaping.Anchor(cfg, su, gx: plantGx, gy: plantGy);
                 s.Reseed(x, sx, su, ss, trustRegion: Math.Clamp(s.TrustRegion, WarmTrustRegion, s.TrustRegionMax));
                 double ratio = double.PositiveInfinity;
-                for (int i = 0; i < 3; i++)
+                for (int i = 0; i < PathShaping.Iterations(left); i++)
                 {
                     ScvxIteration it = s.Iterate();
-                    ratio = it.Accepted ? s.WeightedDefect(tol, n - 2, 1.0, out _, out _, out _) : double.PositiveInfinity;
+                    int gch = -1, gnode = -1; double graw = double.NaN;
+                    ratio = it.Accepted ? s.WeightedDefect(tol, n - 2, 1.0, out gch, out gnode, out graw, refIntervalS: PathShaping.GateRefS) : double.PositiveInfinity;
+                    if (it.Accepted && ratio > 1.0 && Environment.GetCommandLineArgs().Contains("--gate-diag"))
+                        Console.WriteLine(FormattableString.Invariant($"      gate {ratio:F2}x on {Scvx6DofSolver.ChannelName(gch)} at interval {gnode} of {n - 1}, raw {graw:G3}, dt {s.NodeTime(gnode + 1) - s.NodeTime(gnode):F3} s, burn {left:F2} s"));
                     if (ratio <= 0.05) break;
                 }
                 gates.Add(ratio);
                 if (ratio <= 1.0)
                 {
+                    PathShaping.NoteDrift(s, n, left);
                     fx = (double[])s.ReferenceX.Clone();
                     fu = (double[])s.ReferenceU.Clone();
                     fs = s.Sigma;
@@ -248,6 +254,7 @@ internal static class SixDofLiftCheck
             for (double h = 0; h < cycle - 1e-9; h += dt)
             {
                 double[] u = Sample(fu, NU, fs, n, t - f0);
+                PathShaping.SlewPlant(cfg, u, dt, ref plantGx, ref plantGy);
                 Step(x, u, plant, dt);
                 t += dt;
                 if (x[2] <= TargetZ || (x[5] > 0.0 && x[2] < TargetZ + 20.0)) { landed = true; break; }

@@ -782,6 +782,9 @@ public sealed class VehicleAutopilotState
     public string VehicleHeightStatus = "";
 
     internal bool VehicleHeightStowed;
+
+    /// <summary>The colliders the touchdown height was measured from (KsaVehicleHeight.Footprint), as columns, for the contact height at any attitude (ContactDepth, LandingLegs.LegsHeightM); empty when the height is typed in.</summary>
+    internal double[] FootX = [], FootY = [], FootHalfX = [], FootHalfY = [], FootDepthM = [];
     internal string VehicleHeightCard = "";
     internal long VehicleHeightNextMs;
 
@@ -928,7 +931,18 @@ public sealed class VehicleAutopilotState
     public double SixDofSigmaSeed = 20.0;
     // ZERO/ZERO: the plan ends with the legs on the pad and the craft at rest, so it lands the craft itself rather than stopping above the pad for something else to finish. The plan flies the CoM, which sits VehicleHeightM above the legs, and on a slope the first leg meets the ground SiteEarlyContactM before the height of the site centre.
     public double SixDofTargetComAltM => VehicleHeightM + SiteEarlyContactM;
-    public double SixDofGlideSlopeDeg = 10.0;   // 0 = off; degrees above horizontal
+    public double SixDofGlideSlopeDeg = 10.0;
+    /// <summary>
+    /// The progressive glideslope's half-angles from vertical seen from the target, deg (Scvx6DofConfig.GlideFunnelHeightsM, Ksa6DofSetup.GlideFunnelKnots): at one craft length over the target, at 300 m and at 1000 m, so the offset allowed there is the height times tan(half-angle); between them it changes linearly. The user's, 2026-11-27: 20 (0.36 m of offset per metre of height), 30 (173 m at 300 m) and 60 (1732 m at 1000 m). The near one at 0 switches the funnel off, leaving the plain GLIDE SLOPE cone.
+    /// </summary>
+    public double SixDofFunnelNearDeg = 20.0;
+    public double SixDofFunnel300Deg = 30.0;
+    public double SixDofFunnel1000Deg = 60.0;
+    /// <summary>Touchdown's sideways-speed cone, 1/s (Scvx6DofConfig.SideSpeedPerM): the plan's sideways speed at most this times its height over the target, plus 0.3 m/s. 0.3: 3.3 m/s at 10 m, 0.9 m/s at 2 m, where the 2026-11-27 Starships carried 3.4-3.9 m/s. Offline, 0.2 cost the boosters that light low and sideways far more accuracy (14-28 m off against 1-13) and 0.5 barely touched the Starship's speeds. 0 for none.</summary>
+    /// <summary>The last seconds priced for smoothness (Scvx6DofConfig.TerminalPhaseS): 0 off, 1 the tuned weights (two degrees of tilt or 4 deg/s held through the last second about a metre of miss), more is smoother. 0.3 by default (2026-11-27 campaign): headless the booster then landed upright in 4 of 4 (0.1-0.2 deg), where its plans otherwise leaned to the very end and the legs touched first at 3-7 deg; offline it had cost the low-authority boosters 3-29 m of miss even at 0.1, which the flights did not show.</summary>
+    public double SixDofLastSecondsSmooth = 0.3;
+    // The sideways-speed cone, 1/s per metre of height (0 = off). OFF BY DEFAULT since 2026-11-27 evening: at the ground it allows only its 0.3 m/s floor, so a plan with a metre still to go hovered at the contact height to creep it (a lunar lander, 17:16, landed 6 deg over leaning in that pretend hover), and the tip-over line (Scvx6DofConfig.TipLimit) now says how much sideways speed a touchdown can carry.
+    public double SixDofSideSpeedPerM = 0.0;
     public bool SixDofVzEnabled = true;
     public double SixDofVzMaxMs;
 
@@ -938,6 +952,19 @@ public sealed class VehicleAutopilotState
     /// And whether it took a burn over from another mode - the 3-DOF or the braking burn - rather than being engaged directly: such a craft has no plan of its own until the first solve lands, and near the ground the burn's last command it is still flying is as stale as an expired plan.
     /// </summary>
     public bool SixDofSeenDescending, SixDofToContact, SixDofTookBurn;
+
+    /// <summary>The cycle log has faulted once this touchdown and gone to the fault log (SixDof.LogCycle); later faults drop their rows quietly.</summary>
+    public bool SixDofLogFaulted;
+
+    /// <summary>The torque the plan-end attitude hold asked for this step, model body axes, N m; default under the stock hold (SixDof.HoldPlanEndAttitude). For the contact cycle row.</summary>
+    public double3 SixDofContactHoldTorque;
+
+    // DELAY COMPENSATION (SixDof.SolveLeadS, NoteSolveLatency): the last warm dispatch's time and lead, the plan last seen published, the last few latencies and the predicted start state's buffer.
+    public double SolveDispatchAt = double.NaN, SolveDispatchLeadS, SolveLatencyLastS = double.NaN;
+    public Ksa6DofPlan SolveLatencyPlan;
+    public readonly double[] SolveLatencies = new double[4];
+    public int SolveLatencyNext;
+    public readonly double[] SolveLeadState = new double[Dynamics6Dof.NX];
 
     /// <summary>How many times the engine has been relit while flying to contact after the plan (GuidanceWindow.LimitContactRelights), and whether it was lit on the last step.</summary>
     internal int SixDofContactRelights;
@@ -1037,8 +1064,29 @@ public sealed class VehicleAutopilotState
     /// <summary>Price on touchdown guidance's RCS torque, Scvx6DofConfig.RcsWeight: how much the plan leans on the gimbals, which cost no propellant, before the thrusters.</summary>
     public double SixDofRcsWeight = 0.1;
 
-    /// <summary>Touchdown guidance's turn-rate limit, deg/s, roll included, or 0 for none (Scvx6DofConfig.RateMaxRadS).</summary>
-    public double SixDofRateMaxDegS = 15.0;
+    /// <summary>
+    /// Touchdown guidance's turn-rate limit, deg/s, roll included, or 0 for none (Scvx6DofConfig.RateMaxRadS).
+    ///  40 (was 15, 2026-11-20, set against a booster's plan thrashing on its RCS): 15 paced a Starship's 90 deg powered flip at 12-13 deg/s for 7.5 s, its thrust tilted 40-90 deg the while, and the craft went from 17.5 to 39 m/s sideways and was planned 250 m past the site (2026-11-27, 10:06). Its gimbal alone gives about 8 deg/s^2 at the landing burn's throttle and 20 at full, so a flip is limited by the gimbal near 40 deg/s rather than by this.
+    /// </summary>
+    public double SixDofRateMaxDegS = 40.0;
+
+    /// <summary>
+    /// THE CUT SUPERVISOR (#335, CutSupervisor in Ui/Logic, StepCutSupervisor): a watchdog beside touchdown guidance that cuts the engine when the landing has stopped coming down with the legs within CUT HEIGHT of the ground. It integrates the shortfall below CUT SINK and cuts at CUT SHORTFALL; the engine then stays off to contact. On by default.
+    /// </summary>
+    public bool CutSupervisorOn = true;
+    /// <summary>The sink the supervisor expects near the ground, m/s: slower, a hover or a climb builds the shortfall.</summary>
+    public double CutSupervisorSinkMs = 0.5;
+    /// <summary>The shortfall the supervisor cuts at with the legs at CUT HEIGHT, m (the height not descended at CUT SINK); less in proportion lower down, never under 0.1 m.</summary>
+    public double CutSupervisorShortfallM = 0.3;
+    /// <summary>The highest the legs may be above the ground under the craft for a cut, m. From 2 m a free fall lands at about 6.3 m/s (the user's choice, 2026-11-27).</summary>
+    public double CutSupervisorMaxHeightM = 2.0;
+    /// <summary>The height of the legs above the ground below which the supervisor counts the shortfall, m: above CUT HEIGHT, so a stall just over it is owed by the time the craft sinks into it (2026-11-27, 10:50: a hover 2.4-2.6 m up counted nothing).</summary>
+    public double CutSupervisorWatchHeightM = 5.0;
+    /// <summary>The supervisor's memory (armed, cut, shortfall) and its last step's time, s; cleared whenever touchdown guidance is not flying.</summary>
+    public CutSupervisorState CutSup;
+    public double CutSupLastT = double.NaN;
+    /// <summary>What the supervisor did on its last step, for the cycle log.</summary>
+    public CutSupervisorAction CutSupAction;
 
     /// <summary>Touchdown guidance's plan holds its lateral thrust to the gimbal's slew rate (Scvx6DofConfig.GimbalSlewPerS). On; off flies the plan as before 2026-11-18, free to jump between nodes.</summary>
     public bool SixDofGimbalRateLimit = true;
