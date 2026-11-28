@@ -1,5 +1,8 @@
 # The `feature/orbital-entry` branch
 
+!!! note "Merged"
+    This branch was merged into main as PR #304 on 2026-11-25. The page is its record as of the merge: where it says "not flown" or "open", check the [changelog](CHANGELOG.md) for what happened since. The player's view of the chain is in the [User Guide](../user-guide/powered-guidance.md#orbital-entry-and-the-flip-landing).
+
 A summary of the work on `feature/orbital-entry` (2026-11-21 to 2026-11-24, status updated after the first landing) and how it relates to the open GitHub issues. The detailed record of each change, with flight and harness evidence, is the [Unreleased] section of [CHANGELOG.md](CHANGELOG.md). The bellyflop design is in [bellyflop-design.md](bellyflop-design.md).
 
 ## Purpose and status
@@ -146,7 +149,7 @@ Where a cell lists several paths, the later ones are relative to the first one's
 9. **Retro burn after an entry.** Asked once at the entry's hand-over (Mach 5 at 38 km, about 6-7 kPa) and started cold; the entry aims RETRO AIM SHORT (30 km), a guess. A standby like the boostback's, with its prediction of the ground covered in place of the guess, is the next step. Not flown.
 10. **Parachutes.** Armed at the hand-over for a craft with no engine to land on; KSA opens them at their own deploy altitude. Not flown.
 11. **The Lambert-aimed deorbit burn.** Taken when within 25 % (10 m/s) of the horizontal burn and 0.5 deg of its flight path angle. Not flown.
-12. **User guide.** `docs/user-guide/console.md`, `powered-guidance.md` and `docs/guidance/boostback.md` still describe the old LAND page (ENTRY BURN ONLY, ENTRY ON GLIDE, the solver table).
+12. **User guide (done).** `docs/user-guide/console.md`, `powered-guidance.md` and `docs/guidance/boostback.md` describe the LAND path of modes, and the User Guide has an orbital entry section.
 
 ## Relation to open issues
 

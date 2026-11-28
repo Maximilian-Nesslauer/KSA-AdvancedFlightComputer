@@ -1,6 +1,6 @@
 # Vehicle control writes
 
-`VehicleControlOwnership` coordinates claims between AFC's RCS executor and Guidance.
+`VehicleControlOwnership` coordinates claims between AFC's RCS executor, Guidance and hand flying (`ControlClaimant.HandFlying`, AFC MANUAL INTERVENTION: see [Hand flying](#hand-flying)).
 It is internal to AFC and provides no shared ownership protocol for other mods.
 Conflicting writes from another mod are outside this arbitration.
 
@@ -177,3 +177,7 @@ The execution registries persist to TOML; ownership claims remain runtime state.
 Its shallow snapshots do not observe mutations inside referenced objects, private inputs, properties, per-step outputs, staging, Guidance or writes that leave a value unchanged.
 The field list is maintained separately from this document.
 It is a regression check for that scenario, not an automatic audit of every write or release path.
+
+## Hand flying
+
+AFC MANUAL INTERVENTION holds its own claim, `ControlClaimant.HandFlying`, while it is on. Entering it calls `Autopilot.StopForManualIntervention`, which releases Guidance's claim, stops a stock deorbit's, and turns an armed stock Auto burn into Manual; a lit engine stays lit. A guidance mode engaged while hand flying is on is stopped at once. The claim is released, with the attitude controller's actuators, on `HandFlying.StandDown`, on `Forget(Vehicle)` when the craft is disposed, and on `Reset` (unload, save load, star-system swap).

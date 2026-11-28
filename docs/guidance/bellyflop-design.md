@@ -1,6 +1,9 @@
 # Bellyflop: terminal descent for belly-first craft
 
-Design notes, 2026-11-23. Status: agreed in outline, being built on `feature/orbital-entry`.
+Design notes, 2026-11-23, kept as written. Bellyflop has since been built and merged with PR #304 (2026-11-25), and several of the numbers below changed while it was flown.
+
+!!! note "Where this design moved on"
+    On main, bellyflop solves from **BELLYFLOP FROM MACH** (Mach 10) and takes over at its first converged plan that reaches the site, with **HAND-OVER MACH** (Mach 5, 38 km) as the latest. Pitch has its own limits each way (**BELLYFLOP PITCH UP** 55 deg, **BELLYFLOP PITCH DOWN** 20 deg) and bank its own (**BELLYFLOP BANK** 45 deg, held to what the flaps can roll-trim). It aims **BELLYFLOP AIM SHORT** (200 m) short of the site, and touchdown guidance takes the flip and landing burn from **TOUCHDOWN FROM** (45 s). The entry aims at a reach band of bellyflop's falls rather than one point. The planner as it is now is on [Orbital entry and bellyflop](orbital-entry.md). The [User Guide](../user-guide/powered-guidance.md#orbital-entry-and-the-flip-landing) has the player's view and [the branch record](orbital-entry-branch.md) and the [changelog](CHANGELOG.md) the history of each change.
 
 ## The chain
 
