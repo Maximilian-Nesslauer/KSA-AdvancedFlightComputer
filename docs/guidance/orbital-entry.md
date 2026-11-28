@@ -10,7 +10,7 @@ Both planners are SCvx in the same light form: RK4 multiple shooting, Jacobians 
 |---|---|---|---|
 | Aimed deorbit | DEORBIT ONLY with AIM AT SITE (on) | The burn ends | ORBITAL ENTRY, if ENTRY AFTER DEORBIT is on |
 | Entry | ORBITAL ENTRY | Bellyflop's first converged plan from BELLYFLOP FROM MACH (10); at the latest the hand-over energy (HAND-OVER ALTITUDE 38 km, HAND-OVER MACH 5) | Bellyflop, retro burn, parachutes or hold |
-| Bellyflop | last phase of ORBITAL ENTRY | 1 s before touchdown's plan turns 5 deg from the attitude flown; at the latest 5 s before touchdown's ignition or 12 s before bellyflop's ground | Touchdown guidance |
+| Bellyflop | last phase of ORBITAL ENTRY | 1 s before touchdown's plan turns 15 deg from the attitude flown; at the latest 5 s before touchdown's ignition or 12 s before bellyflop's ground | Touchdown guidance |
 | Flip and landing burn | Touchdown guidance (6-DOF) | Contact | |
 
 **Deorbit to entry.** `PlanEntryBurn` hands DEORBIT ONLY's burn to `PlanAimedEntryBurn` when AIM AT SITE (`OrbitalEntryAimDeorbit`) is on, whether or not the entry follows. At the end of the burn `MonitorStockDeorbit` sets `OrbitalEntry.EngagePending` when `OrbitalEntryAfterDeorbit` is on; the entry engages on the next step, ahead of the claim.
@@ -328,7 +328,7 @@ With bellyflop's touchdown hand-over on (`OrbitalEntryBellyflopTouchdown`, on by
 2. **Can it stop?** Refused while the active engines' full thrust at the local pressure gives less than 0.5 m/s² over gravity.
 3. **The flaps' tables.** Touchdown does not plan until the shared sweep's control-surface tables are in (`TouchdownWaitsForSurfaces`, up to 90 s after the sweep was taken).
 4. **Standby.** Touchdown solves on standby, with a coast to an ignition it chooses (`SixDofCoastPending`). Its cold seed follows bellyflop's plan (`BellyflopSeedPath`): the coast along bellyflop's states with its nose as the wanted body axis, then a straight braking burn. The burn seed is the stop at 70 % of thrust less gravity (at least 30 % of the spare), at least 2 s, plus 6 s for the flip.
-5. **Due.** The hand-over is due at the earliest of: 1 s before touchdown's plan first turns more than 5 deg from the attitude flown (`SixDofTurnAwayDue`); 5 s before touchdown's ignition (`ThreeDofTakeoverBeforeIgnitionS`); 12 s before bellyflop's ground (`ThreeDofTakeoverBeforeImpactS`). The standby plan may be up to 2.5 s old (`BellyflopHandoverPlanAgeS`).
+5. **Due.** The hand-over is due at the earliest of: 1 s before touchdown's plan first turns more than 15 deg from the attitude flown (`SixDofTurnAwayDue`, `TurnAwayDeg`; it was 5, which handed a Starship over 31-36 s before ignition); 5 s before touchdown's ignition (`ThreeDofTakeoverBeforeIgnitionS`); 12 s before bellyflop's ground (`ThreeDofTakeoverBeforeImpactS`). The standby plan may be up to 2.5 s old (`BellyflopHandoverPlanAgeS`).
 6. **Take.** `CheckPendingBellyflopTouchdownHandoff` engages touchdown guidance on the next step, ahead of the claim. If touchdown cannot take the craft, or the engines have changed, bellyflop keeps it and the standby waits 5 s before it starts again.
 
 The engine stays off until touchdown's plan lights it.
