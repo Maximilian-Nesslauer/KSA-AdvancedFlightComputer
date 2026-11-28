@@ -84,7 +84,7 @@ The fins report **no authority**, rather than a guess, when
 - the dynamic pressure is under 50 Pa (`MinQPa`),
 - the airspeed is under 1 m/s,
 - the craft flies nose first without nose-first surface tables (`SurfaceTable.NoseForce`/`NoseMoment`), or
-- $|\alpha|$ or $|\beta|$ is over 20 deg (`KsaAeroSweep.BodyAngleMaxDeg` engine-first, `KsaAeroSweep.NoseAngleMaxDeg` nose-first), the edge of the tables.
+- the airflow is outside every table set the sweep has for all the fins (`KsaAeroSweep.TryPickTables` with `surfacesToo`): for a plain sweep, $|\alpha|$ or $|\beta|$ over 20 deg (`KsaAeroSweep.BodyAngleMaxDeg` engine first, `KsaAeroSweep.NoseAngleMaxDeg` nose first); a belly-flopper's sweep also has belly-first, flip-band and whole-sphere fin tables.
 
 Then every fin is sent home and the whole demand goes to the RCS.
 
@@ -132,7 +132,7 @@ $$
 \delta_i \in \big[\max(\delta_{\text{min},i},\ \delta_{\text{now},i} - r_i\,\Delta t),\ \min(\delta_{\text{max},i},\ \delta_{\text{now},i} + r_i\,\Delta t)\big]
 $$
 
-$r_i$ is the fin's rate and $\Delta t$ the time to the next command (the attitude controller's step, or 0.05 s on its first).
+$r_i$ is the fin's rate and $\Delta t$ the time to the next command: the attitude controller's last step, or on its first the game's physics step where that is under 0.2 s, else 0.05 s.
 So what the mixer reports the fins give is what they do give at the next step, and the RCS, which is fired for the rest, is told the truth.
 A fin asked for a deflection it cannot reach in time would leave a gap that nothing filled.
 
@@ -179,17 +179,20 @@ The attitude controller passes the RCS thrusters into the fins' programme as **b
 Column $k$ is thruster $k$'s full-duty torque $\mathbf t_k$, bounded $0 \le d_k \le 1$, at a cost
 
 $$
-c_k = 0.02\,\frac{\dot m_k}{\min_l\,(\dot m_l/|\mathbf t_l|)}
+c_k = \dot m_k\,\max\!\Big(\frac{0.004}{b},\ \min\Big(\frac{0.02}{b},\ \frac{0.25\,p_{\min}}{w}\Big)\Big),
 $$
 
-so the best thruster costs 0.02 per newton metre (`BackupPricePerNm`) and the others more, by their propellant.
+with $b$ and $w$ the least and most propellant per newton metre among the thrusters and $p_{\min}$ the lowest axis priority (0.3, roll) (`AttitudeControlMath.BackupPricePerKgS`). So the best thruster costs 0.02 per newton metre (`BackupPricePerNm`) and the others more, by their propellant, but the dearest never more than a quarter of the cheapest shortfall (`BackupShortfallCapShare`) and none under 0.004 (`MinBackupPricePerNm`).
 The prices then line up as: a fin about $10^{-3}$ per newton metre, a thruster 0.02 or more, and a shortfall 1 (0.3 in roll).
 
 - The fins take every axis they can, whichever it is; the RCS takes the axes the fins cannot reach or find dear.
 - A demand beyond the fins goes to the RCS before any of it goes unmet.
 
-The programme's duties are not flown.
-The controller reads what the fins will give and fires the RCS through [RCS mixing](rcs.md) for the rest.
+The programme's thruster duties are flown as they are (`KsaRcsTorqueControl.CommandDuties`) when it solved and the phase-plane RCS is off.
+Otherwise the controller reads what the fins will give and fires the RCS through [RCS mixing](rcs.md) for the rest.
+
+With the phase-plane RCS (orbital entry, bellyflop, the retro burn's glide under **NEW ATTITUDE CONTROL**, hand flying) there are no backup columns.
+The fins are asked, alone, for the demand on the axes they own and for the trim alone on the RCS's, that trim including the RCS's steady torque moved onto them over 10 s ([Per-axis ownership](index.md#per-axis-ownership)).
 
 ## What the fins can reach
 
@@ -198,6 +201,11 @@ Because those segments are chords where the curves steepen, the programme's maxi
 So the reach is checked: the mixer allocates that maximum and keeps what the curves really give about the axis.
 It then allocates half the reach and reports the side force per newton metre.
 `KsaAeroTorqueControl.TryCharacterise` gives all six directions at the condition flown now.
+
+### Measured for the capture
+
+The attitude controller's authority-aware capture and its per-axis owners need the fins' reach every step, and characterising is six programmes on the main thread.
+So it measures it again only when Mach moves 5 % (at least 0.05), the airflow turns 2 deg in body axes, at most every 0.5 s of real time, or after 5 s regardless, and scales it in between by $q/(1 + kq)$ ([Authority-aware capture](index.md#authority-aware-capture)).
 
 ## Touchdown guidance
 
@@ -208,7 +216,8 @@ The fins go home when a plan has none.
 ## What you see in flight
 
 - **The fins move smoothly and settle.** They would chatter if they chased a jittering demand or swapped work between them every step; the filtered rate error on the [overview](index.md#rate-error-and-its-filter), the price of a degree moved, and asking each fin only for what it reaches stop that.
-- **The RCS fires when the fins cannot reach.** That happens in thin air, while the fins are still travelling to a new deflection, when they are at their stops, and when the craft is more than 20 deg off engine first.
+- **The RCS fires when the fins cannot reach.** That happens in thin air, while the fins are still travelling to a new deflection, when they are at their stops, and when the airflow is outside the fin tables (for a plain sweep, more than 20 deg off engine first). With the phase-plane RCS, on an axis the fins own it fires only once the error passes 1.5 times **RCS DEAD BAND** and is still growing.
+- **In an entry the flaps take the axes as the air thickens**, one by one, once their spare torque holds a 1 deg band.
 - **Idle fins drift home** at their own rate when the demand does not need them.
 - **Fins take roll too**, by deflecting against each other, so the RCS rolls the craft only when the fins have no roll left.
 

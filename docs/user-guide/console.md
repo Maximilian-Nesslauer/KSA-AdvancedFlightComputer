@@ -59,7 +59,8 @@ Close the console with **X** or **F4**. While AFC is flying the craft, the head 
 
 The active page, **WIDE** state and window position are saved in `ui.toml` in the mod folder. Use **RESET WINDOW POSITION** in the **AFC** menu or **WINDOW POSITION > RESET** on **TUNE > PREFERENCES** to dock the console again. **TUNE > PREFERENCES** also holds **OPEN AFC AT FLIGHT START**, **FOLDS OPEN**, **SHOW STAGING DIAGNOSTICS**, **F4 OPENS AFC**, **GUIDANCE ENABLED** and **NUMPAD NUDGES THE HOVER**.
 
-## Failure and separation bands
+## Failure, aero data and separation bands
 
 - **Red failure band:** Appears under the stock altitude counter even when the console is closed if a guidance mode gives up while the craft still needs flying, or stays without a plan for 10 s. It shows what happened, what the engine is doing, who has control and the time to impact when known. It stays until you click **OK**. Normal completions, player or stock AUTO takeovers, and brief no-plan states do not trigger the band.
+- **Amber aero data band:** Appears under the stock altitude counter while AFC measures the craft's aero tables (`GENERATING AERO DATA: READY IN ~x (ESTIMATE)`) or reads saved ones back (`LOADING AERO DATA`), even with the console closed. It is a wait, not a fault. See [Aero data](powered-guidance.md#aero-data).
 - **Green separation band:** Appears under the stock altitude counter (or below the red failure band if both are active) in the final seconds before a stage separates (`SEPARATION T-`), pulsing just before separation, even with the console closed.

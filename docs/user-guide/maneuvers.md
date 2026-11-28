@@ -74,6 +74,8 @@ With [automatic staging](burns-and-staging.md#automatic-staging) armed and [auto
 - Changing the flyby side or altitude updates the selected departure even during thrust.
 - High-energy departures from small SOIs (such as low Mars orbit to Saturn) may auto-clamp to fewer passes so intermediate orbits do not escape the SOI.
 - If a pass runs out of propellant, it pauses in Manual so you can stage or refuel; if nothing aboard can thrust, execution cancels with an alert.
+- A multi-pass transfer needs a near-circular parking orbit (eccentricity at most 0.05).
+- After a load, a saved multi-pass run whose burn is missing, or was edited out of tolerance, is cancelled with a warning.
 
 ## Hyperbolic targets
 

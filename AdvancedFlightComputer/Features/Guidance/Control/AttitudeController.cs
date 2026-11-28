@@ -49,7 +49,8 @@ internal static class AttitudeController
                                              bool UseSurfaces = true, bool UseGimbals = false, bool RollFree = false,
                                              double RollCaptureRateDegS = double.NaN, double RollBandwidthRadS = double.NaN,
                                              bool AuthorityCapture = false, double SurfaceSmoothS = 0.0, bool UseRcs = true,
-                                             bool PhasePlaneRcs = false, double RcsAngleBandDeg = 1.0, double RcsRateLimitDegS = 5.0)
+                                             bool PhasePlaneRcs = false, double RcsAngleBandDeg = 1.0, double RcsRateLimitDegS = 5.0,
+                                             double RollPriority = 0.3)
     {
         public static readonly Settings Default = new(1.0, 0.8, 0.0, 0.5);
     }
@@ -107,7 +108,7 @@ internal static class AttitudeController
 
     private static readonly ConditionalWeakTable<Vehicle, Slot> Slots = new();
 
-    /// <summary>Pitch and yaw before roll when the RCS cannot give the whole torque: model z is the roll axis.</summary>
+    /// <summary>Pitch and yaw before roll when the RCS cannot give the whole torque: model z is the roll axis. The roll's weight is Settings.RollPriority (0.3 by default).</summary>
     private static readonly double[] RcsPriority = [1.0, 1.0, 0.3];
 
     /// <summary>
@@ -316,8 +317,11 @@ internal static class AttitudeController
             using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Attitude.RcsColumns"))
                 rcsColumns = KsaRcsTorqueControl.Measure(vehicle, mx, my, mz, out rcsModules);
         KsaAeroTorqueControl.Report surfaces = default;
+        Span<double> priority = stackalloc double[3];
+        RcsPriority.CopyTo(priority);
+        priority[2] = Math.Max(settings.RollPriority, 0.0);
         if (settings.UseSurfaces)
-            surfaces = KsaAeroTorqueControl.Command(vehicle, aero, remaining, mx, my, mz, RcsPriority, momentLimiterPerPa,
+            surfaces = KsaAeroTorqueControl.Command(vehicle, aero, remaining, mx, my, mz, priority, momentLimiterPerPa,
                                                     stepS, rcsColumns, settings.SurfaceSmoothS,
                                                     slot.RcsKnown ? slot.RcsPlusNm : default, slot.RcsKnown ? slot.RcsMinusNm : default);
         else
@@ -326,7 +330,7 @@ internal static class AttitudeController
         double3 rcsAsked = remaining - surfacesBody;
         int rcsFiring = 0;
         Span<double> rcsPriority = stackalloc double[3];
-        RcsPriority.CopyTo(rcsPriority);
+        priority.CopyTo(rcsPriority);
         if (phasePlane)
         {
             rcsAsked = PhasePlaneTorque(slot, thetaPoint + thetaRoll, -rawRateError, mx, my, mz, ixx, iyy, izz, dt, holdS, settings, out rcsFiring);

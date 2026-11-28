@@ -40,8 +40,8 @@ To drop empty side boosters while a core keeps burning without cutting crossfeed
 1. **Shape cache (`GetPendingJettison`):** keyed on `(SequenceGeneration, Parts.Count, nextSequenceNumber)`. Refuses if the next sequence lights any `EngineController`, has no predictable `Decoupler`, or has an unpredictable tree split.
 2. **Engine survey (`SurveyActiveEngines`) and dwell:** requires at least one spent active engine inside the jettisoned subtree, zero inactive/fueled/broken engines inside, at least one active thrusting engine staying aboard, and an incomplete burn. The condition must hold for `SpentJettisonDwellSeconds = 0.25 s` sim time.
 3. **Live crossfeed and fuel-link check (`CarriesOffUsablePropellant`):** evaluated live after dwell; on refusal, restarts the dwell timer:
-   - `FeedsStayingEngine`: scans fueled `Tank` modules inside the jettison subtree and checks `AvailableConsumers` against staying `EngineController` cores (intentionally ignoring RCS thrusters so recoverable booster pods do not block drop).
-   - `CrossesFuelLink`: checks `vehicle.Parts.FuelLinks.Links` for any enabled fuel link crossing the jettison boundary.
+   - `FeedsStayingEngine`: scans fueled `Tank` modules inside the jettison subtree and checks `AvailableConsumers` against staying `EngineController` cores (intentionally ignoring RCS thrusters so recoverable booster pods do not block drop). A tank counts only while propellant use is enabled, it has the Engine role, and it holds the staying engine's mix.
+   - `CrossesFuelLink`: checks `vehicle.Parts.FuelLinks.Links` for an enabled fuel link across the jettison boundary that can carry flow from the jettisoned side (`FuelLink.AllowsFlowFrom`) while that side still holds usable engine propellant, so a dry crossfed booster drops.
 4. **Control-module guard (`WouldSeparateLastControl`):** checked before both immediate staging and delayed decoupler firing via `StageControl.Evaluate`. If the craft would lose controllability, latches `HeldForControl = true`, alerts once, and releases `HeldBurn`.
 5. **Separation clearance (`CanCascadeAfterSeparation`):** tracks `SeparatingRoots` from `StagingHooks.DecouplerActivating` and blocks subsequent cascade staging for `1.0 s` after all roots leave `vehicle.Parts` (or `2.5 s` deadline from the command).
 
@@ -57,7 +57,7 @@ Any solid motor with `Stack.IsValid == false` increments `BrokenInside` and bloc
 Pure fairing rows are skipped by `NextAutomaticSequence` during engine staging and released independently by the pure-logic `FairingReleaseGate`:
 
 - Requires climbing (`dot(r, v) > 0`). On airless bodies, opens once `clearanceM >= 20 m` (`PadClearanceM`).
-- In an atmosphere, tracks `_peakQ` and dwells when `q < 10 Pa` (`ThinAirPa`) or dynamic pressure is falling (`q <= _lastQ && _peakQ - q >= max(10, 0.01 * _peakQ)`). Opens after `FallSeconds = 0.25 s` once `q <= FairingQKpa` (default `3.0 kPa`) and `clearanceM >= max(20 m, FairingAltitudeKm)` (default `30 km`).
+- In an atmosphere, tracks `_peakQ` and dwells when `q < 10 Pa` (`ThinAirPa`) or dynamic pressure is falling (`q <= _lastQ && _peakQ - q >= max(10, 0.01 * _peakQ)`). Opens after `FallSeconds = 0.25 s` once `q <= FairingQKpa` (default `3.0 kPa`) and `clearanceM >= max(20 m, FairingAltitudeKm)` (default `30 km`), with `clearanceM` measured above the higher of the terrain and ocean radius.
 - On disarm or `1.0 s` release timeout, `ReturnToStock` restores passed-over rows to the stock staging key.
 
 ## Staging delays, persistence and patches

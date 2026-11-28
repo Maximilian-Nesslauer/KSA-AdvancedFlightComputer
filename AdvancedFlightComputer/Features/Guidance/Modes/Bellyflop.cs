@@ -19,14 +19,14 @@ using KSA;
 /// </summary>
 public static partial class GuidanceWindow
 {
-    private static BellyflopConfig BellyflopConfigNow() => new()
+    private static BellyflopConfig BellyflopConfigNow() => BellyflopExperiment.Apply(new()
     {
         AngleMaxDeg = _s.OrbitalEntryBellyflopAngleMaxDeg,
         PitchUpMaxDeg = _s.OrbitalEntryBellyflopPitchUpDeg,
         BankMaxDeg = _s.OrbitalEntryBellyflopBankMaxDeg,
         AngleRateDegS = Math.Max(_s.OrbitalEntryRollRateDegS, 1.0),
         YawRateDegS = Math.Max(_s.OrbitalEntryRollRateDegS, 1.0),
-    };
+    });
 
     /// <summary>The landing-site frame at the site's ground, and the site's distance from the body's centre.</summary>
     private static KsaFrameBridge.SiteFrame BellyflopSiteFrame(IParentBody parent, out double siteRadius)
@@ -221,6 +221,8 @@ public static partial class GuidanceWindow
         {
             st.Phase = OrbitalEntryPhase.Bellyflop;
             st.Tracker.Reset();
+            if (BellyflopExperiment.Text.Length > 0)
+                GuidanceLog.Info(vehicle, "Bellyflop experiment: " + BellyflopExperiment.Text + ".");
             GuidanceLog.Info(vehicle, FormattableString.Invariant(
                 $"BELLYFLOP TAKES OVER at Mach {mach:F2}, {st.AltitudeM / 1000:F1} km: {Math.Sqrt(x[0] * x[0] + x[1] * x[1]) / 1000:F1} km from the site, the plan landing {bf.Plan.MissM:F0} m from it after {bf.Plan.EndTime - now:F0} s; pitch {bf.PitchDeg:F0}, bank {bf.BankDeg:F0}, yaw {bf.YawDeg:F0} deg."));
         }
@@ -448,7 +450,9 @@ public static partial class GuidanceWindow
         {
             double ignition = td.HasCoast ? td.IgnitionTime : now;
             double turnAway = SixDofTurnAwayDue(x14, now);
-            double due = Math.Min(Math.Min(ignition - Math.Max(_s.ThreeDofTakeoverBeforeIgnitionS, 0.0), plan.EndTime - Math.Max(_s.ThreeDofTakeoverBeforeImpactS, 0.0)), turnAway);
+            double beforeIgnition = BellyflopExperiment.Number("HandoverBeforeIgnitionS", _s.ThreeDofTakeoverBeforeIgnitionS);
+            double beforeImpact = BellyflopExperiment.Number("HandoverBeforeImpactS", _s.ThreeDofTakeoverBeforeImpactS);
+            double due = Math.Min(Math.Min(ignition - Math.Max(beforeIgnition, 0.0), plan.EndTime - Math.Max(beforeImpact, 0.0)), turnAway);
             if (now >= due)
                 bf.TouchdownHandoff = FormattableString.Invariant($"HANDOVER FROM BELLYFLOP: TOUCHDOWN AT {x14[2]:F0} m, IGNITION IN {ignition - now:F1} s, {plan.EndTime - now:F0} s FROM BELLYFLOP'S GROUND, ") + (now >= turnAway ? "ITS PLAN TURNING AWAY." : "AT THE LATEST.");
         }

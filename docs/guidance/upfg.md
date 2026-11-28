@@ -130,7 +130,7 @@ $$
 For elliptical targets without a fixed argument of periapsis ($e \ge 10^{-3}$), `UpfgInsertionSearch` runs every `10 s` sim time (`1000 ms` wall clock) during `ClosedLoop` to find the insertion true anomaly $\nu$ that minimizes $t_{\text{go}}$:
 
 - Scans a coarse grid (`5 deg` steps) around periapsis (`0..45 deg`, respecting the atmosphere floor) or apoapsis (`-45..-5 deg`), followed by a `2.5 deg` fine grid and parabolic vertex fit.
-- Each probe runs a fresh `UpfgGuidance` instance until $t_{\text{go}}$ settles within `0.01 s` over 50 solves (capped at `3000` solves per probe, `40000` total).
+- Each probe runs a fresh `UpfgGuidance` instance until $t_{\text{go}}$ stays within `0.01 s` (`SettleTgoS`) over a running window of 50 consecutive solves (`SettleWindowSolves`), capped at `1500` solves per probe (`MaxProbeSolves`) and `12000` per search (`MaxSearchSolves`), the last probe held to what is left. A circular target skips the search. `Converged` also clears on a non-finite or non-positive $t_{\text{go}}$, a turning angle over 70 deg, a non-positive thrust-velocity projection, or a runaway $t_{\text{go}}$ (growing by more than 5 s and 25 %).
 - Moves the target $\nu$ only if the saving is at least `0.2 s`, slews at `0.5 deg/s`, and freezes once $t_{\text{go}} < 60\text{ s}$ or $\lVert\mathbf v_{\text{go}}\rVert < 0.5\,\lVert\mathbf v_{\text{go,0}}\rVert$.
 
 ## Terminal cutoff and escape protection

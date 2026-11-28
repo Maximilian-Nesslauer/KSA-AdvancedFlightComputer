@@ -4,7 +4,7 @@
 A caller asks for a torque; the mixer solves `RcsTorqueAllocator` for each thruster's duty on the main thread, and the vehicle worker turns the duties into pulses.
 It works for any layout and any mode, and it does not go through the stock flight computer's RCS logic at all.
 
-The attitude controller, entry and boostback glides and touchdown guidance all fly their RCS torque through it.
+The attitude controller (ascent, the entry and boostback glides, orbital entry, bellyflop and hand flying) and touchdown guidance all fly their RCS torque through it.
 The shared problem it solves is set out in [The common torque-allocation problem](index.md#the-common-torque-allocation-problem).
 
 ## The thrusters as effectors
@@ -40,7 +40,7 @@ $$
 | bounds | $0 \le d_i \le 1$, through a slack $s_i$ |
 | command cost $\mathbf c$ | full-thrust flow $\dot m_i$, kg/s |
 | shortfall price $p$ | $10^3 \times \max_i \dot m_i / \lVert\mathbf t_i\rVert$: a thousand times the dearest thruster's propellant per newton metre |
-| priorities $w_a$ | $(1, 1, 0.3)$ from every caller: pitch and yaw before roll |
+| priorities $w_a$ | $(1, 1, 0.3)$ from every caller, pitch and yaw before roll, but $(1, 1, 4)$ under bellyflop; the phase-plane RCS weights its axes that are not firing at 0.05 |
 | side force | $\sum_i \mathbf f_i d_i$, left free and reported |
 
 The programme has $3 + n$ rows (three torque rows and one bound per thruster) and $2n + 6$ columns (duties, slacks and six shortfalls).
@@ -61,6 +61,11 @@ The mixer reports it instead (`Report.ForceN`), and touchdown guidance carries i
 The shortfall is priced so high that the mixer gives every newton metre it can before it leaves any unmet.
 When the demand is out of reach, the priorities decide what gives: roll, at 0.3, goes first.
 A large pitch demand with a little roll on top is met in pitch, and the roll waits.
+
+### When the programme gives nothing
+
+A demand of more than 1 kN m that the programme leaves unsolved, or meets by less than a tenth about its largest axis, has its inputs dumped once a session for offline rebuilding.
+For the phase-plane RCS, whose pulses must land, the mixer then fires as the stock flight computer picks jets (`JetMapDuties`): on each axis asked for, every thruster that turns it the asked way by at least a tenth of the strongest, at the one duty that gives the axis its demand between them, capped at full, spill and all.
 
 <!-- viz: rcs-mixing 620 -->
 *Move the torque demand and watch which thrusters fire and for how long, what side force comes with it, and where roll gives way when the demand leaves the attainable set.*
@@ -89,6 +94,42 @@ The vehicle worker turns each duty into a pulse in `KsaRcsTorqueControl.OnComput
 So a small duty comes out as an occasional pulse with the right average, not a minimum pulse every period and not nothing.
 A thruster without propellant is skipped.
 
+## Phase-plane RCS
+
+Orbital entry, bellyflop, the retro burn's glide under **NEW ATTITUDE CONTROL**, and hand flying do not fire the RCS for a torque every step.
+On the axes the RCS owns ([Per-axis ownership](index.md#per-axis-ownership)) it fires by the stock flight computer's phase plane, `PhasePlaneRcs`, restated from KSA's `FlightComputer.ComputeRcsTrackAxis` (2026.11.16.5901) over plain numbers.
+
+**The phase plane.** The state is the error angle (the craft less the target) and its rate.
+Two switching lines bound a region the RCS leaves alone, and inside it the craft coasts.
+They are the braking parabolas, $\dot\theta = -\sqrt{2a\,|\theta - \theta_\text{edge}|}$, from either edge of the angle band widened by a turnaround margin, flattening near the band to 1.5 times the rate band.
+On crossing one, the axis fires for the rate change onto the target line: inside the band a drift of half a rate bit towards the centre, outside it the braking parabola onto the band's edge, capped at the rate limit.
+It stops once the rate reaches the target line, or once it is back inside the band and heading in.
+So it fires once, one impulse sized to the drift it wants, and coasts the band from edge to edge, instead of pushing in proportion to the error every step.
+
+**The sizes**, per model axis:
+
+| Quantity | Value |
+| --- | --- |
+| authority $a$ | the smaller of the RCS's two reaches on the axis, over the inertia |
+| rate bit $\delta\omega$ | the smallest single pulse on the axis over the inertia: the least of $|t_{i}|\,t_{\text{min},i}$ over thrusters that turn it by at least a tenth of the strongest, $t_{\text{min},i}$ the thruster's own minimum pulse, at least 0.02 s |
+| angle band $B$ | `RcsAngleBandDeg` (**RCS DEAD BAND**, 4 deg; **GLIDE RCS DEAD BAND**, 1 deg), whole width, but no narrower than two control periods' drift at the rate bit |
+| rate band $r_d$ | $\max(\delta\omega,\ B/20\,\text{s})$ |
+| rate limit | `RcsRateLimitDegS`, 5 deg/s, and no lower than $r_d$ |
+| turnaround | $\max(r_d^2/a,\ 10\,r_d)$ |
+
+The target's own turning rate is left out of the rate band, as the error's rate is already against the target: in an entry it would have widened the band to tens of degrees through every bank slew.
+The rate band's 20 s floor (`RcsDriftCrossS`) is beyond stock: stock's RCS is the only thing turning its axis, but here the air and the flaps turn it too, and a rate band of one rate bit (0.007 deg/s on a belly flop) was crossed by every disturbance, so the RCS pulsed constantly.
+A request under one rate bit is raised to one rate bit: carried to the next period, it would land doubled.
+
+**The torque.** Each axis's rate change $\Delta\omega$ is asked for as $I\,\Delta\omega/T_h$, held to the RCS's reach that way, with $T_h$ the time it is held: one firing period (0.1 s), or the whole step where that is longer, as in a warped frame.
+The axes that fire are solved together through the programme above, the others weighted 0.05.
+
+**On the surfaces' axes** the RCS is only a backup (`PhasePlaneRcs.Backup`): it fires only while the error is past 1.5 times the band (half of three bands, `RcsBackupBandScale`) and still growing, for the rate change that stops it growing, and stops once it is back inside or no longer growing.
+So it never hurries the flaps' own return, and leaves alone every rate they make inside the band. The switching lines run there fired on the flaps' every move, against them 70 % of the time from 0.5 kPa.
+
+A dead band on the controller's own law instead banged across it in thin air at 1.3 kg/s, against 0.6 to 0.75 kg/s firing continuously, and fired through every turn the flaps flew; offline, the phase plane holds a calm axis on a twentieth of the dead band's impulse.
+**RCS DEAD BAND** is 4 deg by default to leave the flaps the work: at 1 deg a Starship entry burned 5 t of RCS propellant, 2.3 t of it above Mach 20, where the flaps can do nothing.
+
 ## Outside the stock flight computer
 
 Nothing here reads the stock flight computer's RCS mode, thruster configuration, authority figures or attitude modes.
@@ -97,7 +138,7 @@ The one point of contact is where the pulses are delivered: stock rewrites every
 
 That means:
 
-- The stock RCS switch does not stop it. Touchdown guidance has its own switch, `SixDofRcs` (**RCS TORQUE**), and a landing burn that the stock flight computer steers keeps the stock RCS switched off on purpose.
+- The stock RCS switch does not stop it, except in hand flying, which fires the RCS only with the stock switch on. Touchdown guidance has its own switch, `SixDofRcs` (**RCS TORQUE**), orbital entry and bellyflop theirs, **ENTRY RCS**, and a landing burn that the stock flight computer steers keeps the stock RCS switched off on purpose.
 - A craft that is not controllable, or whose control the kFS vehicle computer owns, fires nothing.
 - Duties solved for one set of thrusters find no match after staging, or when a thruster runs dry, and fire nothing until the next command. `KsaRcsTorqueControl.Reached` reports how many thrusters the worker matched; zero with a command standing means the pulses reach nothing.
 - `KsaRcsTorqueControl.Release` stops the writes, and stock's own command stands from the next step.
@@ -118,12 +159,16 @@ It cannot be asked for a torque, it ignores what a thruster does to the other ax
 - **Small, steady demands come out as occasional pulses**, not a constant puffing.
 - **Roll is the first to give way** when a demand is too big.
 
+- **In an orbital entry or a bellyflop the RCS coasts across its band** and fires one short pulse at each edge, on the axes the flaps cannot yet hold; as the air thickens the flaps take the axes one by one and the RCS falls silent but for its backup.
+- **A steady moment the RCS was holding drifts onto the flaps** over about 10 s.
+
 ## Code map
 
 | File | Main type or method |
 | --- | --- |
 | [RcsTorqueAllocator.cs](../../../AdvancedFlightComputer/Features/RcsTorque/RcsTorqueAllocator.cs) | `RcsTorqueAllocator.Allocate`, `Characterise` |
-| [KsaRcsTorqueControl.cs](../../../AdvancedFlightComputer/Features/RcsTorque/KsaRcsTorqueControl.cs) | `KsaRcsTorqueControl.Measure`, `Command`, `TryCharacterise`, `OnComputeControl`, `Release` |
+| [KsaRcsTorqueControl.cs](../../../AdvancedFlightComputer/Features/RcsTorque/KsaRcsTorqueControl.cs) | `KsaRcsTorqueControl.Measure`, `Command`, `CommandDuties`, `TryCharacterise`, `OnComputeControl`, `Release` |
+| [PhasePlaneRcs.cs](../../../AdvancedFlightComputer/Features/RcsTorque/PhasePlaneRcs.cs) | `PhasePlaneRcs.Step`, `Backup`, `TargetLine`, `UpperLine`, `LowerLine` |
 | [RcsLpSolver.cs](../../../AdvancedFlightComputer/Features/RcsTranslation/RcsLpSolver.cs) | `RcsLpSolver.Solve`, two-phase simplex with Bland's rule |
 | [RcsWrenchTable.cs](../../../AdvancedFlightComputer/Features/RcsTranslation/RcsWrenchTable.cs) | `RcsWrenchTable.ComputeLive`, a thruster's live force, torque and flow |
 | [Ksa6DofSetup.cs](../../../AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/Ksa6DofSetup.cs) | `Ksa6DofSetup.RcsModel`, `RcsModelFrom` |

@@ -41,8 +41,21 @@ public sealed class BellyflopConfig
     /// <summary>Price of pitch and bank, per deg^2 over the nodes (a mean): the plan flies as near belly-first as it can.</summary>
     public double EffortWeight { get; set; } = 0.01;
 
-    /// <summary>Price of yaw, per deg over the nodes (a mean, L1), near belly-first: far above bank's, so the plan turns the yaw only once bank is pinned at its limit. While the plan glides it is cheaper (YawGlideScale).</summary>
-    public double YawWeight { get; set; } = 2.0;
+    /// <summary>Price of bank alone, per deg^2 over the nodes (a mean); NaN prices it as pitch (EffortWeight). Bank is the airflow towards the span: the craft rolled about its long axis, held against the air by the flaps' roll trim. Priced ten times pitch, the plan steers as an aeroplane banks, turning its pitch's lift with yaw (BANK TO TURN), which needs no trim to hold, and keeps bank for what yaw cannot do: the air's rolling moment grows with bank (a Starship's 209 kN m at 44 deg), and the flaps hold it on top of the pitch trim. Harness, Starship bellyflop save, 2026-11-27: with a 500 m crossrange the old prices held 5-14 deg of bank into the hand-over, these within 1 deg. NaN prices it as pitch.</summary>
+    public double BankWeight { get; set; } = 0.1;
+
+    /// <summary>Price of yaw, per deg^2 over the nodes (a mean), on top of the L1 price: with YawWeight lowered, a smooth price that keeps a free yaw from wandering. 0 off.</summary>
+    public double YawQuadWeight { get; set; } = 0.01;
+
+    /// <summary>
+    /// LEVEL BY THE END: over a plan's last EndLevelS seconds bank and yaw (and pitch at EndLevelPitchWeight) are priced EndLevelWeight per deg^2 more, rising from nothing EndLevelS before the plan's end to all of it at half that: the craft comes to the flip wings level and nose along the bearing, whatever it steered with on the way. With pitch levelled too the plan does its gliding early and falls the last of the way belly flat and vertical onto its aim, as a Starship comes to the flip; held at one pitch all the way down (the cheapest spread of the glide) it reached the hand-over 170-230 m back from a 50 m aim at 10-15 m/s, and touchdown diverted 120-160 m after lighting and was 11-15 m/s sideways 100 m up. Levelled (harness, 2026-11-27, 12 runs): 46-49 m back at 0.1-0.4 m/s, lit 50 m out, at most 9 m/s sideways in the burn and 3-6 at 100 m, 0.2 t less propellant. 0 s off.
+    /// </summary>
+    public double EndLevelS { get; set; } = 30.0;
+    public double EndLevelWeight { get; set; } = 1.0;
+    public double EndLevelPitchWeight { get; set; } = 0.5;
+
+    /// <summary>Price of yaw, per deg over the nodes (a mean, L1), near belly-first, with YawQuadWeight on top: low since BANK TO TURN (was 2, far above bank's, so the plan turned the yaw only once bank was pinned at its limit). While the plan glides it is cheaper still (YawGlideScale).</summary>
+    public double YawWeight { get; set; } = 0.05;
 
     /// <summary>The share of YawWeight yaw costs at a node gliding at YawGlideFromDeg of pitch or more, falling linearly from 1 at AngleMaxDeg: gliding, the yaw turns the lift as the entry's bank does, and is how the plan should take out crossrange, not a last resort (2026-11-23: the plan unwound the entry's 63 deg at the take-over and fought 10 km of crossrange with sideslip). Offline on the flat plate the plan still takes out crossrange with bank (sideslip) rather than yaw at any price tried (0.02 to 1); the approach cone is what makes it do so early.</summary>
     public double YawGlideScale { get; set; } = 0.1;

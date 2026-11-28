@@ -2,7 +2,8 @@
 
 `KsaTvcAllocator` turns a body torque in newton metres into a deflection for every engine gimbal.
 Touchdown guidance flies its plan's torque through it, together with its attitude feedback's share.
-Ascent's attitude controller also uses it (`AttitudeController.Settings.UseGimbals`, calling `PredictLsq` and `SetLsq`), while glides with the engine off do not.
+Ascent's attitude controller also uses it (`AttitudeController.Settings.UseGimbals`, calling `PredictLsqReachable` and `SetLsq`: the torque the gimbals reach in one control step on KSA's own gimbal law), while glides with the engine off do not.
+Hand flying also gimbals the lit engines while one burns.
 
 The stock flight computer has its own allocation (`TvcAllocation.Solve`), but it takes a normalised demand per axis, not newton metres.
 A 6-DOF plan needs to command a torque it trusts and to know what the gimbals can give, so AFC has its own.

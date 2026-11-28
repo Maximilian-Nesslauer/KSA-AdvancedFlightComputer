@@ -1,6 +1,9 @@
 # Bellyflop: terminal descent for belly-first craft
 
-Design notes, 2026-11-23. Status: agreed in outline, being built on `feature/orbital-entry`.
+Design notes, 2026-11-23, kept as written. Bellyflop has since been built and merged with PR #304 (2026-11-25), and several of the numbers below changed while it was flown.
+
+!!! note "Where this design moved on"
+    On main, bellyflop solves from **BELLYFLOP FROM MACH** (Mach 10) and takes over at its first converged plan that reaches the site, with **HAND-OVER MACH** (Mach 5, 38 km) as the latest. Pitch has its own limits each way (**BELLYFLOP PITCH UP** 55 deg, **BELLYFLOP PITCH DOWN** 20 deg) and bank its own (**BELLYFLOP BANK** 45 deg, held to what the flaps can roll-trim). It aims **BELLYFLOP AIM SHORT** (200 m) short of the site, and touchdown guidance takes the flip and landing burn from **TOUCHDOWN FROM** (45 s). The entry aims at a reach band of bellyflop's falls rather than one point. The planner as it is now is on [Orbital entry and bellyflop](orbital-entry.md). The [User Guide](../user-guide/powered-guidance.md#orbital-entry-and-the-flip-landing) has the player's view and [the branch record](orbital-entry-branch.md) and the [changelog](CHANGELOG.md) the history of each change.
 
 ## The chain
 
@@ -42,6 +45,8 @@ The body axes are built from the reference frame and the three angles; the air f
 - Terminal: ground track ends at the site at ground level (soft L1 on the horizontal miss, hard altitude); final velocity free.
 
 **Objective.** `w_miss |r_xy,N| + Σ (θ_k² + φ_k²) + w_ψ Σ |ψ_k| + w_rate Σ (Δθ² + Δφ²) + virtual control and slack prices`.
+
+Since 2026-11-27 (harness): bank is priced ten times pitch and yaw lightly (L1 plus a square), so the plan steers by turning its pitch's lift with yaw, as an aeroplane banks to turn, rather than holding sideslip against the flaps' roll trim; and over the plan's last 30 s bank, yaw and pitch are priced towards zero (LEVEL BY THE END), so the craft comes to the flip wings level and falls the last of the way belly flat and vertical onto its aim. The attitude controller weighs the roll's shortfall 4 against pitch and yaw's 1 under bellyflop (a rocket's 0.3 elsewhere): belly first the roll is the sideslip.
 
 **Seed.** Integrate belly-first (θ = φ = ψ = 0) from the start state to the ground; σ from that.
 
