@@ -959,6 +959,13 @@ public sealed class VehicleAutopilotState
     /// <summary>The torque the plan-end attitude hold asked for this step, model body axes, N m; default under the stock hold (SixDof.HoldPlanEndAttitude). For the contact cycle row.</summary>
     public double3 SixDofContactHoldTorque;
 
+    // DELAY COMPENSATION (SixDof.SolveLeadS, NoteSolveLatency): the last warm dispatch's time and lead, the plan last seen published, the last few latencies and the predicted start state's buffer.
+    public double SolveDispatchAt = double.NaN, SolveDispatchLeadS, SolveLatencyLastS = double.NaN;
+    public Ksa6DofPlan SolveLatencyPlan;
+    public readonly double[] SolveLatencies = new double[4];
+    public int SolveLatencyNext;
+    public readonly double[] SolveLeadState = new double[Dynamics6Dof.NX];
+
     /// <summary>How many times the engine has been relit while flying to contact after the plan (GuidanceWindow.LimitContactRelights), and whether it was lit on the last step.</summary>
     internal int SixDofContactRelights;
     internal bool SixDofContactEngineLit;

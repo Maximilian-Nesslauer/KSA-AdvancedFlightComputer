@@ -111,7 +111,7 @@ internal static class SixDofLog
                 "allocRoll", "gimCmdY", "gimCmdZ", "gimAngY", "gimAngZ", "gimRateY", "gimRateZ", "gimMaxDeg", "gimSlewPerS", "gimThrustN", "gimCount",
                 "rcsX", "rcsY", "rcsZ", "rcsGivenX", "rcsGivenY", "rcsGivenZ", "rcsShortNm", "rcsForceN", "rcsFlowKgS", "rcsFiring", "rcsReached",
                 "attErrDeg", "rateErrDegS", "fbWantX", "fbWantY", "fbWantZ", "fbGimX", "fbGimY", "fbGimZ", "fbRcsX", "fbRcsY", "fbRcsZ", "fbShortNm",
-                "toContact", "legsM", "cutShortM", "cutAction",
+                "toContact", "legsM", "cutShortM", "cutAction", "latencyS", "leadS",
                 "error"));
 
             _plan.AppendLine("cycle,t,node,x,y,z,vx,vy,vz,thrustN,tiltDeg,qw,qx,qy,qz,wx,wy,wz,mass,tdx,tdy,tauRoll,solveTime,sigma,rcsX,rcsY,rcsZ,coast,coastIntervals,kind");
@@ -252,6 +252,7 @@ internal static class SixDofLog
             sb.Append(r.ToContact ? 1 : 0).Append(',');
             F(sb, r.LegsM); F(sb, r.CutShortM);
             sb.Append(Csv(r.CutAction)).Append(',');
+            F(sb, r.LatencyS); F(sb, r.LeadS);
             sb.Append(Csv(r.Error));
             sb.AppendLine();
 
@@ -422,6 +423,8 @@ internal static class SixDofLog
         public bool ToContact;
         public double LegsM, CutShortM;
         public string CutAction;
+        /// <summary>The last warm re-solve's measured latency, dispatch to first flown, s, and the lead the next one was posed ahead by, s (SixDof.SolveLeadS).</summary>
+        public double LatencyS, LeadS;
         public string Error;
     }
 }

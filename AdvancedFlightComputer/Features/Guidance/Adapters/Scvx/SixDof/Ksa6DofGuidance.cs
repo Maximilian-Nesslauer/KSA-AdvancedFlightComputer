@@ -69,6 +69,9 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <summary>The plan currently being flown, or null before the first solve lands.</summary>
     public Ksa6DofPlan Published => _published;
 
+    /// <summary>The plan published before <see cref="Published"/> by a warm re-solve, flown while a delay-compensated plan's start (its SolveTime, a lead ahead of its dispatch) is still to come (Command).</summary>
+    private Ksa6DofPlan _publishedBefore;
+
     private double[] _planX = [];
     private double[] _planU = [];
     private double _planSigma;
@@ -1270,6 +1273,10 @@ public sealed class Ksa6DofGuidance : IDisposable
         // The PUBLISHED plan, not the solve's working fields: this is called from the sim thread every frame, including while a solve is in flight. Reading _planSigma and _solveTime separately would pair a new burn time with an old anchor and report drift that is an artefact of the read, not of the vehicle.
         Ksa6DofPlan plan = _published;
         if (plan == null) return double.PositiveInfinity;
+        // The plan Command flies: a delay-compensated plan that has landed early starts at its SolveTime.
+        if (simNow < plan.SolveTime && _publishedBefore is { } before && !ReferenceEquals(before, plan)
+            && simNow - before.SolveTime <= before.Duration)
+            plan = before;
         double t = Math.Max(0.0, simNow - plan.SolveTime);
         (int k, double f) = plan.Locate(t);
         double dt = plan.IntervalDt(k);
@@ -1878,6 +1885,7 @@ public sealed class Ksa6DofGuidance : IDisposable
         if (_ignitionCapArmed && !(simNow + _planCoast + _planSigma >= _earliestEndAt))
             _earliestEndAt = simNow + _planCoast + _planSigma;
         // LAST, after every array is fully built. The reference assignment is what makes the new plan visible to the sim thread, so nothing may still be half-written when it happens.
+        _publishedBefore = _published;
         _published = new Ksa6DofPlan(_planX, _planU, _planSigma, simNow, _n, _planCoast, _cfg.CoastIntervals);
         Error = "";
         return true;
@@ -1895,6 +1903,52 @@ public sealed class Ksa6DofGuidance : IDisposable
 
     /// <summary>The plan's RCS torque at the last <see cref="Command"/>, N m, model body axes. Zero for a plan without RCS.</summary>
     public double3 RcsTorqueModel { get; private set; }
+
+    /// <summary>
+    /// The state <paramref name="leadS"/> seconds from <paramref name="x"/> at <paramref name="simNow"/>, flying the published plan's controls through the model the last solve used (Dynamics6Dof, RK4 at 10 ms or finer), into <paramref name="xOut"/>: where a re-solve dispatched now should start, when its answer is flown that much later (SixDof's delay compensation). The coast flies no thrust. False without a published plan, or for a lead that is not positive or a state that comes out not finite. Main thread, with the worker idle: it reads the snapshot the worker replaces at a solve's entry.
+    /// </summary>
+    public bool PredictAlongPlan(double[] x, double simNow, double leadS, double[] xOut)
+    {
+        Ksa6DofPlan plan = _published;
+        Dynamics6Dof.Params p = _snapshot?.Dyn;
+        if (plan == null || p == null || x == null || x.Length < NX || xOut == null || xOut.Length < NX || !(leadS > 0.0))
+            return false;
+        if (plan.U.Length < plan.Nodes * NU)
+            return false;
+        Array.Copy(x, xOut, NX);
+        int steps = Math.Max(1, (int)Math.Ceiling(leadS / 0.01));
+        double h = leadS / steps;
+        double[] u = new double[NU];
+        double[] tmp = new double[NX];
+        Span<double> k1 = stackalloc double[NX], k2 = stackalloc double[NX], k3 = stackalloc double[NX], k4 = stackalloc double[NX];
+        for (int s = 0; s < steps; s++)
+        {
+            double t = simNow - plan.SolveTime + (s + 0.5) * h;
+            (int k, double f) = plan.Locate(Math.Max(t, 0.0));
+            int k1n = Math.Min(k + 1, plan.Nodes - 1);
+            for (int j = 0; j < NU; j++)
+                u[j] = plan.U[k * NU + j] * (1.0 - f) + plan.U[k1n * NU + j] * f;
+            if (plan.InCoast(t))
+                u[0] = u[1] = u[2] = 0.0;
+            Dynamics6Dof.Eval(xOut, u, p, k1);
+            for (int i = 0; i < NX; i++) tmp[i] = xOut[i] + 0.5 * h * k1[i];
+            Dynamics6Dof.Eval(tmp, u, p, k2);
+            for (int i = 0; i < NX; i++) tmp[i] = xOut[i] + 0.5 * h * k2[i];
+            Dynamics6Dof.Eval(tmp, u, p, k3);
+            for (int i = 0; i < NX; i++) tmp[i] = xOut[i] + h * k3[i];
+            Dynamics6Dof.Eval(tmp, u, p, k4);
+            for (int i = 0; i < NX; i++) xOut[i] += h / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]);
+            int q = Dynamics6Dof.IQ;
+            double norm = Math.Sqrt(xOut[q] * xOut[q] + xOut[q + 1] * xOut[q + 1] + xOut[q + 2] * xOut[q + 2] + xOut[q + 3] * xOut[q + 3]);
+            if (!(norm > 0.0))
+                return false;
+            for (int i = q; i < q + 4; i++) xOut[i] /= norm;
+        }
+        for (int i = 0; i < NX; i++)
+            if (!double.IsFinite(xOut[i]))
+                return false;
+        return true;
+    }
 
     /// <summary>AFC_X_FIN_LEAD=1: the fins are commanded at the gimbals' lead (before 2026-11-28). They have no lag - a KSAero surface sits where it is told - so led, they flew about 0.11 s ahead of their plan, 2.5 deg on a 24 deg/s slew (audit).</summary>
     private static readonly bool FinsAtLead = Environment.GetEnvironmentVariable("AFC_X_FIN_LEAD") == "1";
@@ -1979,6 +2033,10 @@ public sealed class Ksa6DofGuidance : IDisposable
         Ksa6DofPlan plan = _published;
         if (plan == null)
             return false;
+        // A DELAY-COMPENSATED PLAN THAT HAS LANDED EARLY (SixDof's AFC_X_SOLVE_LEAD): it starts at its SolveTime, so until then the plan before it is flown, where the prediction it was solved from assumed the craft would be.
+        if (simNow < plan.SolveTime && _publishedBefore is { } before && !ReferenceEquals(before, plan)
+            && simNow - before.SolveTime <= before.Duration)
+            plan = before;
 
         double t = Math.Max(0.0, simNow - plan.SolveTime);
         PlanElapsed = t;

@@ -833,6 +833,7 @@ public static partial class GuidanceWindow
             FbGimX = fb.Gimbal.X, FbGimY = fb.Gimbal.Y, FbGimZ = fb.Gimbal.Z,
             FbRcsX = fb.Rcs.X, FbRcsY = fb.Rcs.Y, FbRcsZ = fb.Rcs.Z, FbShortNm = fb.ShortNm,
             ToContact = _s.SixDofToContact, LegsM = LegsHeightM(vehicle, _s), CutShortM = _s.CutSup.ShortfallM, CutAction = _s.CutSupAction.ToString(),
+            LatencyS = _s.SolveLatencyLastS, LeadS = _s.SolveDispatchLeadS,
             Error = _s.Error,
         };
         SixDofLog.Cycle(_s, row);
@@ -1952,7 +1953,20 @@ public static partial class GuidanceWindow
         if (!firstBrakingCommand && now - _s.LastReplan >= cadence)
         {
             if (_s.Worker != null)
-                _s.Worker.TryDispatchUpdate(_s.Guidance, x, now, 5);
+            {
+                // DELAY COMPENSATION (AFC_X_SOLVE_LEAD=1): the re-solve is posed where the craft will be when its answer is flown (SolveLeadS), not where it is now.
+                double lead = !_s.Worker.IsBusy ? SolveLeadS(now) : 0.0;
+                double[] from = x;
+                if (lead > 0.0 && _s.Guidance.PredictAlongPlan(x, now, lead, _s.SolveLeadState))
+                    from = _s.SolveLeadState;
+                else
+                    lead = 0.0;
+                if (_s.Worker.TryDispatchUpdate(_s.Guidance, from, now + lead, 5))
+                {
+                    _s.SolveDispatchAt = now;
+                    _s.SolveDispatchLeadS = lead;
+                }
+            }
             else
             {
                 _s.DidSolve = true;
@@ -1971,10 +1985,55 @@ public static partial class GuidanceWindow
             return;
         }
 
+        NoteSolveLatency(now);
         if (!_s.Guidance.Command(now, out double3 torqueModel, out double thrustN, x, SixDofTracker(), SixDofAttitude()))
             return;
 
         ApplyPlanCommand(vehicle, parent, siteCci, x, now, torqueModel, thrustN);
+    }
+
+    /// <summary>AFC_X_SOLVE_LEAD=1: warm re-solves are delay-compensated (SolveLeadS). Off by default for now.</summary>
+    private static readonly bool SolveLead = Environment.GetEnvironmentVariable("AFC_X_SOLVE_LEAD") == "1";
+
+    /// <summary>The longest lead a re-solve is posed ahead by, s.</summary>
+    private const double SolveLeadMaxS = 0.3;
+
+    /// <summary>
+    /// THE SOLVE'S LATENCY, measured: from a warm re-solve's dispatch to the step its plan is first flown, the last few (VehicleAutopilotState.SolveLatencies), whether or not the lead is on.
+    /// </summary>
+    private static void NoteSolveLatency(double now)
+    {
+        Ksa6DofPlan plan = _s.Guidance?.Published;
+        if (plan == null || ReferenceEquals(plan, _s.SolveLatencyPlan))
+            return;
+        _s.SolveLatencyPlan = plan;
+        if (!double.IsFinite(_s.SolveDispatchAt))
+            return;
+        double latency = now - _s.SolveDispatchAt;
+        _s.SolveDispatchAt = double.NaN;
+        if (!(latency >= 0.0 && latency < 2.0))
+            return;
+        _s.SolveLatencyLastS = latency;
+        _s.SolveLatencies[_s.SolveLatencyNext++ % _s.SolveLatencies.Length] = latency;
+    }
+
+    /// <summary>
+    /// HOW FAR AHEAD A WARM RE-SOLVE IS POSED, s: the longest of the last four measured latencies (NoteSolveLatency), at most SolveLeadMaxS and 0.4 of the burn left, while the engine burns the plan; 0 with the switch off, before any measurement, in the coast, or with no plan.
+    ///  WHY (2026-11-28). A warm re-solve started from the state at its dispatch and was stamped with its dispatch time, so the first L seconds of every plan - where it puts its correction for the craft having run behind - had passed by the time it was flown. Late in a booster's burn, with plans arriving 0.13-0.29 s old, only each plan's floor-thrust middle was ever flown: the craft fell at 2.6-4.5 m/s past 2 m and, once in four, met the ground at 1.4 m/s before the brake every plan promised (design review of the 070814 run). Real-time MPC's delay compensation: solve from the state predicted at the time the answer applies.
+    /// </summary>
+    private static double SolveLeadS(double now)
+    {
+        Ksa6DofPlan plan = _s.Guidance?.Published;
+        if (!SolveLead || plan == null || _s.Guidance.InCoast)
+            return 0.0;
+        double worst = 0.0;
+        int n = Math.Min(_s.SolveLatencyNext, _s.SolveLatencies.Length);
+        for (int i = 0; i < n; i++)
+            worst = Math.Max(worst, _s.SolveLatencies[i]);
+        double left = plan.Duration - (now - plan.SolveTime);
+        if (!(left > 0.0))
+            return 0.0;
+        return Math.Clamp(Math.Min(worst, 0.4 * left), 0.0, SolveLeadMaxS);
     }
 
     /// <summary>How often the game's moment limiter is measured, s (UpdateMomentLimiter).</summary>
