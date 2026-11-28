@@ -1410,7 +1410,9 @@ public static partial class GuidanceWindow
         // NOTHING TO HOLD WITH: the engine off and no RCS in the plan leaves the gimbals and the plan's RCS nothing to give, so the stock hold keeps the stock RCS (review of 94415f8).
         if (!lit && !g.HasRcs)
             return false;
-        if (!g.Command(now, out double3 torqueModel, out _, x, null, attitude, engineOff: !lit))
+        double pressure = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
+        double flownN = lit ? KsaEnginePerf.ThrustAtThrottle(vehicle, manual.EngineThrottle, pressure) : 0.0;
+        if (!g.Command(now, out double3 torqueModel, out _, x, null, attitude, engineOff: !lit, flownThrustN: flownN))
             return false;
         HoldManualAttitude(vehicle);
         KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);

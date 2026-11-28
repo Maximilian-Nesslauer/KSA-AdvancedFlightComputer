@@ -1964,8 +1964,10 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <param name="tracker">The feedback to fly the plan through, or null.</param>
     /// <param name="attitude">The feedback that holds the plan's attitude from the torque margin, or null.</param>
     /// <param name="engineOff">The engine is not burning though the plan says it is (flying to contact after a cut): the gimbals get no torque and the feedback puts all of its correction on the RCS, as in the coast.</param>
+    /// <param name="flownThrustN">The axial thrust actually flown, N, when it is not the plan's (flying to contact on a post-plan law's throttle); NaN for the plan's. The plan's lateral gimbal torque - its trim against the engines' own moment among it - and the gimbals' room and cone centre scale with it: the engines' moment goes with the thrust they give, not the plan's.</param>
     public bool Command(double simNow, out double3 torqueModel, out double thrustN,
-                        double[] x = null, Tracker6Dof tracker = null, AttitudeFeedback6Dof attitude = null, bool engineOff = false)
+                        double[] x = null, Tracker6Dof tracker = null, AttitudeFeedback6Dof attitude = null, bool engineOff = false,
+                        double flownThrustN = double.NaN)
     {
         torqueModel = default;
         thrustN = 0.0;
@@ -2012,6 +2014,10 @@ public sealed class Ksa6DofGuidance : IDisposable
         bool noThrust = InCoast || engineOff;
         if (engineOff)
             torqueModel = default;
+        // THE THRUST FLOWN, past the plan: its trim at the plan's end thrust, flown at 40 % throttle, held a Starship's gimbals 400 kN m off and pinned its RCS at the limit against them (2026-11-28).
+        double thrustShare = !noThrust && double.IsFinite(flownThrustN) && flownThrustN >= 0.0 && thrust > 0.0 ? flownThrustN / thrust : 1.0;
+        if (thrustShare != 1.0)
+            torqueModel = new double3(torqueModel.X * thrustShare, torqueModel.Y * thrustShare, torqueModel.Z);
 
         // The fins, led as the gimbals are: in the coast as in the burn, a fin works in the air whether the engine burns or not.
         int fins = _dyn.FinCount;
@@ -2051,7 +2057,7 @@ public sealed class Ksa6DofGuidance : IDisposable
         if (attitude != null && x != null && x.Length >= NX && plan.X.Length >= plan.Nodes * NX)
         {
             double share = _cfg.PlanTorqueShare > 0.0 ? _cfg.PlanTorqueShare : 1.0;
-            double axial = Math.Max(thrust, 0.0);
+            double axial = Math.Max(thrust * thrustShare, 0.0);
             double lateralNm = noThrust ? 0.0 : _dyn.LArm * axial * _cfg.TanGimbal / share;
             double rollNm = noThrust && _cfg.RollTorqueFollowsThrust ? 0.0
                 : _cfg.TauRollMax / share * (_cfg.RollTorqueFollowsThrust && _cfg.Tmax > 0.0 ? axial / _cfg.Tmax : 1.0);
