@@ -10,7 +10,7 @@ Both planners are SCvx in the same light form: RK4 multiple shooting, Jacobians 
 |---|---|---|---|
 | Aimed deorbit | DEORBIT ONLY with AIM AT SITE (on) | The burn ends | ORBITAL ENTRY, if ENTRY AFTER DEORBIT is on |
 | Entry | ORBITAL ENTRY | Bellyflop's first converged plan from BELLYFLOP FROM MACH (10); at the latest the hand-over energy (HAND-OVER ALTITUDE 38 km, HAND-OVER MACH 5) | Bellyflop, retro burn, parachutes or hold |
-| Bellyflop | last phase of ORBITAL ENTRY | 1 s before touchdown's plan turns 5 deg from the attitude flown; at the latest 5 s before touchdown's ignition or 12 s before bellyflop's ground | Touchdown guidance |
+| Bellyflop | last phase of ORBITAL ENTRY | 1 s before touchdown's plan turns 15 deg from the attitude flown; at the latest 5 s before touchdown's ignition or 12 s before bellyflop's ground | Touchdown guidance |
 | Flip and landing burn | Touchdown guidance (6-DOF) | Contact | |
 
 **Deorbit to entry.** `PlanEntryBurn` hands DEORBIT ONLY's burn to `PlanAimedEntryBurn` when AIM AT SITE (`OrbitalEntryAimDeorbit`) is on, whether or not the entry follows. At the end of the burn `MonitorStockDeorbit` sets `OrbitalEntry.EngagePending` when `OrbitalEntryAfterDeorbit` is on; the entry engages on the next step, ahead of the claim.
@@ -285,7 +285,7 @@ with $\mathbf r_c$ the position from the body's centre (the site's radius below 
 $$
 J = \frac{w_m}{1000}\big(\lvert x_N\rvert + \lvert y_N\rvert\big)
 + \frac{w_x}{1000\,N}\sum_{k\ge1}\lvert c_k\rvert
-+ \frac{w_e}{N}\sum_k(\alpha_k^2 + \beta_k^2)
++ \frac{1}{N}\sum_k\big(w_{\alpha,k}\alpha_k^2 + w_{\beta,k}\beta_k^2 + w_{\psi^2,k}\psi_k^2\big)
 + \frac{1}{N}\sum_k w_{\psi,k}\lvert\psi_k\rvert
 + w_r\sum_k\lVert\Delta\mathbf u_k\rVert^2
 + \text{cone and penalty terms},
@@ -297,8 +297,11 @@ angles in degrees, distances in metres, $c_k$ the crossrange off the vertical pl
 |---|---|---|---|
 | Miss $w_m$ | 1000 per km (L1 in $x$ and $y$) | `MissWeight` | 1 per metre: a degree of yaw held all the way down is worth 2 m of miss |
 | Crossrange $w_x$ | 300 per km of its mean | `CrossWeight` | Priced at every node, so crossrange comes out early instead of being spread over the whole descent |
-| Pitch and bank $w_e$ | 0.01 per deg² (mean) | `EffortWeight` | Fly as near belly first as the range allows |
-| Yaw $w_\psi$ | 2 per deg (mean, L1) | `YawWeight` | Far above bank's, so yaw turns only once bank is pinned |
+| Pitch $w_\alpha$ | 0.01 per deg² (mean) | `EffortWeight` | Fly as near belly first as the range allows |
+| Bank $w_\beta$ | 0.1 per deg² (mean) | `BankWeight` (NaN prices it as pitch) | **Bank to turn**: bank is sideslip held against the flaps' roll trim, so it is priced ten times pitch and the plan turns its pitch's lift with yaw instead, which needs no trim |
+| Yaw $w_\psi$ | 0.05 per deg (mean, L1) | `YawWeight` | Low, so yaw is how the plan steers (it was 2, far above bank's, and yaw turned only once bank was pinned) |
+| Yaw, square $w_{\psi^2}$ | 0.01 per deg² (mean) | `YawQuadWeight` | Keeps a free yaw from wandering |
+| Level by the end | on pitch $+0.5\,f_k$, on bank and yaw $+1\,f_k$ per deg² | `EndLevelS` 30 s, `EndLevelPitchWeight` 0.5, `EndLevelWeight` 1 | **Level by the end**: $f_k = \operatorname{clamp}\big((30\,\text{s} - t_{\text{go},k})/15\,\text{s},\ 0,\ 1\big)$ rises from nothing 30 s before the plan's end to all of it 15 s before, so the glide is done early and the craft falls the last of the way belly flat and vertical onto its aim, wings level for the flip |
 | Yaw while gliding | 0.1 of $w_\psi$ from 25 deg of pitch | `YawGlideScale`, `YawGlideFromDeg` | Gliding, yaw turns the lift as the entry's bank does. The share falls linearly from 1 at 20 deg |
 | Rate $w_r$ | 0.01 per deg² | `RateWeight` | Smooth angles between nodes |
 | Approach cone | 500 per km, capped | `ConeWeight`, `ConeShareOfPenalty` | Per node, capped so that all the cone's nodes together cost at most 0.5 of one node's position defect |
@@ -318,6 +321,10 @@ The cold seed eases each angle to zero at the angle rate and falls to the ground
 
 **Refusals.** A plan whose defects closed seeds the next solve even when it was refused for its miss (`BellyflopState.Warm`). After three refusals in a row the next solve starts cold. While bellyflop flies, a refused plan is flown if it lands nearer than the plan being flown would from the same state (`BellyflopPlanner.ShotMiss`). Flying a stale converged plan through a run of refusals once took the craft 1.4 km off.
 
+**Roll first.** Under bellyflop the attitude controller weighs the roll's shortfall 4 against pitch and yaw's 1 in the flaps' and RCS's allocation (`BellyflopRollPriority`, `AttitudeController.Settings.RollPriority`; a rocket's 0.3 everywhere else). Belly first the roll is the sideslip, and the air's rolling moment grows with it: with the flaps saturated and roll last, the allocation gave the roll away (once 150 kN m the wrong way against 450 asked), and the craft departed in bank.
+
+**Experiments.** `AFC_XBF_<name>` sets any `BellyflopConfig` property for every plan bellyflop builds (`BellyflopExperiment`, logged at the take-over), and `AFC_XBF_RollPriority`, `AFC_XBF_TurnAwayDeg`, `AFC_XBF_HandoverBeforeIgnitionS` and `AFC_XBF_HandoverBeforeImpactS` the flight-side numbers. Nothing changes when they are unset.
+
 **The command.** `BellyflopAttitude` passes the plan's angles through a critically damped second-order filter, $\omega = 2$ rad/s (`BellyflopCommandOmega`), stepped semi-implicitly in 0.02 s steps. It starts from the angles flown at the take-over, at rest, and reads the plan $2/\omega = 1$ s ahead, the filter's lag on a ramp. Yaw wraps across $\pm180$ deg. The command, its rate and its acceleration are all continuous, so a new plan each second does not step the target. The filtered angles become a nose and a belly for AFC's attitude controller, as the entry's do.
 
 ## Hand-over to touchdown
@@ -328,7 +335,7 @@ With bellyflop's touchdown hand-over on (`OrbitalEntryBellyflopTouchdown`, on by
 2. **Can it stop?** Refused while the active engines' full thrust at the local pressure gives less than 0.5 m/s² over gravity.
 3. **The flaps' tables.** Touchdown does not plan until the shared sweep's control-surface tables are in (`TouchdownWaitsForSurfaces`, up to 90 s after the sweep was taken).
 4. **Standby.** Touchdown solves on standby, with a coast to an ignition it chooses (`SixDofCoastPending`). Its cold seed follows bellyflop's plan (`BellyflopSeedPath`): the coast along bellyflop's states with its nose as the wanted body axis, then a straight braking burn. The burn seed is the stop at 70 % of thrust less gravity (at least 30 % of the spare), at least 2 s, plus 6 s for the flip.
-5. **Due.** The hand-over is due at the earliest of: 1 s before touchdown's plan first turns more than 5 deg from the attitude flown (`SixDofTurnAwayDue`); 5 s before touchdown's ignition (`ThreeDofTakeoverBeforeIgnitionS`); 12 s before bellyflop's ground (`ThreeDofTakeoverBeforeImpactS`). The standby plan may be up to 2.5 s old (`BellyflopHandoverPlanAgeS`).
+5. **Due.** The hand-over is due at the earliest of: 1 s before touchdown's plan first turns more than 15 deg from the attitude flown (`SixDofTurnAwayDue`, `TurnAwayDeg`; it was 5, which handed a Starship over 31-36 s before ignition); 5 s before touchdown's ignition (`ThreeDofTakeoverBeforeIgnitionS`); 12 s before bellyflop's ground (`ThreeDofTakeoverBeforeImpactS`). The standby plan may be up to 2.5 s old (`BellyflopHandoverPlanAgeS`).
 6. **Take.** `CheckPendingBellyflopTouchdownHandoff` engages touchdown guidance on the next step, ahead of the claim. If touchdown cannot take the craft, or the engines have changed, bellyflop keeps it and the standby waits 5 s before it starts again.
 
 The engine stays off until touchdown's plan lights it.

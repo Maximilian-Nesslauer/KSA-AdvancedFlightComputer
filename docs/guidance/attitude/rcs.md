@@ -40,7 +40,7 @@ $$
 | bounds | $0 \le d_i \le 1$, through a slack $s_i$ |
 | command cost $\mathbf c$ | full-thrust flow $\dot m_i$, kg/s |
 | shortfall price $p$ | $10^3 \times \max_i \dot m_i / \lVert\mathbf t_i\rVert$: a thousand times the dearest thruster's propellant per newton metre |
-| priorities $w_a$ | $(1, 1, 0.3)$ from every caller, pitch and yaw before roll; the phase-plane RCS weights its axes that are not firing at 0.05 |
+| priorities $w_a$ | $(1, 1, 0.3)$ from every caller, pitch and yaw before roll, but $(1, 1, 4)$ under bellyflop; the phase-plane RCS weights its axes that are not firing at 0.05 |
 | side force | $\sum_i \mathbf f_i d_i$, left free and reported |
 
 The programme has $3 + n$ rows (three torque rows and one bound per thruster) and $2n + 6$ columns (duties, slacks and six shortfalls).

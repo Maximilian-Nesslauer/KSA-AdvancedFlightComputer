@@ -229,6 +229,7 @@ This deadband is not the **RCS DEAD BAND** of orbital entry and bellyflop, which
 | `RollFree` | `false` | zero $\boldsymbol{\theta}_\text{roll}$ when roll is unconstrained |
 | `RollCaptureRateDegS` | `NaN` | separate roll capture cap $\omega_{\text{roll,max}}$ (ascent uses `AscentRollRateDegS = 30`) |
 | `RollBandwidthRadS` | `NaN` | separate roll bandwidth (ascent uses `AscentRollBandwidthRadS = 1.0`) |
+| `RollPriority` | 0.3 | the roll's shortfall weight in the surfaces' and RCS's allocation, against pitch and yaw's 1; bellyflop uses 4 |
 | `AuthorityCapture` | `false` | the square-root capture on the spare acceleration ([above](#authority-aware-capture)) |
 | `UseRcs` | `true` | allow the RCS at all |
 | `PhasePlaneRcs` | `false` | per-axis owners, the RCS on the phase plane ([below](#per-axis-ownership)) |
@@ -337,7 +338,7 @@ $$
 - $p$ is the price of one newton metre of shortfall, set far above any command's cost per newton metre. So the mixer gives all it can before any demand goes unmet, and among the ways to meet it picks the cheapest.
 - $w_a$ is the axis priority. When the demand is out of reach, the axis with the smallest weight gives way first.
 
-The attitude controller and touchdown guidance both use $\mathbf w = (1, 1, 0.3)$: pitch and yaw before roll.
+The attitude controller and touchdown guidance both use $\mathbf w = (1, 1, 0.3)$: pitch and yaw before roll. Under bellyflop the controller uses $(1, 1, 4)$ (`RollPriority`): belly first the roll is the sideslip, and giving it away let the craft depart in bank.
 The phase-plane RCS weights an axis that is not firing this step at 0.05 instead (`RcsSpillPriority`), so a firing axis's pulse is not refused for the torque it spills onto the others.
 
 The bounds are written as equalities with slacks, $u_j + s_j = u_{\text{max},j}$, so the solver sees the standard form $\min \mathbf c^\mathsf T \mathbf x$, $A\mathbf x = \mathbf b$, $\mathbf x \ge 0$.
