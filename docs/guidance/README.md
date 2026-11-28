@@ -14,7 +14,7 @@ Every guidance write to a craft goes through the ownership described in [../cont
 | `AdvancedFlightComputer/Features/Guidance/Numerics` | Game-independent numerical primitives and flight models. |
 | `AdvancedFlightComputer/Features/Guidance/Conic` | Game-independent conic programs, frozen-sparsity `CcsAssembler`, persistent `ClarabelWorkspace` (`IScvxConicWorkspace`), and optional `ScsWorkspace` bindings. |
 | `AdvancedFlightComputer/Features/Guidance/Gfold` | Game-independent G-FOLD solver. |
-| `AdvancedFlightComputer/Features/Guidance/Scvx` | Game-independent successive-convexification solvers: 6-DOF touchdown in `SixDof`, 3-DOF atmospheric entry in `ThreeDof`, and convex ascent in `Ascent`. |
+| `AdvancedFlightComputer/Features/Guidance/Scvx` | Game-independent successive-convexification solvers: 6-DOF touchdown in `SixDof`, 3-DOF atmospheric entry in `ThreeDof`, convex ascent in `Ascent`, the orbital entry planner in `OrbitalEntry` and the bellyflop planner in `Bellyflop`. |
 | `tests/AdvancedFlightComputer.Guidance.Tests` | Console checks and Python reference fixtures, no game needed. |
 | `tests/AdvancedFlightComputer.UiLogic.Tests` | Console checks of the pure console rules (stop, commit, status, setting tiers), no game needed. |
 | `tests/AdvancedFlightComputer.HarnessTests` | The HeadlessHarness test mod, runs inside the real game. |
@@ -54,6 +54,7 @@ The console rules run with `dotnet run --project tests/AdvancedFlightComputer.Ui
 | [scvx/ascent.md](scvx/ascent.md) | The convex ascent problem. |
 | [scvx/entry.md](scvx/entry.md) | The entry guidance problem (3-DOF glide and burn). |
 | [scvx/touchdown.md](scvx/touchdown.md) | The touchdown guidance problem (6-DOF). |
+| [orbital-entry.md](orbital-entry.md) | Orbital entry and bellyflop: the energy-domain entry planner, its tracker, the aimed deorbit, the bellyflop planner and the hand-over to touchdown. |
 | [scvx-bridge.md](scvx-bridge.md) | Touchdown guidance on the craft: from the 6-DOF plan to vehicle commands. |
 | [attitude/index.md](attitude/index.md) | The attitude controller and the gimbal, RCS and fin mixers. |
 | [scvx-bridge-devnotes.md](scvx-bridge-devnotes.md) | What had to be true besides the maths, learned by flying the 6-DOF path. |
