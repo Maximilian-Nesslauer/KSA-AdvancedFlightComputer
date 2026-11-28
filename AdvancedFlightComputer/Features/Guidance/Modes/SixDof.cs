@@ -1248,9 +1248,12 @@ public static partial class GuidanceWindow
     {
         if (_s.SixDofLastPublishedPlan != null && !_s.SixDofToContact)
             KsaGimbalControl.SetLsq(vehicle, default);
-        // Nothing plans an RCS torque either.
-        KsaRcsTorqueControl.Release(vehicle);
-        ReleaseTouchdownFins(vehicle);
+        // Nothing plans an RCS torque either. Flying to contact, the attitude hold after this step owns the RCS and the fins (HoldTouchdownAttitude).
+        if (!_s.SixDofToContact)
+        {
+            KsaRcsTorqueControl.Release(vehicle);
+            ReleaseTouchdownFins(vehicle);
+        }
 
         double3 position = vehicle.Orbit.StateVectors.PositionCci;
         double3 up = double3.Normalize(position);
@@ -1352,6 +1355,8 @@ public static partial class GuidanceWindow
 
     private static void HoldTouchdownAttitude(Vehicle vehicle, IParentBody parent)
     {
+        if (!StockHoldToContact && HoldPlanEndAttitude(vehicle, parent))
+            return;
         // The plan has ended. Let stock TVC and RCS damp the turn until first contact.
         KsaGimbalControl.Disengage(vehicle);
         KsaRcsTorqueControl.Release(vehicle);
@@ -1362,6 +1367,37 @@ public static partial class GuidanceWindow
         double3 heading = double3.UnitY.Transform(KsaFrameBridge.BodyToCci(vehicle));
         CommandAttitude(vehicle, parent, up, !_s.WasEngaged, heading, FlightComputerRollMode.Decoupled);
         _s.WasEngaged = true;
+    }
+
+    /// <summary>AFC_X_STOCK_TO_CONTACT=1: flying to contact, the stock flight computer, TVC and RCS hold the craft upright (before 2026-11-28), for comparison flights.</summary>
+    private static readonly bool StockHoldToContact = Environment.GetEnvironmentVariable("AFC_X_STOCK_TO_CONTACT") == "1";
+
+    /// <summary>
+    /// HOLD THE PLAN END'S ATTITUDE TO CONTACT: after the plan, the last published plan's command past its end - its last node's attitude, zero rates and its own trim torque - flown through the attitude feedback (AttitudeFeedback6Dof) on the gimbals and the RCS, as in the plan. The engine's throttle stays the post-plan law's (SinkToContact, FlyWithoutPlan); with the engine off the RCS takes all of the correction. False, for the stock hold, without a plan or the feedback.
+    ///  WHY (2026-11-28). The stock hold (below) let a Starship whose plan ended 0.5 m short pitch at 1.7 deg/s, its gimbals left where the plan last put them and its RCS handed to the stock computer: the tilt grew 0.2 to 1.2 deg and its off-axis thrust took it from 0.1 to 0.8 m/s sideways in the 1.1 s to the cut. The plan's own feedback holds the trim the engine choice needs (its integral is the moment it found), which the stock computer does not know.
+    /// </summary>
+    private static bool HoldPlanEndAttitude(Vehicle vehicle, IParentBody parent)
+    {
+        Ksa6DofGuidance g = _s.Guidance;
+        AttitudeFeedback6Dof attitude = SixDofAttitude();
+        if (g?.Published == null || attitude == null)
+            return false;
+        double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+        double[] x = KsaFrameBridge.ToModelState(vehicle, KsaFrameBridge.BuildSiteFrame(siteCci));
+        double now = SimNow();
+        ref ManualControlInputs manual = ref ManualInputs(vehicle);
+        bool lit = manual.EngineOn && manual.EngineThrottle > 0f;
+        if (!g.Command(now, out double3 torqueModel, out _, x, null, attitude, engineOff: !lit))
+            return false;
+        HoldManualAttitude(vehicle);
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
+        double3 torqueKsa = torqueModel.X * mx + torqueModel.Y * my + torqueModel.Z * mz;
+        KsaGimbalControl.SetLsq(vehicle, torqueKsa, g.CoupledRollNm * mz);
+        FlyPlanRcs(vehicle, mx, my, mz);
+        ReleaseTouchdownFins(vehicle);
+        double ambientPa = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
+        LogCycle(vehicle, parent, siteCci, x, now, 0.0, KsaEnginePerf.ActiveThrustCapability(vehicle, ambientPa), _s.LastThrottle, torqueModel, ambientPa);
+        return true;
     }
 
     /// <summary>

@@ -1954,8 +1954,9 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <param name="x">The measured state, model frame, for the tracker; null flies the plan open loop.</param>
     /// <param name="tracker">The feedback to fly the plan through, or null.</param>
     /// <param name="attitude">The feedback that holds the plan's attitude from the torque margin, or null.</param>
+    /// <param name="engineOff">The engine is not burning though the plan says it is (flying to contact after a cut): the gimbals get no torque and the feedback puts all of its correction on the RCS, as in the coast.</param>
     public bool Command(double simNow, out double3 torqueModel, out double thrustN,
-                        double[] x = null, Tracker6Dof tracker = null, AttitudeFeedback6Dof attitude = null)
+                        double[] x = null, Tracker6Dof tracker = null, AttitudeFeedback6Dof attitude = null, bool engineOff = false)
     {
         torqueModel = default;
         thrustN = 0.0;
@@ -1999,6 +2000,9 @@ public sealed class Ksa6DofGuidance : IDisposable
         double leadTdx = InCoast ? 0.0 : Lerp(plan.U, 0, leadNode, leadFraction);
         double leadTdy = InCoast ? 0.0 : Lerp(plan.U, 1, leadNode, leadFraction);
         torqueModel = new double3(_dyn.LArm * leadTdy, -_dyn.LArm * leadTdx, tauRoll);
+        bool noThrust = InCoast || engineOff;
+        if (engineOff)
+            torqueModel = default;
 
         // The fins, led as the gimbals are: in the coast as in the burn, a fin works in the air whether the engine burns or not.
         int fins = _dyn.FinCount;
@@ -2039,8 +2043,8 @@ public sealed class Ksa6DofGuidance : IDisposable
         {
             double share = _cfg.PlanTorqueShare > 0.0 ? _cfg.PlanTorqueShare : 1.0;
             double axial = Math.Max(thrust, 0.0);
-            double lateralNm = InCoast ? 0.0 : _dyn.LArm * axial * _cfg.TanGimbal / share;
-            double rollNm = InCoast && _cfg.RollTorqueFollowsThrust ? 0.0
+            double lateralNm = noThrust ? 0.0 : _dyn.LArm * axial * _cfg.TanGimbal / share;
+            double rollNm = noThrust && _cfg.RollTorqueFollowsThrust ? 0.0
                 : _cfg.TauRollMax / share * (_cfg.RollTorqueFollowsThrust && _cfg.Tmax > 0.0 ? axial / _cfg.Tmax : 1.0);
             double[] rcsPos = null, rcsNeg = null;
             if (_dyn.Rcs != null)
@@ -2056,22 +2060,23 @@ public sealed class Ksa6DofGuidance : IDisposable
                 }
             }
             // The gimbals' cone is centred where the plan's is (Scvx6DofConfig.GimbalTrimX/Y): the torque of the deflection that holds the engines' own moment, (L y T, -L x T).
-            var gimbalCentre = InCoast ? default
+            var gimbalCentre = noThrust ? default
                 : new double3(_dyn.LArm * _cfg.GimbalTrimY * axial, -_dyn.LArm * _cfg.GimbalTrimX * axial, 0.0);
             double3 inertia = _snapshot.Inertia;
             AttitudeFeedback6Dof.Result fb = attitude.Correct(plan, k, f, x, inertia.X, inertia.Y, inertia.Z,
                                                               torqueModel, RcsTorqueModel, lateralNm, rollNm, rcsPos, rcsNeg, simNow, gimbalCentre);
-            torqueModel += fb.Gimbal;
+            if (!noThrust)
+                torqueModel += fb.Gimbal;
             if (_dyn.Rcs != null)
                 RcsTorqueModel += fb.Rcs;
             AttitudeCorrection = fb;
         }
 
         // THE ROLL THAT COMES WITH THE LATERAL TORQUE, plan and feedback together, as the dynamics have it: the deflection makes it whether asked or not, so it is asked for, and the allocator solves it with pitch and yaw rather than holding it at zero with the verniers (KsaTvcAllocator.Solve's coupled).
-        CoupledRollNm = InCoast ? 0.0 : RollWith(torqueModel.X, torqueModel.Y);
+        CoupledRollNm = noThrust ? 0.0 : RollWith(torqueModel.X, torqueModel.Y);
         torqueModel = new double3(torqueModel.X, torqueModel.Y, torqueModel.Z + CoupledRollNm);
         // What the gimbals are told, plan and feedback, for the next re-solve's anchor (FirstGimbalAnchorAt).
-        _lastGimbalTorque = InCoast ? null : torqueModel;
+        _lastGimbalTorque = noThrust ? null : torqueModel;
 
         // THE TRACKER, when there is one: the axial thrust corrected for where the vehicle is against the plan. The torques, and the lateral thrust they come from, are the plan's. Not in the coast, where there is no thrust to correct.
         if (!InCoast && tracker != null && x != null && x.Length >= NX && plan.X.Length >= plan.Nodes * NX)

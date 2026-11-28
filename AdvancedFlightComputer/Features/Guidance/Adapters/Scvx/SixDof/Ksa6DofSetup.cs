@@ -314,6 +314,7 @@ public static class Ksa6DofSetup
             model.MaxPosNm[axis] = p ? plus.MaxTorqueNm : 0.0;
             model.MaxNegNm[axis] = m ? minus.MaxTorqueNm : 0.0;
             // Force for a torque tau: f+ tau one way, f- |tau| the other; the odd line through both is (f+ - f-) / 2, or the one side measured.
+            //  It drops the even part, (f+ + f-) / 2 |tau|: the force that pushes the same way whichever way the torque goes. On a layout whose thrusters fire mostly one way (the Starship's hot-gas RCS) that part is as large as this one, 0.1-0.2 m/s^2 and mostly axial (2026-11-28 audit). The acceleration bias learns what the plan leaves out of it; a model of it needs one-way controls, which SCS solves badly (Dynamics6Dof).
             double w = p && m ? 0.5 : 1.0;
             model.ForcePerNm[3 * axis] = w * ((p ? plus.ForcePerNmX : 0.0) - (m ? minus.ForcePerNmX : 0.0));
             model.ForcePerNm[3 * axis + 1] = w * ((p ? plus.ForcePerNmY : 0.0) - (m ? minus.ForcePerNmY : 0.0));
