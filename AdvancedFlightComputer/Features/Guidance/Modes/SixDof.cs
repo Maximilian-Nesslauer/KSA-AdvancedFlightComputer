@@ -578,7 +578,8 @@ public static partial class GuidanceWindow
                                    momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
                                    momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
                                    momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs,
-                                   glideFunnelDeg: GlideFunnelDeg(), sideSpeedPerM: _s.SixDofSideSpeedPerM, lastSecondsSmooth: _s.SixDofLastSecondsSmooth))
+                                   glideFunnelDeg: GlideFunnelDeg(), sideSpeedPerM: _s.SixDofSideSpeedPerM, lastSecondsSmooth: _s.SixDofLastSecondsSmooth,
+                                   accelBiasUpMs2: PlanBiasUp(), endMassHint: PublishedEndMass()))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -840,7 +841,7 @@ public static partial class GuidanceWindow
     ///   - a dt window, since the first cycle after engage has no previous sample and
     ///     a paused or warped frame produces a meaningless one.
     /// </summary>
-    private static void UpdateAccelBias(double[] x, double now, double thrustDelivered, double3? thrustDirModel = null, double3 rcsForceModel = default)
+    private static void UpdateAccelBias(double[] x, double now, double thrustDelivered, double3? thrustDirModel = null, double3 rcsForceModel = default, double[] flownFinDeg = null)
     {
         if (_s.Guidance == null)
             return;
@@ -880,7 +881,8 @@ public static partial class GuidanceWindow
         double m = Math.Max(x[13], 1.0);
         double3 g0 = _s.Guidance.BaseGravity;
 
-        double3 aero = _s.Guidance.ModelAeroAccel(x);
+        // THE AIR FORCE WITH THE FINS WHERE THEY ARE (FlownFinDeg): the plan models each fin's force at its deflection, so taken at rest the flaps' force was learnt again (2026-11-28 audit). AFC_X_BIAS_FINS_REST=1 takes it at rest, for comparison.
+        double3 aero = _s.Guidance.ModelAeroAccel(x, BiasFinsRest || flownFinDeg == null ? default : flownFinDeg);
         // THE RCS FORCE THE PLAN MODELS, model body axes (RcsForceModel), rotated into the site frame: the plan carries it (Dynamics6Dof's RCS force per N m), so, like the gimbals' sideways thrust, the estimate must not learn it as a missing force (2026-11-27 review). AFC_X_BIAS_NO_RCS=1 leaves it out, for comparison.
         double3 f = BiasNoRcs ? default : rcsForceModel;
         double fx = (1.0 - 2.0 * (qy * qy + qz * qz)) * f.X + 2.0 * (qx * qy - qw * qz) * f.Y + 2.0 * (qx * qz + qw * qy) * f.Z;
@@ -1255,7 +1257,7 @@ public static partial class GuidanceWindow
         double vertical = Math.Max(double3.Dot(KsaFrameBridge.ThrustAxisCci(vehicle), up), 0.5);
         double legs = Math.Max(x[2] - _s.SixDofTargetComAltM, 0.1);
         double sink = Math.Max(-x[5], 0.0);
-        double gravity = parent.Mu / position.LengthSquared();
+        double gravity = parent.Mu / position.LengthSquared() - PostPlanBiasUp();
         double demand = sink > 0.0 ? vehicle.TotalMass * (sink * sink / (2.0 * legs) + gravity) / vertical : 0.0;
 
         double pressure = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
@@ -1444,7 +1446,7 @@ public static partial class GuidanceWindow
         double3 up = double3.Normalize(position);
         double vertical = Math.Max(double3.Dot(KsaFrameBridge.ThrustAxisCci(vehicle), up), 0.5);
         double rate = Math.Min(SixDofTouchdownSinkMs + SixDofSinkPerM * Math.Max(x[2] - _s.SixDofTargetComAltM, 0.0), SixDofSinkMaxMs);
-        double gravity = parent.Mu / position.LengthSquared();
+        double gravity = parent.Mu / position.LengthSquared() - PostPlanBiasUp();
         double demand = vehicle.TotalMass * (gravity + SixDofSinkGain * (-rate - x[5])) / vertical;
         double pressure = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
         KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(vehicle, demand, pressure);
@@ -1840,7 +1842,7 @@ public static partial class GuidanceWindow
             ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle,
                   KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]))
             : 0.0;
-        UpdateAccelBias(x, now, thrustDelivered, ThrustDirModel(vehicle, thrustDelivered), RcsForceModel(vehicle));
+        UpdateAccelBias(x, now, thrustDelivered, ThrustDirModel(vehicle, thrustDelivered), RcsForceModel(vehicle), FlownFinDeg(vehicle));
         // NO LATER IGNITION holds for as long as touchdown has the craft, whatever guidance it flies now: a rebuild without a plan (RebuildUnplannedColdAt) or a direct engage starts a fresh guidance unarmed (2026-11-27 review).
         if (_s.Active && _s.Guidance != null && !_s.Guidance.IgnitionCapArmed)
             _s.Guidance.ArmIgnitionCap();
@@ -2180,6 +2182,47 @@ public static partial class GuidanceWindow
     /// <summary>AFC_X_BIAS_AXIAL=1: the acceleration estimate takes the thrust along the body axis, as it did before 2026-11-27, for comparison flights.</summary>
     private static readonly bool BiasAxialOnly = Environment.GetEnvironmentVariable("AFC_X_BIAS_AXIAL") == "1";
 
+    /// <summary>The acceleration bias the next plan is built with, up (site frame), m/s^2: the filtered estimate when the bias is on, else none. Ksa6DofSetup.TryBuild draws the floor's hover line on gravity less this.</summary>
+    private static double PlanBiasUp() => _s.SixDofBiasEnabled ? _s.Bias.Z : 0.0;
+
+    /// <summary>The mass at the end of the last published plan, kg, or NaN with none: the weight the next plan's floor must sit under at its end.</summary>
+    private static double PublishedEndMass()
+    {
+        Ksa6DofPlan plan = _s.Guidance?.Published;
+        if (plan == null || plan.Nodes < 1 || plan.X == null || plan.X.Length < plan.Nodes * Dynamics6Dof.NX)
+            return double.NaN;
+        return plan.X[(plan.Nodes - 1) * Dynamics6Dof.NX + Dynamics6Dof.IM];
+    }
+
+    /// <summary>
+    /// The acceleration bias, up, that the post-plan laws (SinkToContact, FlyWithoutPlan) take off gravity, m/s^2: the same estimate the plan flew with, held to +-2. The thrust-to-weight gates that choose between those laws stay on raw gravity, so the route after the plan does not change, only the thrust each law asks for.
+    ///  WHY (2026-11-28 audit). On raw gravity the booster's sink law asked a net 0.54 m/s^2 down and got 0.57 up - its bias of 1.19 - and settled to a hover or a slight climb instead of its sink. AFC_X_SINK_RAW_G=1 flies raw gravity, as before.
+    /// </summary>
+    private static double PostPlanBiasUp() => SinkRawGravity || !_s.SixDofBiasEnabled ? 0.0 : Math.Clamp(_s.Bias.Z, -2.0, 2.0);
+
+    private static readonly bool SinkRawGravity = Environment.GetEnvironmentVariable("AFC_X_SINK_RAW_G") == "1";
+
+    /// <summary>AFC_X_BIAS_FINS_REST=1: the acceleration estimate takes the model's air force with the fins at rest (before 2026-11-28), for comparison flights.</summary>
+    private static readonly bool BiasFinsRest = Environment.GetEnvironmentVariable("AFC_X_BIAS_FINS_REST") == "1";
+
+    // FlownFinDeg's buffers, reused every step: FinsFor fills the list in the plan's fin order.
+    private static readonly List<ControlSurface> FlownFinSurfaces = new();
+    private static double[] _flownFinDeg = [];
+
+    /// <summary>The deflections the plan's fins are flown at now, deg, in the plan's fin order (Ksa6DofSetup.FinsFor), or null with no fins in the plan.</summary>
+    internal static double[] FlownFinDeg(Vehicle vehicle)
+    {
+        Ksa6DofGuidance g = _s.Guidance;
+        if (g == null || g.FinCount == 0)
+            return null;
+        Ksa6DofSetup.FinsFor(vehicle, _s.Aero, FlownFinSurfaces);
+        if (_flownFinDeg.Length != g.FinCount)
+            _flownFinDeg = new double[g.FinCount];
+        for (int i = 0; i < _flownFinDeg.Length; i++)
+            _flownFinDeg[i] = i < FlownFinSurfaces.Count ? FlownFinSurfaces[i].DeflectionDeg : 0.0;
+        return _flownFinDeg;
+    }
+
     /// <summary>AFC_X_BIAS_NO_RCS=1: the acceleration estimate leaves the RCS's force out (before 2026-11-27 evening), for comparison flights.</summary>
     private static readonly bool BiasNoRcs = Environment.GetEnvironmentVariable("AFC_X_BIAS_NO_RCS") == "1";
 
@@ -2398,7 +2441,8 @@ public static partial class GuidanceWindow
                                      momentLimiterPerPa: _s.MomentLimiterPerPa, torqueMargin: SixDofTorqueMarginNow, surfaceShare: _s.SixDofSurfaceShare,
                                      momentLimiterStiffnessPerPa: _s.MomentLimiterStiffnessPerPa,
                                      momentLimiterDampingPerPaMs: _s.MomentLimiterDampingPerPaMs,
-                                     glideFunnelDeg: GlideFunnelDeg(), sideSpeedPerM: _s.SixDofSideSpeedPerM, lastSecondsSmooth: _s.SixDofLastSecondsSmooth);
+                                     glideFunnelDeg: GlideFunnelDeg(), sideSpeedPerM: _s.SixDofSideSpeedPerM, lastSecondsSmooth: _s.SixDofLastSecondsSmooth,
+                                     accelBiasUpMs2: PlanBiasUp());
     }
 
     /// <summary>

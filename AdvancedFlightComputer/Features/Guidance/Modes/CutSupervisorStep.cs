@@ -105,9 +105,16 @@ public static partial class GuidanceWindow
             LogContactCycle(vehicle, s, parent);
     }
 
-    /// <summary>The thrust axis's angle from <paramref name="up"/>, deg.</summary>
+    /// <summary>
+    /// The body's long axis's angle from <paramref name="up"/>, deg: the model's +Z (KsaFrameBridge.BodyAxes) through the body's attitude, as the contact height takes it.
+    ///  WHY (2026-11-28 audit). It took the thrust frame (ThrustAxisCci), which a trimmed off-axis engine tilts: about 2.8 deg read against a body tilt of 0.06-0.35, so the logged tilt and tip share (TipText) overstated a touchdown by 1.4-1.7x.
+    /// </summary>
     private static double TiltFromUpDeg(Vehicle vehicle, double3 up)
-        => Math.Acos(Math.Clamp(double3.Dot(KsaFrameBridge.ThrustAxisCci(vehicle), up), -1.0, 1.0)) * 180.0 / Math.PI;
+    {
+        KsaFrameBridge.BodyAxes(vehicle, out _, out _, out double3 mz);
+        double3 axis = double3.Normalize(mz.Transform(KsaFrameBridge.BodyToCci(vehicle)));
+        return Math.Acos(Math.Clamp(double3.Dot(axis, up), -1.0, 1.0)) * 180.0 / Math.PI;
+    }
 
     /// <summary>A cycle row for a craft flying to contact after its plan: the state, the throttle flown and no planned torque. Binds _s to <paramref name="s"/>, as the step it follows did.</summary>
     private static void LogContactCycle(Vehicle vehicle, VehicleAutopilotState s, IParentBody parent)

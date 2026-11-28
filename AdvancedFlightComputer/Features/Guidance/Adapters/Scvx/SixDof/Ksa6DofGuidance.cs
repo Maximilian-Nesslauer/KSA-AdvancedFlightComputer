@@ -322,13 +322,25 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <summary>
     /// The model's aerodynamic acceleration at state x (model frame), m/s^2 - zero with no aero model. What the bias estimator takes off the measured acceleration before calling the rest unmodelled.
     /// </summary>
-    public double3 ModelAeroAccel(double[] x)
+    public double3 ModelAeroAccel(double[] x) => ModelAeroAccel(x, default);
+
+    /// <summary>
+    /// As ModelAeroAccel, with the fins at <paramref name="finDeg"/> (the deflections flown now): the plan models each fin's force at its deflection (Dynamics6Dof), so the estimate must take it out where the fins are, not at rest. Empty for the body at rest, as before.
+    ///  WHY (2026-11-28 audit). Taken at rest, the Starship's flaps' 50-66 kN through the flip was learnt into the gravity bias and planned a second time by every node: a phantom pull of 0.2-0.6 m/s^2 on the ignition and the first braking.
+    /// </summary>
+    public double3 ModelAeroAccel(double[] x, ReadOnlySpan<double> finDeg)
     {
         Dynamics6Dof.Params dyn = _snapshot.Dyn;
         if ((dyn.Aero == null && dyn.BodyAero == null) || x == null || x.Length < NX || !(x[Dynamics6Dof.IM] > 0.0))
             return default;
-        Dynamics6Dof.AeroForce(x, dyn, out double fx, out double fy, out double fz);
         double m = x[Dynamics6Dof.IM];
+        if (finDeg.Length > 0 && dyn.FinCount > 0)
+        {
+            Span<double> w = stackalloc double[6];
+            if (Dynamics6Dof.AeroWrenchAt(x, dyn, finDeg, w))
+                return new double3(w[0] / m, w[1] / m, w[2] / m);
+        }
+        Dynamics6Dof.AeroForce(x, dyn, out double fx, out double fy, out double fz);
         return new double3(fx / m, fy / m, fz / m);
     }
 
@@ -1875,6 +1887,9 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <summary>The plan's RCS torque at the last <see cref="Command"/>, N m, model body axes. Zero for a plan without RCS.</summary>
     public double3 RcsTorqueModel { get; private set; }
 
+    /// <summary>AFC_X_FIN_LEAD=1: the fins are commanded at the gimbals' lead (before 2026-11-28). They have no lag - a KSAero surface sits where it is told - so led, they flew about 0.11 s ahead of their plan, 2.5 deg on a 24 deg/s slew (audit).</summary>
+    private static readonly bool FinsAtLead = Environment.GetEnvironmentVariable("AFC_X_FIN_LEAD") == "1";
+
     /// <summary>The force the plan's own RCS control gives in the plan's model at the last Command, N, model body axes (ForcePerNm times the plan's RCS torque, before the attitude feedback's): the RCS force the plan models, which the acceleration estimate must not learn again.</summary>
     public double3 PlanRcsForceModel { get; private set; }
 
@@ -1990,7 +2005,7 @@ public sealed class Ksa6DofGuidance : IDisposable
         if (FinDeflectionDeg.Length != fins)
             FinDeflectionDeg = new double[fins];
         for (int i = 0; i < fins; i++)
-            FinDeflectionDeg[i] = Lerp(plan.U, Dynamics6Dof.IFIN + i, leadNode, leadFraction);
+            FinDeflectionDeg[i] = FinsAtLead ? Lerp(plan.U, Dynamics6Dof.IFIN + i, leadNode, leadFraction) : Lerp(plan.U, Dynamics6Dof.IFIN + i, k, f);
 
         // The RCS torque at the current step: thrusters answer within a pulse, so there is no lag to lead.
         if (_dyn.Rcs != null)

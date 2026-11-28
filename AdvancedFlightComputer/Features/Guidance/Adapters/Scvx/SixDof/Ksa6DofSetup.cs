@@ -545,6 +545,9 @@ public static class Ksa6DofSetup
     /// </summary>
     internal static double RateScaleRadS = 1.0;
 
+    /// <summary>AFC_X_FLOOR_RAW=1: the plan floor's hover line on raw gravity and the heaviest end mass (before 2026-11-28), for comparison flights.</summary>
+    internal static readonly bool FloorRaw = Environment.GetEnvironmentVariable("AFC_X_FLOOR_RAW") == "1";
+
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                 int nodes, double tiltMaxDeg, double throttleFloor,
                                 double sigmaSeed,
@@ -559,7 +562,8 @@ public static class Ksa6DofSetup
                                 double rateMaxDegS = 0.0, int coastIntervals = 0, double[] scaleFrom = null,
                                 double momentLimiterPerPa = 0.0, double torqueMargin = 0.0, bool fins = true, double surfaceShare = PlanSurfaceShare,
                                 double momentLimiterStiffnessPerPa = 0.0, double momentLimiterDampingPerPaMs = 0.0,
-                                double[] glideFunnelDeg = null, double sideSpeedPerM = 0.0, double lastSecondsSmooth = 0.0)
+                                double[] glideFunnelDeg = null, double sideSpeedPerM = 0.0, double lastSecondsSmooth = 0.0,
+                                double accelBiasUpMs2 = 0.0, double endMassHint = double.NaN)
     {
         cfg = null!;
         dyn = null!;
@@ -586,11 +590,19 @@ public static class Ksa6DofSetup
         (double floorThrust, double floorFlow) = KsaEnginePerf.AtThrottle(vehicle, throttleFloor, LastAmbientPressurePa);
         // THE PLAN'S FLOOR sits above the engines' by floorMargin of the thrust range, so the tracker has thrust to take off, and under the hover line when the engines can go under it (KsaEnginePerf.LandingPlanFloorThrottle); the real floor stays what the flow is fitted through and what the over-powered check falls back to.
         //  The weight is the one at the end of the burn, where hovering matters: no lighter than dry, and no heavier than now less the burn's seed time at the floor's flow.
+        //  THE WEIGHT THE PLAN FLIES (2026-11-28 audit): the site's gravity less the acceleration bias it is planned with (accelBiasUpMs2, up, held to +-2 so a glitch cannot collapse the floor), at the end mass the last plan reached (endMassHint) where there is one. Drawn on raw gravity and the heaviest end mass, the booster's floor sat at 1.09 of the weight its plan flew - 0.72 m/s^2 of forced climb - and its last plans closed 0.1 m of descent with virtual control, ending above the ground. AFC_X_FLOOR_RAW=1 draws it as before.
         double siteGravity = parent.Mu / siteCci.LengthSquared();
         double endMass = Math.Max(vehicle.TotalMass - vehicle.PropellantMass, vehicle.TotalMass - Math.Max(sigmaSeed, 0.0) * Math.Max(floorFlow, 0.0));
+        double hoverGravity = siteGravity;
+        if (!FloorRaw)
+        {
+            if (double.IsFinite(endMassHint) && endMassHint > 0.0)
+                endMass = Math.Clamp(endMassHint, vehicle.TotalMass - vehicle.PropellantMass, vehicle.TotalMass);
+            hoverGravity = Math.Max(siteGravity - Math.Clamp(accelBiasUpMs2, -2.0, 2.0), 0.5 * siteGravity);
+        }
         double planFloorThrust = floorMargin > 0.0
             ? KsaEnginePerf.ThrustAtThrottle(vehicle,
-                KsaEnginePerf.LandingPlanFloorThrottle(vehicle, throttleFloor, floorMargin, LastAmbientPressurePa, endMass * siteGravity),
+                KsaEnginePerf.LandingPlanFloorThrottle(vehicle, throttleFloor, floorMargin, LastAmbientPressurePa, endMass * hoverGravity),
                 LastAmbientPressurePa)
             : floorThrust;
         double realFloorFraction = floorThrust > 0.0 && floorThrust < thrust ? floorThrust / thrust : throttleFloor;
