@@ -1993,7 +1993,7 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>AFC_X_SOLVE_LEAD=1: warm re-solves are delay-compensated (SolveLeadS). Off by default for now.</summary>
-    private static readonly bool SolveLead = Environment.GetEnvironmentVariable("AFC_X_SOLVE_LEAD") == "1";
+    private static bool SolveLead => Ksa6DofGuidance.SolveLeadOn;
 
     /// <summary>The longest lead a re-solve is posed ahead by, s.</summary>
     private const double SolveLeadMaxS = 0.3;
@@ -2007,7 +2007,8 @@ public static partial class GuidanceWindow
         if (plan == null || ReferenceEquals(plan, _s.SolveLatencyPlan))
             return;
         _s.SolveLatencyPlan = plan;
-        if (!double.IsFinite(_s.SolveDispatchAt))
+        // Only the plan the last warm dispatch produced: it carries that dispatch's stamp. A cold or restart plan, or one from a refused dispatch's successor, is not its latency.
+        if (!double.IsFinite(_s.SolveDispatchAt) || Math.Abs(plan.SolveTime - (_s.SolveDispatchAt + _s.SolveDispatchLeadS)) > 1e-6)
             return;
         double latency = now - _s.SolveDispatchAt;
         _s.SolveDispatchAt = double.NaN;

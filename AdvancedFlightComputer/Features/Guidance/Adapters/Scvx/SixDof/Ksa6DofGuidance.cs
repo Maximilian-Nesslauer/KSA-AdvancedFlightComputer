@@ -69,8 +69,20 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// <summary>The plan currently being flown, or null before the first solve lands.</summary>
     public Ksa6DofPlan Published => _published;
 
-    /// <summary>The plan published before <see cref="Published"/> by a warm re-solve, flown while a delay-compensated plan's start (its SolveTime, a lead ahead of its dispatch) is still to come (Command).</summary>
+    /// <summary>The plan published before <see cref="Published"/>, flown while a delay-compensated plan's start (its SolveTime, a lead ahead of its dispatch) is still to come (FlyingPlanAt).</summary>
     private Ksa6DofPlan _publishedBefore;
+
+    /// <summary>AFC_X_SOLVE_LEAD=1 (SixDof's delay compensation): a plan stamped ahead of the sim clock waits behind the plan before it. Off, a plan is flown from its node 0 as soon as it lands, as before - the predicted standby stamps its plans at a forecast ignition time and is left as it was.</summary>
+    internal static readonly bool SolveLeadOn = Environment.GetEnvironmentVariable("AFC_X_SOLVE_LEAD") == "1";
+
+    /// <summary>The plan being flown at <paramref name="simNow"/>: <paramref name="newest"/>, or with the delay compensation on, the plan before it while the newest's start is still to come and the one before has not run out.</summary>
+    private Ksa6DofPlan FlyingPlanAt(Ksa6DofPlan newest, double simNow)
+    {
+        if (SolveLeadOn && newest != null && simNow < newest.SolveTime && _publishedBefore is { } before
+            && !ReferenceEquals(before, newest) && simNow >= before.SolveTime && simNow - before.SolveTime <= before.Duration)
+            return before;
+        return newest;
+    }
 
     private double[] _planX = [];
     private double[] _planU = [];
@@ -1274,9 +1286,7 @@ public sealed class Ksa6DofGuidance : IDisposable
         Ksa6DofPlan plan = _published;
         if (plan == null) return double.PositiveInfinity;
         // The plan Command flies: a delay-compensated plan that has landed early starts at its SolveTime.
-        if (simNow < plan.SolveTime && _publishedBefore is { } before && !ReferenceEquals(before, plan)
-            && simNow - before.SolveTime <= before.Duration)
-            plan = before;
+        plan = FlyingPlanAt(plan, simNow);
         double t = Math.Max(0.0, simNow - plan.SolveTime);
         (int k, double f) = plan.Locate(t);
         double dt = plan.IntervalDt(k);
@@ -1909,11 +1919,9 @@ public sealed class Ksa6DofGuidance : IDisposable
     /// </summary>
     public bool PredictAlongPlan(double[] x, double simNow, double leadS, double[] xOut)
     {
-        Ksa6DofPlan plan = _published;
+        Ksa6DofPlan newest = _published;
         Dynamics6Dof.Params p = _snapshot?.Dyn;
-        if (plan == null || p == null || x == null || x.Length < NX || xOut == null || xOut.Length < NX || !(leadS > 0.0))
-            return false;
-        if (plan.U.Length < plan.Nodes * NU)
+        if (newest == null || p == null || x == null || x.Length < NX || xOut == null || xOut.Length < NX || !(leadS > 0.0))
             return false;
         Array.Copy(x, xOut, NX);
         int steps = Math.Max(1, (int)Math.Ceiling(leadS / 0.01));
@@ -1923,8 +1931,13 @@ public sealed class Ksa6DofGuidance : IDisposable
         Span<double> k1 = stackalloc double[NX], k2 = stackalloc double[NX], k3 = stackalloc double[NX], k4 = stackalloc double[NX];
         for (int s = 0; s < steps; s++)
         {
-            double t = simNow - plan.SolveTime + (s + 0.5) * h;
-            (int k, double f) = plan.Locate(Math.Max(t, 0.0));
+            // The plan flown at each step's time, as Command will choose it (FlyingPlanAt): a plan still waiting for its start is not flown yet.
+            double at = simNow + (s + 0.5) * h;
+            Ksa6DofPlan plan = FlyingPlanAt(newest, at);
+            if (plan.U.Length < plan.Nodes * NU)
+                return false;
+            double t = Math.Max(at - plan.SolveTime, 0.0);
+            (int k, double f) = plan.Locate(t);
             int k1n = Math.Min(k + 1, plan.Nodes - 1);
             for (int j = 0; j < NU; j++)
                 u[j] = plan.U[k * NU + j] * (1.0 - f) + plan.U[k1n * NU + j] * f;
@@ -2034,9 +2047,7 @@ public sealed class Ksa6DofGuidance : IDisposable
         if (plan == null)
             return false;
         // A DELAY-COMPENSATED PLAN THAT HAS LANDED EARLY (SixDof's AFC_X_SOLVE_LEAD): it starts at its SolveTime, so until then the plan before it is flown, where the prediction it was solved from assumed the craft would be.
-        if (simNow < plan.SolveTime && _publishedBefore is { } before && !ReferenceEquals(before, plan)
-            && simNow - before.SolveTime <= before.Duration)
-            plan = before;
+        plan = FlyingPlanAt(plan, simNow);
 
         double t = Math.Max(0.0, simNow - plan.SolveTime);
         PlanElapsed = t;
